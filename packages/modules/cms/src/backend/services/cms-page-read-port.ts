@@ -1,6 +1,12 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import type { CmsPageReadPort, CmsPageRecord } from '@endora-commerce/contracts';
+import type {
+  CmsPageReadPort,
+  CmsPageRecord,
+  CmsPageStorefrontLink,
+  CmsPageStorefrontLinkScope,
+} from '@endora-commerce/contracts';
 import { CmsPage } from '../entities/cms-page.entity.js';
+import { loadChannelPageNodes, pageStorefrontLinks } from './page-paths.js';
 
 /**
  * The page read model `cms` publishes (feature 075, Phase P).
@@ -39,6 +45,35 @@ export class CmsPageReadService implements CmsPageReadPort {
     );
     return pages.map(toCmsPageRecord);
   }
+
+  /**
+   * Feature 168 — the channel's page tree and the pages' names, two reads
+   * however many links a menu holds.
+   */
+  async findStorefrontLinks(
+    ids: readonly string[],
+    scope: CmsPageStorefrontLinkScope,
+  ): Promise<CmsPageStorefrontLink[]> {
+    if (ids.length === 0) return [];
+    const em = this.emFactory();
+    const [nodes, pages] = await Promise.all([
+      loadChannelPageNodes(em, [scope.salesChannelId]),
+      em.find(CmsPage, { id: { $in: [...ids] } }),
+    ]);
+    return pageStorefrontLinks(
+      nodes,
+      pages.map((page) => ({
+        id: page.id,
+        name: page.name,
+        slug: page.slug,
+        description: page.description ?? null,
+        languages: page.languages,
+        translations: page.translations,
+      })),
+      ids,
+      scope,
+    );
+  }
 }
 
 export function toCmsPageRecord(page: CmsPage): CmsPageRecord {
@@ -57,5 +92,10 @@ export function toCmsPageRecord(page: CmsPage): CmsPageRecord {
     archivedAt: page.archivedAt ?? null,
     createdAt: page.createdAt,
     updatedAt: page.updatedAt,
+    parentPageId: page.parentPageId ?? null,
+    // Feature 167 — the sitemap lists a page under each of its languages' prefixes.
+    languages: [...(page.languages ?? [])],
+    // 163 R24 — each language's own slug, for the sitemap.
+    translations: page.translations ?? {},
   };
 }

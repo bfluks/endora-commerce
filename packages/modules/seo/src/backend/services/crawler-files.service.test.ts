@@ -23,6 +23,8 @@ import {
  */
 describe('resolveCrawlerFiles', () => {
   const CHANNEL = '00000000-0000-4000-8000-000000000001';
+  /** The request's resolved channel, open to anonymous visitors. */
+  const OPEN = { id: CHANNEL, anonymousAccess: true };
 
   function settings(
     values: Record<string, unknown>,
@@ -58,13 +60,14 @@ describe('resolveCrawlerFiles', () => {
   };
 
   it('answers the documented shape', async () => {
-    const files = await resolveCrawlerFiles(settings(STORED), CHANNEL);
+    const files = await resolveCrawlerFiles(settings(STORED), OPEN);
     expect(files).toEqual({
       index: false,
       follow: true,
       robotsTxtCustom: STORED['seo.robots_txt_custom'],
       llmsTxtAdditional: STORED['seo.llms_txt_additional'],
       shop: { name: 'Endora Demo' },
+      anonymousAccess: true,
     });
     // Nothing was unreadable, and the answer does not say otherwise.
     expect(files).not.toHaveProperty('unreadable');
@@ -73,23 +76,41 @@ describe('resolveCrawlerFiles', () => {
     expect(LLMS_TXT_ADDITIONAL_SETTING_CODE).toBe('seo.llms_txt_additional');
   });
 
+  it('says whether the channel is open to anonymous visitors (specs/154-sales-channel-access/)', async () => {
+    // The storefront builds a closed store's files differently — `robots.txt`
+    // disallows everything, `llms.txt` lists nothing — so it has to be told.
+    // The texts are answered as stored either way: what a closed store does
+    // with them is the storefront's to say.
+    const closed = await resolveCrawlerFiles(settings(STORED), { id: CHANNEL, anonymousAccess: false });
+    expect(closed).toEqual({
+      index: false,
+      follow: true,
+      robotsTxtCustom: STORED['seo.robots_txt_custom'],
+      llmsTxtAdditional: STORED['seo.llms_txt_additional'],
+      shop: { name: 'Endora Demo' },
+      anonymousAccess: false,
+    });
+    expect(storefrontCrawlerFilesSchema.parse(closed)).toEqual(closed);
+    expect((await resolveCrawlerFiles(settings(STORED), OPEN)).anonymousAccess).toBe(true);
+  });
+
   it('returns the text exactly as stored — no trimming, no line-break rewriting', async () => {
     const text = '\r\n  \tfirst  \r\n\r\nsecond\n\n\n';
     const files = await resolveCrawlerFiles(
       settings({ ...STORED, 'seo.robots_txt_custom': text }),
-      CHANNEL,
+      OPEN,
     );
     expect(files.robotsTxtCustom).toBe(text);
     const llms = await resolveCrawlerFiles(
       settings({ ...STORED, 'seo.llms_txt_additional': text }),
-      CHANNEL,
+      OPEN,
     );
     expect(llms.llmsTxtAdditional).toBe(text);
   });
 
   it('reads every setting for the channel it was given, and no other', async () => {
     const seen: { code: string; salesChannelId: string | null }[] = [];
-    await resolveCrawlerFiles(settings(STORED, seen), CHANNEL);
+    await resolveCrawlerFiles(settings(STORED, seen), OPEN);
     expect(seen.map((read) => read.code).sort()).toEqual([
       'seo.default_robots',
       'seo.llms_txt_additional',
@@ -109,7 +130,7 @@ describe('resolveCrawlerFiles', () => {
       },
       { ...STORED, 'shop.name': 42 },
     ]) {
-      expect((await resolveCrawlerFiles(settings(values), CHANNEL)).shop).toEqual({ name: '' });
+      expect((await resolveCrawlerFiles(settings(values), OPEN)).shop).toEqual({ name: '' });
     }
   });
 
@@ -125,7 +146,7 @@ describe('resolveCrawlerFiles', () => {
       async (stored) => {
         const files = await resolveCrawlerFiles(
           settings({ ...STORED, 'seo.default_robots': stored }),
-          CHANNEL,
+          OPEN,
         );
         expect(files.unreadable).toEqual(['policy']);
         // The operator's text is as readable as it ever was.
@@ -140,7 +161,7 @@ describe('resolveCrawlerFiles', () => {
       // err towards keeping a channel out, never towards letting it in.
       const files = await resolveCrawlerFiles(
         settings({ ...STORED, 'seo.default_robots': 'INDEX' }),
-        CHANNEL,
+        OPEN,
       );
       expect(files.index).toBe(false);
       expect(files.follow).toBe(false);
@@ -156,7 +177,7 @@ describe('resolveCrawlerFiles', () => {
     ])('answers robots.txt its text, and names the content unreadable — %s', async (_name, stored) => {
       const files = await resolveCrawlerFiles(
         settings({ ...STORED, 'seo.llms_txt_additional': stored }),
-        CHANNEL,
+        OPEN,
       );
       expect(files.unreadable).toEqual(['llmsTxtAdditional']);
       // Never the text, and never a part of it.
@@ -171,7 +192,7 @@ describe('resolveCrawlerFiles', () => {
       const atLimit = 'a'.repeat(CRAWLER_TEXT_MAX_BYTES);
       const files = await resolveCrawlerFiles(
         settings({ ...STORED, 'seo.llms_txt_additional': atLimit }),
-        CHANNEL,
+        OPEN,
       );
       expect(files.llmsTxtAdditional).toBe(atLimit);
       expect(files).not.toHaveProperty('unreadable');
@@ -180,7 +201,7 @@ describe('resolveCrawlerFiles', () => {
     it('names both when both are unreadable, in a fixed order', async () => {
       const files = await resolveCrawlerFiles(
         settings({ ...STORED, 'seo.default_robots': 'x', 'seo.llms_txt_additional': 7 }),
-        CHANNEL,
+        OPEN,
       );
       expect(files.unreadable).toEqual(['policy', 'llmsTxtAdditional']);
     });
@@ -190,11 +211,11 @@ describe('resolveCrawlerFiles', () => {
     // "The store has no such setting" is not a value that is wrong; it is an
     // instance that is, and nothing here is in a position to answer for it.
     const { 'seo.default_robots': _robots, ...withoutRobots } = STORED;
-    await expect(resolveCrawlerFiles(settings(withoutRobots), CHANNEL)).rejects.toThrow(
+    await expect(resolveCrawlerFiles(settings(withoutRobots), OPEN)).rejects.toThrow(
       /seo\.default_robots/,
     );
     const { 'seo.llms_txt_additional': _llms, ...withoutLlms } = STORED;
-    await expect(resolveCrawlerFiles(settings(withoutLlms), CHANNEL)).rejects.toThrow(
+    await expect(resolveCrawlerFiles(settings(withoutLlms), OPEN)).rejects.toThrow(
       /seo\.llms_txt_additional/,
     );
   });
@@ -203,12 +224,12 @@ describe('resolveCrawlerFiles', () => {
     // Only a row written around the settings API can be this long.
     const atLimit = 'a'.repeat(CRAWLER_TEXT_MAX_BYTES);
     await expect(
-      resolveCrawlerFiles(settings({ ...STORED, 'seo.robots_txt_custom': atLimit }), CHANNEL),
+      resolveCrawlerFiles(settings({ ...STORED, 'seo.robots_txt_custom': atLimit }), OPEN),
     ).resolves.toMatchObject({ robotsTxtCustom: atLimit });
 
     const tooLong = resolveCrawlerFiles(
       settings({ ...STORED, 'seo.robots_txt_custom': `${'ż'.repeat(CRAWLER_TEXT_MAX_BYTES / 2)}a` }),
-      CHANNEL,
+      OPEN,
     );
     await expect(tooLong).rejects.toBeInstanceOf(StoredCrawlerTextTooLargeError);
     await expect(tooLong).rejects.toThrow(/seo\.robots_txt_custom.*65537.*65536/);
@@ -220,11 +241,11 @@ describe('resolveCrawlerFiles', () => {
     await expect(
       resolveCrawlerFiles(
         settings({ 'seo.default_robots': 'INDEX, FOLLOW', 'seo.llms_txt_additional': '' }),
-        CHANNEL,
+        OPEN,
       ),
     ).rejects.toThrow(/seo\.robots_txt_custom/);
     await expect(
-      resolveCrawlerFiles(settings({ ...STORED, 'seo.robots_txt_custom': 42 }), CHANNEL),
+      resolveCrawlerFiles(settings({ ...STORED, 'seo.robots_txt_custom': 42 }), OPEN),
     ).rejects.toThrow();
   });
 });

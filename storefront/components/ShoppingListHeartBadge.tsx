@@ -1,9 +1,9 @@
 'use client';
 
-import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { getDefaultListSummaryAction } from '../lib/actions/shoppingList';
+import { LocalizedLink } from '../lib/i18n/localized-link';
 
 /**
  * Header heart icon + count badge for the customer's default shopping list.
@@ -52,14 +52,14 @@ export function ShoppingListHeartBadge(props: {
   const href = listId ? `/shopping-lists/${listId}` : '/shopping-lists';
 
   return (
-    <Link href={href} className="icon-btn" aria-label={props.ariaLabel}>
+    <LocalizedLink href={href} className="icon-btn" aria-label={props.ariaLabel}>
       <HeartIcon />
       {count > 0 ? (
         <span className="icon-btn__count" aria-hidden="true">
           {count > 99 ? '99+' : count}
         </span>
       ) : null}
-    </Link>
+    </LocalizedLink>
   );
 }
 

@@ -5,6 +5,7 @@ import {
   customFieldOptionSchema,
   supportedEntityTypeSchema,
   updateCustomFieldDefinitionSchema,
+  updateCustomFieldOptionSchema,
   type CustomFieldEntityTypeInfo,
   type SupportedEntityType,
 } from '@endora-commerce/contracts';
@@ -15,11 +16,12 @@ import {
   type CustomFieldDefinitionService,
 } from './services/custom-field-definition.service.js';
 import {
+  isEntityTypeServed,
   isSupportedEntityType,
   SUPPORTED_ENTITIES,
   type SupportedEntityMeta,
 } from './services/custom-field-registry.js';
-import { effectiveState, type RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 
 export interface CustomFieldsAdminDeps {
   definitionService: CustomFieldDefinitionService;
@@ -34,10 +36,17 @@ function toHttp(err: unknown): never {
         throw new HttpError(404, ERROR_CODES.CUSTOM_FIELD_NOT_FOUND, err.message);
       case 'duplicate_key':
         throw new HttpError(409, ERROR_CODES.CUSTOM_FIELD_KEY_CONFLICT, err.message);
+      // Feature 157 — each of the three a sentence of its own, naming what it
+      // refuses (`details`), rather than one code's English message.
       case 'value_type_locked':
+        throw new HttpError(409, ERROR_CODES.CUSTOM_FIELD_VALUE_TYPE_LOCKED, err.message, { ...err.details });
       case 'stored_values_exist':
+        throw new HttpError(409, ERROR_CODES.CUSTOM_FIELD_STORED_VALUES_EXIST, err.message, { ...err.details });
       case 'option_in_use':
-        throw new HttpError(409, ERROR_CODES.CUSTOM_FIELD_DEFINITION_INVALID, err.message);
+        throw new HttpError(409, ERROR_CODES.CUSTOM_FIELD_OPTION_IN_USE, err.message, { ...err.details });
+      // Feature 162 — `details.code` names why the carry target was refused.
+      case 'carry_incompatible':
+        throw new HttpError(422, ERROR_CODES.CUSTOM_FIELD_CARRY_INCOMPATIBLE, err.message, { ...err.details });
       default:
         throw new HttpError(422, ERROR_CODES.CUSTOM_FIELD_DEFINITION_INVALID, err.message);
     }
@@ -64,25 +73,13 @@ function assertNotHostManaged(entityType: string): void {
 }
 
 /**
- * Feature 143 — a host type follows its owner module. When an entity type's
- * registry entry declares `ownerModuleId`, the type exists for the operator
- * only while that module is effectively present (Constitution XVII). Generic:
- * the one question asked is whether the named module is present.
- */
-function isOwnerPresent(meta: SupportedEntityMeta | undefined): boolean {
-  return !meta?.ownerModuleId || effectiveState.isPresent(meta.ownerModuleId);
-}
-
-/**
  * Whether a stored definition is served: one of a type whose owner module is
  * not present is not — "off behaves as if never installed" covers what an
  * operator defined for the module's entity as well as the entity. The rows
  * stay, and are served again with the owner.
  */
 function isDefinitionServed({ definition }: CachedDefinition): boolean {
-  return isOwnerPresent(
-    isSupportedEntityType(definition.entityType) ? SUPPORTED_ENTITIES[definition.entityType] : undefined,
-  );
+  return isEntityTypeServed(definition.entityType);
 }
 
 /**
@@ -93,8 +90,7 @@ function isDefinitionServed({ definition }: CachedDefinition): boolean {
  * with it.
  */
 function assertOwnerPresent(entityType: string): void {
-  const meta = isSupportedEntityType(entityType) ? SUPPORTED_ENTITIES[entityType] : undefined;
-  if (!isOwnerPresent(meta)) {
+  if (!isEntityTypeServed(entityType)) {
     throw new HttpError(
       409,
       ERROR_CODES.CUSTOM_FIELD_HOST_MANAGED,
@@ -115,6 +111,10 @@ function serialize({ definition, options }: CachedDefinition): Record<string, un
     audience: definition.audience,
     sortOrder: definition.sortOrder,
     config: definition.config,
+    listFilter: definition.listFilter,
+    // Feature 162 — a carry to a type whose owner module is off is not
+    // offered; the row keeps it, and serves it again with the owner.
+    carryTo: definition.carryTo.filter((target) => isEntityTypeServed(target)),
     options: options.map((o) => ({
       id: o.id,
       value: o.value,
@@ -158,10 +158,14 @@ export async function registerCustomFieldsAdminRoutes(
         Object.entries(SUPPORTED_ENTITIES) as Array<[SupportedEntityType, SupportedEntityMeta]>
       )
         // A type whose owner module is off is not offered (feature 143).
-        .filter(([, meta]) => isOwnerPresent(meta))
+        .filter(([entityType]) => isEntityTypeServed(entityType))
         .map(([entityType, meta]) => ({
         entityType,
         labelKey: meta.labelKey,
+        // Whether the type's definitions may be list filters (feature 157).
+        listFilter: meta.listFilter === true,
+        // The types its definitions may carry to, while their owner is present (feature 162).
+        carryTargets: (meta.carryTargets ?? []).filter((target) => isEntityTypeServed(target)),
         ...(meta.managedBy
           ? {
               managedBy: {
@@ -269,9 +273,11 @@ export async function registerCustomFieldsAdminRoutes(
 
   app.patch<{ Params: { id: string; optionId: string } }>(
     '/api/v1/admin/custom-fields/definitions/:id/options/:optionId',
-    { preHandler: requireAdmin('custom_fields:write'), schema: { body: customFieldOptionSchema.partial() } },
+    // Feature 157 — the patch schema carries no create defaults, so a relabel
+    // does not reset the option's default flag, position or translations.
+    { preHandler: requireAdmin('custom_fields:write'), schema: { body: updateCustomFieldOptionSchema } },
     async (request) => {
-      const body = customFieldOptionSchema.partial().parse(request.body);
+      const body = updateCustomFieldOptionSchema.parse(request.body);
       await assertDefinitionNotHostManaged(request.params.id);
       try {
         const opt = await definitionService.updateOption(request.params.id, request.params.optionId, {

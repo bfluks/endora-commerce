@@ -12,6 +12,7 @@ import {
 import { PB_RESPONSIVE_METADATA, hasResponsiveOverride, settingsScopeToTier, type ResponsiveProp } from '../types/responsive.js';
 import {
   ScopedFieldHint,
+  ScopedInheritedNote,
   ScopedResetLink,
   readScopedValue,
   responsiveBaseSeed,
@@ -22,57 +23,84 @@ import { useComponentScope } from '../editor/use-component-scope.js';
 import { usePageBuilderPuck } from '../editor/use-page-builder-puck.js';
 import { PuckFieldLabel } from './puck-field-label.js';
 import { NativeColorInput } from './native-color-input.js';
+import { PB_FIELD_INPUT_CLASS, PB_FIELD_LABEL_CLASS } from './field-classes.js';
+import { useFieldText, type PageBuilderFieldTextKey } from './field-text.js';
+import { ToggleSwitch } from './toggle-field.js';
 
-const inputClassName = '_Input-input_bsxfo_26';
+const inputClassName = PB_FIELD_INPUT_CLASS;
 
-const BORDER_STYLES: { label: string; value: BorderStyle }[] = [
-  { label: 'Solid', value: 'solid' },
-  { label: 'Dashed', value: 'dashed' },
-  { label: 'Dotted', value: 'dotted' },
+const BORDER_STYLES: { label: PageBuilderFieldTextKey; value: BorderStyle }[] = [
+  { label: 'border.style.solid', value: 'solid' },
+  { label: 'border.style.dashed', value: 'dashed' },
+  { label: 'border.style.dotted', value: 'dotted' },
 ];
 
+type Side = 'top' | 'right' | 'bottom' | 'left';
+
+/**
+ * One border's width, style and colour (R17, T202): each control under a small
+ * visible label and named for assistive technology — with the side, when the
+ * sides are edited one by one.
+ */
 function SideEditor({
   side,
+  sideKey,
   onChange,
   readOnly,
 }: {
   side: BorderSide;
+  sideKey?: Side;
   onChange: (next: BorderSide) => void;
   readOnly?: boolean;
 }): ReactElement {
+  const text = useFieldText();
+  const name = (control: PageBuilderFieldTextKey): string =>
+    sideKey ? text('side.control', { side: text(`side.${sideKey}`), control: text(control) }) : text(control);
   return (
     <div className="grid grid-cols-3 gap-2">
-      <input
-        type="number"
-        className={inputClassName}
-        min={0}
-        max={20}
-        step={1}
-        readOnly={readOnly}
-        value={side.width}
-        onChange={(e): void => {
-          const parsed = Number(e.target.value);
-          if (!Number.isNaN(parsed)) onChange({ ...side, width: Math.max(0, parsed) });
-        }}
-      />
-      <select
-        className={inputClassName}
-        disabled={readOnly}
-        value={side.style}
-        onChange={(e): void => onChange({ ...side, style: e.target.value as BorderStyle })}
-      >
-        {BORDER_STYLES.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
-      <NativeColorInput
-        className="h-9 w-full cursor-pointer rounded border border-border p-0.5"
-        readOnly={readOnly}
-        value={side.color.startsWith('#') ? side.color : '#d9e0e7'}
-        onCommit={(hex): void => onChange({ ...side, color: hex })}
-      />
+      <div className="flex min-w-0 flex-col gap-1">
+        <span className={PB_FIELD_LABEL_CLASS} aria-hidden="true">{text('border.width')}</span>
+        <input
+          type="number"
+          className={inputClassName}
+          min={0}
+          max={20}
+          step={1}
+          aria-label={name('border.width')}
+          readOnly={readOnly}
+          value={side.width}
+          onChange={(e): void => {
+            const parsed = Number(e.target.value);
+            if (!Number.isNaN(parsed)) onChange({ ...side, width: Math.max(0, parsed) });
+          }}
+        />
+      </div>
+      <div className="flex min-w-0 flex-col gap-1">
+        <span className={PB_FIELD_LABEL_CLASS} aria-hidden="true">{text('border.style')}</span>
+        <select
+          className={inputClassName}
+          aria-label={name('border.style')}
+          disabled={readOnly}
+          value={side.style}
+          onChange={(e): void => onChange({ ...side, style: e.target.value as BorderStyle })}
+        >
+          {BORDER_STYLES.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {text(opt.label)}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="flex min-w-0 flex-col gap-1">
+        <span className={PB_FIELD_LABEL_CLASS} aria-hidden="true">{text('border.color')}</span>
+        <NativeColorInput
+          className="h-9 w-full cursor-pointer rounded border border-border p-0.5"
+          ariaLabel={name('border.color')}
+          readOnly={readOnly}
+          value={side.color.startsWith('#') ? side.color : '#d9e0e7'}
+          onCommit={(hex): void => onChange({ ...side, color: hex })}
+        />
+      </div>
     </div>
   );
 }
@@ -86,6 +114,7 @@ function BorderEditor({
   onChange: (next: BorderValue) => void;
   readOnly?: boolean;
 }): ReactElement {
+  const text = useFieldText();
   const border = normalizeBorder(value);
   const showBorder = border.mode !== 'none';
 
@@ -96,21 +125,13 @@ function BorderEditor({
 
   return (
     <div className="space-y-2">
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={showBorder}
-          disabled={readOnly}
-          onChange={(e): void => {
-            if (!e.target.checked) {
-              onChange({ mode: 'none' });
-              return;
-            }
-            onChange(uniform);
-          }}
-        />
-        Show border
-      </label>
+      <ToggleSwitch
+        size="sm"
+        label={text('border.show')}
+        checked={showBorder}
+        readOnly={readOnly === true}
+        onChange={(next): void => onChange(next ? uniform : { mode: 'none' })}
+      />
       {showBorder ? (
         <>
           <div className="flex gap-2 text-sm">
@@ -121,7 +142,7 @@ function BorderEditor({
                 disabled={readOnly}
                 onChange={(): void => onChange(uniform)}
               />
-              All sides
+              {text('spacing.uniform')}
             </label>
             <label className="flex items-center gap-1">
               <input
@@ -137,7 +158,7 @@ function BorderEditor({
                   onChange({ mode: 'sides', top: side, right: side, bottom: side, left: side });
                 }}
               />
-              Each side
+              {text('spacing.sides')}
             </label>
           </div>
           {border.mode === 'uniform' ? (
@@ -156,9 +177,10 @@ function BorderEditor({
             <div className="space-y-2">
               {(['top', 'right', 'bottom', 'left'] as const).map((key) => (
                 <div key={key} className="space-y-1">
-                  <p className="text-xs capitalize">{key}</p>
+                  <p className="m-0 text-xs font-semibold">{text(`side.${key}`)}</p>
                   <SideEditor
                     side={border[key]}
+                    sideKey={key}
                     onChange={(side): void => onChange({ ...border, [key]: side })}
                     {...(readOnly === true ? { readOnly: true } : {})}
                   />
@@ -227,7 +249,7 @@ const ResponsiveBorderControl = memo(function ResponsiveBorderControl({
         {...(readOnly === true ? { readOnly: true } : {})}
       />
       {inherited ? (
-        <p className="text-xs opacity-60">Inherited value shown — change to override for this scope.</p>
+        <ScopedInheritedNote />
       ) : null}
     </div>
   );
@@ -242,7 +264,7 @@ export function createBorderField(): Field<
     label: 'Border',
     metadata: PB_RESPONSIVE_METADATA,
     render: ({ value, onChange, readOnly, field }): ReactElement => (
-      <PuckFieldLabel label={field.label ?? 'Border'} {...(readOnly === true ? { readOnly: true } : {})}>
+      <PuckFieldLabel label={field.label ?? 'Border'} el="div" {...(readOnly === true ? { readOnly: true } : {})}>
         <ResponsiveBorderControl
           value={value ?? DEFAULT_BORDER}
           onChange={(next) => onChange(next as BorderValue | ResponsiveProp<BorderValue>)}

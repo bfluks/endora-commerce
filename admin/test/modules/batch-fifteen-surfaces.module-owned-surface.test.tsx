@@ -217,6 +217,9 @@ const SUBJECTS: readonly Subject[] = [
       // the static declaration is written before the parametric one it used to
       // hide behind.
       ['/catalog/products/new', 'catalog:write'],
+      // The roster on its Archived tab (feature 163, owner PAL-1 → B), the palette's
+      // "Archived products" target; the same screen and code as the index.
+      ['/catalog/products/archived', 'catalog:read'],
       ['/catalog/products/:id', 'catalog:read'],
       ['/catalog/categories', 'catalog:read'],
       // The category page content screen, added after this batch: a detail
@@ -251,11 +254,14 @@ const SUBJECTS: readonly Subject[] = [
     // A host and nothing else: this module contributes to no zone.
     zones: [],
     mounts: [
-      ['catalog/src/admin/pages/ProductEditor.tsx', 'product.editor.details.before', 1],
-      ['catalog/src/admin/pages/ProductEditor.tsx', 'product.editor.field.after', 5],
+      // Feature 170 moved the Details tab into its own component.
+      ['catalog/src/admin/components/editor/DetailsTab.tsx', 'product.editor.details.before', 1],
+      ['catalog/src/admin/components/editor/DetailsTab.tsx', 'product.editor.field.after', 3],
+      ['catalog/src/admin/pages/ProductEditor.tsx', 'product.editor.field.after', 2],
       ['catalog/src/admin/pages/ProductEditor.tsx', 'product.editor.pricing.before', 1],
       ['catalog/src/admin/pages/ProductEditor.tsx', 'product.editor.pricing.after', 1],
       ['catalog/src/admin/pages/ProductEditor.tsx', 'product.editor.channels', 1],
+      ['catalog/src/admin/pages/ProductEditor.tsx', 'product.editor.seo', 1],
       ['catalog/src/admin/components/ProductAttributesTab.tsx', 'product.editor.field.after', 1],
       ['catalog/src/admin/pages/CategoriesTree.tsx', 'category.editor.after', 1],
     ],
@@ -900,14 +906,13 @@ describe('the routes that tighten say so in their own declarations', () => {
     // declared as `requires` (D-175), which the role editor renders as a
     // one-click shortfall. Asserted here, beside the route it belongs to,
     // because the two are one decision.
-    const loader = sourceOf('../packages/modules/catalog/src/admin/pages/ProductEditor.tsx');
-    const unconditional = loader.slice(
-      loader.indexOf('const refresh'),
-      loader.indexOf('const defaultSet'),
-    );
+    //
+    // Feature 170 split the create form out of the editor (`ProductCreateForm.tsx`); its mount
+    // effect is the loader now, and it reads both lists on every mount.
+    const loader = sourceOf('../packages/modules/catalog/src/admin/pages/ProductCreateForm.tsx');
+    const unconditional = loader.slice(loader.indexOf('useEffect(() => {'), loader.indexOf('const submit'));
     expect(unconditional).toContain('/api/v1/admin/catalog/categories');
     expect(unconditional).toContain('/api/v1/admin/catalog/attribute-sets');
-    expect(unconditional).not.toContain('isNew');
 
     const manifest = sourceOf('../packages/modules/catalog/src/manifest.ts');
     expect(manifest).toMatch(
@@ -929,7 +934,8 @@ describe('the moved screens take no reach the package cannot resolve', () => {
     'catalog/src/admin/components/PackagingUnitsEditor.tsx',
     'catalog/src/admin/components/ProductAttributesTab.tsx',
     'catalog/src/admin/components/ProductInventoryTab.tsx',
-    'catalog/src/admin/components/ProductScopeEditor.tsx',
+    'catalog/src/admin/components/ProductScopeBar.tsx',
+    'catalog/src/admin/pages/ProductCreateForm.tsx',
     'catalog/src/admin/components/ProductsBulkEditDialog.tsx',
     'catalog/src/admin/lib/resolve-product-selection.ts',
     'orders/src/admin/pages/OrderCreatePage.tsx',

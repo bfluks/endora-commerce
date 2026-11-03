@@ -51,6 +51,12 @@ export interface OAuthTransaction {
   nonce: string;
   next: string;
   /**
+   * The language of the storefront page that started the sign-in (feature 167),
+   * so the pages it returns to carry that language's prefix. Absent in a
+   * transaction issued before the field existed.
+   */
+  language?: string | null;
+  /**
    * SHA-256 (hex) of the browser-binding cookie `start` set. The callback
    * completes only for a browser presenting the cookie this digest was taken
    * of; the cookie value itself is never stored.

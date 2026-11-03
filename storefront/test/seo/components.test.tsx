@@ -19,7 +19,7 @@ import type { ProductSummary, ProductAsset } from '@endora-commerce/contracts';
 describe('Breadcrumbs — JSON-LD + crawlable anchors', () => {
   it('emits BreadcrumbList JSON-LD and links every non-current crumb', () => {
     const html = renderToString(
-      <Breadcrumbs
+      <Breadcrumbs locale="en-US"
         crumbs={[
           { href: '/', label: 'Home' },
           { href: '/catalog', label: 'Catalog' },
@@ -38,7 +38,7 @@ describe('Breadcrumbs — JSON-LD + crawlable anchors', () => {
   });
 
   it('renders nothing for an empty crumb list', () => {
-    expect(renderToString(<Breadcrumbs crumbs={[]} />)).toBe('');
+    expect(renderToString(<Breadcrumbs locale="en-US" crumbs={[]} />)).toBe('');
   });
 });
 
@@ -56,7 +56,7 @@ describe('ProductCard — semantic markup with name + price + SKU', () => {
       stockIndicator: 'available',
       stockLevel: 12,
     };
-    const html = renderToString(<ProductCard product={product} locale="en-US" />);
+    const html = renderToString(<ProductCard product={product} locale="en-US" salesChannelCode="retail" />);
     expect(html).toContain('<h3');
     expect(html).toContain('Widget 1000');
     expect(html).toContain('href="/p/widget-1000"');
@@ -83,7 +83,7 @@ describe('ProductGallery — server-rendered images + document links', () => {
         altText: 'Datasheet',
       },
     ];
-    const html = renderToString(<ProductGallery assets={assets} alt="Widget gallery" />);
+    const html = renderToString(<ProductGallery locale="en-US" assets={assets} alt="Widget gallery" />);
     expect(html).toContain('src="https://example.com/a.jpg"');
     expect(html).toContain('alt="Widget gallery"');
     expect(html).toContain('href="https://example.com/datasheet.pdf"');
@@ -91,7 +91,7 @@ describe('ProductGallery — server-rendered images + document links', () => {
   });
 
   it('renders a placeholder when there are no images', () => {
-    const html = renderToString(<ProductGallery assets={[]} alt="empty" />);
+    const html = renderToString(<ProductGallery locale="en-US" assets={[]} alt="empty" />);
     expect(html).toContain('aspect-square');
   });
 });

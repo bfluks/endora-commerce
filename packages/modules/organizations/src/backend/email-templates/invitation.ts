@@ -20,10 +20,13 @@ export interface BuildInvitationEmailInput {
   expiresAt: Date;
   /** Storefront base URL used to build the redemption link. */
   acceptBaseUrl: string;
+  /** Puts the storefront language prefix on the page path (feature 167, FR-034); absent: the logical path. */
+  pagePath?: (path: string) => string;
 }
 
 export function buildInvitationEmail(input: BuildInvitationEmailInput): EmailMailerSendInput {
-  const acceptUrl = `${trimSlash(input.acceptBaseUrl)}/invitations/${input.rawToken}/accept`;
+  const path = `/invitations/${input.rawToken}/accept`;
+  const acceptUrl = `${trimSlash(input.acceptBaseUrl)}${input.pagePath ? input.pagePath(path) : path}`;
   const roleLabel = input.role === 'organization_admin' ? 'Organization Admin' : 'Member';
   const expiresOn = input.expiresAt.toISOString().slice(0, 10);
 

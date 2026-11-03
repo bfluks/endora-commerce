@@ -47,6 +47,13 @@ import { registerModule as registerCreditLimits } from '@endora-commerce/mod-cre
 import { registerModule as registerOrganizations } from '@endora-commerce/mod-organizations/backend';
 import { registerModule as registerCustomers } from '@endora-commerce/mod-customers/backend';
 import { registerModule as registerComparisons } from '@endora-commerce/mod-comparisons/backend';
+// `projects` pushes its `project` Task context into `tasks`' registry
+// (`specs/163-projects-and-tasks/`, User Story 2), by its published specifier
+// like the rest.
+import { registerModule as registerProjects } from '@endora-commerce/mod-projects/backend';
+// `tasks` offers the Task record type to `admin_search`'s registry
+// (`specs/163-projects-and-tasks/`, User Story 11).
+import { registerModule as registerTasks } from '@endora-commerce/mod-tasks/backend';
 
 /**
  * **A contribution to a registry that was never registered is dropped**
@@ -204,6 +211,9 @@ const COMPOSERS: Readonly<
     compose('orders', registerOrders, ownerNames, withOwner, {
       emailDefaultsPort: { register: () => {} },
       salesChannelAttributionRegistry: { register: () => {} },
+      // Issue #428 — the minimum-order-value write validator, pushed into
+      // `settings`' registry, a module `orders` declares in `dependencies`.
+      settingWriteValidatorRegistry: { register: () => {} },
     }),
   // `crm` offers three of its events to `webhooks`' registry
   // (`specs/143-crm-sales-opportunities/`, User Story 16). Its four other boot
@@ -246,6 +256,31 @@ const COMPOSERS: Readonly<
   // `document_templates`' registry (`specs/152-compare-pdf-template/`), from its
   // only boot hook.
   comparisons: (withOwner, ownerNames) => compose('comparisons', registerComparisons, ownerNames, withOwner),
+  // `projects` contributes to `tasks`' context registry and — User Story 11 —
+  // `admin_search`'s; it pushes into `settings`' validator registry, — User
+  // Story 7 — the asset-reference and audit-reference registries, and — User
+  // Story 8 — the Stage deadline alert e-mail's defaults into
+  // `transactional_emails`', owners it declares in `dependencies`.
+  projects: (withOwner, ownerNames) =>
+    compose('projects', registerProjects, ownerNames, withOwner, {
+      settingWriteValidatorRegistry: { register: () => {} },
+      assetReferenceRegistry: { register: () => {} },
+      auditReferenceRegistry: { register: () => {} },
+      emailDefaultsPort: { register: () => {} },
+    }),
+  // `tasks` offers the Task record type to `admin_search`'s registry. Its other
+  // boot hooks push into `audit_logs`' reference registry and — since
+  // `specs/165-task-management/` User Story 1 — `assets_library`'s
+  // asset-reference registry, and — User Story 7 — `settings`' validator
+  // registry (`tasks.time_zone`) and `transactional_emails`' e-mail defaults,
+  // modules it declares in `dependencies`.
+  tasks: (withOwner, ownerNames) =>
+    compose('tasks', registerTasks, ownerNames, withOwner, {
+      auditReferenceRegistry: { register: () => {} },
+      assetReferenceRegistry: { register: () => {} },
+      settingWriteValidatorRegistry: { register: () => {} },
+      emailDefaultsPort: { register: () => {} },
+    }),
   inventory: (withOwner, ownerNames) =>
     compose('inventory', registerInventory, ownerNames, withOwner, {
       countryReferenceRegistry: { register: () => {} },

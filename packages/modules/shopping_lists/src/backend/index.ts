@@ -1,6 +1,11 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { FastifyRequest } from 'fastify';
-import type { CartWritePort, CatalogProductReadPort, RfqCustomerPort } from '@endora-commerce/contracts';
+import type {
+  CartWritePort,
+  CatalogProductAvailabilityPort,
+  CatalogProductReadPort,
+  RfqCustomerPort,
+} from '@endora-commerce/contracts';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import { lazyPort } from '@endora-commerce/platform/kernel';
@@ -93,6 +98,9 @@ export function registerModule(ctx: ModuleContext): void {
             // kernel registration, not a module's, so there is no edge to
             // declare here.
             lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+            // Feature 163 — `catalog`'s availability answer for the save seam
+            // and the conversions; `catalog` is a binding dependency already.
+            lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
           ),
       )
       .singleton(),
@@ -165,3 +173,4 @@ export const entities = [
  * subpath.
  */
 export type { ShoppingListService } from './services/shopping-list-service.js';
+

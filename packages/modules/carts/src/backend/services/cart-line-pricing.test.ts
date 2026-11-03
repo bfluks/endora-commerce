@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type {
   CatalogProductRecord,
   DisplayMode,
-  LinePricePort,
+  LinePricesPort,
   LinePriceResult,
   OrganizationDetailsPort,
   ProductDisplayModePort,
@@ -10,7 +10,6 @@ import type {
 import {
   CartLinePricing,
   agreedUnitPriceFor,
-  productOwnUnitPrice,
   storedPriceDiffers,
   type CartPricingContext,
 } from './cart-line-pricing.js';
@@ -24,25 +23,35 @@ import {
 const product = (attributeValues: Record<string, unknown> = {}): CatalogProductRecord =>
   ({ id: 'p-1', attributeValues }) as unknown as CatalogProductRecord;
 
-/** Quantity-tier list: 11.49 below 100 pieces, 1.00 from 100 up. */
-function tieredPricing(calls: number[] = []): LinePricePort {
+/** A batched stub answering every line with `price(quantity)`; records each batch. */
+function batched(
+  price: (quantity: number) => LinePriceResult | null,
+  batches: Array<{ quantities: number[]; context: Record<string, unknown> }> = [],
+): LinePricesPort {
   return {
-    async resolveLinePrice({ context }): Promise<LinePriceResult | null> {
-      calls.push(context.quantity);
-      const amount = context.quantity >= 100 ? '1.0000' : '11.4900';
-      return {
-        amount,
-        currency: 'PLN',
-        priceListId: 'list-1',
-        isSale: false,
-        bracketStartQuantity: context.quantity >= 100 ? 100 : 1,
-        displayMode: 'gross_only',
-      };
+    async resolveLinePrices({ lines, context }) {
+      batches.push({ quantities: lines.map((l) => l.quantity), context: { ...context } });
+      return new Map(lines.map((line) => [line.key, price(line.quantity)]));
     },
   };
 }
 
-const noListPrice: LinePricePort = { resolveLinePrice: async () => null };
+/** Quantity-tier list: 11.49 below 100 pieces, 1.00 from 100 up. */
+function tieredPricing(calls: number[] = []): LinePricesPort {
+  return batched((quantity) => {
+    calls.push(quantity);
+    return {
+      amount: quantity >= 100 ? '1.0000' : '11.4900',
+      currency: 'PLN',
+      priceListId: 'list-1',
+      isSale: false,
+      bracketStartQuantity: quantity >= 100 ? 100 : 1,
+      displayMode: 'gross_only',
+    };
+  });
+}
+
+const noListPrice: LinePricesPort = batched(() => null);
 
 function displayModes(mode: DisplayMode): ProductDisplayModePort {
   return { resolveDisplayMode: async () => mode };
@@ -63,10 +72,10 @@ describe('CartLinePricing.orderablePrice', () => {
     const pricing = new CartLinePricing(tieredPricing(), displayModes('gross_only'), noOrganizations);
     expect(
       await pricing.orderablePrice(ctx, { product: product(), variantId: null, quantity: 100 }),
-    ).toEqual({ ok: true, unitPrice: '1.00', currency: 'PLN', source: 'price_list' });
+    ).toEqual({ ok: true, unitPrice: '1.0000', currency: 'PLN', source: 'price_list', priceSource: null });
     expect(
       await pricing.orderablePrice(ctx, { product: product(), variantId: null, quantity: 1 }),
-    ).toEqual({ ok: true, unitPrice: '11.49', currency: 'PLN', source: 'price_list' });
+    ).toEqual({ ok: true, unitPrice: '11.4900', currency: 'PLN', source: 'price_list', priceSource: null });
   });
 
   it('keeps an agreed price only while the quantity is the agreed quantity', async () => {
@@ -85,7 +94,7 @@ describe('CartLinePricing.orderablePrice', () => {
         quantity: 10,
         agreed,
       }),
-    ).toEqual({ ok: true, unitPrice: '5.00', currency: 'PLN', source: 'agreed' });
+    ).toEqual({ ok: true, unitPrice: '5.0000', currency: 'PLN', source: 'agreed', priceSource: 'agreed' });
     expect(calls).toEqual([]);
 
     expect(
@@ -95,10 +104,10 @@ describe('CartLinePricing.orderablePrice', () => {
         quantity: 11,
         agreed,
       }),
-    ).toEqual({ ok: true, unitPrice: '11.49', currency: 'PLN', source: 'price_list' });
+    ).toEqual({ ok: true, unitPrice: '11.4900', currency: 'PLN', source: 'price_list', priceSource: null });
   });
 
-  it("falls back to the product's own price when no list applies", async () => {
+  it("is unpriced when no price book prices the line — the product's legacy own price is not a price (FR-018)", async () => {
     const pricing = new CartLinePricing(noListPrice, displayModes('gross_only'), noOrganizations);
     expect(
       await pricing.orderablePrice(ctx, {
@@ -106,7 +115,38 @@ describe('CartLinePricing.orderablePrice', () => {
         variantId: null,
         quantity: 3,
       }),
-    ).toEqual({ ok: true, unitPrice: '19.99', currency: 'PLN', source: 'product' });
+    ).toEqual({ ok: false, reason: 'unpriced' });
+  });
+
+  it('passes the variant and records the tier that priced the line (FR-030, FR-031)', async () => {
+    const seen: Array<string | null | undefined> = [];
+    const pricing = new CartLinePricing(
+      {
+        async resolveLinePrices({ lines }) {
+          for (const line of lines) seen.push(line.variantId);
+          return new Map(
+            lines.map((line) => [
+              line.key,
+              {
+                amount: '83.6000',
+                currency: 'PLN',
+                priceListId: 'book-1',
+                isSale: false,
+                bracketStartQuantity: 1,
+                displayMode: 'gross_only' as const,
+                source: 'buyer' as const,
+              },
+            ]),
+          );
+        },
+      },
+      displayModes('gross_only'),
+      noOrganizations,
+    );
+    expect(
+      await pricing.orderablePrice(ctx, { product: product(), variantId: 'v-red', quantity: 2 }),
+    ).toEqual({ ok: true, unitPrice: '83.6000', currency: 'PLN', source: 'price_list', priceSource: 'buyer' });
+    expect(seen).toEqual(['v-red']);
   });
 
   it('answers unpriced when neither a list nor the product carries a price', async () => {
@@ -118,16 +158,14 @@ describe('CartLinePricing.orderablePrice', () => {
 
   it('answers quote_only for a product sold on request, listed or not', async () => {
     const listed = new CartLinePricing(
-      {
-        resolveLinePrice: async () => ({
-          amount: '3.00',
-          currency: 'PLN',
-          priceListId: 'l',
-          isSale: false,
-          bracketStartQuantity: 1,
-          displayMode: 'none',
-        }),
-      },
+      batched(() => ({
+        amount: '3.00',
+        currency: 'PLN',
+        priceListId: 'l',
+        isSale: false,
+        bracketStartQuantity: 1,
+        displayMode: 'none',
+      })),
       displayModes('gross_only'),
       noOrganizations,
     );
@@ -154,7 +192,59 @@ describe('CartLinePricing.orderablePrice', () => {
         quantity: 4,
         agreed: { quantity: 4, unitPrice: '0.00', currency: 'PLN' },
       }),
-    ).toEqual({ ok: true, unitPrice: '0.00', currency: 'PLN', source: 'agreed' });
+    ).toEqual({ ok: true, unitPrice: '0.0000', currency: 'PLN', source: 'agreed', priceSource: 'agreed' });
+  });
+});
+
+describe('CartLinePricing — D-287 P0', () => {
+  it('answers unpriced on a basket whose channel is gone', async () => {
+    const pricing = new CartLinePricing(noListPrice, displayModes('gross_only'), noOrganizations);
+    expect(
+      await pricing.orderablePrice(
+        { ...ctx, channel: null },
+        { product: product({ defaultPrice: 19.99 }), variantId: null, quantity: 1 },
+      ),
+    ).toEqual({ ok: false, reason: 'unpriced' });
+  });
+
+  it("prices a basket's lines in one batched call, agreed lines excluded", async () => {
+    const batches: Array<{ quantities: number[]; context: Record<string, unknown> }> = [];
+    const pricing = new CartLinePricing(
+      batched(
+        (quantity) => ({
+          amount: quantity >= 100 ? '1.0000' : '11.4900',
+          currency: 'PLN',
+          priceListId: 'list-1',
+          isSale: false,
+          bracketStartQuantity: 1,
+          displayMode: 'gross_only',
+        }),
+        batches,
+      ),
+      displayModes('gross_only'),
+      noOrganizations,
+    );
+    const answers = await pricing.orderablePrices(
+      { ...ctx, organization: { id: 'org-1', customerGroupId: null } as never, customerAccountId: 'cust-1' },
+      [
+        { key: 'a', product: product(), variantId: null, quantity: 1 },
+        { key: 'b', product: product(), variantId: null, quantity: 100 },
+        {
+          key: 'c',
+          product: product(),
+          variantId: null,
+          quantity: 7,
+          agreed: { quantity: 7, unitPrice: '5.00', currency: 'PLN' },
+        },
+      ],
+    );
+    expect(batches).toHaveLength(1);
+    expect(batches[0]!.quantities).toEqual([1, 100]);
+    // The customer travels to the engine, which applies their own group.
+    expect(batches[0]!.context['customerAccountId']).toBe('cust-1');
+    expect(answers.get('a')).toMatchObject({ unitPrice: '11.4900', source: 'price_list', priceSource: null });
+    expect(answers.get('b')).toMatchObject({ unitPrice: '1.0000', source: 'price_list', priceSource: null });
+    expect(answers.get('c')).toMatchObject({ unitPrice: '5.0000', source: 'agreed', priceSource: 'agreed' });
   });
 });
 
@@ -166,22 +256,12 @@ describe('agreedUnitPriceFor', () => {
 
   it('is the agreed price at the agreed quantity and null at any other', () => {
     const agreed = { quantity: 5, unitPrice: '2.5', currency: 'EUR' };
-    expect(agreedUnitPriceFor(5, agreed)).toEqual({ unitPrice: '2.50', currency: 'EUR' });
+    expect(agreedUnitPriceFor(5, agreed)).toEqual({ unitPrice: '2.5000', currency: 'EUR' });
     expect(agreedUnitPriceFor(6, agreed)).toBeNull();
   });
 });
 
-describe('productOwnUnitPrice', () => {
-  it('reads defaultPrice, then price, and refuses what is not a non-negative number', () => {
-    expect(productOwnUnitPrice({ defaultPrice: '12.5' })).toBe('12.50');
-    expect(productOwnUnitPrice({ price: 7 })).toBe('7.00');
-    expect(productOwnUnitPrice({ defaultPrice: 0 })).toBe('0.00');
-    expect(productOwnUnitPrice({})).toBeNull();
-    expect(productOwnUnitPrice({ defaultPrice: 'abc' })).toBeNull();
-    expect(productOwnUnitPrice({ defaultPrice: -1 })).toBeNull();
-    expect(productOwnUnitPrice({ defaultPrice: null })).toBeNull();
-  });
-});
+
 
 describe('storedPriceDiffers', () => {
   it('compares amounts at two decimals and the currency', () => {
@@ -189,5 +269,86 @@ describe('storedPriceDiffers', () => {
     expect(storedPriceDiffers({ unitPrice: '1.00', currency: 'PLN' }, { unitPrice: '11.49', currency: 'PLN' })).toBe(true);
     expect(storedPriceDiffers({ unitPrice: '1.00', currency: 'PLN' }, { unitPrice: '1.00', currency: 'EUR' })).toBe(true);
     expect(storedPriceDiffers({ unitPrice: '1.00', currency: 'PLN' }, null)).toBe(true);
+  });
+});
+
+describe('CartLinePricing.contextFor — the basket’s own channel', () => {
+  /**
+   * `specs/154-sales-channel-access/` (contracts/basket-attribution.md §2): the
+   * context is the basket's channel, looked up by id. It used to load the
+   * system-default channel whatever the basket, which is the shape this
+   * refuses: the only lookup is by the id it was given.
+   */
+  it('loads the channel it is given, by id, and nothing else', async () => {
+    const lookups: Array<Record<string, unknown>> = [];
+    const em = {
+      findOne: async (_entity: unknown, where: Record<string, unknown>) => {
+        lookups.push(where);
+        return where['id'] === 'ch-b' ? { id: 'ch-b', defaultCurrency: 'EUR' } : null;
+      },
+    } as unknown as Parameters<CartLinePricing['contextFor']>[0];
+    const pricing = new CartLinePricing(noListPrice, displayModes('both'), noOrganizations);
+
+    const context = await pricing.contextFor(em, {
+      organizationId: null,
+      signedIn: false,
+      salesChannelId: 'ch-b',
+    });
+
+    expect(context.channel).toEqual({ id: 'ch-b', defaultCurrency: 'EUR' });
+    expect(lookups).toEqual([{ id: 'ch-b' }]);
+  });
+
+  it('answers no channel for one that is gone, rather than another channel', async () => {
+    const em = { findOne: async () => null } as unknown as Parameters<
+      CartLinePricing['contextFor']
+    >[0];
+    const pricing = new CartLinePricing(noListPrice, displayModes('both'), noOrganizations);
+    const context = await pricing.contextFor(em, {
+      organizationId: null,
+      signedIn: true,
+      salesChannelId: 'ch-gone',
+    });
+    expect(context.channel).toBeNull();
+  });
+});
+
+/**
+ * Owner ruling of 2026-10-25 (`specs/pricing/worked-examples.md` §10.18) — the
+ * cart carries the resolver's unit price at its four places, unrounded; only
+ * the line value is rounded. Rounding it to two at intake charged a screw
+ * priced 0.0125 as 0.01, so 10 000 pieces cost 100.00 instead of 125.00.
+ */
+describe('CartLinePricing — a unit price is carried at four places, unrounded', () => {
+  const at = (amount: string): LinePricesPort =>
+    batched(() => ({ amount, currency: 'PLN', priceListId: 'b', isSale: false, bracketStartQuantity: 1, displayMode: 'gross_only' }));
+
+  it.each([
+    ['0.0125', '0.0125'],
+    ['0.0150', '0.0150'],
+    ['9.0450', '9.0450'],
+    ['1.0050', '1.0050'],
+    ['29.5', '29.5000'],
+  ])('%s is stored as %s', async (amount, stored) => {
+    const pricing = new CartLinePricing(at(amount), displayModes('gross_only'), noOrganizations);
+    expect(await pricing.orderablePrice(ctx, { product: product(), variantId: null, quantity: 10_000 })).toMatchObject({
+      ok: true,
+      unitPrice: stored,
+    });
+  });
+
+  it('keeps an agreed four-place price as agreed', () => {
+    expect(agreedUnitPriceFor(10_000, { quantity: 10_000, unitPrice: '0.0125', currency: 'PLN' })).toEqual({
+      unitPrice: '0.0125',
+      currency: 'PLN',
+    });
+  });
+
+  it('a stored price differs from the current one at any of its four places', () => {
+    expect(storedPriceDiffers({ unitPrice: '0.0125', currency: 'PLN' }, { unitPrice: '0.0125', currency: 'PLN' })).toBe(false);
+    expect(storedPriceDiffers({ unitPrice: '9.0450', currency: 'PLN' }, { unitPrice: '9.045', currency: 'PLN' })).toBe(false);
+    // A line priced at two places before the upgrade is not the four-place price now.
+    expect(storedPriceDiffers({ unitPrice: '9.0500', currency: 'PLN' }, { unitPrice: '9.0450', currency: 'PLN' })).toBe(true);
+    expect(storedPriceDiffers({ unitPrice: '0.0100', currency: 'PLN' }, { unitPrice: '0.0125', currency: 'PLN' })).toBe(true);
   });
 });

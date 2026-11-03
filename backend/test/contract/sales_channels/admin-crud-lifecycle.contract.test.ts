@@ -5,7 +5,10 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
-import { SalesChannel } from '@endora-commerce/platform/kernel';
+import { AuditLogEntry, SalesChannel } from '@endora-commerce/platform/kernel';
+import { randomUUID } from 'node:crypto';
+import { AdminRole, AdminUser } from '../../helpers/package-entities.js';
+import { ADMIN_COOKIES } from '../../helpers/test-actors.js';
 
 /**
  * T029-T033 — Admin HTTP contract for the Sales Channels module.
@@ -443,6 +446,242 @@ describe('admin sales-channels CRUD + lifecycle (T029-T033)', () => {
       cookies: adminCookie,
     });
     expect(detail.statusCode).toBe(404);
+  });
+
+  // -- Feature 154: open to anonymous visitors -----------------------------
+
+  it('POST without anonymousAccess creates an open channel; the flag is on list and detail', async () => {
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/sales-channels',
+      cookies: adminCookie,
+      payload: {
+        code: 'serwis-open',
+        name: { 'en-US': 'Open' },
+        languages: ['en-US'],
+        defaultLanguage: 'en-US',
+        currencies: ['PLN'],
+        defaultCurrency: 'PLN',
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect((created.json() as Record<string, unknown>)['anonymousAccess']).toBe(true);
+
+    const closed = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/sales-channels',
+      cookies: adminCookie,
+      payload: {
+        code: 'serwis-closed',
+        name: { 'en-US': 'Closed' },
+        languages: ['en-US'],
+        defaultLanguage: 'en-US',
+        currencies: ['PLN'],
+        defaultCurrency: 'PLN',
+        anonymousAccess: false,
+      },
+    });
+    expect((closed.json() as Record<string, unknown>)['anonymousAccess']).toBe(false);
+
+    const list = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/sales-channels',
+      cookies: adminCookie,
+    });
+    const items = (list.json() as { items: Array<{ code: string; anonymousAccess: boolean }> })
+      .items;
+    expect(items.find((c) => c.code === 'serwis-closed')?.anonymousAccess).toBe(false);
+    expect(items.find((c) => c.code === 'default')?.anonymousAccess).toBe(true);
+  });
+
+  it('PATCH anonymousAccess is audited before/after, bumps version, honours the version and reaches resolution', async () => {
+    await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/sales-channels',
+      cookies: adminCookie,
+      payload: {
+        code: 'serwis-flag',
+        name: { 'en-US': 'Flag' },
+        languages: ['en-US'],
+        defaultLanguage: 'en-US',
+        currencies: ['PLN'],
+        defaultCurrency: 'PLN',
+      },
+    });
+    // Warm the channel cache so the change has something to invalidate.
+    const warm = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/storefront/sales-channel',
+      headers: { 'x-sales-channel': 'serwis-flag' },
+    });
+    expect((warm.json() as { data: { anonymousAccess: boolean } }).data.anonymousAccess).toBe(true);
+
+    const r = await h.app.inject({
+      method: 'PATCH',
+      url: '/api/v1/admin/sales-channels/serwis-flag',
+      cookies: adminCookie,
+      payload: { expectedVersion: 1, anonymousAccess: false },
+    });
+    expect(r.statusCode).toBe(200);
+    const body = r.json() as Record<string, unknown>;
+    expect(body['anonymousAccess']).toBe(false);
+    expect(body['version']).toBe(2);
+
+    const stale = await h.app.inject({
+      method: 'PATCH',
+      url: '/api/v1/admin/sales-channels/serwis-flag',
+      cookies: adminCookie,
+      payload: { expectedVersion: 1, anonymousAccess: true },
+    });
+    expect(stale.statusCode).toBe(412);
+
+    const entry = await h.em().findOne(
+      AuditLogEntry,
+      {
+        objectType: 'sales_channel',
+        objectId: body['id'] as string,
+        action: 'sales_channel.identity.changed',
+      },
+      { orderBy: { actedAt: 'desc' } },
+    );
+    // A Command Bus row (Principle XIII): the snapshots are the row's own
+    // before/after columns, and the actor is the signed-in administrator.
+    expect(entry?.actorAdminUserId).toBeTruthy();
+    expect(entry?.stateBefore).toMatchObject({ anonymousAccess: true, version: 1 });
+    expect(entry?.stateAfter).toMatchObject({ anonymousAccess: false, version: 2 });
+
+    const identity = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/storefront/sales-channel',
+      headers: { 'x-sales-channel': 'serwis-flag' },
+    });
+    expect((identity.json() as { data: { anonymousAccess: boolean } }).data.anonymousAccess).toBe(
+      false,
+    );
+    const refused = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/catalog/products',
+      headers: { 'x-sales-channel': 'serwis-flag' },
+    });
+    expect(refused.statusCode).toBe(403);
+    expect((refused.json() as { error: { code: string } }).error.code).toBe(
+      ERROR_CODES.SALES_CHANNEL_SIGN_IN_REQUIRED,
+    );
+  });
+
+  // -- Feature 167: prefix the default language in URLs -----------------------
+
+  it('POST without prefixDefaultLanguage creates a prefixed channel; the flag is on list and detail (OR-1)', async () => {
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/sales-channels',
+      cookies: adminCookie,
+      payload: {
+        code: 'serwis-prefixed',
+        name: { 'en-US': 'Prefixed' },
+        languages: ['en-US', 'pl-PL'],
+        defaultLanguage: 'en-US',
+        currencies: ['PLN'],
+        defaultCurrency: 'PLN',
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect((created.json() as Record<string, unknown>)['prefixDefaultLanguage']).toBe(true);
+
+    const detail = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/sales-channels/serwis-prefixed',
+      cookies: adminCookie,
+    });
+    expect((detail.json() as Record<string, unknown>)['prefixDefaultLanguage']).toBe(true);
+    const list = await h.app.inject({ method: 'GET', url: '/api/v1/admin/sales-channels', cookies: adminCookie });
+    const items = (list.json() as { items: Array<{ code: string; prefixDefaultLanguage: boolean }> }).items;
+    expect(items.find((c) => c.code === 'serwis-prefixed')?.prefixDefaultLanguage).toBe(true);
+  });
+
+  it('PATCH prefixDefaultLanguage is audited before/after and reaches the public read; read-only admins are refused', async () => {
+    await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/sales-channels',
+      cookies: adminCookie,
+      payload: {
+        code: 'serwis-prefix-flag',
+        name: { 'en-US': 'Prefix flag' },
+        languages: ['en-US', 'pl-PL'],
+        defaultLanguage: 'en-US',
+        currencies: ['PLN'],
+        defaultCurrency: 'PLN',
+      },
+    });
+    const warm = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/storefront/sales-channel',
+      headers: { 'x-sales-channel': 'serwis-prefix-flag' },
+    });
+    expect((warm.json() as { data: { prefixDefaultLanguage: boolean } }).data.prefixDefaultLanguage).toBe(true);
+
+    const r = await h.app.inject({
+      method: 'PATCH',
+      url: '/api/v1/admin/sales-channels/serwis-prefix-flag',
+      cookies: adminCookie,
+      payload: { expectedVersion: 1, prefixDefaultLanguage: false },
+    });
+    expect(r.statusCode).toBe(200);
+    const body = r.json() as Record<string, unknown>;
+    expect(body['prefixDefaultLanguage']).toBe(false);
+
+    const entries = await h.em().find(AuditLogEntry, {
+      objectType: 'sales_channel',
+      objectId: body['id'] as string,
+      action: 'sales_channel.identity.changed',
+    });
+    // One row for the create, exactly one for this update.
+    const updates = entries.filter((e) => e.stateBefore != null);
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.stateBefore).toMatchObject({ prefixDefaultLanguage: true, version: 1 });
+    expect(updates[0]?.stateAfter).toMatchObject({ prefixDefaultLanguage: false, version: 2 });
+
+    // The cached channel was dropped: the next resolve reads the new value.
+    const identity = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/storefront/sales-channel',
+      headers: { 'x-sales-channel': 'serwis-prefix-flag' },
+    });
+    const data = (identity.json() as { data: { prefixDefaultLanguage: boolean; urlLanguages: Array<{ prefixed: boolean }> } })
+      .data;
+    expect(data.prefixDefaultLanguage).toBe(false);
+    expect(data.urlLanguages[0]?.prefixed).toBe(false);
+
+    // An operator with sales_channels:read only cannot change it.
+    const em = h.em();
+    const stamp = randomUUID().slice(0, 8);
+    const role = em.create(AdminRole, {
+      code: `sc-reader-${stamp}`,
+      name: 'Sales channel reader',
+      permissions: ['sales_channels:read'],
+    });
+    await em.persistAndFlush(role);
+    const reader = em.create(AdminUser, {
+      email: `sc-reader-${stamp}@audit.local`,
+      passwordHash: 'x'.repeat(60),
+      adminRoleId: role.id,
+      firstName: 'Channel',
+      lastName: 'Reader',
+    });
+    await em.persistAndFlush(reader);
+    const session = `stub-sc-reader-${stamp}`;
+    ADMIN_COOKIES[session] = { adminUserId: reader.id };
+    try {
+      const refused = await h.app.inject({
+        method: 'PATCH',
+        url: '/api/v1/admin/sales-channels/serwis-prefix-flag',
+        cookies: { b2b_session: session },
+        payload: { expectedVersion: 2, prefixDefaultLanguage: true },
+      });
+      expect(refused.statusCode).toBe(403);
+    } finally {
+      delete ADMIN_COOKIES[session];
+    }
   });
 
   // -- Auth gate ------------------------------------------------------------

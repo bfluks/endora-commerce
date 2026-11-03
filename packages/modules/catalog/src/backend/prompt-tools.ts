@@ -1,11 +1,15 @@
 import {
+  ArchiveProductsParamsSchema,
   AssignProductsToCategoryParamsSchema,
+  RestoreProductsParamsSchema,
   RemoveProductsFromCategoryParamsSchema,
   SearchCategoriesParamsSchema,
   SearchProductsParamsSchema,
   SetProductStatusParamsSchema,
   SetProductsVisibilityParamsSchema,
+  type ArchiveProductsParams,
   type AssignProductsToCategoryParams,
+  type RestoreProductsParams,
   type RemoveProductsFromCategoryParams,
   type SearchCategoriesParams,
   type SearchProductsParams,
@@ -21,6 +25,8 @@ import type { Redis } from 'ioredis';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { EventBus } from '@endora-commerce/platform/events';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { CommandBus } from '@endora-commerce/platform/commands';
+import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import { Category } from './entities/category.entity.js';
 import { Product } from './entities/product.entity.js';
 import { CatalogAdminService, type CatalogEventBus } from './services/catalog-admin.service.js';
@@ -54,6 +60,15 @@ export interface CatalogPromptToolsDeps {
   salesChannelMembership?: SalesChannelMembershipPort;
   /** Enables queue delegation for > BULK_ASYNC_THRESHOLD selections. */
   redis?: Redis;
+  /**
+   * Feature 163 (P-1 = A) — the bus the Archive / Restore tools run their
+   * `product.archive` / `product.restore` Commands through, so the audit entry is
+   * written co-transactionally with the acting admin the bus derives from the
+   * confirming request. Without it those two tools are not contributed: the
+   * service's bus-less fallback writes no audit entry. The four older mutations
+   * keep their own audited path and do not use it.
+   */
+  commandBus?: CommandBus;
 }
 
 /** Mirrors the feature-022 route threshold (catalog/routes.admin.ts). */
@@ -79,19 +94,24 @@ export function catalogPromptResolverTools(deps: CatalogPromptToolsDeps): Prompt
     moduleId: 'catalog',
     kind: 'resolver',
     description:
-      'Search products by a name, SKU or slug fragment (case- and diacritic-insensitive substring). Returns up to 20 matches as {id, sku, label, status}. Use the returned id in mutation tools; never invent ids.',
+      'Search products by a name, SKU or slug fragment (case- and diacritic-insensitive substring), archived products included. Returns up to 20 matches as {id, sku, label, status, archived}; archived is independent of status. Use the returned id in mutation tools; never invent ids.',
     requiredPermission: 'catalog:read',
     paramsSchema: SearchProductsParamsSchema,
     execute: async (params) => {
+      // Feature 163 (P-1 = A) — archived products included, so that
+      // `catalog.restore_product` can be resolved at all; the admin list's own
+      // default (`exclude`) would hide every product it applies to.
       const result = await adminService.listProducts({
         q: params.q,
+        archived: 'include',
         pageSize: Math.min(params.limit ?? 10, RESULT_LIMIT),
       });
       return result.items.map((p) => ({
         id: p.id,
         sku: p.sku,
-        label: localizedLabel(p.name),
+        label: p.name || p.sku,
         status: p.status,
+        archived: (p.archivedAt ?? null) !== null,
       }));
     },
   };
@@ -201,7 +221,7 @@ async function previewProducts(
   return {
     headline,
     affectedCount: products.length,
-    sample: products.slice(0, 10).map((p) => ({ id: p.id, label: localizedLabel(p.name) })),
+    sample: products.slice(0, 10).map((p) => ({ id: p.id, label: p.name || p.sku })),
   };
 }
 
@@ -241,7 +261,7 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
         affectedCount: products.length,
         sample: products.slice(0, 10).map((p) => ({
           id: p.id,
-          label: p.name['en'] ?? Object.values(p.name)[0] ?? p.sku,
+          label: p.name || p.sku,
         })),
       };
     },
@@ -311,7 +331,7 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
         affectedCount: products.length,
         sample: products.slice(0, 10).map((p) => ({
           id: p.id,
-          label: p.name['en'] ?? Object.values(p.name)[0] ?? p.sku,
+          label: p.name || p.sku,
         })),
       };
     },
@@ -329,7 +349,7 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
     moduleId: 'catalog',
     kind: 'mutation',
     description:
-      'Set the status (draft | active | inactive) of one or more products. Resolve products via catalog.search_products first. Captured into a plan the operator must confirm; not executed immediately.',
+      'Set the status (active | inactive) of one or more products: inactive switches a product off and does not archive it, and active does not restore an archived product. To archive or restore, use catalog.archive_product or catalog.restore_product. Resolve products via catalog.search_products first. Captured into a plan the operator must confirm; not executed immediately.',
     requiredPermission: 'catalog:write',
     paramsSchema: SetProductStatusParamsSchema,
     preview: async (params) =>
@@ -365,7 +385,130 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
     removeFromCategory as PromptActionTool,
     setProductStatus as PromptActionTool,
     setProductsVisibility as PromptActionTool,
-  ];
+    ...(deps.commandBus ? archiveRestoreTools(deps, deps.commandBus, bulkOperationService) : []),
+  ].map(withUniqueProductIds);
+}
+
+/**
+ * Feature 163, checkpoint F (S-1) — a model may name one product twice. Every product
+ * mutation tool sees each id once, in first-seen order: a repeated id neither fails the
+ * preview's existence count (`id in (…)` answers one row for it) nor runs twice.
+ */
+function withUniqueProductIds(tool: PromptActionTool): PromptActionTool {
+  const unique = (params: unknown): unknown => {
+    if (typeof params !== 'object' || params === null) return params;
+    const ids = (params as { productIds?: unknown }).productIds;
+    return Array.isArray(ids) ? { ...params, productIds: [...new Set(ids)] } : params;
+  };
+  const preview = tool.preview;
+  return {
+    ...tool,
+    execute: (params, ctx) => tool.execute(unique(params), ctx),
+    ...(preview ? { preview: (params: unknown, ctx: ToolContext) => preview.call(tool, unique(params), ctx) } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Feature 163, owner decision P-1 = A — Archive / Restore
+// ---------------------------------------------------------------------------
+
+/**
+ * `catalog.archive_product` and `catalog.restore_product` (FR-019): the same
+ * audited Commands as `POST /api/v1/admin/catalog/products/:id/archive` and
+ * `…/restore`, run through a bus-backed {@link CatalogAdminService} so each
+ * product gets its own `product.archive` / `product.restore` entry with the
+ * confirming admin as actor. The plan / confirm step is the confirmation; the
+ * preview headline says what is hard to undo.
+ *
+ * Up to {@link BULK_ASYNC_THRESHOLD} products run at confirm time, one Command
+ * each (a product already in the requested state succeeds with no entry and no
+ * event, O-6). A larger selection is the bulk Archive / Restore of FR-053 on the
+ * durable `catalog.bulk-operation` queue — `fields: { archived }` alone — whose
+ * worker runs the same Command per product, audited with the requesting admin
+ * as actor (S-W2), and whose operation page carries the undo.
+ */
+function archiveRestoreTools(
+  deps: CatalogPromptToolsDeps,
+  commandBus: CommandBus,
+  bulkOperationService: BulkOperationService,
+): PromptActionTool[] {
+  const adminService = new CatalogAdminService(
+    deps.emFactory,
+    deps.events as CatalogEventBus,
+    deps.auditLogService,
+    deps.salesChannelMembership,
+    commandBus,
+  );
+
+  const run = async (productIds: string[], archive: boolean, ctx: ToolContext): Promise<unknown> => {
+    if (productIds.length > BULK_ASYNC_THRESHOLD) {
+      const op = await bulkOperationService.create({
+        requestedByAdminUserId: ctx.adminUserId,
+        payload: { productIds, fields: { archived: archive } },
+      });
+      return { delegated: true, bulkOperationId: op.id };
+    }
+    const failures: Array<{ id: string; reason: string }> = [];
+    for (const id of productIds) {
+      try {
+        if (archive) await adminService.archiveProduct(id);
+        else await adminService.restoreProduct(id);
+      } catch (err) {
+        // A per-item tolerance: one product's failure never rolls back
+        // another's (FR-011). A disabled module is not a per-item failure,
+        // so it still fails the whole run closed.
+        rethrowIfModuleDisabled(err);
+        // Feature 163, checkpoint F (S-2) — the reason reaches the assistant's
+        // transcript: only an HttpError's message is written for a reader; any other
+        // error's text (a driver message, a stack detail) stays in the server log.
+        failures.push({ id, reason: err instanceof HttpError ? err.message : 'failed' });
+      }
+    }
+    return {
+      summary: {
+        total: productIds.length,
+        succeeded: productIds.length - failures.length,
+        failed: failures.length,
+        failures: failures.slice(0, 50),
+      },
+    };
+  };
+
+  const archiveProduct: PromptActionTool<ArchiveProductsParams> = {
+    id: 'catalog.archive_product',
+    moduleId: 'catalog',
+    kind: 'mutation',
+    description:
+      'Archive one or more products: an archived product leaves every sales channel and its page answers "gone", whatever its status. It stays archived until catalog.restore_product restores it; setting its status does not. Archiving an already archived product changes nothing. Resolve products via catalog.search_products first. Captured into a plan the operator must confirm; not executed immediately.',
+    requiredPermission: 'catalog:write',
+    paramsSchema: ArchiveProductsParamsSchema,
+    preview: async (params) =>
+      previewProducts(
+        deps.emFactory(),
+        params.productIds,
+        `Archive ${params.productIds.length} product(s): they leave every sales channel, and only Restore brings them back`,
+      ),
+    execute: async (params, ctx: ToolContext) => run(params.productIds, true, ctx),
+  };
+
+  const restoreProduct: PromptActionTool<RestoreProductsParams> = {
+    id: 'catalog.restore_product',
+    moduleId: 'catalog',
+    kind: 'mutation',
+    description:
+      'Restore one or more archived products. Restore does not change the status: a restored inactive product stays switched off. Restoring a product that is not archived changes nothing. Resolve products via catalog.search_products first (it reports archived). Captured into a plan the operator must confirm; not executed immediately.',
+    requiredPermission: 'catalog:write',
+    paramsSchema: RestoreProductsParamsSchema,
+    preview: async (params) =>
+      previewProducts(
+        deps.emFactory(),
+        params.productIds,
+        `Restore ${params.productIds.length} archived product(s); their status stays as it is`,
+      ),
+    execute: async (params, ctx: ToolContext) => run(params.productIds, false, ctx),
+  };
+
+  return [archiveProduct as PromptActionTool, restoreProduct as PromptActionTool];
 }
 
 /**

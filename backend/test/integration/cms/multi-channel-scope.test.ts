@@ -26,7 +26,6 @@ describe('CMS multi-channel scope (T061)', () => {
       defaultCurrency: 'PLN',
       active: true,
       systemDefault: false,
-      isPublic: true,
       status: 'active',
     });
     vip = em.create(SalesChannel, {
@@ -38,7 +37,6 @@ describe('CMS multi-channel scope (T061)', () => {
       defaultCurrency: 'PLN',
       active: true,
       systemDefault: false,
-      isPublic: true,
       status: 'active',
     });
     await em.persistAndFlush([retail, vip]);

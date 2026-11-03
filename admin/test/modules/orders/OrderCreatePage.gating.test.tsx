@@ -43,7 +43,7 @@ const { OrderCreatePage } = await import('../../../../packages/modules/orders/sr
 
 const JAN = { id: 'cust-1', email: 'jan@acme.test', firstName: 'Jan', lastName: 'Kowalski', organizationName: 'Acme' };
 const EWA = { id: 'cust-2', email: 'ewa@beta.test', firstName: 'Ewa', lastName: 'Nowak', organizationName: 'Beta' };
-const PRODUCT = { id: 'prod-1', sku: 'SKU-1', slug: 'p1', status: 'active', name: { 'en-US': 'Widget' } };
+const PRODUCT = { id: 'prod-1', sku: 'SKU-1', slug: 'p1', status: 'active', name: 'Widget' };
 
 const PREVIEW = {
   lines: [{ productId: 'prod-1', quantity: 1, unitPrice: '10.00', currency: 'PLN', lineTotal: 10 }],

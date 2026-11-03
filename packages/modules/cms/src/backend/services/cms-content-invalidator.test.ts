@@ -75,6 +75,16 @@ describe('CmsContentInvalidator', () => {
     expect(r.published).toEqual([{ kind: 'page', slugs: ['about', 'about-us'] }]);
   });
 
+  it('drops every page when a nested address moved, then publishes the change as such (R19D)', async () => {
+    // A nested page's path is written into the links of other pages, so a
+    // write that moves it leaves those answers stale too.
+    const r = recorder();
+    await new CmsContentInvalidator(r.cache, r.publish).pagesChanged(['zone', 'zone/leaf'], { addressesMoved: true });
+
+    expect(r.log).toEqual(['redis:pages:zone,zone/leaf', 'redis:all-pages', 'publish:page']);
+    expect(r.published).toEqual([{ kind: 'page', slugs: ['zone', 'zone/leaf'], addressesMoved: true }]);
+  });
+
   it('says nothing when a page write names no slug', async () => {
     const r = recorder();
     await new CmsContentInvalidator(r.cache, r.publish).pagesChanged(['', '']);
@@ -113,6 +123,31 @@ describe('CmsContentInvalidator', () => {
     expect(r.published).toEqual([{ kind: 'hook', codes: ['home.top'] }]);
   });
 
+  // R19C (T271): a write answers once the storefront has been told, so the next request is fresh.
+  it('waits for the published change to be delivered before the write answers', async () => {
+    const r = recorder();
+    let deliver!: () => void;
+    const delivered = new Promise<void>((resolve) => {
+      deliver = resolve;
+    });
+    const publish = (change: CmsContentChange): Promise<void> => {
+      r.publish(change);
+      return delivered.then(() => {
+        r.log.push('delivered');
+      });
+    };
+    let answered = false;
+    const write = new CmsContentInvalidator(r.cache, publish).pagesChanged(['about']).then(() => {
+      answered = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(r.log).toEqual(['redis:pages:about', 'publish:page']);
+    expect(answered).toBe(false);
+    deliver();
+    await write;
+    expect(r.log).toEqual(['redis:pages:about', 'publish:page', 'delivered']);
+  });
+
   it('still publishes in a composition with no Redis', async () => {
     // The storefront's Data Cache exists whether or not this process has a
     // Redis connection, so the absent cache must not take the notice with it.
@@ -129,6 +164,14 @@ describe('storefrontTagsFor', () => {
       CMS_STOREFRONT_CACHE_TAGS.page('about'),
       CMS_STOREFRONT_CACHE_TAGS.page('o-nas'),
       CMS_STOREFRONT_CACHE_TAGS.pageIndex,
+    ]);
+  });
+
+  it('adds every page read when a nested address moved (R19D)', () => {
+    expect(storefrontTagsFor({ kind: 'page', slugs: ['zone/leaf'], addressesMoved: true })).toEqual([
+      CMS_STOREFRONT_CACHE_TAGS.page('zone/leaf'),
+      CMS_STOREFRONT_CACHE_TAGS.pageIndex,
+      CMS_STOREFRONT_CACHE_TAGS.pages,
     ]);
   });
 

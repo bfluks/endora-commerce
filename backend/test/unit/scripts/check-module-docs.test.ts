@@ -348,10 +348,8 @@ describe('check:module-docs', () => {
     it('holds the undocumented modules that remain in this repository', () => {
       expect(Object.keys(MODULES_WITHOUT_DOCUMENTATION).sort()).toEqual([
         'admin_notifications',
-        'custom_fields',
         'email',
         'mfa',
-        'pim_connector',
       ]);
       for (const reason of Object.values(MODULES_WITHOUT_DOCUMENTATION)) {
         expect(reason.length).toBeGreaterThan(40);

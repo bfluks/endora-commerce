@@ -15,6 +15,21 @@ export type IsoDateTime = z.infer<typeof isoDateTimeSchema>;
 export const uuidSchema = z.string().uuid();
 export type Uuid = z.infer<typeof uuidSchema>;
 
+/** Whether `YYYY-MM-DD` names a day the calendar has: `2026-02-31` and `2026-13-01` do not. */
+export function isCalendarDate(value: string): boolean {
+  const [year = 0, month = 0, day = 0] = value.split('-').map(Number);
+  if (year < 1) return false;
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+/** A calendar date as `YYYY-MM-DD`, refusing a day the calendar does not have. */
+export const calendarDateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD')
+  .refine(isCalendarDate, 'Not a date of the calendar');
+
 /**
  * Monetary amount — decimal string or number in the minor-unit-plus-currency form.
  * We keep amount as a `number` on the wire; backend persists as numeric(14,2).

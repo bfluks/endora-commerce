@@ -9,6 +9,7 @@ import type {
 import { HttpError } from '@endora-commerce/platform/http';
 import { Cart } from '../entities/cart.entity.js';
 import { CartItem } from '../entities/cart-item.entity.js';
+import { cartTotalsByCart } from './cart-money.js';
 
 /**
  * Organization-Administrator visibility surface (feature 027 US4).
@@ -40,8 +41,12 @@ export class CartOrganizationVisibilityService {
 
   async list(organizationId: string, query: OrgCartsListQuery = {}): Promise<OrgCartsListResponse> {
     const em = this.emFactory();
-    const where: Record<string, unknown> = { organizationId };
-    if (query.status && query.status.length > 0) where['status'] = { $in: query.status };
+    // A working basket (issue #169) is transient placement state, never a cart
+    // of the organisation's to list: it is seen once it is `completed`.
+    const where: Record<string, unknown> = { organizationId, status: { $ne: 'working' } };
+    if (query.status && query.status.length > 0) {
+      where['status'] = { $in: query.status.filter((status) => status !== 'working') };
+    }
     if (query.approvalStatus && query.approvalStatus.length > 0) {
       where['approvalStatus'] = { $in: query.approvalStatus };
     }
@@ -63,16 +68,8 @@ export class CartOrganizationVisibilityService {
 
     // Bulk item-count + total resolution.
     const cartIds = rows.map((r) => r.id);
-    const itemCounts = new Map<string, { count: number; total: number; currency: string }>();
-    if (cartIds.length > 0) {
-      const items = await em.find(CartItem, { cartId: { $in: cartIds } });
-      for (const it of items) {
-        const prev = itemCounts.get(it.cartId) ?? { count: 0, total: 0, currency: it.currency };
-        prev.count += 1;
-        prev.total += Number(it.unitPrice) * it.quantity;
-        itemCounts.set(it.cartId, prev);
-      }
-    }
+    const itemCounts =
+      cartIds.length > 0 ? cartTotalsByCart(await em.find(CartItem, { cartId: { $in: cartIds } })) : new Map();
 
     return {
       data: rows

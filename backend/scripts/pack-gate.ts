@@ -72,9 +72,9 @@ import {
   judgePackedPackages,
   binTargets,
   type BinRun,
-  type PackedEntry,
   type PackedPackage,
 } from './lib/pack-assert.js';
+import { listTarball } from './lib/pack-tarball.js';
 import {
   classifyWorkspaceMembers,
   nodeWorkspaceFs,
@@ -86,23 +86,6 @@ const PREFIX = '[pack-gate]';
 function refuse(message: string): never {
   console.error(`${PREFIX} ${message}`);
   process.exit(2);
-}
-
-/** `tar -tzvf`, parsed into `{ path, size }` with the leading `package/` stripped. */
-function listTarball(tarball: string): readonly PackedEntry[] | null {
-  const listed = spawnSync('tar', ['-tzvf', tarball], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  if (listed.status !== 0) return null;
-  const entries: PackedEntry[] = [];
-  for (const line of listed.stdout.split('\n')) {
-    // `-rw-r--r-- 0/0   1234 2026-09-05 20:00 package/dist/index.js`
-    const match = /^(\S+)\s+\S+\s+(\d+)\s+\S+\s+\S+\s+(.+)$/.exec(line.trim());
-    if (match === null) continue;
-    const [, mode, size, path] = match;
-    if (mode!.startsWith('d')) continue;
-    if (!path!.startsWith('package/')) continue;
-    entries.push({ path: path!.slice('package/'.length), size: Number(size) });
-  }
-  return entries;
 }
 
 /** `package/<path>` out of the tarball, as text, or `null`. */
@@ -268,7 +251,7 @@ function main(): void {
         );
       }
       const tarball = join(out, produced[0]!);
-      const entries = listTarball(tarball);
+      const entries = listTarball(tarball, join(scratch, 'listed'));
       if (entries === null) {
         refuse(
           `the tarball ${produced[0]!} could not be listed, so nothing about ${member.name} was ` +

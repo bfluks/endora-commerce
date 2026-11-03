@@ -6,6 +6,7 @@ import {
 } from '../../helpers/test-server.js';
 import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
 import { ADMIN_COOKIES } from '../../helpers/test-actors.js';
+import { bindOrganizationToDefaultChannel } from '../../helpers/sales-channel-access.js';
 import {
   AdminRole,
   AdminUser,
@@ -127,6 +128,12 @@ describe('146 — sales representative scope [integration]', () => {
       expect(res.statusCode, res.body).toBe(201);
       return (res.json() as { data: { id: string } }).data.id;
     };
+    // `raise` names no channel, so each request is raised on the system default,
+    // which `createOnBehalf` accepts only for an Organization assigned to it
+    // (feature 163, owner decision 2026-10-29 "A").
+    for (const organizationId of [orgOwnId, orgForeign, orgUnassigned]) {
+      await bindOrganizationToDefaultChannel(h, organizationId);
+    }
     rfqOwn = await raise(orgOwnId, accountOwn);
     rfqForeign = await raise(orgForeign, accountForeign);
     rfqUnassigned = await raise(orgUnassigned, accountUnassigned);
@@ -220,8 +227,10 @@ describe('146 — sales representative scope [integration]', () => {
     await probe('rfq history', 'GET', `/api/v1/admin/quote-requests/${rfqUnassigned}/history`);
     await probe('neg org GET', 'GET', `/api/v1/admin/organizations/${orgUnassigned}/quote-price-negotiation`);
     await probe('neg customer GET', 'GET', `/api/v1/admin/customers/${accountUnassigned}/quote-price-negotiation`);
-    await probe('probe org', 'GET', `/api/v1/admin/products/${SEED_PRODUCT_101_ID}/resolved-price?organizationId=${orgUnassigned}`);
-    await probe('probe account', 'GET', `/api/v1/admin/products/${SEED_PRODUCT_101_ID}/resolved-price?customerAccountId=${accountUnassigned}`);
+    // Feature 160 — the price explanation replaced the per-product probe, with its scope.
+    const line = [{ key: 'probe', productId: SEED_PRODUCT_101_ID, quantity: 1 }];
+    await probe('probe org', 'POST', '/api/v1/admin/price-books/resolve', { buyer: { organizationId: orgUnassigned }, lines: line });
+    await probe('probe account', 'POST', '/api/v1/admin/price-books/resolve', { buyer: { customerAccountId: accountUnassigned }, lines: line });
     await probe('neg org PUT', 'PUT', `/api/v1/admin/organizations/${orgUnassigned}/quote-price-negotiation`, { priceProposalsAllowed: true });
     await probe('neg customer PUT', 'PUT', `/api/v1/admin/customers/${accountUnassigned}/quote-price-negotiation`, { override: 'inherit' });
     await probe('customer detail (pre-existing)', 'GET', `/api/v1/admin/customers/${accountUnassigned}`);

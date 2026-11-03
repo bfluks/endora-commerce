@@ -1,4 +1,4 @@
-import { ERROR_CODES, type BuyerLinePricePort } from '@endora-commerce/contracts';
+import { ERROR_CODES, unitPriceHalfUp, type BuyerLinePricePort } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 
@@ -37,6 +37,13 @@ export interface ReferencePriceRequest {
   lines: readonly ReferencePriceLine[];
   /** Index-aligned with `lines`; a non-`null` entry is used as is and not resolved. */
   supplied?: ReadonlyArray<LineReference | null>;
+  /**
+   * Feature 160 — the currency the request is priced in. A quote request carries
+   * no currency of its own today (issue #303's quote-line half), so callers
+   * omit it and the reference is in the channel's default currency, which is the
+   * request's currency.
+   */
+  currencyCode?: string;
 }
 
 /**
@@ -86,6 +93,7 @@ export async function resolveReferencePrices(
           organizationId: request.owner.organizationId,
         },
         salesChannelId: request.salesChannelId,
+        ...(request.currencyCode ? { currencyCode: request.currencyCode } : {}),
         lines: chunk.map(({ line, index }) => ({
           key: String(index),
           productId: line.productId,
@@ -95,12 +103,15 @@ export async function resolveReferencePrices(
       });
       for (const answer of answers) {
         if (!answer.price) continue;
-        const amount = Number(answer.price.amount);
-        if (!Number.isFinite(amount) || amount < 0) continue;
-        // What `numeric(12,2)` holds, checked on the stored text: a larger
+        // The resolver's decimal string at its four places, unrounded (owner
+        // ruling of 2026-10-25) — never through a JS number (review 2,
+        // finding 1 of release 0.108.0). Anything but a non-negative decimal
+        // stores no reference.
+        if (!RESOLVER_AMOUNT.test(answer.price.amount)) continue;
+        // What `numeric(14,4)` holds, checked on the stored text: a larger
         // amount would fail the insert. Such a line stores no reference
         // (research R2) rather than failing the customer's request.
-        const stored = amount.toFixed(2);
+        const stored = unitPriceHalfUp(answer.price.amount);
         if (!AMOUNT_PATTERN.test(stored)) continue;
         resolved.set(Number(answer.key), {
           amount: stored,
@@ -120,8 +131,11 @@ export async function resolveReferencePrices(
   return out;
 }
 
-/** At most ten integer digits — what `numeric(12,2)` holds — and at most two decimals. */
-const AMOUNT_PATTERN = /^\d{1,10}(\.\d{1,2})?$/;
+/** A non-negative decimal string, as a resolver answers an amount. */
+const RESOLVER_AMOUNT = /^\d+(?:\.\d+)?$/;
+
+/** At most ten integer digits — what `numeric(14,4)` holds — and at most four decimals. */
+const AMOUNT_PATTERN = /^\d{1,10}(\.\d{1,4})?$/;
 const CURRENCY_PATTERN = /^[A-Z]{3}$/;
 
 /**
@@ -130,7 +144,7 @@ const CURRENCY_PATTERN = /^[A-Z]{3}$/;
  *
  * Only a composed module can reach it (the HTTP body cannot), so a violation is
  * a programming error in that module, answered as one: a 500, not a 400 the
- * buyer could act on. It also keeps a value out of a `numeric(12,2)` column
+ * buyer could act on. It also keeps a value out of a `numeric(14,4)` column
  * that would otherwise fail half-way through the write.
  */
 export function assertValidSuppliedReferences(
@@ -150,7 +164,7 @@ export function assertValidSuppliedReferences(
   supplied.forEach((entry, index) => {
     if (entry === null) return;
     if (typeof entry.amount !== 'string' || !AMOUNT_PATTERN.test(entry.amount)) {
-      refuse(`[${index}].amount is not a non-negative decimal with at most two decimals`);
+      refuse(`[${index}].amount is not a non-negative decimal with at most four decimals`);
     }
     if (!Number.isFinite(Number(entry.amount))) {
       refuse(`[${index}].amount is not finite`);

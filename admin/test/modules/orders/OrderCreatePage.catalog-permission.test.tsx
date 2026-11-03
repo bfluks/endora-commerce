@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { MemoryRouter } from 'react-router-dom';
-import type { Bundle } from '../../../../packages/admin-shell/src/i18n/types';
+import type { Bundle } from '@endora-commerce/admin-kit/i18n';
 import { renderWithI18n } from '../../helpers/render-with-i18n';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
 
@@ -55,7 +55,7 @@ const ROWS = ['a01', 'a02'].map((id, i) => ({
   id,
   sku: `SKU-${id.toUpperCase()}`,
   slug: id,
-  name: { 'en-US': `Widget 0${i + 1}` },
+  name: `Widget 0${i + 1}`,
   status: 'active',
   type: 'simple',
 }));
@@ -69,7 +69,7 @@ beforeEach(() => {
       return Promise.resolve({
         data: ROWS,
         pagination: { page: 0, pageSize: 20, total: ROWS.length },
-        counts: { all: 2, active: 2, draft: 0, inactive: 0 },
+        counts: { all: 2, active: 2, inactive: 0, archived: 0 },
       });
     }
     if (path.startsWith('/api/v1/admin/sales-channels')) {
@@ -140,7 +140,7 @@ describe('OrderCreatePage — product picking permission (FR-013) and re-selecti
     expect(screen.getByRole('combobox', { name: CORE['orderCreate.items.quickSearch']! })).toBeEnabled();
   });
 
-  it('makes a product selectable again once its line is removed', async () => {
+  it('keeps a product selectable while it is a line and once its line is removed (feature 159, N-31)', async () => {
     const user = userEvent.setup();
     renderPage(['*']);
     const open = async (): Promise<HTMLElement> => {
@@ -156,7 +156,8 @@ describe('OrderCreatePage — product picking permission (FR-013) and re-selecti
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 
     dialog = await open();
-    expect(within(dialog).getByRole('checkbox', { name: 'Select Widget 01' })).toBeDisabled();
+    // One product may be on several lines: it is offered again.
+    expect(within(dialog).getByRole('checkbox', { name: 'Select Widget 01' })).toBeEnabled();
     await user.click(within(dialog).getByRole('button', { name: /Cancel/ }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 

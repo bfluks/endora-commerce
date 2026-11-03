@@ -15,7 +15,7 @@ import { HttpError } from '@endora-commerce/platform/http';
 import { Organization } from '../entities/organization.entity.js';
 import { EmailVerificationToken } from '../entities/email-verification-token.entity.js';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { AuditPort, SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 
 /**
  * Registration flow (T117, FR-040).
@@ -98,9 +98,29 @@ export class RegistrationService {
     private readonly accounts: RegistrationAccountPorts,
     private readonly dictionaryValidator?: DictionaryValidator,
     private readonly auditLog?: AuditPort,
+    /**
+     * Feature 154 — the kernel's audited channel-membership writer. An
+     * Organization with no sales channel may shop nowhere, so a created one is
+     * bound in the creating step (FR-016, FR-019). Optional so a unit
+     * composition without it keeps working.
+     */
+    private readonly channelMembership?: Pick<
+      SalesChannelMembershipPort,
+      'bindToDefaultIfEmpty' | 'replaceChannelsForEntity'
+    >,
   ) {}
 
-  async registerOrganization(req: RegisterOrganizationRequest): Promise<RegistrationResult> {
+  /**
+   * @param context.salesChannelId the channel of the store the business
+   *   registered on — the request's resolved channel. Feature 154 (owner
+   *   decision D6): the new Organization gets exactly that channel, also on a
+   *   store closed to anonymous visitors, where registering is how a business
+   *   applies. `null` (no request channel) binds the system default.
+   */
+  async registerOrganization(
+    req: RegisterOrganizationRequest,
+    context: { salesChannelId: string | null } = { salesChannelId: null },
+  ): Promise<RegistrationResult> {
     const em = this.emFactory();
     await this.validateCountry(req.organization.registeredAddress.country);
 
@@ -147,6 +167,18 @@ export class RegistrationService {
         );
       }
       throw err;
+    }
+    // Feature 154 — on this `EntityManager`, right after the Organization row,
+    // so "no Organization without a channel" holds by construction.
+    if (context.salesChannelId !== null) {
+      await this.channelMembership?.replaceChannelsForEntity(
+        'organization',
+        organization.id,
+        [context.salesChannelId],
+        { em },
+      );
+    } else {
+      await this.channelMembership?.bindToDefaultIfEmpty('organization', organization.id, { em });
     }
 
     // `create` raises the same 409 `EMAIL_ALREADY_REGISTERED` on the unique

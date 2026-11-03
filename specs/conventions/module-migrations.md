@@ -64,7 +64,9 @@ number", never pick a number, never edit an execution list.
    accesses stood in 28 migration files, 4 of them undeclared and 37 of them writes.
    `check:module-boundary` now judges them, under two rules with two ledgers:
    **R1** is item 4 with its predicate widened from `references` to every statement
-   `sqlTableAccesses` recognises, and **R2** is that a migration owned by `A` may not
+   `sqlTableAccesses` recognises — DML, knex builders and, since issue #108, DDL against an
+   existing table (`create index … on`, `alter table`, `drop table`, `drop index`,
+   `comment on`, triggers), which counts as a write — and **R2** is that a migration owned by `A` may not
    **write** a table owned by `B` *whether or not R1 holds* — a declaration is an
    ordering-and-presence fact and a write is an ownership fact, so seeding, reseeding and
    correcting a module's rows is that module's own migration's job. Kernel-owned tables are
@@ -186,6 +188,24 @@ hand. **The ranges a module package peers on come from the applications, plural*
 reason — `react` and `lucide-react` are declared by `admin` and by no other member — and which
 workspace members are applications is derived from the shape of their `pnpm-workspace.yaml` entry
 (a literal names one deployable, a glob enumerates a library family), never from a list.
+
+**And `backend/package.json`'s dependency on every module package, on the same terms** (issue
+#445). The generated manifest index imports every module's manifest by bare specifier, whatever
+layers it ships, so a module package the backend does not declare is `ERR_MODULE_NOT_FOUND` at
+`overlay:check` and at every boot. Until then each new module added the line by hand. The backend
+is found as the member whose directory holds the manifest index, not by its name; the population
+is every module package this run derived, not the names the committed index registers, because
+`composer:generate` runs after this command and a module scaffolded a moment ago is in the first
+set only. `manifests:check` refuses either application manifest drifting. **Do not add the entry
+by hand** — run `manifests:generate`.
+
+**A new package needs one generator run before its build, and none between.** The first run admits
+a package it is writing a first `package.json` for (it cannot have been built — nothing builds a
+non-member) and renders its `LICENSE` and `README.md` from the manifest it is about to write. Any
+later run — `manifests:generate` or `manifests:check` — refuses a package that has a manifest and no
+`dist`, because D-181's peer/devDependency split is read off the package's emitted declarations and
+a render without them is a fail-closed guess. That refusal is intended, not a defect: `pnpm install`,
+build the package, then regenerate or check.
 
 **Run `pnpm install --lockfile-only` in the same breath and commit `pnpm-lock.yaml`.** A generated
 manifest changes what a workspace declares, so `pnpm-lock.yaml` goes stale the moment the render

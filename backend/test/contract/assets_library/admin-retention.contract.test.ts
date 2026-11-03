@@ -80,17 +80,24 @@ describe('asset retention setting (#322)', () => {
     });
     expect(reply.statusCode).toBe(200);
     const { data } = reply.json<{ data: { deletedAt: string; purgeAfterAt: string } }>();
-    expect(Date.parse(data.purgeAfterAt) - Date.parse(data.deletedAt)).toBe((days ?? 30) * DAY_MS);
+    expect(Date.parse(data.purgeAfterAt) - Date.parse(data.deletedAt)).toBe(Math.max(1, days ?? 30) * DAY_MS);
     const stored = await h.em().fork({ clear: true }).findOneOrFail(Asset, { id: asset.id });
     expect(stored.purgeAfterAt?.toISOString()).toBe(data.purgeAfterAt);
 
-    // A later setting change must not move an existing deletion deadline.
+    // Feature 156 (owner ruling P1): a later setting change applies to an
+    // existing deletion — the repeated answer reports `deletedAt` + the current
+    // setting, which is what the sweep will use — while the stored
+    // `purge_after_at` keeps the first value as a rollback snapshot.
     await setRetention(14);
     const again = await h.app.inject({
       method: 'DELETE', url: `/api/v1/admin/assets/${asset.id}`, cookies: adminCookie,
     });
     expect(again.statusCode).toBe(200);
-    expect(again.json()).toEqual(reply.json());
+    const repeated = again.json<{ data: { deletedAt: string; purgeAfterAt: string } }>().data;
+    expect(repeated.deletedAt).toBe(data.deletedAt);
+    expect(Date.parse(repeated.purgeAfterAt) - Date.parse(repeated.deletedAt)).toBe(14 * DAY_MS);
+    const kept = await h.em().fork({ clear: true }).findOneOrFail(Asset, { id: asset.id });
+    expect(kept.purgeAfterAt?.toISOString()).toBe(data.purgeAfterAt);
   });
 
   it.each([7, 90, 0, undefined])('recursive delete uses %s days throughout the subtree', async (days) => {
@@ -110,7 +117,7 @@ describe('asset retention setting (#322)', () => {
     for (const id of [direct.id, nested.id]) {
       const stored = await fresh.findOneOrFail(Asset, { id });
       expect(stored.deletedAt).toBeInstanceOf(Date);
-      expect(stored.purgeAfterAt!.getTime() - stored.deletedAt!.getTime()).toBe((days ?? 30) * DAY_MS);
+      expect(stored.purgeAfterAt!.getTime() - stored.deletedAt!.getTime()).toBe(Math.max(1, days ?? 30) * DAY_MS);
     }
   });
 });

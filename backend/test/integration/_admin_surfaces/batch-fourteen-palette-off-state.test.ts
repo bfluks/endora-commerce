@@ -14,6 +14,7 @@ import {
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
 import { withModuleOff, type OffStateAxis } from '../../helpers/off-state.js';
+import { servedPaletteKeywords } from '../../helpers/palette-keywords.js';
 
 /**
  * The **server-side** half of feature 091 batch 14's off-state proof — the
@@ -107,7 +108,7 @@ const SUBJECTS: readonly Subject[] = [
   },
   {
     module: 'organizations',
-    actions: ['open-organizations'],
+    actions: ['new-organization', 'open-organizations'],
     axis: 'platform-unavailable',
     admin: organizationsAdmin,
   },
@@ -256,15 +257,21 @@ describe('batch 14 contributes no palette action while off (Constitution XVII it
     // and the action can name one code. `customers:read` is the member that
     // opens the roster for the role the row was written for.
     expect(organizations?.requiredPermission).toBe('customers:read');
-    for (const keyword of ['org', 'organization', 'organizacja', 'klient']) {
+    for (const keyword of ['org', 'organization']) {
       expect(organizations?.keywords, keyword).toContain(keyword);
+    }
+    // Issues #560/#573 — the Polish words left the manifest for the module's
+    // own bundle, under the action's `keywordsKey`; the palette serves them to
+    // a Polish operator beside the English ones, so the ⌘K answer is unchanged.
+    for (const keyword of ['organizacja', 'klient']) {
+      expect(servedPaletteKeywords('organizations', 'open-organizations', 'pl'), keyword).toContain(keyword);
     }
 
     const salesChannels = actionOf('sales_channels', 'open-sales-channels');
     expect(salesChannels?.targetRoute).toBe('/sales-channels');
     expect(salesChannels?.requiredPermission).toBe('sales_channels:read');
     for (const keyword of ['sales', 'channel', 'kanał']) {
-      expect(salesChannels?.keywords, keyword).toContain(keyword);
+      expect(servedPaletteKeywords('sales_channels', 'open-sales-channels', 'pl'), keyword).toContain(keyword);
     }
   });
 

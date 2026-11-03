@@ -23,6 +23,7 @@ import {
 } from './settings-tab-store.js';
 import { useComponentScope } from './use-component-scope.js';
 import { usePageBuilderPuck } from './use-page-builder-puck.js';
+import { PB_FIELD_INPUT_CLASS } from '../fields/field-classes.js';
 
 const SCOPE_OPTIONS: SettingsScope[] = ['base', 'tablet', 'desktop'];
 
@@ -67,6 +68,19 @@ const scrollStyle: React.CSSProperties = {
   overflowY: 'auto',
 };
 
+/**
+ * Puck draws a rule between two fields with `._PuckFields-field +
+ * ._PuckFields-field`, which needs the fields to be siblings. This panel wraps
+ * each one to put it on its tab, so that rule never matched and the fields ran
+ * into each other (feature 163, T115). The same rule, between the wrappers
+ * shown: an empty wrapper is a field Puck does not render (a slot, a field
+ * resolved `visible: false`).
+ */
+const FIELD_SEPARATOR_CSS =
+  '[data-pb-fields] > [data-pb-field]:not(:empty):not([hidden]) ~ [data-pb-field]:not(:empty):not([hidden]) {' +
+  ' border-top: var(--puck-border-width-regular, 1px) solid var(--puck-color-border, #dcdcdc);' +
+  ' margin-top: var(--puck-space-2, 8px); }';
+
 const scopePanelStyle: React.CSSProperties = {
   marginInline: '16px',
   marginBottom: '16px',
@@ -101,7 +115,7 @@ function ScopeSelectorControl(): ReactElement {
       <select
         id="pb-settings-scope"
         aria-label="Scope settings"
-        className="_Input-input_bsxfo_26"
+        className={PB_FIELD_INPUT_CLASS}
         style={{ width: '100%', boxSizing: 'border-box', marginTop: '4px' }}
         value={scope}
         onChange={(e): void => {
@@ -202,7 +216,10 @@ function FieldsTabPanelInner({
           ))}
         </div>
       ) : null}
-      <div style={scrollStyle}>
+      <div style={scrollStyle} data-pb-fields="">
+        <style href="pb-fields-separators" precedence="default">
+          {FIELD_SEPARATOR_CSS}
+        </style>
         {hasResponsive && activeTab === 'responsive' ? <ScopeSelectorControl /> : null}
         {childEntries.map(({ child, fieldName }) => {
           if (!fieldName) return <div key="pb-field-unknown">{child}</div>;
@@ -210,7 +227,7 @@ function FieldsTabPanelInner({
           const tab = fieldTabForName(fieldName, field);
           const visible = !hasTabs || tab === activeTab;
           return (
-            <div key={fieldName} style={{ display: visible ? 'block' : 'none' }}>
+            <div key={fieldName} data-pb-field={fieldName} hidden={!visible}>
               {child}
             </div>
           );

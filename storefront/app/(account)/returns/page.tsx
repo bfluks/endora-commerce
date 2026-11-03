@@ -1,10 +1,13 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { listMyReturns } from '../../../lib/api/returns';
 import { getSessionCookie } from '../../../lib/session';
 import { formatMoney } from '../../../lib/i18n/money';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../lib/i18n/navigation';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
+import { getServerContext } from '../../../lib/server-context';
+import { tForLocale } from '../../../lib/i18n/messages';
+import { codeLabel } from '../../../lib/account/labels';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -19,41 +22,43 @@ export const metadata: Metadata = { robots: { index: false, follow: false } };
  */
 export default async function ReturnsListPage(): Promise<ReactNode> {
   const session = await getSessionCookie();
-  if (!session) redirect('/login?next=/returns');
+  if (!session) return await localeRedirect('/login?next=/returns');
   const cases = await listMyReturns(session);
+  const { locale } = await getServerContext();
+  const t = tForLocale(locale);
 
   return (
     <div className="b2b-auth max-w-[720px]">
-      <h1>Returns &amp; complaints</h1>
+      <h1>{t('account.returns.heading')}</h1>
       <p>
-        <Link href="/returns/new">Start a new return</Link>
+        <LocalizedLink href="/returns/new">{t('account.returns.startNew')}</LocalizedLink>
       </p>
       {cases.length === 0 ? (
-        <p>You don&apos;t have any returns yet.</p>
+        <p>{t('account.returns.empty')}</p>
       ) : (
         <table className="b2b-account__table">
           <thead>
             <tr>
-              <th>Submitted</th>
-              <th>RMA</th>
-              <th>Kind</th>
-              <th>Status</th>
-              <th className="text-right">Refund</th>
+              <th>{t('account.returns.col.submitted')}</th>
+              <th>{t('account.returns.col.rma')}</th>
+              <th>{t('account.returns.col.kind')}</th>
+              <th>{t('account.common.status')}</th>
+              <th className="text-right">{t('account.returns.col.refund')}</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {cases.map((c) => (
               <tr key={c.id}>
-                <td>{new Date(c.submittedAt).toLocaleDateString()}</td>
+                <td>{new Date(c.submittedAt).toLocaleDateString(locale)}</td>
                 <td>{c.rmaNumber ?? '—'}</td>
-                <td>{c.kind}</td>
+                <td>{codeLabel(t, 'returns.new.kind', c.kind)}</td>
                 <td>{c.statusLabel}</td>
                 <td className="text-right">
                   {formatMoney(c.totalRefundAmount, c.currency)}
                 </td>
                 <td>
-                  <Link href={`/returns/${c.id}`}>Open</Link>
+                  <LocalizedLink href={`/returns/${c.id}`}>{t('account.common.open')}</LocalizedLink>
                 </td>
               </tr>
             ))}

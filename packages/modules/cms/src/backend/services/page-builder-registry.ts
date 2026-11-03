@@ -37,12 +37,18 @@ import type {
   PageBuilderBreakpoints,
   PageBuilderContext,
 } from '@endora-commerce/contracts/cms';
-import type { ModuleManifest } from '@endora-commerce/contracts';
+import { DEFAULT_BRAND_TOKENS, type CmsBrandTokens, type ModuleManifest } from '@endora-commerce/contracts';
 import { DEFAULT_BREAKPOINTS } from '@endora-commerce/page-builder-core/types/responsive';
 
 export type PageBuilderBreakpointsResolver = () => Promise<PageBuilderBreakpoints>;
 
 export type ColorPaletteResolver = () => Promise<CmsColorPaletteEntry[]>;
+
+/**
+ * Feature 163 (research R-4) — the effective brand tokens for a channel, or the
+ * global set for `null`. Installed by the plugin over `CmsBrandTokensService`.
+ */
+export type BrandTokensResolver = (salesChannelId: string | null) => Promise<CmsBrandTokens>;
 
 export interface ComponentRegistration {
   ownerModule: string;
@@ -125,6 +131,7 @@ export class PageBuilderRegistry {
   private readonly isModulePresent: (moduleId: string) => boolean;
   private breakpointsResolver?: PageBuilderBreakpointsResolver;
   private colorPaletteResolver?: ColorPaletteResolver;
+  private brandTokensResolver?: BrandTokensResolver;
 
   constructor(options: PageBuilderRegistryOptions = {}) {
     this.breakpoints = options.breakpoints ?? { ...DEFAULT_BREAKPOINTS };
@@ -185,6 +192,10 @@ export class PageBuilderRegistry {
     this.colorPaletteResolver = resolver;
   }
 
+  setBrandTokensResolver(resolver: BrandTokensResolver): void {
+    this.brandTokensResolver = resolver;
+  }
+
   async resolveBreakpoints(): Promise<PageBuilderBreakpoints> {
     if (this.breakpointsResolver) {
       return this.breakpointsResolver();
@@ -237,13 +248,17 @@ export class PageBuilderRegistry {
    * byte-identical under a re-composition or a reordering of `MODULES` — the
    * D-45 property, which a fold at registration cannot have.
    */
-  async describe(): Promise<CmsPageBuilderDescriptor> {
+  async describe(options: { salesChannelId?: string | null } = {}): Promise<CmsPageBuilderDescriptor> {
     const breakpoints = await this.resolveBreakpoints();
     const colorPalette = this.colorPaletteResolver ? await this.colorPaletteResolver() : [];
+    const brandTokens = this.brandTokensResolver
+      ? await this.brandTokensResolver(options.salesChannelId ?? null)
+      : DEFAULT_BRAND_TOKENS;
     return {
       schemaVersion: this.schemaVersion,
       breakpoints,
       colorPalette,
+      brandTokens,
       components: Array.from(this.components.entries())
         .filter(([, reg]) => this.isModulePresent(reg.ownerModule))
         .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))

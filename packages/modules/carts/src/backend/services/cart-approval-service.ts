@@ -5,12 +5,18 @@ import { Cart } from '../entities/cart.entity.js';
 import type { CartApprovalStatus } from '../entities/cart.entity.js';
 import { CartItem } from '../entities/cart-item.entity.js';
 import type {
+  CatalogProductAvailabilityPort,
+  CatalogProductReadPort,
   CustomerAccountReadPort,
   OrganizationCartApprovalWritePort,
   OrganizationDetailsPort,
+  OrderQuoteSourcePort,
   OrganizationRecord,
 } from '@endora-commerce/contracts';
 import type { CartAuditService } from './cart-audit-service.js';
+import { assertCartMeetsMinimums, toCartMinimumItem } from './cart-minimums.js';
+import { availableRecords, basketNamesAt, basketScopeLanguage, withBasketOrderRules } from './cart-availability.js';
+import { cartAudience } from './cart-service.js';
 
 /**
  * Approval-workflow state machine (feature 027 US4).
@@ -79,6 +85,26 @@ export class CartApprovalService {
     private readonly organizationCartApproval: OrganizationCartApprovalWritePort,
     /** `customer_accounts`' read model — the submitting buyer's role. */
     private readonly customerAccounts: CustomerAccountReadPort,
+    /**
+     * Feature 155 (owner ruling 2026-10-18) — the basket's products and units, so a
+     * basket below a minimum is refused before it is sent for approval.
+     */
+    private readonly catalogProducts: Pick<CatalogProductReadPort, 'findByIds' | 'listPackagingUnitsByProductIds'>,
+    /**
+     * Feature 155 (FR-039) — `orders`' checkout-preview confirmation of the
+     * basket's quote source, so a quote-seeded line is exempt at submit only
+     * while its quote is still valid, as at placement.
+     */
+    private readonly quoteSource: OrderQuoteSourcePort,
+    /**
+     * Feature 163 (FR-006) — `catalog`'s availability answer: a basket holding
+     * a product no longer available at its (channel, language) is refused at
+     * submit as placement refuses it.
+     */
+    private readonly availability: Pick<
+      CatalogProductAvailabilityPort,
+      'filterAvailable' | 'effectiveOrderRules' | 'effectiveTexts'
+    >,
     private readonly emailDispatch?: CartEmailDispatch,
   ) {}
 
@@ -103,8 +129,16 @@ export class CartApprovalService {
    *   - the policy is off (approval not required)
    *   - the buyer is themself an Org Admin (self-approval exemption)
    *   - approval_status is already non-`not_required`
+   *   - a line is below a minimum or its product is gone (feature 155, owner
+   *     ruling 2026-10-18, FR-039) — the refusal placement would give, with the
+   *     quote-line exemption honoured only once `orders` confirms the quote
+   *     source, so a basket that cannot be ordered is never sent for approval
    */
-  async submitForApproval(cart: Cart, actor: ApproveActor): Promise<Cart> {
+  async submitForApproval(
+    cart: Cart,
+    actor: ApproveActor,
+    options: { language?: string | undefined } = {},
+  ): Promise<Cart> {
     const em = this.emFactory();
     if (!cart.organizationId || cart.organizationId !== actor.organizationId) {
       throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'cart_not_found');
@@ -114,19 +148,74 @@ export class CartApprovalService {
     if (items.length === 0) {
       throw new HttpError(422, ERROR_CODES.CART_EMPTY, 'cart_empty');
     }
+    // Issue #86 — each refusal below has a code of its own: raised as
+    // `VALIDATION_FAILED` its token was the message, which the envelope never
+    // replaces, so the buyer read `approval_already_initiated` in every
+    // language and a client could not tell it from a malformed request.
     if (cart.approvalStatus !== 'not_required') {
-      throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'approval_already_initiated');
+      throw new HttpError(
+        422,
+        ERROR_CODES.CART_APPROVAL_ALREADY_SUBMITTED,
+        'This cart has already been sent for approval.',
+        { cartId: cart.id, approvalStatus: cart.approvalStatus },
+      );
     }
 
     const org = await this.organizations.findById(actor.organizationId);
     if (!org || !org.requiresCartApproval) {
-      throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'approval_not_required');
+      throw new HttpError(
+        422,
+        ERROR_CODES.CART_APPROVAL_NOT_REQUIRED,
+        'The organization does not require cart approval.',
+      );
     }
 
     const buyer = await this.customerAccounts.findById(actor.customerAccountId);
     if (buyer?.role === 'organization_admin') {
-      throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'org_admin_self_submit');
+      throw new HttpError(
+        422,
+        ERROR_CODES.CART_APPROVAL_SELF_SUBMIT,
+        'An organization administrator places orders directly; their own cart is not sent for approval.',
+      );
     }
+
+    await assertCartMeetsMinimums(this.catalogProducts, {
+      cart: { sourceQuoteRequestId: cart.sourceQuoteRequestId ?? null },
+      items: items.map(toCartMinimumItem),
+      language: options.language,
+      // Feature 163 — available at the basket's (channel, L), judged on that
+      // channel's minimums (FR-006, FR-100).
+      availableOnly: async (products) =>
+        withBasketOrderRules(
+          this.availability,
+          await availableRecords(this.availability, products, {
+            channelId: cart.salesChannelId,
+            languageCode: cart.salesChannelId ? basketScopeLanguage(cart.salesChannelId, options.language) : null,
+            audience: cartAudience({
+              customer: { ...actor, salesChannelId: cart.salesChannelId ?? '' },
+            }),
+          }),
+          cart.salesChannelId,
+        ),
+      // Feature 170 (FR-030) — a refusal names the product as the basket shows it.
+      namesAt: (productIds) =>
+        basketNamesAt(
+          this.availability,
+          productIds,
+          cart.salesChannelId,
+          cart.salesChannelId ? basketScopeLanguage(cart.salesChannelId, options.language) : null,
+        ),
+      confirmQuoteSource: (quoteRequestId) =>
+        this.quoteSource.quoteSourceHonoursExemptions({
+          organizationId: actor.organizationId,
+          quoteRequestId,
+          basketLines: items.map((item) => ({
+            productId: item.productId,
+            variantId: item.variantId ?? null,
+            unitPrice: item.unitPrice,
+          })),
+        }),
+    });
 
     cart.approvalStatus = 'pending';
     cart.submittedForApprovalAt = new Date();
@@ -155,7 +244,7 @@ export class CartApprovalService {
       throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'cart_not_found');
     }
     if (cart.approvalStatus !== 'pending') {
-      throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'approval_not_pending');
+      throw notPending(cart);
     }
     cart.approvalStatus = 'approved';
     cart.approvedAt = new Date();
@@ -184,7 +273,7 @@ export class CartApprovalService {
       throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'cart_not_found');
     }
     if (cart.approvalStatus !== 'pending') {
-      throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'approval_not_pending');
+      throw notPending(cart);
     }
     cart.approvalStatus = 'rejected_by_org_admin';
     cart.status = 'rejected';
@@ -323,4 +412,17 @@ export class CartApprovalService {
       toState: 'pending',
     });
   }
+}
+
+/**
+ * Issue #86 — approve and reject refuse a cart that is not awaiting approval
+ * with a code of their own, the cart's approval state in `details`.
+ */
+function notPending(cart: Cart): HttpError {
+  return new HttpError(
+    422,
+    ERROR_CODES.CART_APPROVAL_NOT_PENDING,
+    'This cart is not awaiting approval.',
+    { cartId: cart.id, approvalStatus: cart.approvalStatus },
+  );
 }

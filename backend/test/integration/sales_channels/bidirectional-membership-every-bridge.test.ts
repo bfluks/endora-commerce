@@ -61,7 +61,6 @@ describe('bidirectional membership: every bridge (T043)', () => {
       defaultCurrency: 'EUR',
       languages: ['en'],
       currencies: ['EUR'],
-      isPublic: false,
       active: true,
       systemDefault: false,
       version: 1,
@@ -85,6 +84,7 @@ describe('bidirectional membership: every bridge (T043)', () => {
     customer: async () => insertCustomerAccount(),
     promotion: async () => insertPromotion(),
     'cms-page': async () => insertCmsPage(),
+    'price-list': async () => insertPriceBook(),
   };
 
   async function rawExec(sql: string, params: unknown[] = []): Promise<void> {
@@ -100,7 +100,7 @@ describe('bidirectional membership: every bridge (T043)', () => {
     await rawExec(
       `insert into "products" ("id","sku","slug","type","status","name","description","visibility",` +
         `"attribute_values","allowed_organization_ids","created_at","updated_at") values ` +
-        `(?, ?, ?, 'simple', 'draft', ?::jsonb, ?::jsonb, 'public', '{}'::jsonb, '[]'::jsonb, now(), now())`,
+        `(?, ?, ?, 'simple', 'inactive', ?::jsonb, ?::jsonb, 'public', '{}'::jsonb, '[]'::jsonb, now(), now())`,
       [id, `T043-${id.slice(0, 8)}`, slug, '{"en":"P"}', '{"en":"P"}'],
     );
     return id;
@@ -195,6 +195,18 @@ describe('bidirectional membership: every bridge (T043)', () => {
     return id;
   }
 
+  /** Feature 160 — a price book; its channel set is the `sales_channel_price_lists` bridge. */
+  async function insertPriceBook(): Promise<string> {
+    const id = randomUUID();
+    await rawExec(
+      `insert into "price_lists"
+         ("id","name","currency_code","priority","type","status","audience_kind","is_system","created_at","updated_at")
+       values (?, ?, 'EUR', 0, 'regular', 'draft', 'everyone', false, now(), now())`,
+      [id, `Book ${id.slice(0, 8)}`],
+    );
+    return id;
+  }
+
   const ENTITY_TYPES: ChannelMemberEntityType[] = [
     'product',
     'category',
@@ -205,6 +217,7 @@ describe('bidirectional membership: every bridge (T043)', () => {
     'customer',
     'promotion',
     'cms-page',
+    'price-list',
   ];
 
   it.each(ENTITY_TYPES)(

@@ -1,16 +1,48 @@
 import { useState, type ReactNode } from 'react';
 import { ApiError } from '@endora-commerce/admin-kit/lib';
-import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Label, Textarea, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, PageHeader } from '@endora-commerce/admin-kit/ui';
+import { Alert, AlertDescription, AlertTitle, Badge, Button, Card, CardContent, CardHeader, CardTitle, Label, Textarea, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, PageHeader } from '@endora-commerce/admin-kit/ui';
 import { CustomerPicker, OrganizationPicker, FileDropzone } from '@endora-commerce/admin-kit/components';
 import { RouteTabsZone } from '@endora-commerce/admin-kit/zones';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import {
   adminQuickOrderBuild,
   adminQuickOrderImport,
+  type QuickOrderBuildRejectedLine,
   type QuickOrderBuildResponse,
   type QuickOrderImportResponse,
   type QuickOrderTarget,
+  type RejectedQuickOrderItem,
 } from '../api/quick-order-client.js';
+
+type Translate = (key: string, params?: Record<string, string | number>) => string;
+
+/**
+ * Feature 155 — a rejected row's reason. A buyer-style `below_minimum` row names
+ * the minimum and the file total the verdict used (FR-011 (a)): "below the
+ * minimum" alone would leave the operator to work out by how much.
+ */
+export function rejectionReasonLabel(row: RejectedQuickOrderItem, t: Translate): string {
+  if (row.reason === 'below_minimum' && row.minimum !== undefined && row.productTotal !== undefined) {
+    return t('onBehalf.reason.below_minimumDetail', { minimum: row.minimum, productTotal: row.productTotal });
+  }
+  return t(`onBehalf.reason.${row.reason}`);
+}
+
+/** Feature 155 (FR-011 (b)) — one line a cart build left out, with product and minimum. */
+export function buildRejectionLabel(line: QuickOrderBuildRejectedLine, t: Translate): string {
+  const key =
+    line.kind === 'pieces'
+      ? 'onBehalf.build.rejectedPieces'
+      : line.packagingUnitName !== undefined
+        ? 'onBehalf.build.rejectedUnits'
+        : 'onBehalf.build.rejectedUnitsUnnamed';
+  return t(key, {
+    product: line.productName,
+    quantity: line.quantity,
+    minimum: line.minimum,
+    ...(line.packagingUnitName !== undefined ? { unit: line.packagingUnitName } : {}),
+  });
+}
 
 /**
  * QuickOrderOnBehalfPage — feature 039 (US1 / FR-008).
@@ -28,6 +60,10 @@ export function QuickOrderOnBehalfPage(): ReactNode {
   const [result, setResult] = useState<QuickOrderBuildResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Counted off the rows rather than read from `summary.warningCount`, which is
+  // optional: the note then cannot disagree with the badges below it.
+  const warnedCount = preview?.recognized.filter((r) => r.warning).length ?? 0;
 
   async function runImport(input: {
     csv?: string;
@@ -95,6 +131,22 @@ export function QuickOrderOnBehalfPage(): ReactNode {
             {result.target === 'cart'
               ? t('onBehalf.success.cart', { id: result.cartId ?? '' })
               : t('onBehalf.success.quoteRequest', { id: result.quoteRequestId ?? '' })}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {/* Feature 155 (FR-011 (b)) — the cart was built, but without these lines.
+          Amber, not red: the build succeeded, and the remedy is the operator's
+          (raise the quantity, or build a quote request instead). */}
+      {result?.rejected && result.rejected.length > 0 ? (
+        <Alert variant="warning">
+          <AlertTitle>{t('onBehalf.build.rejectedTitle')}</AlertTitle>
+          <AlertDescription>
+            <ul className="list-disc space-y-0.5 pl-5">
+              {result.rejected.map((line) => (
+                <li key={`${line.productId}:${line.variantId ?? ''}`}>{buildRejectionLabel(line, t)}</li>
+              ))}
+            </ul>
           </AlertDescription>
         </Alert>
       ) : null}
@@ -170,6 +222,11 @@ export function QuickOrderOnBehalfPage(): ReactNode {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {warnedCount > 0 ? (
+              <Alert variant="warning">
+                <AlertDescription>{t('onBehalf.minimum.note', { count: warnedCount })}</AlertDescription>
+              </Alert>
+            ) : null}
             {preview.recognized.length > 0 ? (
               <Table>
                 <TableHeader>
@@ -186,7 +243,21 @@ export function QuickOrderOnBehalfPage(): ReactNode {
                       <TableCell>{r.line}</TableCell>
                       <TableCell>{r.sku}</TableCell>
                       <TableCell>{r.resolvedVariantSku ?? '—'}</TableCell>
-                      <TableCell>{r.quantity}</TableCell>
+                      <TableCell>
+                        <div className="tabular-nums">{r.quantity}</div>
+                        {r.warning ? (
+                          <>
+                            <Badge variant="warning" className="mt-1">
+                              <span>{t('onBehalf.minimum.badge', { minimum: r.warning.minimum })}</span>
+                            </Badge>
+                            {r.warning.productTotal !== r.quantity ? (
+                              <div className="mt-0.5 text-xs text-muted-foreground">
+                                {t('onBehalf.minimum.fileTotal', { productTotal: r.warning.productTotal })}
+                              </div>
+                            ) : null}
+                          </>
+                        ) : null}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -208,7 +279,7 @@ export function QuickOrderOnBehalfPage(): ReactNode {
                   {preview.rejected.map((r) => (
                     <TableRow key={`r-${r.line}`}>
                       <TableCell>{r.line}</TableCell>
-                      <TableCell>{t(`onBehalf.reason.${r.reason}`)}</TableCell>
+                      <TableCell>{rejectionReasonLabel(r, t)}</TableCell>
                       <TableCell>
                         <code>{r.raw}</code>
                       </TableCell>

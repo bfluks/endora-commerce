@@ -193,3 +193,56 @@ describe('storefront degradation for a block whose owner is absent (FR-019, FR-0
     expect(JSON.stringify(stored)).toBe(serialised);
   });
 });
+
+/**
+ * Feature 163, T056 — a block **removed** from the palette degrades the same
+ * way (`specs/163-page-builder-marketing-pages/` FR-041a, edge case "content
+ * saved by earlier block versions"). The image slider became the Carousel with
+ * `cms.CarouselImage` slides and its stored content is not migrated: a page
+ * still holding one renders the rest of the page, and the removed block shows
+ * customers nothing — not its props, not an error.
+ *
+ * Unlike the cases above this one names its blocks, deliberately: the subject
+ * is one particular removal, and the heading after it is the page that must
+ * survive. `backend/test/integration/cms/removed-block-placeholder.test.ts`
+ * holds the server half (the page still resolves by slug).
+ */
+describe('storefront degradation for a removed block (feature 163, T056, FR-041a)', () => {
+  const REMOVED = 'cms.ImageSlider';
+
+  it('is a name the composed palette no longer keys', () => {
+    expect(Object.keys(COMPONENTS)).not.toContain(REMOVED);
+  });
+
+  it('renders the heading after a stored image slider, and nothing of the slider', () => {
+    const content = [
+      {
+        type: REMOVED,
+        props: {
+          id: 'legacy-slider',
+          items: [{ imageSource: 'url', src: 'https://example.com/harbour.jpg', title: 'Harbour slide', titlePlacement: 'bottom-center' }],
+          slidesPerView: { base: 1, tablet: 4, desktop: 8 },
+          showArrows: true,
+        },
+      },
+      {
+        type: 'cms.Heading',
+        props: { ...(COMPONENTS['cms.Heading']?.defaultProps ?? {}), id: 'kept-heading', text: 'Kept heading', level: 'h2' },
+      },
+    ];
+
+    let html = '';
+    expect(() => {
+      html = renderToString(
+        createElement(PageBuilderRender, { data: { root: { props: {} }, content, zones: {} }, presence: { absent: [] } }),
+      );
+    }).not.toThrow();
+
+    expect(html).toContain('Kept heading');
+    expect(html).toMatch(/<h2[^>]*>.*Kept heading/);
+    expect(html).not.toContain('Harbour slide');
+    expect(html).not.toContain('harbour.jpg');
+    expect(html).not.toContain(REMOVED);
+    expect(html).not.toContain('missing renderer');
+  });
+});

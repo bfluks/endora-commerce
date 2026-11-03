@@ -8,6 +8,8 @@ const EMPTY_SHOP_INFO: ShopInfo = {
   contactEmail: '',
   supportEmail: '',
   phone: '',
+  logoUrl: null,
+  socialProfiles: [],
 };
 
 /**

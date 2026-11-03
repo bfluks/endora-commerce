@@ -210,7 +210,8 @@ export const manifest = defineModuleManifest({
       icon: 'Package',
       targetRoute: '/returns',
       requiredPermission: 'returns:read',
-      keywords: ['returns', 'refunds', 'rma', 'zwroty', 'reklamacje'],
+      keywords: ['returns', 'refunds', 'rma'],
+      keywordsKey: 'actions.openReturns.keywords',
       weight: 230,
     },
     {
@@ -223,9 +224,25 @@ export const manifest = defineModuleManifest({
       // that renders the screen is read-gated, so the write code hid a screen
       // read-only operators can open (issue #232).
       requiredPermission: 'returns:read',
-      keywords: ['return status', 'rma workflow', 'statusy zwrotów'],
+      keywords: ['return status', 'rma workflow'],
+      keywordsKey: 'actions.returnStatusConfig.keywords',
       weight: 235,
     },
   ],
   activation: { settingCode: 'returns.enabled', default: true },
+  /**
+   * The error codes this module owns. The first, minted by feature 155
+   * (`specs/155-catalog-order-constraints/contracts/error-codes.md`):
+   * `RETURN_LINE_NOT_RETURNABLE`, the refusal of a `return`-kind case naming an
+   * order line recorded as not returnable at purchase. The policy is this
+   * module's — `orders` only reports the stamp through `OrderReturnContextPort`
+   * — and `createCase` is the one raise site. Its sentence is `errors.<CODE>`
+   * in this module's own `i18n/{en,pl}.json`. No token: its `details` carry
+   * `{ productName, orderItemIds, lines }`, no `code`.
+   *
+   * `RETURN_SAVED_VIEW_NAME_TAKEN` (#312) is the 409 a saved view on the return
+   * list earns when its owner already holds one whose name differs only by case
+   * or surrounding spaces; `return-list-view-service.ts` is the one raise site.
+   */
+  errorCodes: [{ code: 'RETURN_LINE_NOT_RETURNABLE' }, { code: 'RETURN_SAVED_VIEW_NAME_TAKEN' }],
 });

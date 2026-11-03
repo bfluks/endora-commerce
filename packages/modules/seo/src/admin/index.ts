@@ -99,5 +99,11 @@ export const contributions: AdminContributions = {
         requiredPermission: SETTINGS_READ_PERMISSION,
       },
     ),
+    // Feature 170 (US10) — the product's SEO fields inline in the product editor, at the
+    // editor scope. `catalog` hosts the place and never names `seo`; reading needs
+    // `catalog:read` (the product SEO read's code), and the host's one Save writes.
+    zoneComponent('product.editor.seo', () => import('./zones/ProductSeoSection.js'), {
+      requiredPermission: 'catalog:read',
+    }),
   ],
 };

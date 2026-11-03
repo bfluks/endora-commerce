@@ -3,9 +3,11 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   ERROR_CODES,
   GENERIC_DOCUMENT_PAGE_DEFAULTS,
+  isValidSectionPartition,
   type CreateDocumentTemplateBody,
   type DeleteDocumentTemplateBody,
   type DocumentBuilderConfig,
+  type DocumentCollectionDeclaration,
   type DocumentCollectionDetail,
   type DocumentTemplateDetail,
   type DocumentTemplateListQuery,
@@ -131,14 +133,16 @@ export class DocumentTemplateService {
     const collections: DocumentCollectionDetail[] = [];
     for (const collection of this.deps.registry.collections(code)) {
       const catalogue = await this.deps.registry.catalogue(code, collection.key, sampleLanguage);
+      const sampleItems = withSampleValues(numberItems(collection.items(sample)), catalogue.fields);
       collections.push({
         key: collection.key,
         labelKey: collection.labelKey,
         ownerModule: registration.moduleId,
         fields: [...catalogue.fields],
         summaryFields: [...catalogue.summaryFields],
-        sampleItems: withSampleValues(numberItems(collection.items(sample)), catalogue.fields),
+        sampleItems,
         sampleSummary: { ...(collection.summary?.(sample) ?? {}) },
+        sampleSections: sampleSectionsOf(collection, sample, sampleItems.length),
       });
     }
     return {
@@ -377,4 +381,26 @@ export function templateReaderOver(emFactory: () => EntityManager): TemplateRead
       return rows.map(toRow);
     },
   };
+}
+
+/**
+ * Feature 159 — the sample's sections for the editor's canvas
+ * (`specs/159-quote-request-item-groups/contracts/document-sections.md` §4): `[]`
+ * when the collection declares none, and — as the renderer does — when the host
+ * throws or answers a partition that does not cover the sample's lines.
+ */
+function sampleSectionsOf(
+  collection: DocumentCollectionDeclaration,
+  sample: unknown,
+  itemCount: number,
+): DocumentCollectionDetail['sampleSections'] {
+  if (!collection.sections) return [];
+  try {
+    const sections = collection.sections(sample);
+    return isValidSectionPartition(sections, itemCount)
+      ? sections.map((section) => ({ ...section, itemIndexes: [...section.itemIndexes], summary: { ...section.summary } }))
+      : [];
+  } catch {
+    return [];
+  }
 }

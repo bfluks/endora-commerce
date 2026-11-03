@@ -13,6 +13,8 @@ import { randomUUID } from 'crypto';
  * `allowed-set` arm grant a sales representative assigned to the buyer's
  * organisation (Principle XI). Both ids are required: a preference always
  * belongs to an account, and every account has an organisation (D-178).
+ * `push_notification_preferences_organization_attribution_chk` holds the
+ * attribution rule itself in the database (D-187).
  *
  * No foreign key to `customer_accounts`, for the reason
  * `20260830T172022_pwa_organization_attribution.ts` writes down. Written only

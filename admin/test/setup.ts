@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, configure } from '@testing-library/react';
-import { afterEach, beforeEach, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, vi } from 'vitest';
+import { installMemoryStorage } from './helpers/memory-storage';
 
 /**
  * The budget a DOM assertion gets before it gives up, declared rather than
@@ -107,6 +108,29 @@ if (!('ResizeObserver' in globalThis)) {
   };
 }
 
+/**
+ * Every test gets its own empty, in-memory `localStorage` and `sessionStorage`
+ * (issue #442).
+ *
+ * jsdom's own storage cannot be relied on to reach the global: from Node 25 the
+ * runtime defines `localStorage` and `sessionStorage` itself, and vitest's jsdom
+ * environment copies a window key onto the global only when the global lacks it.
+ * Node's then wins — `undefined` on Node 26 without `--localstorage-file`, so
+ * every test calling `window.localStorage.clear()` failed with a `TypeError`.
+ * Installing our own storage in the setup file makes the suite independent of
+ * the Node major, and installing a fresh one per test means nothing a test
+ * stored, or a storage a test swapped in, leaks into the next.
+ *
+ * Installed once at load as well, so a module that touches storage while the
+ * test file is being imported finds a working one.
+ */
+const STORAGE_NAMES = ['localStorage', 'sessionStorage'] as const;
+const installStorages = (): void => {
+  for (const name of STORAGE_NAMES) installMemoryStorage(globalThis, name);
+};
+installStorages();
+beforeEach(installStorages);
+
 // jsdom does not implement scrollIntoView; components that call it (e.g. the
 // organization picker's active-option scroll) would throw under test. Polyfill
 // it globally so tests don't depend on call ordering across files.
@@ -120,8 +144,31 @@ if (!Element.prototype.scrollIntoView) {
 // auto-cleanup isn't registered. Do it explicitly so each test gets a
 // fresh DOM and findBy* queries don't collide with leftovers.
 afterEach(() => {
+  if (document.querySelector('[class*="_Puck_"]')) puckMountedInThisFile = true;
   cleanup();
   setMobileViewport(false);
+});
+
+/**
+ * Puck 0.23 starts a 500 ms timer when its canvas mounts
+ * (`setTimeout(() => setShowLoader(true), 500)` in `@puckeditor/core`'s
+ * `dist/chunk-55V3NZVF.mjs`) and never clears it on unmount. Unmounting is
+ * harmless while the file's jsdom is alive — React drops the update — but a
+ * file whose last mount is under 500 ms before the end lets the timer fire
+ * after jsdom has been torn down, and React's `dispatchSetState` then reads
+ * `window` and throws `ReferenceError: window is not defined`. Vitest reports
+ * it as an unhandled error and fails the run with every test green — PR #478's
+ * `test:frontend`, blamed on `test/modules/cms/section-presets.test.tsx`.
+ *
+ * So a file that mounted Puck outlives that timer before its environment goes:
+ * one wait per such file, none for any other.
+ */
+const PUCK_LOADER_TIMER_MS = 500;
+let puckMountedInThisFile = false;
+
+afterAll(async () => {
+  if (!puckMountedInThisFile) return;
+  await new Promise((settle) => setTimeout(settle, PUCK_LOADER_TIMER_MS + 100));
 });
 
 /** Default: desktop tier (min-width 1024px) for layout tests. */
@@ -151,3 +198,22 @@ beforeEach(() => {
     })),
   });
 });
+
+/**
+ * jsdom lays nothing out, and ProseMirror — the editor under the CRM's
+ * formatted fields (`specs/158-crm-opportunity-inline-editing/`) — asks the
+ * layout where the caret is after every keystroke it reads. These answer "at
+ * the origin, with no size", which is what a DOM without layout means; a
+ * screen that positions something by them falls back as it would in a browser
+ * that could not say.
+ */
+const emptyRect = (): DOMRect =>
+  ({ x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) }) as DOMRect;
+const emptyRects = (): DOMRectList => Object.assign([], { item: () => null }) as unknown as DOMRectList;
+if (typeof document !== 'undefined') {
+  document.elementFromPoint ??= (() => null) as typeof document.elementFromPoint;
+  Range.prototype.getClientRects ??= emptyRects;
+  Range.prototype.getBoundingClientRect ??= emptyRect;
+  const text = Text.prototype as unknown as { getClientRects?: () => DOMRectList };
+  text.getClientRects ??= emptyRects;
+}

@@ -1,8 +1,18 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { ZodError } from 'zod';
 import {
+  SCOPED_VALUES_BODY_LIMIT,
+  SCOPED_VALUES_COPY_BODY_LIMIT,
+  copyScopedValueRequestSchema,
+  productEditorPreferenceRequestSchema,
+  saveScopedValuesRequestSchema,
+  scopedValuesQuerySchema,
+  PRICE_FIELDS_REFUSED_ON_PRODUCTS,
+  PRICE_FIELDS_REFUSED_ON_VARIANTS,
   assignAttributesRequestSchema,
   batchByIdProductsRequestSchema,
   bulkUpdateProductsRequestSchema,
+  type ScopeWarning,
   resolveProductIdsRequestSchema,
   createAttributeRequestSchema,
   createAttributeSetRequestSchema,
@@ -36,6 +46,8 @@ import {
   createProductSavedViewRequestSchema,
   updateProductSavedViewRequestSchema,
   ERROR_CODES,
+  productArchivedModeSchema,
+  productStatusSchema,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { savedViewActor } from './saved-view-actor.js';
@@ -52,12 +64,46 @@ import type { PackagingUnitService } from './services/packaging-unit.service.js'
 import type { ProductLinkService } from './services/product-link.service.js';
 import type { GroupedService } from './services/grouped.service.js';
 import type { BundleService } from './services/bundle.service.js';
-import type { ProductScopeContextService } from './services/product-scope-context.service.js';
 import type { ProductEditorPreferencesService } from './services/product-editor-preferences.service.js';
+import type { ScopedValuesService } from './services/scoped-values.service.js';
 import type { ProductListViewService } from './services/product-list-view-service.js';
 import type { ProductValueResolverService } from './services/product-value-resolver.service.js';
-import type { ProductOverridesService } from './services/product-overrides.service.js';
-import { productValueOverridesPatchRequestSchema } from '@endora-commerce/contracts';
+import type { ProductScopesService } from './services/product-scopes.service.js';
+import type { ScopeOverviewService } from './services/scope-overview.service.js';
+import type { AttributeScopePreviewService } from './services/attribute-scope-preview.js';
+import type { UrlKeyService } from './services/url-key.service.js';
+import { registerCatalogUrlKeyAdminRoutes } from './routes.admin.url-keys.js';
+import {
+  patchProductScopesRequestSchema,
+} from '@endora-commerce/contracts';
+
+/**
+ * Feature 160 (FR-043) — the old price fields an admin body names, read in
+ * `preValidation`: the request schemas strip unknown keys, so by the handler a
+ * `priceOverride` or a top-level `defaultPrice` would be gone and the write
+ * would succeed without it. The hook only notes the names; the handler — after
+ * `requireAdmin` — refuses them with `400 PRICE_SET_IN_PRICE_BOOKS`, so an
+ * unauthenticated request still answers 401.
+ */
+const namedPriceFields = new WeakMap<FastifyRequest, string[]>();
+const notePriceFields =
+  (keys: readonly string[]) =>
+  async (request: FastifyRequest): Promise<void> => {
+    const body = request.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return;
+    const named = keys.filter((key) => Object.prototype.hasOwnProperty.call(body, key));
+    if (named.length > 0) namedPriceFields.set(request, named);
+  };
+function refuseNotedPriceFields(request: FastifyRequest, subject: 'product' | 'variant'): void {
+  const named = namedPriceFields.get(request);
+  if (!named) return;
+  throw new HttpError(
+    400,
+    ERROR_CODES.PRICE_SET_IN_PRICE_BOOKS,
+    `Prices are set in price books, not on the ${subject}.`,
+    named.map((key) => ({ path: key, issue: 'prices are set in price books' })),
+  );
+}
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { ProductVariant } from './entities/product-variant.entity.js';
 import type { Product } from './entities/product.entity.js';
@@ -117,12 +163,6 @@ export interface CatalogAdminDeps {
   /** Feature 002 — Bundle slots + options admin CRUD (US5). */
   bundleService?: BundleService;
   /**
-   * Feature 023 — per-Sales-Channel + per-Language product scope
-   * context endpoint backing the product edit page switchers. When
-   * omitted, the scope-context route is NOT registered (back-compat).
-   */
-  productScopeContextService?: ProductScopeContextService;
-  /**
    * Feature 023 — editor preference upsert backing the remembered
    * switcher state. Optional same reason as above.
    */
@@ -139,12 +179,36 @@ export interface CatalogAdminDeps {
    */
   productValueResolverService?: ProductValueResolverService;
   /**
-   * Feature 023 — channel-aware override CRUD. Powers the
-   * `PATCH /admin/products/:id/value-overrides` endpoint. Optional so
-   * the read-only path (GET value-overrides) can ship without the
-   * write surface in dev/test setups that haven't wired it yet.
+   * Feature 163 — a product's scoped values per sales channel and language
+   * (`GET|PATCH /admin/catalog/products/:id/scopes`). When omitted, the two
+   * routes are NOT registered.
    */
-  productOverridesService?: ProductOverridesService;
+  productScopesService?: ProductScopesService;
+  /**
+   * Feature 170 — the editor's one read and one save of a scope
+   * (`GET|PUT /admin/catalog/products/:id/scoped-values`). When omitted, the two
+   * routes are NOT registered.
+   */
+  scopedValuesService?: ScopedValuesService;
+  /**
+   * Feature 163 — the product's scope overview
+   * (`GET /admin/catalog/products/:id/scope-overview`, US4). When omitted, the
+   * route is NOT registered.
+   */
+  scopeOverviewService?: ScopeOverviewService;
+  /**
+   * Feature 163 — the FR-090 preview of an attribute's scope-flag change
+   * (`GET /admin/catalog/attributes/:idOrKey/scope-change-preview`). When
+   * omitted, the route is NOT registered.
+   */
+  attributeScopePreviewService?: AttributeScopePreviewService;
+  /**
+   * Feature 163 — a product's URL keys and redirects
+   * (`GET|PUT /admin/catalog/products/:id/url-keys`,
+   * `DELETE /admin/catalog/products/:id/url-redirects/:redirectId`). When
+   * omitted, the three routes are NOT registered.
+   */
+  urlKeyService?: UrlKeyService;
   /**
    * Feature 022 (products bulk edit) — POST /products/bulk-update. Optional
    * so tests / dev composition roots that don't yet wire the service stay
@@ -232,10 +296,12 @@ export async function registerCatalogAdminRoutes(
   app.post(
     '/api/v1/admin/catalog/products',
     {
+      preValidation: notePriceFields(PRICE_FIELDS_REFUSED_ON_PRODUCTS),
       preHandler: requireAdmin('catalog:write'),
       schema: { body: createProductRequestSchema },
     },
     async (request, reply) => {
+      refuseNotedPriceFields(request, 'product');
       const body = createProductRequestSchema.parse(request.body);
       const auditCtx = deps.resolveAdminAuditContext?.(request);
       const product = await adminService.createProduct(
@@ -261,15 +327,22 @@ export async function registerCatalogAdminRoutes(
   app.patch<{ Params: { id: string } }>(
     '/api/v1/admin/catalog/products/:id',
     {
+      preValidation: notePriceFields(PRICE_FIELDS_REFUSED_ON_PRODUCTS),
       preHandler: requireAdmin('catalog:write'),
       schema: { body: updateProductRequestSchema },
     },
     async (request) => {
+      refuseNotedPriceFields(request, 'product');
       const body = updateProductRequestSchema.parse(request.body);
       // Feature 054 — audited co-transactionally via the Command Bus; the actor
       // is derived from the ambient TenantContext (not from the request body).
-      const product = await adminService.updateProductAudited(request.params.id, body);
-      return { data: serializeAdminProduct(product) };
+      // Feature 163 (FR-060, US6 #3) — a change of the global switch runs the
+      // completeness gate in the platform's mode; `warn` saves and answers the
+      // warnings, `refuse` answers 422 SCOPE_INCOMPLETE with nothing saved.
+      const warnings: ScopeWarning[] = [];
+      const completeness = body.status !== undefined ? await adminService.completenessMode() : undefined;
+      const product = await adminService.updateProductAudited(request.params.id, body, { completeness, warnings });
+      return { data: serializeAdminProduct(product), warnings };
     },
   );
 
@@ -313,6 +386,28 @@ export async function registerCatalogAdminRoutes(
     },
   );
 
+  // Feature 163 (FR-019, FR-082, research R30.3) — Archive / Restore one product.
+  // No body; `catalog:write` answers 401/403 before anything is read. Both are
+  // idempotent: a repeat answers 200 with the product and writes no audit row
+  // and no event. They touch `archivedAt` only — never a status at any scope.
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/admin/catalog/products/:id/archive',
+    { preHandler: requireAdmin('catalog:write') },
+    async (request) => {
+      const { product } = await adminService.archiveProduct(request.params.id);
+      return { data: serializeAdminProduct(product) };
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/admin/catalog/products/:id/restore',
+    { preHandler: requireAdmin('catalog:write') },
+    async (request) => {
+      const { product } = await adminService.restoreProduct(request.params.id);
+      return { data: serializeAdminProduct(product) };
+    },
+  );
+
   // Feature 022 — Products Bulk Edit. Applies a sparse field-patch to a
   // selection of products in one call; returns a per-product outcome.
   //
@@ -335,9 +430,15 @@ export async function registerCatalogAdminRoutes(
         const auditCtx = deps.resolveAdminAuditContext?.(request);
 
         if (bulkOperationService && body.productIds.length > BULK_ASYNC_THRESHOLD) {
+          // Final security review S-L3 — the queued run acts for, and is re-checked
+          // against, the admin recorded here; a request no admin is resolved for is not
+          // queued at all (`requireAdmin` above makes this a composition defect).
+          const requester = auditCtx?.actorAdminUserId;
+          if (!requester) {
+            throw new HttpError(401, ERROR_CODES.UNAUTHORIZED, 'No administrator was resolved for this request.');
+          }
           const op = await bulkOperationService.create({
-            requestedByAdminUserId:
-              auditCtx?.actorAdminUserId ?? '00000000-0000-0000-0000-000000000000',
+            requestedByAdminUserId: requester,
             payload: { productIds: body.productIds, fields: body.fields },
           });
           reply.status(202);
@@ -489,14 +590,34 @@ export async function registerCatalogAdminRoutes(
     { preHandler: requireAdmin('catalog:read') },
     async (request) => {
       const q = (request.query ?? {}) as Record<string, string | undefined>;
-      const includeArchived = q['includeArchived'] === '1' || q['includeArchived'] === 'true';
+      // Feature 163 (FR-112, FR-113, R30.4) — the status is `active` | `inactive`;
+      // anything else, `draft` and the old `archived` filter included, is refused
+      // rather than ignored or mapped. Archived products are their own axis:
+      // `archived=exclude|include|only` (default `exclude`), with the legacy
+      // `includeArchived=1|true` meaning `include`; `archived` wins.
       const statusRaw = q['status'];
-      const status =
-        statusRaw === 'active' || statusRaw === 'draft' || statusRaw === 'inactive'
-          ? statusRaw
-          : statusRaw === 'archived'
-            ? 'inactive'
-            : undefined;
+      let status: 'active' | 'inactive' | undefined;
+      if (statusRaw !== undefined && statusRaw !== '') {
+        const parsed = productStatusSchema.safeParse(statusRaw);
+        if (!parsed.success) {
+          throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, `Unknown product status "${statusRaw}".`, {
+            field: 'status',
+          });
+        }
+        status = parsed.data;
+      }
+      const archivedRaw = q['archived'];
+      let archived: 'exclude' | 'include' | 'only' =
+        q['includeArchived'] === '1' || q['includeArchived'] === 'true' ? 'include' : 'exclude';
+      if (archivedRaw !== undefined && archivedRaw !== '') {
+        const parsed = productArchivedModeSchema.safeParse(archivedRaw);
+        if (!parsed.success) {
+          throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, `Unknown archived mode "${archivedRaw}".`, {
+            field: 'archived',
+          });
+        }
+        archived = parsed.data;
+      }
       const typeRaw = q['type'];
       const type =
         typeRaw === 'simple' ||
@@ -509,7 +630,7 @@ export async function registerCatalogAdminRoutes(
       const search = q['q']?.trim();
       const categorySlug = q['categorySlug']?.trim();
       const result = await adminService.listProducts({
-        includeArchived,
+        archived,
         ...(status ? { status } : {}),
         ...(type ? { type } : {}),
         ...(search ? { q: search } : {}),
@@ -541,9 +662,11 @@ export async function registerCatalogAdminRoutes(
     },
     async (request) => {
       const body = resolveProductIdsRequestSchema.parse(request.body);
-      const includeArchived = body.includeArchived ?? true;
+      // Feature 163 (R30.4) — the list's `archived` mode; without it the legacy
+      // `includeArchived` decides, and the selection's default stays "include".
+      const archived = body.archived ?? ((body.includeArchived ?? true) ? 'include' : 'exclude');
       const result = await adminService.resolveProductIds({
-        includeArchived,
+        archived,
         ...(body.status ? { status: body.status } : {}),
         ...(body.type ? { type: body.type } : {}),
         ...(body.q ? { q: body.q } : {}),
@@ -619,81 +742,98 @@ export async function registerCatalogAdminRoutes(
   // Feature 022 — Product Scope Editor: per Sales Channel + per Language.
   // -------------------------------------------------------------------------
 
-  if (deps.productScopeContextService) {
-    const scopeContextSvc = deps.productScopeContextService;
-    app.get<{ Params: { id: string } }>(
-      '/api/v1/admin/catalog/products/:id/scope-context',
-      { preHandler: requireAdmin('catalog:read') },
-      async (request) => {
-        const ctx = deps.resolveAdminAuditContext?.(request);
-        // Editor identity is required for the per-(user, product) prefs;
-        // when the composition root cannot resolve an admin actor (e.g.,
-        // dev mode without auth), fall back to a fixed UUID — the
-        // returned preference block is just `null` in that path.
-        const adminUserId =
-          ctx?.actorAdminUserId ?? '00000000-0000-0000-0000-000000000000';
-        const data = await scopeContextSvc.getContext(request.params.id, adminUserId);
-        return { data };
-      },
-    );
-  }
+  // Feature 170 (T043) — `GET …/scope-context` and `GET|PATCH …/value-overrides` are retired:
+  // the editor reads one scope through `GET …/scoped-values` and saves it through `PUT …/scoped-values`.
 
-  if (deps.productValueResolverService) {
-    const resolverSvc = deps.productValueResolverService;
+  // -------------------------------------------------------------------------
+  // Feature 163 — scoped status, publication window, audience and order rules
+  // per sales channel and channel × language (`contracts/admin-scopes-api.md`
+  // §1–§2). The body is parsed inside the handler, after the gate, so an
+  // unauthenticated or unauthorised caller is answered 401/403 whatever it sent.
+  if (deps.productScopesService) {
+    const scopesSvc = deps.productScopesService;
     app.get<{ Params: { id: string } }>(
-      '/api/v1/admin/catalog/products/:id/value-overrides',
+      '/api/v1/admin/catalog/products/:id/scopes',
       { preHandler: requireAdmin('catalog:read') },
-      async (request) => {
-        // For a missing product the resolver service does not 404 on
-        // its own (it just returns an empty list). Run the lookup
-        // through adminService.getProductById so the 404 path stays
-        // consistent with every other product-scoped endpoint.
-        const product = await adminService.getProductById(request.params.id);
-        const overrides = await resolverSvc.loadOverrides(product.id);
-        return {
-          data: {
-            productId: product.id,
-            overrides: overrides.map((o) => ({
-              attributeKey: o.attributeKey,
-              channelId: o.channelId,
-              languageCode: o.languageCode,
-              value: o.value,
-            })),
-          },
-        };
-      },
+      async (request) => ({ data: await scopesSvc.read(request.params.id) }),
     );
-  }
-
-  if (deps.productOverridesService) {
-    const overridesSvc = deps.productOverridesService;
-    app.patch<{
-      Params: { id: string };
-    }>(
-      '/api/v1/admin/catalog/products/:id/value-overrides',
+    app.patch<{ Params: { id: string } }>(
+      '/api/v1/admin/catalog/products/:id/scopes',
       { preHandler: requireAdmin('catalog:write') },
       async (request) => {
-        const body = productValueOverridesPatchRequestSchema.parse(request.body);
-        const result = await overridesSvc.applyBulk(request.params.id, {
-          upserts: body.upserts,
-          deletes: body.deletes,
-        });
-        return {
-          data: {
-            productId: result.productId,
-            applied: result.applied,
-            overrides: result.overrides.map((o) => ({
-              id: o.id,
-              attributeKey: o.attributeKey,
-              channelId: o.channelId,
-              languageCode: o.languageCode ?? null,
-              value: o.value,
-              updatedAt: o.updatedAt.toISOString(),
-            })),
-          },
-        };
+        const body = patchProductScopesRequestSchema.parse(request.body);
+        // Feature 163 (FR-060) — an operator's status write runs the completeness gate
+        // in the platform's mode, read once for the request.
+        const writesStatus = body.channels.some(
+          (entry) => entry.status !== undefined || (entry.languageStatuses?.length ?? 0) > 0,
+        );
+        const completeness = writesStatus ? await scopesSvc.completenessMode() : undefined;
+        return scopesSvc.apply(request.params.id, body, completeness ? { completeness } : {});
       },
     );
+  }
+  // Feature 170 (`contracts/scoped-values-api.md` §2–§3) — one read per scope switch and one
+  // atomic save of a scope. The body is parsed after the gate; a reserved record key
+  // (`constructor`, `prototype`; `__proto__` is already refused by the body parser) is
+  // `422 SCOPED_VALUE_INVALID`, never silently dropped (R21).
+  if (deps.scopedValuesService) {
+    const scopedSvc = deps.scopedValuesService;
+    app.get<{ Params: { id: string } }>(
+      '/api/v1/admin/catalog/products/:id/scoped-values',
+      { preHandler: requireAdmin('catalog:read') },
+      async (request) => {
+        const query = scopedValuesQuerySchema.parse(request.query ?? {});
+        return { data: await scopedSvc.read(request.params.id, query) };
+      },
+    );
+    app.put<{ Params: { id: string } }>(
+      '/api/v1/admin/catalog/products/:id/scoped-values',
+      { preHandler: requireAdmin('catalog:write'), bodyLimit: SCOPED_VALUES_BODY_LIMIT },
+      async (request) => {
+        const parsed = saveScopedValuesRequestSchema.safeParse(request.body);
+        if (!parsed.success) {
+          const reserved = parsed.error.issues.filter((issue) => issue.message === 'reserved key');
+          if (reserved.length > 0) {
+            throw new HttpError(422, ERROR_CODES.SCOPED_VALUE_INVALID, 'A record key is reserved.', {
+              fields: reserved.map((issue) => ({ field: issue.path.map(String).join('.'), scope: { level: 'global' }, reason: 'invalid' })),
+            });
+          }
+          throw new ZodError(parsed.error.issues);
+        }
+        return scopedSvc.save(request.params.id, parsed.data);
+      },
+    );
+    // Feature 170 (T115; §4, FR-086) — "Copy to other channels": one Command, one audit entry.
+    app.post<{ Params: { id: string } }>(
+      '/api/v1/admin/catalog/products/:id/scoped-values/copy',
+      { preHandler: requireAdmin('catalog:write'), bodyLimit: SCOPED_VALUES_COPY_BODY_LIMIT },
+      async (request) => scopedSvc.copy(request.params.id, copyScopedValueRequestSchema.parse(request.body)),
+    );
+  }
+
+  // Feature 163 — the scope overview (§3) and the attribute scope-flag change
+  // preview (§6). Both are reads behind `catalog:read`; the writes they lead to
+  // stay on their owning routes and gates.
+  if (deps.scopeOverviewService) {
+    const overviewSvc = deps.scopeOverviewService;
+    app.get<{ Params: { id: string } }>(
+      '/api/v1/admin/catalog/products/:id/scope-overview',
+      { preHandler: requireAdmin('catalog:read') },
+      async (request) => ({ data: await overviewSvc.read(request.params.id) }),
+    );
+  }
+  if (deps.attributeScopePreviewService) {
+    const previewSvc = deps.attributeScopePreviewService;
+    app.get<{ Params: { idOrKey: string } }>(
+      '/api/v1/admin/catalog/attributes/:idOrKey/scope-change-preview',
+      { preHandler: requireAdmin('catalog:read') },
+      async (request) => ({
+        data: await previewSvc.preview(request.params.idOrKey, (request.query ?? {}) as Record<string, unknown>),
+      }),
+    );
+  }
+  if (deps.urlKeyService) {
+    await registerCatalogUrlKeyAdminRoutes(app, { urlKeyService: deps.urlKeyService, requireAdmin });
   }
 
   // -------------------------------------------------------------------------
@@ -742,41 +882,48 @@ export async function registerCatalogAdminRoutes(
     );
   }
 
-  if (deps.productEditorPreferencesService && deps.productScopeContextService) {
+  // Feature 170 (T044; `contracts/scoped-values-api.md` §5, R8) — the editor's last scope per
+  // (admin, product). UI state, not a Command (Constitution XIII does not apply). A language
+  // without a channel is 422 VALIDATION_FAILED; a non-member channel or an unoffered language is
+  // 422 SCOPE_INVALID (the same resolution as the read).
+  if (deps.productEditorPreferencesService && deps.scopedValuesService) {
     const prefSvc = deps.productEditorPreferencesService;
-    const scopeContextSvc = deps.productScopeContextService;
-    app.put<{
-      Params: { id: string };
-      Body: { lastChannelId: string | null; lastLanguageCode: string | null };
-    }>(
-      '/api/v1/admin/catalog/products/:id/editor-preference',
-      { preHandler: requireAdmin('catalog:read') },
-      async (request) => {
-        // Validate the product exists + channel (if any) is assigned to it.
-        await adminService.getProductById(request.params.id);
-        const ctx = deps.resolveAdminAuditContext?.(request);
-        const adminUserId =
-          ctx?.actorAdminUserId ?? '00000000-0000-0000-0000-000000000000';
-        const body = request.body;
-        if (body.lastChannelId) {
-          await scopeContextSvc.assertChannelAssignedToProduct(
-            request.params.id,
-            body.lastChannelId,
-          );
-        }
-        const row = await prefSvc.upsert(adminUserId, request.params.id, {
-          lastChannelId: body.lastChannelId,
-          lastLanguageCode: body.lastLanguageCode,
-        });
-        return {
-          data: {
+    const scopedSvc = deps.scopedValuesService;
+    const adminOf = (request: FastifyRequest) =>
+      deps.resolveAdminAuditContext?.(request)?.actorAdminUserId ?? '00000000-0000-0000-0000-000000000000';
+    const view = (row: { productId: string; adminUserId: string; lastChannelId?: string | null; lastLanguageCode?: string | null; updatedAt: Date } | null) => ({
+      data: row
+        ? {
             productId: row.productId,
             adminUserId: row.adminUserId,
             lastChannelId: row.lastChannelId ?? null,
             lastLanguageCode: row.lastLanguageCode ?? null,
             updatedAt: row.updatedAt.toISOString(),
-          },
-        };
+          }
+        : null,
+    });
+    app.get<{ Params: { id: string } }>(
+      '/api/v1/admin/catalog/products/:id/editor-preference',
+      { preHandler: requireAdmin('catalog:read') },
+      async (request) => {
+        await scopedSvc.resolveScope(request.params.id, {});
+        return view(await prefSvc.find(adminOf(request), request.params.id));
+      },
+    );
+    app.put<{ Params: { id: string } }>(
+      '/api/v1/admin/catalog/products/:id/editor-preference',
+      { preHandler: requireAdmin('catalog:read') },
+      async (request) => {
+        const body = productEditorPreferenceRequestSchema.parse(request.body);
+        const scope = await scopedSvc.resolveScope(request.params.id, {
+          channelId: body.lastChannelId ?? undefined,
+          languageCode: body.lastLanguageCode ?? undefined,
+        });
+        const row = await prefSvc.upsert(adminOf(request), request.params.id, {
+          lastChannelId: scope.level === 'global' ? null : scope.channelId,
+          lastLanguageCode: scope.level === 'channel_language' ? scope.languageCode : null,
+        });
+        return view(row);
       },
     );
   }
@@ -1201,10 +1348,7 @@ export async function registerCatalogAdminRoutes(
       },
     );
 
-    app.patch<{
-      Params: { productId: string; itemId: string };
-      Querystring: { replace?: string };
-    }>(
+    app.patch<{ Params: { productId: string; itemId: string } }>(
       '/api/v1/admin/catalog/products/:productId/gallery/:itemId',
       {
         preHandler: requireAdmin('catalog:write'),
@@ -1212,31 +1356,24 @@ export async function registerCatalogAdminRoutes(
       },
       async (request) => {
         const body = updateGalleryItemRequestSchema.parse(request.body);
-        const item = await gallery.update(
-          request.params.productId,
-          request.params.itemId,
-          body,
-          { replaceConflictingLabels: request.query.replace === 'true' },
-        );
-        await auditEmit(request, {
-          action: 'gallery.update',
-          objectType: 'gallery_item',
-          objectId: request.params.itemId,
-        });
+        // One audit entry per request (FR-080): the service's `gallery_item.update` Command
+        // writes it. Feature 170 (§6) — the position only; roles, alt text and the hidden
+        // flag are scoped fields of `PUT …/scoped-values`.
+        const item = await gallery.update(request.params.productId, request.params.itemId, body);
         return { data: item };
       },
     );
+
+    // Feature 170 (`contracts/scoped-values-api.md` §6) — 163's `GET` / `PUT …/gallery/channel-roles`
+    // are retired; gallery roles at C and C×L are scoped fields of `PUT …/scoped-values`.
 
     app.delete<{ Params: { productId: string; itemId: string } }>(
       '/api/v1/admin/catalog/products/:productId/gallery/:itemId',
       { preHandler: requireAdmin('catalog:write') },
       async (request, reply) => {
+        // One audit entry (163 checkpoint F, S-4): the service's `gallery_item.delete`
+        // Command writes it, so the route writes none of its own.
         await gallery.delete(request.params.productId, request.params.itemId);
-        await auditEmit(request, {
-          action: 'gallery.delete',
-          objectType: 'gallery_item',
-          objectId: request.params.itemId,
-        });
         return reply.status(204).send();
       },
     );
@@ -1249,12 +1386,9 @@ export async function registerCatalogAdminRoutes(
       },
       async (request, reply) => {
         const body = reorderGalleryRequestSchema.parse(request.body);
+        // One audit entry (163 checkpoint F, S-4): the service's `product.media.update`
+        // Command writes it, with the order before and after.
         await gallery.reorder(request.params.productId, body.orderedGalleryItemIds);
-        await auditEmit(request, {
-          action: 'gallery.reorder',
-          objectType: 'product',
-          objectId: request.params.productId,
-        });
         return reply.status(204).send();
       },
     );
@@ -1337,13 +1471,10 @@ export async function registerCatalogAdminRoutes(
       },
       async (request, reply) => {
         const body = createAttachmentRequestSchema.parse(request.body);
+        // Feature 163 (FR-080) — one audit entry per request: the service's Command
+        // writes it, so the route writes none of its own.
         const a = await att.createAttachment(request.params.productId, body);
         reply.status(201);
-        await auditEmit(request, {
-          action: 'attachment.create',
-          objectType: 'product_attachment',
-          objectId: a.id,
-        });
         return { data: a };
       },
     );
@@ -1356,16 +1487,13 @@ export async function registerCatalogAdminRoutes(
       },
       async (request) => {
         const body = updateAttachmentRequestSchema.parse(request.body);
+        // Feature 163 (FR-080) — one audit entry per request: the service's Command
+        // writes it, so the route writes none of its own.
         const a = await att.updateAttachment(
           request.params.productId,
           request.params.attachmentId,
           body,
         );
-        await auditEmit(request, {
-          action: 'attachment.update',
-          objectType: 'product_attachment',
-          objectId: request.params.attachmentId,
-        });
         return { data: a };
       },
     );
@@ -1374,15 +1502,12 @@ export async function registerCatalogAdminRoutes(
       '/api/v1/admin/catalog/products/:productId/attachments/:attachmentId',
       { preHandler: requireAdmin('catalog:write') },
       async (request, reply) => {
+        // One audit entry (163 checkpoint F, S-4): the service's
+        // `product_attachment.delete` Command writes it, so the route writes none.
         await att.deleteAttachment(
           request.params.productId,
           request.params.attachmentId,
         );
-        await auditEmit(request, {
-          action: 'attachment.delete',
-          objectType: 'product_attachment',
-          objectId: request.params.attachmentId,
-        });
         return reply.status(204).send();
       },
     );
@@ -1409,13 +1534,10 @@ export async function registerCatalogAdminRoutes(
       },
       async (request, reply) => {
         const body = createPackagingUnitRequestSchema.parse(request.body);
+        // Feature 163 (FR-080) — one audit entry per request: the service's Command
+        // writes it, so the route writes none of its own.
         const unit = await pkg.create(request.params.productId, body);
         reply.status(201);
-        await auditEmit(request, {
-          action: 'packaging_unit.create',
-          objectType: 'product_packaging_unit',
-          objectId: unit.id,
-        });
         return { data: unit };
       },
     );
@@ -1428,16 +1550,13 @@ export async function registerCatalogAdminRoutes(
       },
       async (request) => {
         const body = updatePackagingUnitRequestSchema.parse(request.body);
+        // Feature 163 (FR-080) — one audit entry per request: the service's Command
+        // writes it, so the route writes none of its own.
         const unit = await pkg.update(
           request.params.productId,
           request.params.unitId,
           body,
         );
-        await auditEmit(request, {
-          action: 'packaging_unit.update',
-          objectType: 'product_packaging_unit',
-          objectId: request.params.unitId,
-        });
         return { data: unit };
       },
     );
@@ -1480,13 +1599,24 @@ export async function registerCatalogAdminRoutes(
   // need an admin write surface for Variants. Foundation 001 shipped the
   // ProductVariant entity but no routes.
 
+  // Feature 161 — every variant of a product, as an admin sees it: the
+  // storefront's product read (which `ProductEditor` used for its variants)
+  // answers an inactive product 410 and an out-of-channel one 404.
+  app.get<{ Params: { productId: string } }>(
+    '/api/v1/admin/catalog/products/:productId/variants',
+    { preHandler: requireAdmin('catalog:read') },
+    async (request) => ({ data: (await adminService.listVariants(request.params.productId)).map(serializeAdminVariant) }),
+  );
+
   app.post<{ Params: { productId: string } }>(
     '/api/v1/admin/catalog/products/:productId/variants',
     {
+      preValidation: notePriceFields(PRICE_FIELDS_REFUSED_ON_VARIANTS),
       preHandler: requireAdmin('catalog:write'),
       schema: { body: createVariantRequestSchema },
     },
     async (request, reply) => {
+      refuseNotedPriceFields(request, 'variant');
       const body = createVariantRequestSchema.parse(request.body);
       const variant = await adminService.createVariant(request.params.productId, body);
       reply.status(201);
@@ -1497,10 +1627,12 @@ export async function registerCatalogAdminRoutes(
   app.patch<{ Params: { productId: string; variantId: string } }>(
     '/api/v1/admin/catalog/products/:productId/variants/:variantId',
     {
+      preValidation: notePriceFields(PRICE_FIELDS_REFUSED_ON_VARIANTS),
       preHandler: requireAdmin('catalog:write'),
       schema: { body: updateVariantRequestSchema },
     },
     async (request) => {
+      refuseNotedPriceFields(request, 'variant');
       const body = updateVariantRequestSchema.parse(request.body);
       const variant = await adminService.updateVariant(
         request.params.productId,
@@ -1842,6 +1974,9 @@ function serializeAdminProduct(p: Product) {
     lowStockThresholdMode: p.lowStockThresholdMode,
     fulfilmentStrategy: p.fulfilmentStrategy ?? null,
     fulfilmentStrategyWarehouseOrder: p.fulfilmentStrategyWarehouseOrder ?? null,
+    // Feature 155 (FR-001, FR-003) — the order rules, as stored (any type).
+    minOrderQuantity: p.minOrderQuantity ?? null,
+    returnable: p.returnable,
     // Feature 022 — surface so the Bulk Edit summary and the single-
     // product editor can render the archived state.
     archivedAt: p.archivedAt ? p.archivedAt.toISOString() : null,
@@ -1887,6 +2022,9 @@ function serializeAdminAttribute(
     // Feature 061 (additive) — id of the backing product-host Custom Field
     // definition (adminAttributeResponseSchema.customFieldDefinitionId).
     customFieldDefinitionId: a.customFieldDefinitionId,
+    // Feature 170 (R15) — the scope flag the attribute editor edits and the levels it derives.
+    scopable: a.scopable,
+    scopeLevels: [...a.scopeLevels],
     createdAt: a.createdAt.toISOString(),
     updatedAt: a.updatedAt.toISOString(),
   };
@@ -1898,7 +2036,6 @@ function serializeAdminVariant(v: ProductVariant) {
     parentProductId: v.parentProductId,
     sku: v.sku,
     variantAttributeValues: v.variantAttributeValues,
-    priceOverride: v.priceOverride != null ? Number(v.priceOverride) : null,
     stockLevel: v.stockLevel ?? null,
     createdAt: v.createdAt.toISOString(),
     updatedAt: v.updatedAt.toISOString(),

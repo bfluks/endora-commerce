@@ -63,7 +63,10 @@ describe('custom_fields — re-creating a key over values a deleted field left b
   it('refuses a customer-visible definition over stored values', async () => {
     const res = await create(key, 'customer');
     expect(res.statusCode, res.body).toBe(409);
-    expect(res.body).toContain('Create the field as internal');
+    const { error } = res.json() as { error: { code: string; message: string; details?: Record<string, unknown> } };
+    expect(error.code).toBe('CUSTOM_FIELD_STORED_VALUES_EXIST');
+    expect(error.details).toMatchObject({ key });
+    expect(error.message).toContain('Create the field as internal');
   });
 
   it('accepts it as internal, and then lets the audience be opened deliberately', async () => {

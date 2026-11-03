@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { ERROR_CODES, unitPriceHalfUp } from '@endora-commerce/contracts';
 
 import { Cart, CartItem, Order, OrderItem } from '../../helpers/package-entities.js';
 import {
@@ -11,11 +11,13 @@ import {
 import { SEED_PAYMENT_METHOD_ID } from '../../helpers/seed-commerce.js';
 import { cartWritePortOf } from '../../helpers/orders-neighbour-ports.js';
 import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+import { systemDefaultSalesChannelId } from '../../helpers/sales-channel-fixtures.js';
 import {
   createTieredProduct,
   TIER_UNIT_PRICE,
   TIER_VOLUME_PRICE,
 } from '../../helpers/tiered-product-fixture.js';
+import { emptyCustomerBasket } from '../../helpers/customer-basket.js';
 
 /**
  * An order line is placed at the price its cart line may be ordered at **now**,
@@ -28,11 +30,17 @@ describe('POST /api/v1/orders — the line price is the price for its current qu
   let h: BackendServerHandle;
   let productId: string;
   const customer = { b2b_session: 'stub-customer-session' };
-  const customerCtx = { customerAccountId: TEST_CUSTOMER_ID, organizationId: TEST_ORGANIZATION_ID };
+  /** The basket of the system-default channel — the one `place()` (no channel named) uses. */
+  let customerCtx: { customerAccountId: string; organizationId: string; salesChannelId: string };
 
   beforeAll(async () => {
     h = await setupBackendServer();
     productId = await createTieredProduct(h, `order-${Date.now()}`);
+    customerCtx = {
+      customerAccountId: TEST_CUSTOMER_ID,
+      organizationId: TEST_ORGANIZATION_ID,
+      salesChannelId: await systemDefaultSalesChannelId(h.em()),
+    };
   });
 
   afterAll(async () => {
@@ -40,7 +48,7 @@ describe('POST /api/v1/orders — the line price is the price for its current qu
   });
 
   beforeEach(async () => {
-    await h.cartService()!.clearForCustomer(customerCtx);
+    await emptyCustomerBasket(h, customerCtx);
   });
 
   function place() {
@@ -123,8 +131,9 @@ describe('POST /api/v1/orders — the line price is the price for its current qu
         productId,
         variantId: null,
         quantity: 1,
-        previousUnitPrice: TIER_VOLUME_PRICE,
-        currentUnitPrice: TIER_UNIT_PRICE,
+        // Unit prices at four places (owner ruling of 2026-10-25).
+        previousUnitPrice: unitPriceHalfUp(TIER_VOLUME_PRICE),
+        currentUnitPrice: unitPriceHalfUp(TIER_UNIT_PRICE),
         currency: 'PLN',
       },
     ]);

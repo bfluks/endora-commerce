@@ -46,12 +46,15 @@ describe('customer_accounts — passwordSetAt (issue #222)', () => {
     (h.container.cradle as unknown as { passwordResetService: CustomerPasswordResetPort })
       .passwordResetService;
 
-  const socialLogin = (): { autoCreate(email: string): Promise<{ id: string } | null> } =>
-    (
-      h.container.cradle as unknown as {
-        customerSocialLoginPort: { autoCreate(email: string): Promise<{ id: string } | null> };
-      }
-    ).customerSocialLoginPort;
+  type SocialLogin = {
+    autoCreate(
+      email: string,
+      context: { salesChannelId: string | null },
+    ): Promise<{ id: string } | null>;
+  };
+  const socialLogin = (): SocialLogin =>
+    (h.container.cradle as unknown as { customerSocialLoginPort: SocialLogin })
+      .customerSocialLoginPort;
 
   async function rowFor(email: string): Promise<CustomerAccount> {
     const row = await h.em().findOne(CustomerAccount, { email });
@@ -186,7 +189,7 @@ describe('customer_accounts — passwordSetAt (issue #222)', () => {
 
   it('leaves the column null when federated sign-in auto-creates the account', async () => {
     const email = `pw-set-social-${Date.now()}@example.test`;
-    const created = await socialLogin().autoCreate(email);
+    const created = await socialLogin().autoCreate(email, { salesChannelId: null });
     expect(created, 'auto-create is allowed in this composition').not.toBeNull();
 
     const account = await rowFor(email);

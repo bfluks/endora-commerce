@@ -177,4 +177,244 @@ describe('assets_library migration (T008 — 034_assets_library_init)', () => {
       await db.rollbackTx();
     }
   });
+
+  // ---------------------------------------------------------------------------
+  // specs/156-asset-stable-url/ data-model §1–§1b (T005).
+  // ---------------------------------------------------------------------------
+
+  async function columnsOf(table: string) {
+    const conn = db.orm.em.getConnection();
+    const rows = await conn.execute<
+      Array<{
+        column_name: string;
+        data_type: string;
+        is_nullable: 'YES' | 'NO';
+        character_maximum_length: number | null;
+        column_default: string | null;
+      }>
+    >(
+      `select column_name, data_type, is_nullable, character_maximum_length, column_default
+       from information_schema.columns
+       where table_schema = 'public' and table_name = ?`,
+      [table],
+    );
+    return new Map(rows.map((r) => [r.column_name, r]));
+  }
+
+  async function indexDef(name: string): Promise<string | undefined> {
+    const conn = db.orm.em.getConnection();
+    const rows = await conn.execute<Array<{ indexdef: string }>>(
+      `select indexdef from pg_indexes where schemaname = 'public' and indexname = ?`,
+      [name],
+    );
+    return rows[0]?.indexdef;
+  }
+
+  /** A raw row the way other modules' seeds and fixtures insert one — no content_version. */
+  async function insertRawAsset(
+    conn: { execute: (sql: string, params?: unknown[]) => Promise<unknown> },
+    extra: Record<string, unknown> = {},
+  ): Promise<string> {
+    const id = randomUUID();
+    const columns = ['id', 'kind', 'filename', 'mime_type', 'size_bytes', 'storage_url', 'created_at', 'updated_at'];
+    const values: unknown[] = [id, 'pdf', `as156-${id.slice(0, 8)}.pdf`, 'application/pdf', 100, `as156/${id}.pdf`];
+    const placeholders = ['?', '?', '?', '?', '?', '?', 'now()', 'now()'];
+    for (const [column, value] of Object.entries(extra)) {
+      columns.push(column);
+      values.push(value);
+      placeholders.push('?');
+    }
+    await conn.execute(
+      `insert into assets (${columns.join(', ')}) values (${placeholders.join(', ')})`,
+      values,
+    );
+    return id;
+  }
+
+  it('adds the eleven version and permalink columns to assets with their types and nullability', async () => {
+    const cols = await columnsOf('assets');
+    const expected: Array<[string, string, 'YES' | 'NO', number | null]> = [
+      ['content_version', 'character varying', 'NO', 32],
+      ['permalink', 'character varying', 'YES', 200],
+      ['previous_storage_locator', 'character varying', 'YES', 2048],
+      ['previous_filename', 'character varying', 'YES', 255],
+      ['previous_mime_type', 'character varying', 'YES', 127],
+      ['previous_mime_type_overridden', 'boolean', 'YES', null],
+      ['previous_kind', 'character varying', 'YES', 16],
+      ['previous_size_bytes', 'bigint', 'YES', null],
+      ['previous_content_version', 'character varying', 'YES', 32],
+      ['previous_replaced_at', 'timestamp with time zone', 'YES', null],
+      ['previous_replaced_by', 'uuid', 'YES', null],
+    ];
+    for (const [name, type, nullable, length] of expected) {
+      const col = cols.get(name);
+      expect(col, `missing column "${name}"`).toBeDefined();
+      expect(col!.data_type, name).toBe(type);
+      expect(col!.is_nullable, name).toBe(nullable);
+      expect(col!.character_maximum_length, name).toBe(length);
+    }
+  });
+
+  it('creates the permalink, previous-version and soft-delete indexes', async () => {
+    const permalink = await indexDef('assets_permalink_lower_unique');
+    expect(permalink).toMatch(/CREATE UNIQUE INDEX/);
+    expect(permalink).toMatch(/lower\(\(permalink\)::text\)/);
+    expect(permalink).toMatch(/WHERE \(permalink IS NOT NULL\)/);
+
+    const previous = await indexDef('assets_previous_replaced_at_idx');
+    expect(previous).toMatch(/\(previous_replaced_at\)/);
+    expect(previous).toMatch(/WHERE \(previous_replaced_at IS NOT NULL\)/);
+
+    const softDeleted = await indexDef('assets_soft_deleted_at_idx');
+    expect(softDeleted).toMatch(/\(deleted_at\)/);
+    expect(softDeleted).toMatch(/WHERE \(deleted_at IS NOT NULL\)/);
+  });
+
+  it('gives every assets row a 12-hex content_version, and a raw insert a fresh one', async () => {
+    await db.beginTx();
+    try {
+      const conn = db.em().getConnection();
+      const a = await insertRawAsset(conn);
+      const b = await insertRawAsset(conn);
+      const bad = await conn.execute<Array<{ n: string }>>(
+        `select count(*)::text as n from assets where content_version !~ '^[0-9a-f]{12}$'`,
+      );
+      expect(bad[0]!.n).toBe('0');
+      const rows = await conn.execute<Array<{ id: string; content_version: string }>>(
+        `select id::text as id, content_version from assets where id in (?, ?)`,
+        [a, b],
+      );
+      expect(rows).toHaveLength(2);
+      for (const row of rows) expect(row.content_version).toMatch(/^[0-9a-f]{12}$/);
+      expect(rows[0]!.content_version).not.toBe(rows[1]!.content_version);
+    } finally {
+      await db.rollbackTx();
+    }
+  });
+
+  it('refuses two permalinks that differ only by case, and lets null permalinks coexist', async () => {
+    await db.beginTx();
+    try {
+      const conn = db.em().getConnection();
+      const suffix = randomUUID().slice(0, 8);
+      await insertRawAsset(conn);
+      await insertRawAsset(conn);
+      await insertRawAsset(conn, { permalink: `as156-${suffix}/Certificate.pdf` });
+      await expect(
+        insertRawAsset(conn, { permalink: `as156-${suffix}/certificate.PDF` }),
+      ).rejects.toThrow(/assets_permalink_lower_unique/);
+    } finally {
+      await db.rollbackTx();
+    }
+  });
+
+  it('refuses a partially recorded previous version', async () => {
+    await db.beginTx();
+    try {
+      const conn = db.em().getConnection();
+      await expect(
+        insertRawAsset(conn, { previous_storage_locator: `as156/${randomUUID()}.prev.pdf` }),
+      ).rejects.toThrow(/assets_previous_version_complete/);
+    } finally {
+      await db.rollbackTx();
+    }
+  });
+
+  it('accepts a complete previous version with or without its actor', async () => {
+    await db.beginTx();
+    try {
+      const conn = db.em().getConnection();
+      const complete = {
+        previous_storage_locator: `as156/${randomUUID()}.prev.pdf`,
+        previous_filename: 'certificate.pdf',
+        previous_mime_type: 'application/pdf',
+        previous_mime_type_overridden: false,
+        previous_kind: 'pdf',
+        previous_size_bytes: 10,
+        previous_content_version: 'a1b2c3d4e5f6',
+        previous_replaced_at: new Date(),
+      };
+      await insertRawAsset(conn, complete);
+      await insertRawAsset(conn, { ...complete, previous_replaced_by: randomUUID() });
+    } finally {
+      await db.rollbackTx();
+    }
+  });
+
+  it('creates asset_permalink_releases keyed by permalink_lower with a reason check', async () => {
+    const cols = await columnsOf('asset_permalink_releases');
+    for (const name of ['permalink_lower', 'permalink', 'asset_id', 'released_at', 'reason']) {
+      expect(cols.get(name)?.is_nullable, name).toBe('NO');
+    }
+    await db.beginTx();
+    try {
+      const conn = db.em().getConnection();
+      const name = `as156-${randomUUID().slice(0, 8)}/certificate.pdf`;
+      const insert = (reason: string) =>
+        conn.execute(
+          `insert into asset_permalink_releases (permalink_lower, permalink, asset_id, released_at, reason)
+           values (?, ?, ?, now(), ?)`,
+          [name.toLowerCase(), name, randomUUID(), reason],
+        );
+      await insert('changed');
+      await expect(insert('removed')).rejects.toThrow(/asset_permalink_releases_pkey/);
+    } finally {
+      await db.rollbackTx();
+    }
+    await db.beginTx();
+    try {
+      const conn = db.em().getConnection();
+      const name = `as156-${randomUUID().slice(0, 8)}/certificate.pdf`;
+      await expect(
+        conn.execute(
+          `insert into asset_permalink_releases (permalink_lower, permalink, asset_id, released_at, reason)
+           values (?, ?, ?, now(), 'renamed')`,
+          [name, name, randomUUID()],
+        ),
+      ).rejects.toThrow(/asset_permalink_releases_reason_check/);
+    } finally {
+      await db.rollbackTx();
+    }
+  });
+
+  it('creates asset_object_cleanups unique per object, with a reason check and attempts defaulting to 0', async () => {
+    await db.beginTx();
+    try {
+      const conn = db.em().getConnection();
+      const locator = `as156/${randomUUID()}.stage.pdf`;
+      const id = randomUUID();
+      await conn.execute(
+        `insert into asset_object_cleanups (id, storage_backend, locator, reason, recorded_at)
+         values (?, 'local', ?, 'staging', now())`,
+        [id, locator],
+      );
+      const rows = await conn.execute<Array<{ attempts: number }>>(
+        `select attempts from asset_object_cleanups where id = ?`,
+        [id],
+      );
+      expect(rows[0]!.attempts).toBe(0);
+      await expect(
+        conn.execute(
+          `insert into asset_object_cleanups (id, storage_backend, locator, reason, recorded_at)
+           values (?, 'local', ?, 'previous', now())`,
+          [randomUUID(), locator],
+        ),
+      ).rejects.toThrow(/asset_object_cleanups_locator_unique/);
+    } finally {
+      await db.rollbackTx();
+    }
+    await db.beginTx();
+    try {
+      const conn = db.em().getConnection();
+      await expect(
+        conn.execute(
+          `insert into asset_object_cleanups (id, storage_backend, locator, reason, recorded_at)
+           values (?, 'local', ?, 'other', now())`,
+          [randomUUID(), `as156/${randomUUID()}.pdf`],
+        ),
+      ).rejects.toThrow(/asset_object_cleanups_reason_check/);
+    } finally {
+      await db.rollbackTx();
+    }
+  });
 });

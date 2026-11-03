@@ -118,7 +118,24 @@ obliczonymi przez serwer; narzędzia wyłączonych modułów automatycznie znika
 | `inventory.search_warehouses` | wyszukiwanie | `catalog:read` |
 | `inventory.set_stock_level` | zmiana | `catalog:write` |
 | `catalog.assign_products_to_category` | zmiana | `catalog:write` |
+| `catalog.remove_products_from_category` | zmiana | `catalog:write` |
+| `catalog.set_product_status` | zmiana | `catalog:write` |
+| `catalog.set_products_visibility` | zmiana | `catalog:write` |
+| `catalog.archive_product` | zmiana | `catalog:write` |
+| `catalog.restore_product` | zmiana | `catalog:write` |
 
 Masowe przypisania do kategorii obejmujące ponad 50 produktów trafiają do istniejącej kolejki
 `catalog.bulk-operation` (ten sam worker co ekran masowej edycji), więc duże polecenia nigdy nie
 blokują procesu API.
+
+**Archiwizacja to nie status.** `catalog.set_product_status` włącza (`active`) lub wyłącza
+(`inactive`) produkty i nigdy ich nie archiwizuje ani nie przywraca. Aby zarchiwizować lub
+przywrócić produkt, poproś o to asystenta: `catalog.archive_product` i `catalog.restore_product`
+uruchamiają akcje Archiwizuj i Przywróć modułu Catalog — z tym samym wpisem audytu
+(`product.archive` / `product.restore`), a jako wykonawcę zapisują administratora, który
+zatwierdził plan; powyżej 50 produktów działają jako zbiorcze Archiwizuj / Przywróć w tej samej
+kolejce, z możliwością cofnięcia na stronie operacji zbiorczej. Podgląd planu mówi, że produkt
+zarchiwizowany przywraca tylko Przywróć. `catalog.search_products` obejmuje produkty
+zarchiwizowane i zwraca `archived` obok `status`, więc zarchiwizowany produkt da się znaleźć, by
+go przywrócić. Oba narzędzia są dostępne tylko tam, gdzie podłączona jest szyna poleceń modułu
+Catalog.

@@ -56,6 +56,18 @@ Beyond the routes, orders consume the drivers via
 The buyer's own retry (`POST /api/v1/orders/:orderId/payments/retry`) is a
 customer route and authorises through `requireCustomer`, not a permission.
 
+## Gateway refunds
+
+A gateway reports each refund — made from its dashboard or by a return
+settlement — through its webhook, with the cumulative refunded amount, and the
+payment records it. An amount with more than two decimal places is **refused,
+not rounded**: the payment's refunded amount and status stay as they were, the
+refusal is logged with the payment, the order, the reported amount and the
+gateway's refund reference, and the payment is marked for manual attention
+(`providerDetails.refundAnomaly` in the payment history). The webhook is still
+acknowledged, so the gateway does not deliver it again; an operator checks the
+refund with the gateway and settles it by hand.
+
 ## Events emitted
 
 `payment.received.v1`, `payment.failed.v1`, `payment.refunded.v1`. These are

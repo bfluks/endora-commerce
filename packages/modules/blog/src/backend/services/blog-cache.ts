@@ -68,6 +68,16 @@ export class BlogCacheService {
     return `${channelLanguagePrefix(channelCode, language)}:tag:${code}:p${page}`;
   }
 
+  /** The card list behind `GET /api/v1/blog/posts` (feature 163). */
+  static composeListKey(
+    channelCode: string,
+    language: string,
+    limit: number,
+    categorySlug: string | null,
+  ): string {
+    return `${channelLanguagePrefix(channelCode, language)}:list:${categorySlug ?? '*'}:n${limit}`;
+  }
+
   async get<T>(key: string): Promise<T | null> {
     if (!this.enabled) return null;
     const raw = await this.redis.get(key);

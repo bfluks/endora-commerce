@@ -35,14 +35,14 @@ describe('named price list resolution goes through the port (#132)', () => {
     const resolve = createNamedListPriceResolver(portReturning({ p1: '42.50' }));
     await expect(
       resolve.one({ priceListId: LIST, productId: 'p1', currencyCode: 'PLN' }),
-    ).resolves.toBe(42.5);
+    ).resolves.toBe('42.50');
   });
 
   it('resolves an amount of zero to zero, not to "no price"', async () => {
     const resolve = createNamedListPriceResolver(portReturning({ p1: '0.00' }));
     await expect(
       resolve.one({ priceListId: LIST, productId: 'p1', currencyCode: 'PLN' }),
-    ).resolves.toBe(0);
+    ).resolves.toBe('0.00');
   });
 
   it('answers null for a product the list does not price', async () => {
@@ -60,8 +60,8 @@ describe('named price list resolution goes through the port (#132)', () => {
       currencyCode: 'PLN',
     });
     expect([...out.entries()]).toEqual([
-      ['p1', 10],
-      ['p3', 0],
+      ['p1', '10.00'],
+      ['p3', '0.00'],
     ]);
   });
 

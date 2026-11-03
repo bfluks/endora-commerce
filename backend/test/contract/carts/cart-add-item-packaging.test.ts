@@ -5,6 +5,7 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
+import { seedBasePriceSql } from '../../helpers/price-book-sql.js';
 
 /**
  * Feature 043 — buyer ordering by a packaging unit (US2).
@@ -33,16 +34,20 @@ describe('Cart add-item packaging units (043)', () => {
       payload: {
         sku: `PKGCART-${suffix}`,
         type: 'simple',
-        name: { 'en-US': `Pallet product ${suffix}` },
-        description: { 'en-US': '' },
+        name: `Pallet product ${suffix}`,
+        description: '',
         categoryIds: [],
-        attributeValues: { defaultPrice: 3 },
+        attributeValues: {},
         visibility: 'public',
+        // Feature 163 (Q1-d) — a product created without a status is `inactive`, which no basket
+        // accepts; this one is meant to be on sale.
+        status: 'active',
       },
       cookies: adminCookie,
     });
     expect(created.statusCode).toBe(201);
     const product = (created.json() as { data: { id: string; slug: string } }).data;
+    await seedBasePriceSql(h.em(), product.id, '3.00');
 
     const unit = await h.app.inject({
       method: 'POST',

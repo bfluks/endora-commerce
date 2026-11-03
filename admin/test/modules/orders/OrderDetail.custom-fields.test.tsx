@@ -87,7 +87,7 @@ const ORDER = {
   placedAt: '2026-05-22T12:00:00Z',
 };
 
-function renderDetail(): void {
+function renderDetail(entry = `/orders/${ORDER_ID}`): void {
   getSpy.mockImplementation((path: string) => {
     if (path === `/api/v1/admin/orders/${ORDER_ID}`) return Promise.resolve({ data: ORDER });
     if (path === '/api/v1/admin/orders/statuses') {
@@ -105,7 +105,7 @@ function renderDetail(): void {
   });
   renderWithI18n(
     withSession(
-      <MemoryRouter initialEntries={[`/orders/${ORDER_ID}`]}>
+      <MemoryRouter initialEntries={[entry]}>
         <Routes>
           <Route path="/orders/:id" element={<OrderDetail />} />
         </Routes>
@@ -154,5 +154,25 @@ describe('OrderDetail — custom fields, through the published panel', () => {
         getSpy.mock.calls.filter((call) => call[0] === `/api/v1/admin/orders/${ORDER_ID}`),
       ).toHaveLength(2),
     );
+  });
+});
+
+describe('OrderDetail — the way back (specs/158-crm-opportunity-inline-editing/, FR-020)', () => {
+  it('leads to the Orders list when it was opened from nowhere in particular', async () => {
+    renderDetail();
+    const back = await screen.findByRole('link', { name: CORE_EN['orders.page.title'] as string });
+    expect(back).toHaveAttribute('href', '/orders');
+  });
+
+  it('leads back to the screen that opened it, and says only "Back"', async () => {
+    renderDetail(`/orders/${ORDER_ID}?returnTo=${encodeURIComponent('/crm/opportunities/abc?tab=links')}`);
+    const back = await screen.findByRole('link', { name: CORE_EN['common.action.back'] as string });
+    expect(back).toHaveAttribute('href', '/crm/opportunities/abc?tab=links');
+  });
+
+  it('ignores a return address outside the application', async () => {
+    renderDetail(`/orders/${ORDER_ID}?returnTo=${encodeURIComponent('//evil.example/')}`);
+    const back = await screen.findByRole('link', { name: CORE_EN['orders.page.title'] as string });
+    expect(back).toHaveAttribute('href', '/orders');
   });
 });

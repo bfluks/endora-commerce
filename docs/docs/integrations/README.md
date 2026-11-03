@@ -64,7 +64,8 @@ catalog-sync guidance, bulk pricing, and idempotent ordering are documented in
 
 A key is granted one or more scopes from the typed catalog: `catalog:read`,
 `catalog:write` (unbound keys only), `orders:read`, `orders:write` (bound
-keys only). When a request hits a route gated by
+keys only), and `platform.api_description.read`, which lets the integration
+read the API description at `GET /api/v1/_openapi.json`. When a request hits a route gated by
 `requireApiKey('catalog:write')`, the platform:
 
 1. Resolves the bearer token to its `ApiKey` row by SHA-256 hash.

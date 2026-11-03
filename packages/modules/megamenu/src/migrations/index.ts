@@ -23,11 +23,17 @@
  */
 
 import { Migration20260505T193836MegamenuInit } from './20260505T193836_megamenu_init.js';
+import { Migration20261029T162855MegamenuNavigationBar } from './20261029T162855_megamenu_navigation_bar.js';
+import { Migration20261029T190956MegamenuTabClickNavigates } from './20261029T190956_megamenu_tab_click_navigates.js';
 
 export const migrations = [
   Migration20260505T193836MegamenuInit,
+  Migration20261029T162855MegamenuNavigationBar,
+  Migration20261029T190956MegamenuTabClickNavigates,
 ];
 
 export {
   Migration20260505T193836MegamenuInit,
+  Migration20261029T162855MegamenuNavigationBar,
+  Migration20261029T190956MegamenuTabClickNavigates,
 };

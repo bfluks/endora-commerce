@@ -34,12 +34,10 @@ import { withModuleOff, type OffStateAxis } from '../../helpers/off-state.js';
  * `megamenu` and `returns` already declared theirs, so what the drain adds for
  * them is the proof that it goes when the module does.
  *
- * `taxes` declares **none**, and that is asserted rather than skipped: a module
- * with no action has nothing to advertise, so the honest test is that the
- * registry answers nothing for it in both states — which also fails if somebody
- * adds one without adding it to this table. It is a Principle XVI entry the
- * register still owes and not this batch's to pay, because inventing a landing
- * action for a screen is a product decision and not a file move.
+ * `taxes` declared **none** when this batch landed — a Principle XVI entry the
+ * batch did not pay, because inventing a landing action is a product decision
+ * and not a file move. Issue #510 paid it: `open-taxes` opens the tax-rule
+ * table, and it goes when the module does like every other row here.
  *
  * `seo` stood beside it until `specs/144-seo-search-engine-robots/` made that
  * product decision: it now declares the landing action for its own screen and
@@ -66,7 +64,7 @@ const SUBJECTS: readonly Subject[] = [
   { module: 'seo', actions: ['open-search-engine-robots', 'open-seo'], axis: 'deactivated' },
   // Locked: `activation.nonDeactivatable`, asserted below in the manifest's
   // own words rather than restated here.
-  { module: 'taxes', actions: [], axis: 'platform-unavailable' },
+  { module: 'taxes', actions: ['open-taxes'], axis: 'platform-unavailable' },
   { module: 'credit_limits', actions: ['open-credit-limits'], axis: 'deactivated' },
   { module: 'delivery_methods', actions: ['open-delivery-methods'], axis: 'deactivated' },
   { module: 'megamenu', actions: ['edit-megamenu'], axis: 'deactivated' },

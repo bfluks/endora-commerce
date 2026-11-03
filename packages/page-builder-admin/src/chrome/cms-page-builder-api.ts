@@ -2,6 +2,7 @@ import { apiClient } from '@endora-commerce/admin-kit/lib';
 import type {
   CmsColorPaletteEntry,
   CmsPageBuilderDescriptor,
+  CmsPageSummary,
   PutCmsColorPaletteRequest,
 } from '@endora-commerce/contracts';
 
@@ -60,4 +61,18 @@ export async function putPageBuilderColorPalette(
     body,
   );
   return out.data;
+}
+
+const PAGES_PATH = '/api/v1/admin/cms/pages';
+
+/**
+ * The pages a link can point at, as `{slug, label}` — the first hundred, which
+ * is what `cms`' old button link picker listed (feature 163, T016). Rebuilt on
+ * `apiClient` for the reason this file's header gives: an HTTP path plus a
+ * contract type is the one kind of module knowledge a published component may
+ * carry. With `cms` off the call fails and the picker shows no pages.
+ */
+export async function listPageBuilderLinkPages(): Promise<{ slug: string; label: string }[]> {
+  const out = await apiClient.get<{ data: CmsPageSummary[] }>(`${PAGES_PATH}?limit=100`);
+  return out.data.map((page) => ({ slug: page.slug, label: `${page.name} (/${page.slug})` }));
 }

@@ -4,6 +4,7 @@ import {
   CRM_EVENTS,
   ERROR_CODES,
   type CreateOpportunityLinkRequest,
+  type CustomFieldCarryPort,
   type OpportunityDocumentKind,
   type OpportunityDocumentLinkedEvent,
   type OpportunityLink,
@@ -19,6 +20,7 @@ import { CrmOpportunity } from '../entities/crm-opportunity.entity.js';
 import { CrmOpportunityLink } from '../entities/crm-opportunity-link.entity.js';
 import type { CrmQuoteRequestDocument, CrmQuoteRequests } from './crm-quote-requests.js';
 import { isUuid, loadOpportunity } from './opportunity-access.js';
+import { carryIntoOpportunity, type OpportunityCarrySource } from './opportunity-custom-field-carry.js';
 import { assertMayReadQuoteRequests, type OwnerReadChecks } from './owner-read-permissions.js';
 
 export interface OpportunityLinkServiceDeps {
@@ -39,6 +41,11 @@ export interface OpportunityLinkServiceDeps {
    * without `rfqs:handle` neither does a linked Quote Request.
    */
   mayRead: Pick<OwnerReadChecks, 'orders' | 'quoteRequests'>;
+  /**
+   * `custom_fields`' carry port (feature 162): a document's values the
+   * Opportunity it joins receives into its empty fields. Lazy, resolved per call.
+   */
+  customFieldCarry: CustomFieldCarryPort;
 }
 
 /** What a link is rendered from: the document as the reader may see it. */
@@ -52,6 +59,12 @@ export interface AutomaticLink {
   documentKind: OpportunityDocumentKind;
   documentId: string;
   linkSource: Exclude<OpportunityLinkSource, 'manual'>;
+  /**
+   * The joining document's custom-field values (feature 162) — given for an
+   * Order joining from its Quote Request, never for an origin link (that carry
+   * goes the other way) and never for a manual link.
+   */
+  carry?: OpportunityCarrySource;
 }
 
 function linkNotFound(): HttpError {
@@ -226,6 +239,13 @@ export class OpportunityLinkService {
             linkSource: link.linkSource,
             linkedByAdminUserId: null,
           });
+          // Feature 162 (US2-2, US2-3) — the joining document's carried values
+          // fill the Opportunity's **empty** fields, in this Command, and what
+          // was carried or skipped is named in this entry.
+          const carry = link.carry
+            ? await carryIntoOpportunity(this.deps.customFieldCarry, link.carry, { ...(parent.customFieldValues ?? {}) })
+            : null;
+          if (carry && carry.carried.length > 0) parent.customFieldValues = { ...carry.values };
           return {
             result: { organizationId: parent.organizationId },
             before: null,
@@ -235,6 +255,8 @@ export class OpportunityLinkService {
               documentId: created.documentId,
               syncStatus: created.syncStatus,
               linkSource: created.linkSource,
+              ...(carry && carry.carried.length > 0 ? { customFieldValues: { ...carry.values } } : {}),
+              ...(carry?.after ?? {}),
             },
           };
         },
@@ -279,6 +301,7 @@ export class OpportunityLinkService {
       documentKind: 'order',
       documentId: order.id,
       linkSource: 'quote_conversion',
+      carry: { sourceType: 'order', recordId: order.id, sourceValues: order.customFieldValues ?? {} },
     });
     return opportunity.id;
   }

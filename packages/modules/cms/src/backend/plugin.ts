@@ -23,10 +23,11 @@ import { CmsPageService, type ReservedSlugSegmentsResolver } from './services/cm
 import { CmsBlockService } from './services/cms-block-service.js';
 import { CmsTemplateService } from './services/cms-template-service.js';
 import { CmsReferenceRegistry } from './services/cms-reference-registry.js';
-import { StorefrontResolver, type CmsAssetResolver } from './services/storefront-resolver.js';
+import { StorefrontResolver, type CmsAssetResolver, type CmsDefaultShareImageResolver } from './services/storefront-resolver.js';
 import { CmsHookService } from './services/cms-hook-service.js';
 import { CmsCache } from './services/cms-cache.js';
 import { CmsContentInvalidator } from './services/cms-content-invalidator.js';
+import { CmsBrandTokensService } from './services/brand-tokens-service.js';
 import { registerCmsAdminRoutes } from './routes.admin.js';
 import { registerCmsStorefrontRoutes } from './routes.storefront.js';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
@@ -82,7 +83,7 @@ export interface CmsModuleOptions {
    * module's own Redis entries were dropped. `backend/index.ts` binds it to the
    * EventBus; a composition that passes nothing publishes nothing.
    */
-  publishContentChange?: (change: CmsContentChange) => void;
+  publishContentChange?: (change: CmsContentChange) => void | Promise<void>;
   /**
    * Feature 151 — the Page Builder translation's configuration, resolved per
    * request (settings, credential, model). `backend/index.ts` binds it to the
@@ -90,6 +91,13 @@ export interface CmsModuleOptions {
    * nothing has the function switched off.
    */
   translationConfig?: () => Promise<TranslationConfig>;
+  /**
+   * Feature 163 — asks the storefront to drop Data Cache entries by tag after a
+   * brand-token write commits. `backend/index.ts` binds it to
+   * `cmsStorefrontRevalidator`; a composition that passes nothing revalidates
+   * nothing.
+   */
+  revalidateStorefront?: (tags: string[]) => Promise<void>;
 }
 
 export interface CmsModuleHandle {
@@ -102,6 +110,8 @@ export interface CmsModuleHandle {
   storefrontResolver: StorefrontResolver;
   /** Feature 151 — the Page Builder translation behind the two admin routes. */
   translation: PageBuilderTranslationService;
+  /** Feature 163 — the brand tokens behind the admin and storefront routes. */
+  brandTokensService: CmsBrandTokensService;
   /** Storefront read-through cache — `undefined` when no Redis was wired. */
   cache: CmsCache | undefined;
   /** Idempotent reconciler — called by composition before HTTP starts. */
@@ -119,8 +129,12 @@ export interface CmsModuleHandle {
    * for a composition root to forget.
    */
   setReservedSlugSegmentsResolver: (resolver: ReservedSlugSegmentsResolver) => void;
+  /** Feature 167 — the channels' storefront language prefixes → channel codes. */
+  setLanguagePrefixesResolver: (resolver: () => Promise<ReadonlyMap<string, readonly string[]>>) => void;
   getColorPaletteWriter: () => ColorPaletteWriter | null;
   setAssetResolver: (resolver: CmsAssetResolver | null) => void;
+  /** Feature 163 — the default sharing image, read per request for the request's channel. */
+  setDefaultShareImageResolver: (resolver: CmsDefaultShareImageResolver | null) => void;
 }
 
 export function cmsModule(options: CmsModuleOptions): {
@@ -180,6 +194,17 @@ export function cmsModule(options: CmsModuleOptions): {
     commandBus: options.commandBus,
   });
 
+  const brandTokensService = new CmsBrandTokensService({
+    emFactory: options.emFactory,
+    commandBus: options.commandBus,
+    ...(options.revalidateStorefront ? { revalidateStorefront: options.revalidateStorefront } : {}),
+  });
+  // The page-builder descriptor carries the effective set for the previewed
+  // channel (feature 163, research R-4).
+  pageBuilderRegistry.setBrandTokensResolver((salesChannelId) =>
+    brandTokensService.effective(salesChannelId),
+  );
+
   let colorPaletteWriter: ColorPaletteWriter | null = null;
 
   const handle: CmsModuleHandle = {
@@ -191,6 +216,7 @@ export function cmsModule(options: CmsModuleOptions): {
     referenceRegistry,
     storefrontResolver,
     translation,
+    brandTokensService,
     cache,
     reconcile: () => reconcileSeededHooks(options.emFactory),
     setPageBuilderBreakpointsResolver: (resolver) => {
@@ -205,13 +231,21 @@ export function cmsModule(options: CmsModuleOptions): {
     setReservedSlugSegmentsResolver: (resolver) => {
       pageService.setReservedSegmentsResolver(resolver);
     },
+    setLanguagePrefixesResolver: (resolver) => {
+      pageService.setLanguagePrefixesResolver(resolver);
+    },
     getColorPaletteWriter: () => colorPaletteWriter,
     setAssetResolver: (resolver) => {
       storefrontResolver.setAssetResolver(resolver);
     },
+    setDefaultShareImageResolver: (resolver) => {
+      storefrontResolver.setDefaultShareImageResolver(resolver);
+    },
   };
 
   const plugin = async (app: FastifyInstance) => {
+    // `app.log` exists from here on; a failed brand revalidation is logged to it.
+    brandTokensService.setLogger(app.log);
     await registerCmsAdminRoutes(app, {
       pageService,
       blockService,
@@ -221,8 +255,9 @@ export function cmsModule(options: CmsModuleOptions): {
       getColorPaletteWriter: () => colorPaletteWriter,
       requireAdmin: options.requireAdmin,
       translation,
+      brandTokensService,
     });
-    await registerCmsStorefrontRoutes(app, { storefrontResolver });
+    await registerCmsStorefrontRoutes(app, { storefrontResolver, brandTokensService });
   };
 
   return { plugin, handle };

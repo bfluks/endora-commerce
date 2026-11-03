@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { BlogBySlugPostResponse } from '@endora-commerce/contracts';
+import type { BlogBySlugPostResponse, ProductSummary } from '@endora-commerce/contracts';
 import { Breadcrumbs } from '../../../components/Breadcrumbs';
 import { JsonLd } from '../../../lib/seo/JsonLd';
 import { absoluteUrl } from '../../../lib/seo/site-url';
@@ -8,10 +8,10 @@ import { RelatedPostsStrip } from './RelatedPostsStrip';
 import { RelatedProductsStrip } from './RelatedProductsStrip';
 import { TagChipStrip } from './TagChipStrip';
 
-function formatDate(iso: string | null): string | null {
+function formatDate(iso: string | null, locale: string): string | null {
   if (!iso) return null;
   try {
-    return new Date(iso).toLocaleDateString();
+    return new Date(iso).toLocaleDateString(locale);
   } catch {
     return null;
   }
@@ -20,12 +20,25 @@ function formatDate(iso: string | null): string | null {
 export function BlogPostPage({
   payload,
   language,
+  locale,
+  relatedProducts,
+  salesChannelCode,
 }: {
   payload: BlogBySlugPostResponse;
   language: string;
+  /** The page language, for the date and the strips' headings (issue #85). */
+  locale: string;
+  /**
+   * The post's related products as this viewer's listing cards, in the post's
+   * order (`getBlogRelatedProducts`, issue #590). The payload names them by id
+   * only; it carries no card and no price.
+   */
+  relatedProducts: ProductSummary[];
+  /** The active sales channel, for the product cards' browser-side calls. */
+  salesChannelCode: string | undefined;
 }): ReactNode {
   const { post } = payload;
-  const date = formatDate(post.publishedAt);
+  const date = formatDate(post.publishedAt, locale);
   return (
     <article className="mx-auto max-w-4xl space-y-8">
       {/*
@@ -45,7 +58,7 @@ export function BlogPostPage({
           ...(post.tags.length > 0 ? { keywords: post.tags.map((tag) => tag.name).join(', ') } : {}),
         }}
       />
-      <Breadcrumbs crumbs={post.breadcrumb.map((c) => ({ href: c.url, label: c.name }))} />
+      <Breadcrumbs locale={locale} crumbs={post.breadcrumb.map((c) => ({ href: c.url, label: c.name }))} />
 
       <header className="space-y-3">
         {date ? (
@@ -64,8 +77,8 @@ export function BlogPostPage({
       </div>
 
       <TagChipStrip tags={post.tags} />
-      <RelatedPostsStrip posts={post.relatedPosts} />
-      <RelatedProductsStrip products={post.relatedProducts} />
+      <RelatedPostsStrip posts={post.relatedPosts} locale={locale} />
+      <RelatedProductsStrip products={relatedProducts} locale={locale} salesChannelCode={salesChannelCode} />
     </article>
   );
 }

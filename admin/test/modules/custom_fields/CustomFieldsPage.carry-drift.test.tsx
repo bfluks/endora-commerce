@@ -1,0 +1,448 @@
+import { StrictMode } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { AuthProvider } from '@endora-commerce/admin-kit/lib';
+import type { CustomFieldDefinitionDto } from '@endora-commerce/contracts';
+import { renderWithI18n } from '../../helpers/render-with-i18n';
+import { adminSession } from '../../helpers/render-with-session';
+import { expectNoAxeViolations } from '../../helpers/axe';
+import en from '../../../../packages/modules/custom_fields/i18n/en.json';
+import pl from '../../../../packages/modules/custom_fields/i18n/pl.json';
+import coreEn from '../../../../packages/modules/_i18n/i18n/en.json';
+import corePl from '../../../../packages/modules/_i18n/i18n/pl.json';
+import { CARRY_ENTITY_TYPES, carryDefinition, sentence } from './carry-fixtures';
+
+/**
+ * Feature 162 (T043, US4-6, US4-8, SC-007, FR-019) — a change that would stop
+ * an enabled carry from working asks first, in the page, naming every field on
+ * the other side; *Cancel* sends nothing and the proceed button — named after
+ * the action it confirms (owner ruling V1, 2026-10-21, T065) — sends exactly
+ * what the action sent before
+ * (`specs/162-custom-fields-value-carry/contracts/admin-surfaces.md` §1.4).
+ */
+
+type Bundle = Record<string, string>;
+const EN = en as Bundle;
+const PL = pl as Bundle;
+const WARNING = sentence(EN, 'customFields.carry.warning.title');
+const CANCEL = sentence(EN, 'customFields.carry.warning.cancel');
+const BODY = sentence(EN, 'customFields.carry.warning.body');
+const REMOVE_OPTION_ANYWAY = sentence(EN, 'customFields.carry.warning.proceedRemoveOption');
+const DELETE_FIELD_ANYWAY = sentence(EN, 'customFields.carry.warning.proceedDeleteField');
+const ADD_OPTION_ANYWAY = sentence(EN, 'customFields.carry.warning.proceedAddOption');
+const CHANGE_AUDIENCE_ANYWAY = sentence(EN, 'customFields.carry.warning.proceedChangeAudience');
+
+/** Internal, offers north + south, carries to the Order field of the same key. */
+const QR_REGION = carryDefinition('00000000-0000-4000-8000-0000000d0001', { carryTo: ['order'] });
+/** The carry's target: compatible today. */
+const ORDER_REGION = carryDefinition('00000000-0000-4000-8000-0000000d0002', { entityType: 'order' });
+/** Takes part in no carry. */
+const ORDER_NOTE = carryDefinition('00000000-0000-4000-8000-0000000d0003', {
+  entityType: 'order',
+  key: 'note',
+  valueType: 'text',
+  optionValues: [],
+});
+
+const db = vi.hoisted(() => ({ definitions: [] as CustomFieldDefinitionDto[] }));
+const client = vi.hoisted(() => ({
+  list: vi.fn(),
+  update: vi.fn(),
+  remove: vi.fn(),
+  createOption: vi.fn(),
+  removeOption: vi.fn(),
+}));
+
+vi.mock('../../../../packages/modules/custom_fields/src/admin/api/custom-fields-client', () => ({
+  customFieldsClient: {
+    listEntityTypes: async () => CARRY_ENTITY_TYPES,
+    list: async (entityType?: string) => {
+      client.list(entityType);
+      return db.definitions.filter((d) => entityType === undefined || d.entityType === entityType);
+    },
+    get: async (id: string) => db.definitions.find((d) => d.id === id),
+    create: async () => ({}),
+    update: (...args: unknown[]) => client.update(...args),
+    remove: (...args: unknown[]) => client.remove(...args),
+    createOption: (...args: unknown[]) => client.createOption(...args),
+    updateOption: async () => ({}),
+    removeOption: (...args: unknown[]) => client.removeOption(...args),
+  },
+}));
+
+const { CustomFieldsPage } = await import(
+  '../../../../packages/modules/custom_fields/src/admin/pages/CustomFieldsPage'
+);
+
+let nativeDialogs: Array<ReturnType<typeof vi.spyOn>>;
+
+beforeEach(() => {
+  db.definitions = [QR_REGION, ORDER_REGION, ORDER_NOTE];
+  for (const fn of Object.values(client)) fn.mockReset();
+  client.update.mockResolvedValue({});
+  client.remove.mockResolvedValue({});
+  client.createOption.mockResolvedValue({ id: 'new', value: 'east' });
+  client.removeOption.mockResolvedValue(undefined);
+  nativeDialogs = [
+    vi.spyOn(window, 'confirm').mockImplementation(() => false),
+    vi.spyOn(window, 'prompt').mockImplementation(() => null),
+    vi.spyOn(window, 'alert').mockImplementation(() => undefined),
+  ];
+});
+
+afterEach(() => {
+  for (const spy of nativeDialogs) expect(spy).not.toHaveBeenCalled();
+  vi.restoreAllMocks();
+});
+
+async function renderPage(
+  entityType: 'quote_request' | 'order',
+  bundle: Bundle = EN,
+  core: Bundle = coreEn as Bundle,
+): Promise<void> {
+  renderWithI18n(
+    <StrictMode>
+      <AuthProvider initial={adminSession({ permissions: ['custom_fields:read', 'custom_fields:write'] })}>
+        <CustomFieldsPage />
+      </AuthProvider>
+    </StrictMode>,
+    { custom_fields: bundle, core },
+  );
+  const recordType = sentence(bundle, 'customFields.form.entity');
+  await waitFor(() =>
+    expect(within(screen.getByLabelText(recordType)).getAllByRole('option').map((o) => o.textContent)).toContain(
+      sentence(bundle, 'customFields.entity.order'),
+    ),
+  );
+  fireEvent.change(screen.getByLabelText(recordType), { target: { value: entityType } });
+  await waitFor(() => expect(client.list).toHaveBeenCalledWith(entityType));
+  await waitFor(() => expect(client.list).toHaveBeenCalledWith(undefined));
+  await screen.findByRole('row', { name: /region/ });
+}
+
+async function openEditor(key = 'region', bundle: Bundle = EN): Promise<HTMLElement> {
+  const title = sentence(bundle, 'customFields.editor.title', { key });
+  fireEvent.click(await screen.findByRole('button', { name: title }));
+  return screen.findByRole('dialog', { name: title });
+}
+
+/** The warning lists exactly these "<type> · <key>" lines. */
+function expectCounterparts(warning: HTMLElement, lines: string[]): void {
+  expect(within(warning).getAllByRole('listitem').map((item) => item.textContent)).toEqual(lines);
+}
+
+const REQUESTS = (): number =>
+  client.update.mock.calls.length +
+  client.remove.mock.calls.length +
+  client.createOption.mock.calls.length +
+  client.removeOption.mock.calls.length;
+
+describe('CustomFieldsPage — drift warnings', () => {
+  describe('removing an option a carrying source holds', () => {
+    async function askToRemoveSouth(): Promise<HTMLElement> {
+      await renderPage('order');
+      const dialog = await openEditor();
+      const south = within(dialog).getByRole('group', { name: 'South' });
+      fireEvent.click(within(south).getByRole('button', { name: 'Remove' }));
+      return screen.findByRole('dialog', { name: WARNING });
+    }
+
+    it('asks first, naming the source, and sends nothing on Cancel', async () => {
+      const warning = await askToRemoveSouth();
+      expectCounterparts(warning, ['Quote request · region']);
+      expect(within(warning).getByRole('button', { name: CANCEL })).toHaveFocus();
+      expect(REQUESTS()).toBe(0);
+      fireEvent.click(within(warning).getByRole('button', { name: CANCEL }));
+      // The editor comes back as it was, the removal not asked again in the row.
+      const editor = await screen.findByRole('dialog', { name: sentence(EN, 'customFields.editor.title', { key: 'region' }) });
+      expect(within(editor).getByRole('group', { name: 'South' })).toBeInTheDocument();
+      expect(REQUESTS()).toBe(0);
+    });
+
+    it('describes the editor by the warning while it stands, and says it appeared', async () => {
+      await renderPage('order');
+      const dialog = await openEditor();
+      const announcement = within(dialog).getByTestId('drift-announcement');
+      // Mounted, empty, before there is anything to say — so the swap is announced.
+      expect(announcement).toHaveAttribute('role', 'status');
+      expect(announcement).toHaveTextContent('');
+      expect(dialog).not.toHaveAttribute('aria-describedby');
+
+      fireEvent.click(within(within(dialog).getByRole('group', { name: 'South' })).getByRole('button', { name: 'Remove' }));
+      const warning = await screen.findByRole('dialog', { name: WARNING });
+      expect(warning).toBe(dialog);
+      expect(announcement).toHaveTextContent(WARNING);
+      expect(warning).toHaveAccessibleDescription(expect.stringContaining(BODY));
+      expect(warning).toHaveAccessibleDescription(expect.stringContaining('Quote request · region'));
+      // Focus still starts on the answer that changes nothing.
+      expect(within(warning).getByRole('button', { name: CANCEL })).toHaveFocus();
+
+      fireEvent.click(within(warning).getByRole('button', { name: CANCEL }));
+      await screen.findByRole('dialog', { name: sentence(EN, 'customFields.editor.title', { key: 'region' }) });
+      expect(announcement).toHaveTextContent('');
+      expect(dialog).not.toHaveAttribute('aria-describedby');
+    });
+
+    it('removes the option exactly as before on Remove option anyway', async () => {
+      const warning = await askToRemoveSouth();
+      fireEvent.click(within(warning).getByRole('button', { name: REMOVE_OPTION_ANYWAY }));
+      await waitFor(() => expect(client.removeOption).toHaveBeenCalledTimes(1));
+      expect(client.removeOption).toHaveBeenCalledWith(ORDER_REGION.id, ORDER_REGION.options[1]!.id);
+      expect(REQUESTS()).toBe(1);
+    });
+
+    it('leaves focus on the options heading once the option is gone, not on the page', async () => {
+      const warning = await askToRemoveSouth();
+      // The re-read answers the definition without "south".
+      db.definitions = [QR_REGION, { ...ORDER_REGION, options: [ORDER_REGION.options[0]!] }, ORDER_NOTE];
+      fireEvent.click(within(warning).getByRole('button', { name: REMOVE_OPTION_ANYWAY }));
+      const editor = await screen.findByRole('dialog', { name: sentence(EN, 'customFields.editor.title', { key: 'region' }) });
+      await waitFor(() => expect(within(editor).queryByRole('group', { name: 'South' })).toBeNull());
+      const heading = within(editor).getByRole('heading', { name: sentence(EN, 'customFields.editor.section.options') });
+      expect(heading).toHaveFocus();
+    });
+
+    it('draws the warning icon in the destructive colour for a removal', async () => {
+      const warning = await askToRemoveSouth();
+      const icon = warning.querySelector('svg');
+      expect(icon).toHaveClass('text-destructive');
+    });
+  });
+
+  describe('adding an option the target lacks', () => {
+    async function askToAddEast(): Promise<HTMLElement> {
+      await renderPage('quote_request');
+      const dialog = await openEditor();
+      const add = within(dialog).getByRole('group', { name: 'Add option' });
+      fireEvent.change(within(add).getByLabelText('Stored value'), { target: { value: 'east' } });
+      fireEvent.change(within(add).getByLabelText('Default label'), { target: { value: 'East' } });
+      fireEvent.click(within(add).getByRole('button', { name: 'Add option' }));
+      return screen.findByRole('dialog', { name: WARNING });
+    }
+
+    it('asks first, naming the target, and keeps the typed option on Cancel', async () => {
+      const warning = await askToAddEast();
+      expectCounterparts(warning, ['Order · region']);
+      // An added option loses nothing: the icon reads as a caution, not a loss.
+      const icon = warning.querySelector('svg');
+      expect(icon).not.toHaveClass('text-destructive');
+      expect(icon).toHaveClass('text-amber-700');
+      fireEvent.click(within(warning).getByRole('button', { name: CANCEL }));
+      const editor = await screen.findByRole('dialog', { name: sentence(EN, 'customFields.editor.title', { key: 'region' }) });
+      expect(within(within(editor).getByRole('group', { name: 'Add option' })).getByLabelText('Stored value')).toHaveValue('east');
+      expect(REQUESTS()).toBe(0);
+    });
+
+    it('adds the option exactly as before on Add option anyway', async () => {
+      const warning = await askToAddEast();
+      fireEvent.click(within(warning).getByRole('button', { name: ADD_OPTION_ANYWAY }));
+      await waitFor(() => expect(client.createOption).toHaveBeenCalledTimes(1));
+      expect(client.createOption).toHaveBeenCalledWith(QR_REGION.id, {
+        value: 'east',
+        labelDefault: 'East',
+        label: {},
+        isDefault: false,
+        sortOrder: 2,
+      });
+    });
+  });
+
+  describe('making the target visible to customers under an internal source', () => {
+    const audienceOf = (): HTMLSelectElement =>
+      screen.getByLabelText(sentence(EN, 'customFields.audience.rowLabel', { key: 'region' })) as HTMLSelectElement;
+
+    it('asks first and leaves the audience as it was on Cancel', async () => {
+      await renderPage('order');
+      fireEvent.change(audienceOf(), { target: { value: 'customer' } });
+      const warning = await screen.findByRole('dialog', { name: WARNING });
+      expectCounterparts(warning, ['Quote request · region']);
+      // Read with the title as focus enters the dialog on Cancel.
+      expect(warning).toHaveAccessibleDescription(expect.stringContaining(BODY));
+      expect(warning).toHaveAccessibleDescription(expect.stringContaining('Quote request · region'));
+      expect(within(warning).getByRole('button', { name: CANCEL })).toHaveFocus();
+      expect(warning.querySelector('svg')).not.toHaveClass('text-destructive');
+      fireEvent.click(within(warning).getByRole('button', { name: CANCEL }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(audienceOf().value).toBe('internal');
+      expect(REQUESTS()).toBe(0);
+    });
+
+    it('sends the audience exactly as before on Change audience anyway', async () => {
+      await renderPage('order');
+      fireEvent.change(audienceOf(), { target: { value: 'customer' } });
+      const warning = await screen.findByRole('dialog', { name: WARNING });
+      fireEvent.click(within(warning).getByRole('button', { name: CHANGE_AUDIENCE_ANYWAY }));
+      await waitFor(() => expect(client.update).toHaveBeenCalledTimes(1));
+      expect(client.update).toHaveBeenCalledWith(ORDER_REGION.id, { audience: 'customer' });
+    });
+  });
+
+  describe('changing the audience in the edit dialog (issue #447)', () => {
+    async function askFromDialog(): Promise<{ dialog: HTMLElement }> {
+      await renderPage('order');
+      const dialog = await openEditor();
+      fireEvent.change(within(dialog).getByLabelText(sentence(EN, 'customFields.audience.label')), {
+        target: { value: 'customer' },
+      });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+      await screen.findByRole('dialog', { name: WARNING });
+      return { dialog };
+    }
+
+    it('asks first, naming the source, and sends nothing on Cancel — the dialog keeps the choice', async () => {
+      await askFromDialog();
+      const warning = screen.getByRole('dialog', { name: WARNING });
+      expectCounterparts(warning, ['Quote request · region']);
+      expect(within(warning).getByRole('button', { name: CANCEL })).toHaveFocus();
+      fireEvent.click(within(warning).getByRole('button', { name: CANCEL }));
+      const dialog = await screen.findByRole('dialog', { name: sentence(EN, 'customFields.editor.title', { key: 'region' }) });
+      expect(within(dialog).getByLabelText(sentence(EN, 'customFields.audience.label'))).toHaveValue('customer');
+      expect(REQUESTS()).toBe(0);
+    });
+
+    it('saves the audience on Change audience anyway', async () => {
+      await askFromDialog();
+      fireEvent.click(screen.getByRole('button', { name: CHANGE_AUDIENCE_ANYWAY }));
+      await waitFor(() => expect(client.update).toHaveBeenCalledTimes(1));
+      expect(client.update).toHaveBeenCalledWith(ORDER_REGION.id, { audience: 'customer' });
+    });
+  });
+
+  describe('deleting a definition that is part of an enabled carry', () => {
+    it('asks once, in the warning, and sends nothing on Cancel', async () => {
+      await renderPage('order');
+      fireEvent.click(screen.getByRole('button', { name: sentence(EN, 'customFields.table.delete', { key: 'region' }) }));
+      const warning = await screen.findByRole('dialog', { name: WARNING });
+      expect(within(warning).getByText(sentence(EN, 'customFields.table.deleteConfirm', { key: 'region' }))).toBeInTheDocument();
+      expectCounterparts(warning, ['Quote request · region']);
+      expect(warning).toHaveAccessibleDescription(
+        expect.stringContaining(sentence(EN, 'customFields.table.deleteConfirm', { key: 'region' })),
+      );
+      expect(warning).toHaveAccessibleDescription(expect.stringContaining(BODY));
+      expect(warning.querySelector('svg')).toHaveClass('text-destructive');
+      fireEvent.click(within(warning).getByRole('button', { name: CANCEL }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(REQUESTS()).toBe(0);
+    });
+
+    it('deletes exactly as before on Delete field anyway', async () => {
+      await renderPage('quote_request');
+      fireEvent.click(screen.getByRole('button', { name: sentence(EN, 'customFields.table.delete', { key: 'region' }) }));
+      const warning = await screen.findByRole('dialog', { name: WARNING });
+      expectCounterparts(warning, ['Order · region']);
+      fireEvent.click(within(warning).getByRole('button', { name: DELETE_FIELD_ANYWAY }));
+      await waitFor(() => expect(client.remove).toHaveBeenCalledTimes(1));
+      expect(client.remove).toHaveBeenCalledWith(QR_REGION.id);
+    });
+  });
+
+  /**
+   * Owner ruling V1 (T065): the proceed button names the action — never a bare
+   * "Continue" — and stays destructive-styled for a removal or a deletion.
+   */
+  describe.each([
+    ['en', EN, coreEn as Bundle],
+    ['pl', PL, corePl as Bundle],
+  ] as const)('the proceed button names the action (%s)', (_language, bundle, core) => {
+    const say = (key: string, params: Record<string, string> = {}): string => sentence(bundle, key, params);
+    const title = (): string => say('customFields.carry.warning.title');
+    /** The warning's only two buttons, *Cancel* first, and the proceed button's name. */
+    function expectButtons(warning: HTMLElement, proceedKey: string, destructive: boolean): void {
+      const buttons = within(warning).getAllByRole('button');
+      expect(buttons.map((button) => button.textContent)).toEqual([say('customFields.carry.warning.cancel'), say(proceedKey)]);
+      const proceed = buttons[1]!;
+      if (destructive) expect(proceed).toHaveClass('bg-destructive');
+      else expect(proceed).not.toHaveClass('bg-destructive');
+      // The old generic labels are gone from both bundles.
+      expect(bundle['customFields.carry.warning.proceed']).toBeUndefined();
+      expect(bundle['customFields.carry.warning.proceedSave']).toBeUndefined();
+    }
+
+    it('reads "remove option anyway", destructive, for removing an option a carry needs', async () => {
+      await renderPage('order', bundle, core);
+      const dialog = await openEditor('region', bundle);
+      const south = within(dialog).getByRole('group', { name: 'South' });
+      fireEvent.click(within(south).getByRole('button', { name: say('customFields.editor.option.remove') }));
+      const warning = await screen.findByRole('dialog', { name: title() });
+      const proceed = within(warning).getByRole('button', { name: say('customFields.carry.warning.proceedRemoveOption') });
+      expect(proceed).toHaveClass('bg-destructive');
+      fireEvent.click(proceed);
+      await waitFor(() => expect(client.removeOption).toHaveBeenCalledTimes(1));
+    });
+
+    it('reads "add option anyway", not destructive, for adding an option the target lacks', async () => {
+      await renderPage('quote_request', bundle, core);
+      const dialog = await openEditor('region', bundle);
+      const add = within(dialog).getByRole('group', { name: say('customFields.editor.option.add') });
+      fireEvent.change(within(add).getByLabelText(say('customFields.editor.option.value')), { target: { value: 'east' } });
+      fireEvent.change(within(add).getByLabelText(say('customFields.editor.labelDefault')), { target: { value: 'East' } });
+      fireEvent.click(within(add).getByRole('button', { name: say('customFields.editor.option.add') }));
+      const warning = await screen.findByRole('dialog', { name: title() });
+      expectButtons(warning, 'customFields.carry.warning.proceedAddOption', false);
+      const proceed = within(warning).getByRole('button', { name: say('customFields.carry.warning.proceedAddOption') });
+      fireEvent.click(proceed);
+      await waitFor(() => expect(client.createOption).toHaveBeenCalledTimes(1));
+    });
+
+    it('reads "change audience anyway", not destructive, for an audience change', async () => {
+      await renderPage('order', bundle, core);
+      fireEvent.change(screen.getByLabelText(say('customFields.audience.rowLabel', { key: 'region' })), {
+        target: { value: 'customer' },
+      });
+      const warning = await screen.findByRole('dialog', { name: title() });
+      expectButtons(warning, 'customFields.carry.warning.proceedChangeAudience', false);
+    });
+
+    it('reads "delete field anyway", destructive, for deleting a field a carry needs', async () => {
+      await renderPage('quote_request', bundle, core);
+      fireEvent.click(screen.getByRole('button', { name: say('customFields.table.delete', { key: 'region' }) }));
+      const warning = await screen.findByRole('dialog', { name: title() });
+      expectButtons(warning, 'customFields.carry.warning.proceedDeleteField', true);
+    });
+  });
+
+  describe('accessibility', () => {
+    it('has no axe violations with the warning open in the editor and over the table', async () => {
+      await renderPage('order');
+      const dialog = await openEditor();
+      fireEvent.click(within(within(dialog).getByRole('group', { name: 'South' })).getByRole('button', { name: 'Remove' }));
+      await expectNoAxeViolations(await screen.findByRole('dialog', { name: WARNING }));
+      fireEvent.keyDown(document, { key: 'Escape' });
+      // Escape answers the warning, not the editor under it.
+      expect(await screen.findByRole('dialog', { name: sentence(EN, 'customFields.editor.title', { key: 'region' }) })).toBeInTheDocument();
+      fireEvent.keyDown(document, { key: 'Escape' });
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+      fireEvent.click(screen.getByRole('button', { name: sentence(EN, 'customFields.table.delete', { key: 'region' }) }));
+      await expectNoAxeViolations(await screen.findByRole('dialog', { name: WARNING }));
+      expect(REQUESTS()).toBe(0);
+    });
+  });
+
+  describe('a change that breaks nothing', () => {
+    it('asks nothing when the audience change is one the rule allows', async () => {
+      await renderPage('quote_request');
+      fireEvent.change(screen.getByLabelText(sentence(EN, 'customFields.audience.rowLabel', { key: 'region' })), {
+        target: { value: 'customer' },
+      });
+      await waitFor(() => expect(client.update).toHaveBeenCalledWith(QR_REGION.id, { audience: 'customer' }));
+      expect(screen.queryByRole('dialog', { name: WARNING })).toBeNull();
+    });
+
+    it('keeps the in-row confirmation for a deletion no carry depends on', async () => {
+      await renderPage('order');
+      fireEvent.click(screen.getByRole('button', { name: sentence(EN, 'customFields.table.delete', { key: 'note' }) }));
+      expect(screen.queryByRole('dialog', { name: WARNING })).toBeNull();
+      expect(screen.getByText(sentence(EN, 'customFields.table.deleteConfirm', { key: 'note' }))).toBeInTheDocument();
+    });
+
+    it('keeps the in-row confirmation for an option no source holds', async () => {
+      db.definitions = [QR_REGION, carryDefinition(ORDER_REGION.id, { entityType: 'order', optionValues: ['north', 'south', 'west'] })];
+      await renderPage('order');
+      const dialog = await openEditor();
+      fireEvent.click(within(within(dialog).getByRole('group', { name: 'West' })).getByRole('button', { name: 'Remove' }));
+      expect(screen.queryByRole('dialog', { name: WARNING })).toBeNull();
+      expect(within(dialog).getByRole('button', { name: 'Keep' })).toBeInTheDocument();
+    });
+  });
+});

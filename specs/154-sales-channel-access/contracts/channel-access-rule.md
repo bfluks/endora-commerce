@@ -79,6 +79,7 @@ As [data-model.md](../data-model.md) §2. Contract points:
 | --- | --- |
 | `customer_accounts` `CustomerAuthService.login` | `assertCustomerMayUse(customer.organizationId, input.salesChannelId)` after the blocked-account check, before `mfaPort.beginLogin` and `createSession` |
 | `mfa` federated callback (customer surface) | `assertCustomerMayUse(account.organizationId, tx.salesChannelId)` before `createSession`; refusal → `loginRedirect(…, 'sales_channel_not_permitted')` |
+| `mfa` federated callback, account to be created (customer surface) | `decide({ kind: 'anonymous' }, <channel tx.salesChannelId>)` before `autoCreate`; refusal → no account, no Organization, `loginRedirect(…, 'sales_channel_sign_in_required')`; admitted → the personal Organization gets exactly `tx.salesChannelId` |
 | `mfa` second-factor verify (customer) | re-check before the session is issued (the channel is on the challenge context) |
 | `sales_channels` access read (storefront contract §2) | `permittedChannelIds` |
 

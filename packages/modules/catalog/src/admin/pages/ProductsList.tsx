@@ -1,13 +1,15 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useState,
   type CSSProperties,
   type ReactNode,
 } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
+  ArchiveRestore,
   CircleDollarSign,
   Download,
   MoreHorizontal,
@@ -23,10 +25,15 @@ import {
   X,
 } from 'lucide-react';
 import { ProductsBulkEditDialog } from '../components/ProductsBulkEditDialog.js';
+import { resolveProductName, type ProductLabel } from '../lib/product-labels.js';
+import { ArchivedPill, ProductStatusPill } from '../components/ProductStatusPills.js';
 import {
   BULK_EDIT_HARD_MAX,
+  productListTabFromUrl,
+  productListTabQuery,
   resolveProductSelection,
   type ListFilterSnapshot,
+  type ProductListTab,
 } from '../lib/resolve-product-selection.js';
 import { ApiError, apiClient, cn, useAuth, usePageSizePreference } from '@endora-commerce/admin-kit/lib';
 import { PaginationFooter, SavedViewsControl } from '@endora-commerce/admin-kit/components';
@@ -38,14 +45,16 @@ interface AdminProduct {
   sku: string;
   slug: string;
   type: string;
-  status: 'draft' | 'active' | 'inactive';
+  status: 'active' | 'inactive';
+  /** Archived is its own fact, independent of `status`. */
+  archivedAt?: string | null;
   name: Record<string, string>;
   visibility: string;
   attributeValues: Record<string, unknown>;
   updatedAt: string;
 }
 
-type StatusFilter = 'all' | 'active' | 'draft' | 'inactive';
+type StatusFilter = ProductListTab;
 type StockFilter = 'all' | 'low' | 'out';
 type TypeFilter = 'all' | 'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual';
 type SelectionMode = 'none' | 'page' | 'collection';
@@ -76,13 +85,35 @@ const STOCK_CYCLE: StockFilter[] = ['all', 'low', 'out'];
 interface ProductsResponse {
   data: AdminProduct[];
   pagination: { page: number; pageSize: number; total: number };
-  counts: { all: number; active: number; draft: number; inactive: number };
+  counts: ProductListCounts;
 }
 
-const STATUS_FILTERS: readonly StatusFilter[] = ['all', 'active', 'draft', 'inactive'];
+/** `all` / `active` / `inactive` count non-archived products. */
+interface ProductListCounts {
+  all: number;
+  active: number;
+  inactive: number;
+  archived: number;
+}
 
-function isStatusFilter(value: unknown): value is StatusFilter {
-  return typeof value === 'string' && (STATUS_FILTERS as readonly string[]).includes(value);
+/**
+ * A saved view's filters → the tab it opens on (FR-012). The Archived tab is saved
+ * as its own key, `archived: 'only'`, never as a status (R30.4 rejects an
+ * "archived" pseudo-status). A `status` the page no longer offers — `draft` among
+ * them — opens as *All* (owner decision P-2 → A, 2026-10-26: not mapped onto
+ * `inactive`); the list says so once, when such a view is applied.
+ */
+export function savedViewTab(filters: Record<string, unknown>): StatusFilter {
+  if (filters['archived'] === 'only') return 'archived';
+  const status = filters['status'];
+  return status === 'active' || status === 'inactive' ? status : 'all';
+}
+
+/** The tab → the saved view's filter keys; the inverse of {@link savedViewTab}. */
+export function savedViewTabFilters(tab: StatusFilter): Record<string, unknown> {
+  if (tab === 'archived') return { archived: 'only' };
+  if (tab === 'active' || tab === 'inactive') return { status: tab };
+  return {};
 }
 
 function isTypeFilter(value: unknown): value is TypeFilter {
@@ -101,25 +132,48 @@ export function ProductsList(): ReactNode {
   // `New post` are the same shape.
   const { hasPermission } = useAuth();
   const canWrite = hasPermission('catalog:write');
-  const [searchParams] = useSearchParams();
+  const location = useLocation();
   const [rows, setRows] = useState<AdminProduct[]>([]);
   const [total, setTotal] = useState(0);
-  const [counts, setCounts] = useState<{ all: number; active: number; draft: number; inactive: number }>(
-    { all: 0, active: 0, draft: 0, inactive: 0 },
-  );
+  const [counts, setCounts] = useState<ProductListCounts>({ all: 0, active: 0, inactive: 0, archived: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
-    const fromUrl = searchParams.get('status');
-    return isStatusFilter(fromUrl) ? fromUrl : 'all';
-  });
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() =>
+    productListTabFromUrl(location.pathname, location.search),
+  );
+  // The list follows the URL after its first load too: every navigation — the palette's
+  // "Archived products" while the list is already open, a link to `?status=…`, Back —
+  // has a new location key and re-reads the tab. A tab click does not navigate.
+  useEffect(() => {
+    setStatusFilter(productListTabFromUrl(location.pathname, location.search));
+    setLegacyDraftView(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the navigation itself
+  }, [location.key]);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
+  // A saved view that held the removed `draft` status opens on All (owner P-2 → A);
+  // said once, when it is applied, until the operator picks a tab or dismisses it.
+  const [legacyDraftView, setLegacyDraftView] = useState(false);
+  const chooseTab = (tab: StatusFilter): void => {
+    setStatusFilter(tab);
+    setLegacyDraftView(false);
+  };
   const [stockFilter, setStockFilter] = useState<StockFilter>('all');
   const [selection, setSelection] = useState<ProductListSelection>(emptySelection);
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  // The Archived tab's bar Restore opens the dialog on its confirmation (owner P-4 → B).
+  const [bulkInitialStep, setBulkInitialStep] = useState<'form' | 'confirmArchive'>('form');
   const [deleting, setDeleting] = useState(false);
   const [bulkEditProductIds, setBulkEditProductIds] = useState<string[]>([]);
+  const editPriceReasonId = useId();
+  // D3 — the names and SKUs of the selected rows on this page, so the dialog's result
+  // names them without a lookup; a "select all N" selection's other rows are looked up there.
+  const bulkEditLabels = useMemo(() => {
+    const wanted = new Set(bulkEditProductIds);
+    const labels: Record<string, ProductLabel> = {};
+    for (const r of rows) if (wanted.has(r.id)) labels[r.id] = { name: resolveProductName(r.name), sku: r.sku };
+    return labels;
+  }, [bulkEditProductIds, rows]);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [resolvingSelection, setResolvingSelection] = useState(false);
   const { pageSize, setPageSize } = usePageSizePreference('catalog-products');
@@ -138,8 +192,11 @@ export function ProductsList(): ReactNode {
     setError(null);
     try {
       const params = new URLSearchParams();
-      params.set('includeArchived', '1');
-      if (statusFilter !== 'all') params.set('status', statusFilter);
+      // Archived products are hidden by the list's default
+      // (`archived=exclude`); only the Archived tab asks for them.
+      const tabQuery = productListTabQuery(statusFilter);
+      if (tabQuery.archived === 'only') params.set('archived', 'only');
+      if (tabQuery.status) params.set('status', tabQuery.status);
       if (typeFilter !== 'all') params.set('type', typeFilter);
       const trimmed = debouncedQuery.trim();
       if (trimmed) params.set('q', trimmed);
@@ -184,7 +241,7 @@ export function ProductsList(): ReactNode {
     const trimmed = query.trim();
     return {
       filters: {
-        ...(statusFilter !== 'all' ? { status: statusFilter } : {}),
+        ...savedViewTabFilters(statusFilter),
         ...(typeFilter !== 'all' ? { type: typeFilter } : {}),
         ...(trimmed ? { q: trimmed } : {}),
       },
@@ -199,7 +256,8 @@ export function ProductsList(): ReactNode {
   const applySavedView = (state: SavedViewState): void => {
     const f = state.filters;
     const q = typeof f['q'] === 'string' ? f['q'] : '';
-    setStatusFilter(isStatusFilter(f['status']) ? f['status'] : 'all');
+    setStatusFilter(savedViewTab(f));
+    setLegacyDraftView(f['status'] === 'draft');
     setTypeFilter(isTypeFilter(f['type']) ? f['type'] : 'all');
     setQuery(q);
     setDebouncedQuery(q);
@@ -225,6 +283,16 @@ export function ProductsList(): ReactNode {
     if (stockFilter !== 'all') return [];
     return rows;
   }, [rows, stockFilter]);
+
+  // The Archived tab's own empty copy is true only when nothing narrows it; a
+  // filtered Archived tab gets the usual "try clearing filters".
+  const filtersAtDefault = query.trim() === '' && typeFilter === 'all' && stockFilter === 'all';
+  const restoreFromBar = canWrite && statusFilter === 'archived';
+  const archivedEmpty = statusFilter === 'archived' && filtersAtDefault;
+  // A search that finds nothing among live products may be looking for an archived
+  // one, which every other tab hides; one step takes the query there.
+  const searchArchivedHint =
+    statusFilter !== 'archived' && debouncedQuery.trim() !== '' && stockFilter === 'all' && rows.length === 0;
 
   const selectedCount =
     selection.mode === 'collection' ? selection.collectionTotal : selection.pageIds.size;
@@ -305,7 +373,7 @@ export function ProductsList(): ReactNode {
     return Array.from(selection.pageIds);
   };
 
-  const openBulkEdit = async (): Promise<void> => {
+  const openBulkEdit = async (step: 'form' | 'confirmArchive' = 'form'): Promise<void> => {
     setSelectionError(null);
     setResolvingSelection(true);
     try {
@@ -324,6 +392,7 @@ export function ProductsList(): ReactNode {
         return;
       }
       setBulkEditProductIds(ids);
+      setBulkInitialStep(step);
       setBulkEditOpen(true);
     } catch {
       setSelectionError(t('productsList.selection.resolveFailed'));
@@ -426,10 +495,10 @@ export function ProductsList(): ReactNode {
         <div style={{ padding: '4px 12px 0', overflow: 'hidden' }}>
           <div className="b2b-tabs-scroll">
           <div className="b2b-tabs" role="tablist">
-            <Tab id="all" label={t('productsList.tab.all')} count={counts.all} active={statusFilter} onChange={setStatusFilter} />
-            <Tab id="active" label={t('productsList.tab.active')} count={counts.active} active={statusFilter} onChange={setStatusFilter} />
-            <Tab id="draft" label={t('productsList.tab.draft')} count={counts.draft} active={statusFilter} onChange={setStatusFilter} />
-            <Tab id="inactive" label={t('productsList.tab.inactive')} count={counts.inactive} active={statusFilter} onChange={setStatusFilter} />
+            <Tab id="all" label={t('productsList.tab.all')} count={counts.all} active={statusFilter} onChange={chooseTab} />
+            <Tab id="active" label={t('productsList.tab.active')} count={counts.active} active={statusFilter} onChange={chooseTab} />
+            <Tab id="inactive" label={t('productsList.tab.inactive')} count={counts.inactive} active={statusFilter} onChange={chooseTab} />
+            <Tab id="archived" label={t('productsList.tab.archived')} count={counts.archived} active={statusFilter} onChange={chooseTab} />
           </div>
           </div>
         </div>
@@ -488,6 +557,32 @@ export function ProductsList(): ReactNode {
           </div>
         </div>
 
+        {/* Mounted before it has text, so the note is announced when a view brings it. */}
+        <div role="status">
+          {legacyDraftView ? (
+            <div
+              className="b2b-help"
+              data-testid="saved-view-draft-note"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '6px 12px',
+                borderBottom: '1px solid var(--border, #e5e7eb)',
+              }}
+            >
+              <span style={{ flex: 1 }}>{t('productsList.savedView.draftRemoved')}</span>
+              <button
+                type="button"
+                className="b2b-btn b2b-btn--ghost b2b-btn--sm"
+                onClick={(): void => setLegacyDraftView(false)}
+              >
+                {t('productsList.savedView.dismiss')}
+              </button>
+            </div>
+          ) : null}
+        </div>
+
         {showSelectAllBanner ? (
           <div
             style={{
@@ -542,9 +637,25 @@ export function ProductsList(): ReactNode {
                 : t('productsList.selection.scopePage')}
             </span>
             <div className="actions">
+              {/* On the Archived tab the one thing a selection is for is bringing it
+                  back, so Restore leads as the primary and Bulk edit steps down (Von
+                  Restorff); the placeholder Edit price goes, keeping three actions (Hick),
+                  and Delete stays last (owner P-4 → B). */}
+              {restoreFromBar ? (
+                <button
+                  type="button"
+                  className="b2b-btn b2b-btn--primary"
+                  disabled={resolvingSelection}
+                  onClick={(): void => {
+                    void openBulkEdit('confirmArchive');
+                  }}
+                >
+                  <ArchiveRestore size={13} aria-hidden="true" /> {t('productsList.bulk.restore')}
+                </button>
+              ) : null}
               <button
                 type="button"
-                className="b2b-btn b2b-btn--primary"
+                className={restoreFromBar ? 'b2b-btn' : 'b2b-btn b2b-btn--primary'}
                 disabled={resolvingSelection}
                 onClick={(): void => {
                   void openBulkEdit();
@@ -555,18 +666,24 @@ export function ProductsList(): ReactNode {
                   ? t('productsList.selection.resolving')
                   : t('productsList.bulk.edit')}
               </button>
-              <button
-                type="button"
-                className="b2b-btn"
-                disabled={resolvingSelection}
-                onClick={(): void => {
-                  void runWithResolvedIds(async () => {
-                    /* Edit price — placeholder until dedicated flow ships */
-                  });
-                }}
-              >
-                <CircleDollarSign size={13} /> {t('productsList.bulk.editPrice')}
-              </button>
+              {statusFilter !== 'archived' ? (
+                // D17 — no bulk price flow exists (prices are set in price books), so the
+                // button is disabled and says why instead of doing nothing on click.
+                <>
+                  <button
+                    type="button"
+                    className="b2b-btn"
+                    disabled
+                    aria-describedby={editPriceReasonId}
+                    title={t('productsList.bulk.editPriceUnavailable')}
+                  >
+                    <CircleDollarSign size={13} aria-hidden="true" /> {t('productsList.bulk.editPrice')}
+                  </button>
+                  <span id={editPriceReasonId} className="sr-only">
+                    {t('productsList.bulk.editPriceUnavailable')}
+                  </span>
+                </>
+              ) : null}
               <button
                 type="button"
                 className="b2b-btn b2b-btn--danger"
@@ -590,7 +707,22 @@ export function ProductsList(): ReactNode {
         {bulkEditOpen && bulkEditProductIds.length > 0 ? (
           <ProductsBulkEditDialog
             productIds={bulkEditProductIds}
+            productLabels={bulkEditLabels}
             selectionScope={selection.mode === 'collection' ? 'collection' : 'page'}
+            // One archive action, the one that changes something: the Archived tab
+            // holds only archived products, every other tab only products that are
+            // not. On the Archived tab Restore lives on the bar (P-4 → B), so the
+            // form opened by Bulk edit offers none.
+            archiveAction={
+              !canWrite
+                ? null
+                : statusFilter !== 'archived'
+                  ? 'archive'
+                  : bulkInitialStep === 'confirmArchive'
+                    ? 'restore'
+                    : null
+            }
+            initialStep={bulkInitialStep}
             onClose={(): void => {
               setBulkEditOpen(false);
               setBulkEditProductIds([]);
@@ -615,7 +747,9 @@ export function ProductsList(): ReactNode {
               <div className="b2b-empty__icon">
                 <Package size={20} />
               </div>
-              <div className="b2b-empty__title">{t('productsList.empty.title')}</div>
+              <div className="b2b-empty__title">
+                {archivedEmpty ? t('productsList.empty.archivedTitle') : t('productsList.empty.title')}
+              </div>
               {/*
                 The empty state's sentence is *"Try clearing filters, or use
                 + New product to create one."* — half advice, half affordance.
@@ -625,7 +759,9 @@ export function ProductsList(): ReactNode {
                 *"Try clearing filters, or use  to create one."*
               */}
               <div className="b2b-empty__sub">
-                {canWrite ? (
+                {archivedEmpty ? (
+                  t('productsList.empty.archivedSub')
+                ) : canWrite ? (
                   <>
                     {t('productsList.empty.prefix')}{' '}
                     <button
@@ -642,6 +778,16 @@ export function ProductsList(): ReactNode {
                   t('productsList.empty.readOnly')
                 )}
               </div>
+              {searchArchivedHint ? (
+                <button
+                  type="button"
+                  className="b2b-btn b2b-btn--ghost"
+                  style={{ marginTop: 8, color: 'var(--primary-color)' }}
+                  onClick={(): void => chooseTab('archived')}
+                >
+                  {t('productsList.empty.searchArchived')}
+                </button>
+              ) : null}
             </div>
           ) : (
             <div className="b2b-table-scroll">
@@ -729,7 +875,11 @@ export function ProductsList(): ReactNode {
                       </span>
                     </td>
                     <td>
-                      <StatusPill status={r.status} />
+                      <span className="b2b-row" style={{ gap: 4, flexWrap: 'wrap' }}>
+                        <ProductStatusPill status={r.status} archived={Boolean(r.archivedAt)} />
+                        {/* On the Archived tab every row is archived; the tab already says so. */}
+                        {r.archivedAt && statusFilter !== 'archived' ? <ArchivedPill /> : null}
+                      </span>
                     </td>
                     <td>
                       <span style={{ fontSize: 12, textTransform: 'capitalize' }}>{r.type}</span>
@@ -815,16 +965,6 @@ function Chip(props: {
       ) : null}
     </button>
   );
-}
-
-function StatusPill({ status }: { status: AdminProduct['status'] }): ReactNode {
-  const map: Record<AdminProduct['status'], { cls: string; label: string }> = {
-    active: { cls: 'b2b-badge--success', label: 'Active' },
-    draft: { cls: 'b2b-badge--warn', label: 'Draft' },
-    inactive: { cls: '', label: 'Inactive' },
-  } as const;
-  const v = map[status];
-  return <span className={cn('b2b-badge', 'b2b-badge--dot', v.cls)}>{v.label}</span>;
 }
 
 function pickName(name: Record<string, string>): string {

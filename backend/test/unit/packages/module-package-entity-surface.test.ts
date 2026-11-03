@@ -312,6 +312,78 @@ describe('D-168 — the shapes the analysis refuses', () => {
     ]);
   });
 
+  describe('charges a named re-export only with what it asked for (issue #101)', () => {
+    // `mixed.ts` publishes one name this analysis resolves and, beside it, a
+    // bare re-export it cannot follow. A barrel naming the resolved one has a
+    // known surface; only a name the file does not resolve inherits the unknown.
+    const MIXED = { 'mixed.ts': `export const helper = 1;\nexport * from '@somebody/else';\n` };
+
+    it('does not inherit an unrelated unresolvable through `export { a } from`', () => {
+      const barrel = writePackage(
+        'named-known',
+        `export { helper } from './mixed.js';\nexport const entities = [];\n`,
+        MIXED,
+      );
+
+      expect(readBackendSurface(barrel).unresolvable).toEqual([]);
+    });
+
+    it('does not inherit it through an imported binding exported by name either', () => {
+      const barrel = writePackage(
+        'imported-known',
+        `import { helper } from './mixed.js';\nexport { helper };\nexport const entities = [];\n`,
+        MIXED,
+      );
+
+      expect(readBackendSurface(barrel).unresolvable).toEqual([]);
+    });
+
+    it('still inherits it when the name it asks for is not among the resolved exports', () => {
+      // The other direction of the discrimination: `unknown` may have come from
+      // the bare specifier, so whether it is an entity is unknown, not false.
+      const barrel = writePackage(
+        'named-unknown',
+        `export { unknown } from './mixed.js';\nexport const entities = [];\n`,
+        MIXED,
+      );
+
+      expect(readBackendSurface(barrel).unresolvable).toEqual(['@somebody/else']);
+    });
+
+    // Every declaration kind a file can export resolves the name it declares
+    // (issue #564). The discrimination above held for a class or a variable
+    // only, so a named re-export of a function, an interface, a type alias or
+    // an enum was "not resolved" and inherited the file's bare re-export.
+    const DECLARATIONS: ReadonlyArray<readonly [string, string, string]> = [
+      ['a function', 'export function helper() {}\n', 'helper'],
+      ['an interface', 'export interface Helper {}\n', 'Helper'],
+      ['a type alias', 'export type Helper = string;\n', 'Helper'],
+      ['an enum', 'export enum Helper { A }\n', 'Helper'],
+    ];
+
+    for (const [kind, declaration, name] of DECLARATIONS) {
+      it(`does not inherit it through a named re-export of ${kind}`, () => {
+        const barrel = writePackage(
+          `named-${kind.replace(/\W+/g, '-')}`,
+          `export { ${name} } from './declared.js';\nexport const entities = [];\n`,
+          { 'declared.ts': `${declaration}export * from '@somebody/else';\n` },
+        );
+
+        expect(readBackendSurface(barrel).unresolvable).toEqual([]);
+      });
+    }
+
+    it('does not inherit it through an imported function exported by name either', () => {
+      const barrel = writePackage(
+        'imported-function',
+        `import { helper } from './declared.js';\nexport { helper };\nexport const entities = [];\n`,
+        { 'declared.ts': `export function helper() {}\nexport * from '@somebody/else';\n` },
+      );
+
+      expect(readBackendSurface(barrel).unresolvable).toEqual([]);
+    });
+  });
+
   it('follows a named re-export chain, so one hop does not hide the class', () => {
     // `export { Widget } from './x.js'` two files deep — the same edge as
     // `export *`, spelled the way an author reaches for when told to stop

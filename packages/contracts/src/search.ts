@@ -95,6 +95,10 @@ export const searchSuggestItemSchema = productSummarySchema.extend({
   /** Resolved price-visibility mode. `none` ⇒ the storefront must hide the
    *  price and offer a quote affordance instead. */
   priceDisplayMode: displayModeSchema.optional(),
+  /** Feature 161 (G19) — the catalogue price beside a lower buyer price
+   *  ("list price / your price"), as on the catalogue cards (G14): present only
+   *  while `pricing.show_list_price` is on and it is above the price charged. */
+  listPrice: searchSuggestMoneySchema.optional(),
 });
 export type SearchSuggestItem = z.infer<typeof searchSuggestItemSchema>;
 
@@ -203,9 +207,15 @@ export type SearchReindexResponse = z.infer<typeof SearchReindexResponseSchema>;
 export interface ResolvedSearchChannel {
   id: string;
   code: string;
-  isPublic: boolean;
   defaultCurrency: string;
   defaultLanguage: string;
+  /**
+   * Feature 163 — the channel's content languages, from the resolved channel
+   * record. The scope language a query filters on is the request's
+   * `Accept-Language` pick resolved against them. Absent: the default
+   * language alone.
+   */
+  languages?: readonly string[] | undefined;
 }
 
 export interface SearchQueryContext {

@@ -430,7 +430,18 @@ export function renderPackageIdentityFiles(
   }
   filesRead += 1;
 
-  const { members } = classifyWorkspaceMembers(repoRoot, fs);
+  // Membership is read through the manifests this run is about to write, not
+  // only the ones on disk: a package whose **first** `package.json` this run
+  // writes is not a workspace member on disk yet, and leaving it out deferred
+  // its LICENSE and README to a second `manifests:generate` — which refuses
+  // until the package has been built (issue #445).
+  const pending = new Map(
+    [...renderedManifests].map(([dir, text]) => [join(dir, 'package.json'), text] as const),
+  );
+  const { members } = classifyWorkspaceMembers(repoRoot, {
+    ...fs,
+    readText: (path) => pending.get(path) ?? fs.readText(path),
+  });
   const publishable = members
     .filter((member) => member.family && member.manifest['private'] !== true)
     .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));

@@ -6,7 +6,8 @@ import { EventBus } from '@endora-commerce/platform/events';
 import { SalesChannelAttributionRegistry } from '../../../../packages/modules/sales_channels/src/backend/services/sales-channel-attribution-registry.js';
 import { SalesChannelsService } from '../../../../packages/modules/sales_channels/src/backend/services/sales-channels.service.js';
 import { dictionaryValidatorFor } from '../../helpers/dictionary-services.js';
-import { DefaultChannelReconciler } from '@endora-commerce/platform/composition';
+import { AuditLogService, DefaultChannelReconciler } from '@endora-commerce/platform/composition';
+import { transactionBoundCommandBus } from '../../helpers/sales-channels-service.js';
 import { HttpError } from '@endora-commerce/platform/http';
 
 /**
@@ -40,15 +41,18 @@ describe('Default channel is undeletable / undeactivatable (T023)', () => {
    * either any more, which is the point.
    */
   function serviceFor(): SalesChannelsService {
+    const eventBus = new EventBus();
     return new SalesChannelsService(
       () => db.em(),
-      new EventBus(),
+      eventBus,
       dictionaryValidatorFor(() => db.em()),
       new SalesChannelAttributionRegistry(),
       // Feature 120 (FR-015) — which table holds each entity type's
       // memberships. This suite composes no platform, so the descriptors are
       // the ones `setupTestDb` declared from their owning modules.
       testChannelBridges(),
+      // Required since issue #467 — identity writes are Commands. Unused here.
+      transactionBoundCommandBus(() => db.em(), new AuditLogService(() => db.em()), eventBus),
     );
   }
 
