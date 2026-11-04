@@ -179,6 +179,8 @@ export class CatalogBulkImportService implements CatalogBulkImportPort {
    * (field, scope) named twice in a row, or a refusal of the whole product (`404`) is a row error;
    * each refused cell a field error under its column, the row's other cells applying. The
    * legacy `status` column writes the Global status, `visibility` the Global audience's visibility.
+   * `imported` counts the rows not every cell of which was refused. A row error's `reason` is
+   * `<CODE>: <message>` for a refusal of the whole product, which the admin labels by its code.
    * `dryRun` plans every row the same way and writes nothing.
    */
   async importProducts(rows: readonly ProductImportRow[], options: { dryRun?: boolean } = {}): Promise<BulkImportReport> {
@@ -218,10 +220,16 @@ export class CatalogBulkImportService implements CatalogBulkImportPort {
           fieldErrors.push({ index, column: columnOf(cells[refusal.index]!), code: refusal.code });
         }
         const urlKeyCells = cells.filter((cell) => cell.field === 'urlKey' && !result.refused.some((r) => cells[r.index] === cell));
+        let takenUrlKeys = 0;
         result.urlKeys.forEach((outcome, position) => {
-          if (!outcome.written) fieldErrors.push({ index, column: columnOf(urlKeyCells[position]!), code: ERROR_CODES.URL_KEY_TAKEN });
+          if (outcome.written) return;
+          takenUrlKeys += 1;
+          fieldErrors.push({ index, column: columnOf(urlKeyCells[position]!), code: ERROR_CODES.URL_KEY_TAKEN });
         });
-        imported += 1;
+        // A row counts as imported unless every one of its cells was refused (a field error each):
+        // a cell that writes what the scope already holds is not a refusal, so an unchanged
+        // re-import still counts its rows (`contracts/import-profiles-and-csv.md` §2.3).
+        if (cells.length - result.refused.length - takenUrlKeys > 0 || extras !== undefined) imported += 1;
       } catch (error) {
         if (!(error instanceof HttpError)) throw error;
         errors.push({ index, reason: `${error.code}: ${error.message}` });

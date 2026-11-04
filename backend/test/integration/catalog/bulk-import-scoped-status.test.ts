@@ -143,12 +143,12 @@ describe('Products CSV — scoped status columns (spec 163, T121)', () => {
 
   it('exports the override at each channel and channel × language scope, INHERIT where it inherits', async () => {
     const { header, row } = await exportCsv();
-    expect(header).toEqual(
-      expect.arrayContaining([`status@${channelCode}`, `status@${channelCode}/pl-PL`, `status@${channelCode}/en-US`]),
-    );
+    // `contracts/import-profiles-and-csv.md` §3: a column only where some exported product holds an
+    // own value there. Nobody holds a pl-PL status, so the file has no such column.
+    expect(header).toEqual(expect.arrayContaining([`status@${channelCode}`, `status@${channelCode}/en-US`]));
+    expect(header).not.toContain(`status@${channelCode}/pl-PL`);
     expect(row(sku)).toMatchObject({
       [`status@${channelCode}`]: 'inactive',
-      [`status@${channelCode}/pl-PL`]: 'INHERIT',
       [`status@${channelCode}/en-US`]: 'active',
     });
     // A product outside the channel inherits there too.
@@ -200,10 +200,14 @@ describe('Products CSV — scoped status columns (spec 163, T121)', () => {
     expect((sideways as { fieldErrors?: unknown[] }).fieldErrors).toEqual([
       { rowNumber: 2, column: `status@${channelCode}`, code: 'invalid' },
     ]);
-    // A value for a channel the second product is not in: that row refused, by catalog.
+    // A value for a channel the second product is not in: catalog refuses the cell. A row whose
+    // every cell is refused imports nothing, so it is not counted, the same as the "not a status" row.
     const outsider = await importCsv([`${base},status@${channelCode}`, `${outsiderSku},,,,,active`]);
     expect(outsider.imported).toBe(0);
-    expect(outsider.errors.length).toBeGreaterThan(0);
+    expect(outsider.errors).toEqual([]);
+    expect((outsider as { fieldErrors?: unknown[] }).fieldErrors).toEqual([
+      { rowNumber: 2, column: `status@${channelCode}`, code: 'SCOPE_INVALID' },
+    ]);
     expect([await channelStatus(productId), await languageStatus(productId, 'pl-PL')]).toEqual(before);
   });
 
