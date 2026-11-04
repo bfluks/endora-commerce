@@ -31,6 +31,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
   Input,
   Label,
@@ -58,6 +59,7 @@ import { DetailsTab } from '../components/editor/DetailsTab.js';
 import { EditorField, ProductEditorContextProvider, fieldDomId, type ProductEditorContextValue } from '../components/editor/editor-context.js';
 import { ImmediateBadge, SectionHeading } from '../components/editor/ImmediateBadge.js';
 import { TextControl } from '../components/editor/scoped-controls.js';
+import { useConfirmRemoval } from '../components/editor/confirm-removal.js';
 import { ProductCreateForm } from './ProductCreateForm.js';
 import { describeIncompletePair } from '../lib/product-scopes-api.js';
 import { takeoverDetails, urlKeyErrorMessage, describeKeyInLanguage } from '../lib/product-url-keys-api.js';
@@ -256,22 +258,31 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
   /** The scope the last successful read opened; a different one is announced once its data is in. */
   const announcedScopeRef = useRef<string | null>(null);
 
-  // The reference lists the Details tab picks from (global, read once).
-  useEffect(() => {
-    let cancelled = false;
-    void Promise.all([
-      apiClient.get<{ data: typeof categories }>('/api/v1/admin/catalog/categories').catch(() => ({ data: [] })),
-      apiClient.get<{ data: typeof attributeSets }>('/api/v1/admin/catalog/attribute-sets').catch(() => ({ data: [] })),
+  // The reference lists the Details tab picks from (global, read once). A failed read is an
+  // error with a retry, never an empty list (final design review): "No categories" would be a lie.
+  const [referenceError, setReferenceError] = useState(false);
+  const referenceRequest = useRef(0);
+  const loadReference = useCallback((): void => {
+    const request = ++referenceRequest.current;
+    setCategoriesLoading(true);
+    setReferenceError(false);
+    void Promise.allSettled([
+      apiClient.get<{ data: typeof categories }>('/api/v1/admin/catalog/categories'),
+      apiClient.get<{ data: typeof attributeSets }>('/api/v1/admin/catalog/attribute-sets'),
     ]).then(([cats, sets]) => {
-      if (cancelled) return;
-      setCategories(cats.data ?? []);
-      setAttributeSets(sets.data ?? []);
+      if (request !== referenceRequest.current) return;
+      if (cats.status === 'fulfilled') setCategories(cats.value.data ?? []);
+      if (sets.status === 'fulfilled') setAttributeSets(sets.value.data ?? []);
+      setReferenceError(cats.status === 'rejected' || sets.status === 'rejected');
       setCategoriesLoading(false);
     });
-    return (): void => {
-      cancelled = true;
-    };
   }, []);
+  useEffect(() => {
+    loadReference();
+    return (): void => {
+      referenceRequest.current += 1;
+    };
+  }, [loadReference]);
 
   // --- Loading a scope --------------------------------------------------------------------
   const load = useCallback(
@@ -914,7 +925,15 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
     const notice = GLOBAL_ONLY_TABS.has(activeTab) && !atGlobal ? globalOnlyNotice : null;
     switch (activeTab) {
       case 'details':
-        return <DetailsTab attributeSets={attributeSets} categories={categories} categoriesLoading={categoriesLoading} />;
+        return (
+          <DetailsTab
+            attributeSets={attributeSets}
+            categories={categories}
+            categoriesLoading={categoriesLoading}
+            referenceError={referenceError}
+            onRetryReference={loadReference}
+          />
+        );
       case 'attributes':
         return <ProductAttributesTab />;
       case 'pricing':
@@ -1099,6 +1118,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
                       <Archive size={14} aria-hidden="true" /> {t('productEditor.action.archive')}
                     </DropdownMenuItem>
                   ) : null}
+                  <DropdownMenuSeparator />
                   <DropdownMenuItem className="max-lg:min-h-11" destructive onSelect={(): void => openWholeProductDialog('delete')}>
                     <Trash2 size={14} aria-hidden="true" /> {t('productEditor.action.delete')}
                   </DropdownMenuItem>
@@ -1155,7 +1175,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
             <Alert variant="destructive" className="mb-4" data-testid="product-save-error" id="product-save-error" tabIndex={-1}>
               <AlertDescription>
                 {formError.kind === 'validation' ? (
-                  t('productEditor.save.error.fields', { count: String(formError.count) })
+                  plural('productEditor.save.error.fields', formError.count)
                 ) : formError.kind === 'conflict' ? (
                   <div className="flex flex-wrap items-center gap-3">
                     <span className="flex-1">{t('productEditor.save.error.conflict')}</span>
@@ -1334,7 +1354,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
 
         {wholeProductDialog !== null ? (
           <ModalDialog
-            title={t(wholeProductDialog === 'duplicate' ? 'productEditor.duplicateTitle' : 'productEditor.deleteTitle')}
+            title={t(wholeProductDialog === 'duplicate' ? 'productEditor.duplicateTitle' : 'productEditor.deleteTitle', { product: title })}
             onClose={(): void => setWholeProductDialog(null)}
             busy={duplicating || deleting}
             aria-describedby="product-whole-confirm-body"
@@ -1366,6 +1386,9 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
           >
             <p id="product-whole-confirm-body" className="text-sm">
               {t(wholeProductDialog === 'duplicate' ? 'productEditor.duplicateConfirm' : 'productEditor.deleteConfirm')}
+              {stagedCount > 0
+                ? ` ${t(wholeProductDialog === 'duplicate' ? 'productEditor.duplicateUnsaved' : 'productEditor.deleteUnsaved')}`
+                : null}
             </p>
             {wholeProductError ? (
               <p role="alert" className="mt-3 text-sm text-destructive">
@@ -1426,6 +1449,7 @@ interface AdminVariant {
 
 function VariantsSection({ productId, readOnly = false }: { productId: string; readOnly?: boolean }): ReactNode {
   const t = useTranslation('catalog');
+  const { ask, dialog: removalDialog } = useConfirmRemoval();
   const [variants, setVariants] = useState<AdminVariant[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1491,7 +1515,7 @@ function VariantsSection({ productId, readOnly = false }: { productId: string; r
 
   const handleDelete = useCallback(
     async (variantId: string, sku: string): Promise<void> => {
-      if (!confirm(t('productEditor.variants.deleteConfirm', { sku }))) return;
+      if (!(await ask(t('productEditor.variants.deleteConfirm', { sku })))) return;
       try {
         await apiClient.delete<void>(
           `/api/v1/admin/catalog/products/${productId}/variants/${variantId}`,
@@ -1502,7 +1526,7 @@ function VariantsSection({ productId, readOnly = false }: { productId: string; r
         setError(err instanceof ApiError ? err.envelope.error.message : t('productEditor.variants.error.delete'));
       }
     },
-    [productId, refresh, t],
+    [productId, refresh, ask, t],
   );
 
   return (
@@ -1566,6 +1590,7 @@ function VariantsSection({ productId, readOnly = false }: { productId: string; r
 
         {readOnly ? null : <CreateVariantInline onCreate={handleCreate} />}
       </CardContent>
+      {removalDialog}
     </Card>
   );
 }
@@ -1667,6 +1692,7 @@ const TARGETS_BATCH_PAGE_SIZE = 200;
 
 function ProductLinksSection({ productId, readOnly = false }: { productId: string; readOnly?: boolean }): ReactNode {
   const t = useTranslation('catalog');
+  const { ask, dialog: removalDialog } = useConfirmRemoval();
   const [links, setLinks] = useState<AdminProductLink[]>([]);
   const [targetsById, setTargetsById] = useState<Map<string, AdminProductSummary>>(
     () => new Map(),
@@ -1738,7 +1764,7 @@ function ProductLinksSection({ productId, readOnly = false }: { productId: strin
 
   const handleDelete = useCallback(
     async (linkId: string): Promise<void> => {
-      if (!confirm(t('productEditor.links.removeConfirm'))) return;
+      if (!(await ask(t('productEditor.links.removeConfirm')))) return;
       try {
         await apiClient.delete(`/api/v1/admin/catalog/products/${productId}/links/${linkId}`);
         setInfo(t('productEditor.links.success.remove'));
@@ -1747,7 +1773,7 @@ function ProductLinksSection({ productId, readOnly = false }: { productId: strin
         setError(err instanceof ApiError ? err.envelope.error.message : t('productEditor.links.error.delete'));
       }
     },
-    [productId, refresh, t],
+    [productId, refresh, ask, t],
   );
 
   const byKind = useMemo(() => {
@@ -1867,6 +1893,7 @@ function ProductLinksSection({ productId, readOnly = false }: { productId: strin
 
         {readOnly ? null : <CreateProductLinkInline onCreate={handleCreate} sourceProductId={productId} />}
       </CardContent>
+      {removalDialog}
     </Card>
   );
 }
@@ -1945,6 +1972,7 @@ interface AdminGroupedItem {
 
 function GroupedItemsSection({ productId, readOnly = false }: { productId: string; readOnly?: boolean }): ReactNode {
   const t = useTranslation('catalog');
+  const { ask, dialog: removalDialog } = useConfirmRemoval();
   const [items, setItems] = useState<AdminGroupedItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1992,7 +2020,7 @@ function GroupedItemsSection({ productId, readOnly = false }: { productId: strin
 
   const handleDelete = useCallback(
     async (itemId: string): Promise<void> => {
-      if (!confirm(t('productEditor.grouped.removeConfirm'))) return;
+      if (!(await ask(t('productEditor.grouped.removeConfirm')))) return;
       try {
         await apiClient.delete(
           `/api/v1/admin/catalog/products/${productId}/grouped-items/${itemId}`,
@@ -2003,7 +2031,7 @@ function GroupedItemsSection({ productId, readOnly = false }: { productId: strin
         setError(err instanceof ApiError ? err.envelope.error.message : t('productEditor.grouped.error.delete'));
       }
     },
-    [productId, refresh, t],
+    [productId, refresh, ask, t],
   );
 
   return (
@@ -2063,6 +2091,7 @@ function GroupedItemsSection({ productId, readOnly = false }: { productId: strin
 
         {readOnly ? null : <CreateGroupedItemInline onCreate={handleCreate} />}
       </CardContent>
+      {removalDialog}
     </Card>
   );
 }
@@ -2144,6 +2173,7 @@ interface AdminBundleSlot {
 
 function BundleSlotsSection({ productId, readOnly = false }: { productId: string; readOnly?: boolean }): ReactNode {
   const t = useTranslation('catalog');
+  const { ask, dialog: removalDialog } = useConfirmRemoval();
   const [slots, setSlots] = useState<AdminBundleSlot[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -2196,7 +2226,7 @@ function BundleSlotsSection({ productId, readOnly = false }: { productId: string
 
   const handleDeleteSlot = useCallback(
     async (slotId: string): Promise<void> => {
-      if (!confirm(t('productEditor.bundle.removeSlotConfirm'))) return;
+      if (!(await ask(t('productEditor.bundle.removeSlotConfirm')))) return;
       try {
         await apiClient.delete(
           `/api/v1/admin/catalog/products/${productId}/bundle-slots/${slotId}`,
@@ -2207,7 +2237,7 @@ function BundleSlotsSection({ productId, readOnly = false }: { productId: string
         setError(err instanceof ApiError ? err.envelope.error.message : t('productEditor.bundle.error.deleteSlot'));
       }
     },
-    [productId, refresh, t],
+    [productId, refresh, ask, t],
   );
 
   const handleAddOption = useCallback(
@@ -2229,7 +2259,7 @@ function BundleSlotsSection({ productId, readOnly = false }: { productId: string
 
   const handleRemoveOption = useCallback(
     async (slotId: string, optionId: string): Promise<void> => {
-      if (!confirm(t('productEditor.bundle.removeOptionConfirm'))) return;
+      if (!(await ask(t('productEditor.bundle.removeOptionConfirm')))) return;
       try {
         await apiClient.delete(
           `/api/v1/admin/catalog/products/${productId}/bundle-slots/${slotId}/options/${optionId}`,
@@ -2240,7 +2270,7 @@ function BundleSlotsSection({ productId, readOnly = false }: { productId: string
         setError(err instanceof ApiError ? err.envelope.error.message : t('productEditor.bundle.error.deleteOption'));
       }
     },
-    [productId, refresh, t],
+    [productId, refresh, ask, t],
   );
 
   return (
@@ -2281,6 +2311,7 @@ function BundleSlotsSection({ productId, readOnly = false }: { productId: string
 
         {readOnly ? null : <CreateBundleSlotInline onCreate={handleCreateSlot} />}
       </CardContent>
+      {removalDialog}
     </Card>
   );
 }
