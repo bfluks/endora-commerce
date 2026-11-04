@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Copy, Info, Trash2 } from 'lucide-react';
-import type { AdminOrderPreviewMessageCode } from '@endora-commerce/contracts';
-import { ApiError, apiClient, useUnsavedChangesPrompt, formatMoney as formatMoneyShared } from '@endora-commerce/admin-kit/lib';
+import { ArrowLeft, Copy, Info, Split, Trash2 } from 'lucide-react';
+import type {
+  AdminOrderPreviewMessageCode,
+  OrganizationSalesChannelOption,
+  OrganizationSalesChannelsResponse,
+} from '@endora-commerce/contracts';
+import {
+  ApiError,
+  apiClient,
+  useUnsavedChangesPrompt,
+  formatMoney as formatMoneyShared,
+  type FormatMoneyOptions,
+} from '@endora-commerce/admin-kit/lib';
 import {
   Alert,
   AlertDescription,
@@ -17,34 +27,47 @@ import {
   Separator,
   PageHeader,
   Combobox,
-  Table,
-  TableBody,
   TableCell,
   TableHead,
-  TableHeader,
   TableRow,
 } from '@endora-commerce/admin-kit/ui';
 import type { ComboboxOption } from '@endora-commerce/admin-kit/ui';
 import {
   CountrySelect,
+  LineGroupsEditor,
   ProductBrowserDialog,
   ProductBrowserTrigger,
   ProductPicker,
+  SplitLineDialog,
+  canSplitLine,
   parsePositiveInt,
   productDisplayName,
+  splitLineInto,
   type ProductBrowserItem,
   type ProductBrowserRules,
 } from '@endora-commerce/admin-kit/components';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { RouteTabsZone } from '@endora-commerce/admin-kit/zones';
+import {
+  OrderSectionSummary,
+  orderSectionTotals,
+  useOrderLineGroupLabels,
+  useOrderSectionSummaryText,
+  useOrderSplitLineLabels,
+} from '../line-groups.js';
 
 /**
- * One order line (feature 145, FR-022). Keyed by `productId`: a product is a line
- * at most once, which is what the picker's and the quick search's *already added*
- * state relies on. `quantityInput` is what the operator typed — kept as text so an
- * invalid entry stays on screen, marked, instead of being coerced away.
+ * One order line (feature 145, FR-022). Keyed by its own `key`: one product may be
+ * on several lines — in different groups, or twice in one (feature 159, research
+ * N-31) — so the picker and the quick search offer a product already a line again.
+ * `quantityInput` is what the operator typed — kept as text so an invalid entry
+ * stays on screen, marked, instead of being coerced away.
  */
 interface ItemRow {
+  /** The line's identity — the grouping editor's, the preview lookup's and the row's DOM ids. */
+  key: string;
+  /** Feature 159 — the group (a group draft's `key`) the line is in; `null` = ungrouped. */
+  groupKey: string | null;
   productId: string;
   sku: string;
   name: string;
@@ -52,43 +75,65 @@ interface ItemRow {
 }
 
 /** The order's selectability rules for the picker and the quick search (Clarifications). */
+/**
+ * An archived product cannot be ordered whatever its status,
+ * so it is refused on its own, beside `inactive`.
+ */
 const ORDER_PRODUCT_RULES: ProductBrowserRules = {
   initialStatus: 'active',
   blockedTypes: ['grouped', 'bundle'],
-  blockedStatuses: ['draft', 'inactive'],
+  blockedStatuses: ['inactive'],
+  blockArchived: true,
 };
 
 // Members of `ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE`, named rather than taken by
 // position: a renamed code then fails to compile instead of remapping a reason.
 const NOT_VISIBLE_CODE: AdminOrderPreviewMessageCode = 'PRODUCT_NOT_VISIBLE_TO_CUSTOMER';
 const NOT_IN_CHANNEL_CODE: AdminOrderPreviewMessageCode = 'PRODUCT_NOT_IN_SALES_CHANNEL';
+const BELOW_MINIMUM_CODE: AdminOrderPreviewMessageCode = 'BELOW_MINIMUM_QUANTITY';
 
-/**
- * The line reason for a preview message code
- * (`contracts/order-preview-unavailability.md` § Consumer mapping): the two
- * assortment/visibility codes carry their own reason; `PRODUCT_NOT_FOUND`,
- * `QUOTE_ONLY` and any code this client does not know read **No price**.
- */
-function unavailableReasonKey(code: string | undefined): string {
-  if (code === NOT_VISIBLE_CODE) return 'orderCreate.line.notVisible';
-  if (code === NOT_IN_CHANNEL_CODE) return 'orderCreate.line.notInChannel';
-  return 'orderCreate.line.unavailable';
+/** One preview message, as `messages[]` carries it (`minimum` on `BELOW_MINIMUM_QUANTITY` only). */
+interface PreviewMessage {
+  productId: string;
+  code: string;
+  minimum?: number;
 }
 
-function productLine(item: ProductBrowserItem): ItemRow {
+/**
+ * The line reason for a preview message
+ * (`contracts/order-preview-unavailability.md` § Consumer mapping): the two
+ * assortment/visibility codes carry their own reason; feature 155's
+ * `BELOW_MINIMUM_QUANTITY` names the minimum it missed (FR-009) — the operator
+ * can fix that one by raising the quantity, so it must not read as **No price**;
+ * `PRODUCT_NOT_FOUND`, `QUOTE_ONLY` and any code this client does not know read
+ * **No price**.
+ */
+function unavailableReason(message: PreviewMessage | undefined): {
+  key: string;
+  params?: Record<string, number>;
+} {
+  if (message?.code === NOT_VISIBLE_CODE) return { key: 'orderCreate.line.notVisible' };
+  if (message?.code === NOT_IN_CHANNEL_CODE) return { key: 'orderCreate.line.notInChannel' };
+  if (message?.code === BELOW_MINIMUM_CODE) {
+    return message.minimum !== undefined
+      ? { key: 'orderCreate.line.belowMinimum', params: { minimum: message.minimum } }
+      : { key: 'orderCreate.line.belowMinimumUnknown' };
+  }
+  return { key: 'orderCreate.line.unavailable' };
+}
+
+/** Feature 159 (research N-31) — nothing is "already added": a product may be a line twice. */
+const NO_IDS: readonly string[] = [];
+
+function productLine(item: ProductBrowserItem, groupKey: string | null, key: string): ItemRow {
   return {
+    key,
+    groupKey,
     productId: item.id,
     sku: item.sku,
     name: productDisplayName(item),
     quantityInput: '1',
   };
-}
-
-interface SalesChannelSummary {
-  id: string;
-  code: string;
-  name: Record<string, string>;
-  active: boolean;
 }
 
 interface MethodSummary {
@@ -120,6 +165,29 @@ export function methodsOfferedInChannel<M extends { salesChannelIds?: string[] }
   });
 }
 
+/**
+ * Issue #515 — the channels an operator may place the customer's order on:
+ * exactly the set the API accepts (`POST /api/v1/admin/orders` refuses anything
+ * else with `422 ORDER_SALES_CHANNEL_NOT_ALLOWED`), the customer's
+ * Organization's own active channels. Never another active channel, nor the
+ * system default: an Organization with no active channel of its own gets an
+ * empty list, and the screen says so and sends nothing.
+ *
+ * The preselection is the channel the page was opened with when it is one of
+ * them, else the only choice when there is one, else none — the operator
+ * chooses. A channel handed over in the link that is not allowed is dropped
+ * rather than sent blind.
+ */
+export function orderChannelChoices(
+  assignment: Pick<OrganizationSalesChannelsResponse['data'], 'assignedSalesChannelIds' | 'options'>,
+  requested: string,
+): { options: OrganizationSalesChannelOption[]; preselected: string } {
+  const assigned = new Set(assignment.assignedSalesChannelIds);
+  const options = assignment.options.filter((c) => c.active && assigned.has(c.id));
+  if (requested && options.some((c) => c.id === requested)) return { options, preselected: requested };
+  return { options, preselected: options.length === 1 ? options[0]!.id : '' };
+}
+
 function toMethodOptions(methods: readonly MethodSummary[]): ComboboxOption<string>[] {
   return methods.map((m) => ({
     value: m.id,
@@ -140,6 +208,8 @@ interface AdminCustomerListItem {
   firstName: string;
   lastName: string;
   organizationName: string | null;
+  /** The customer's Organization — whose channels the order may be placed on (issue #515). */
+  organizationId?: string | null;
 }
 
 interface AddressSummary {
@@ -211,6 +281,8 @@ interface PreviewLine {
   unitPrice: string;
   currency: string;
   lineTotal: number;
+  /** Feature 159 — the rate the line is taxed at; a group's VAT is summed from it. */
+  taxRate?: number;
   unavailable?: boolean;
 }
 
@@ -225,7 +297,7 @@ interface PreviewResponse {
     total: number;
     currency: string;
   };
-  messages: Array<{ productId: string; code: string }>;
+  messages: PreviewMessage[];
 }
 
 /**
@@ -275,8 +347,8 @@ function customerLabel(c: AdminCustomerListItem): string {
   return name.length > 0 ? name : c.email;
 }
 
-function formatMoney(amount: number, currency: string): string {
-  return formatMoneyShared(amount, currency);
+function formatMoney(amount: number, currency: string, locale?: string, options?: FormatMoneyOptions): string {
+  return formatMoneyShared(amount, currency, locale, options);
 }
 
 /**
@@ -290,6 +362,11 @@ function CustomerPicker(props: {
   onChange: (next: string | null) => void;
   /** Narrows the search to one organization's customers, and offers them at once. */
   organizationId?: string;
+  /**
+   * The chosen customer's Organization, once its row is known — `''` while it
+   * is not (issue #515: the order's channels are that Organization's).
+   */
+  onOrganizationChange: (organizationId: string) => void;
 }): ReactNode {
   const t = useTranslation('core');
   const [options, setOptions] = useState<ComboboxOption<string>[]>([]);
@@ -374,6 +451,11 @@ function CustomerPicker(props: {
   );
 
   const selected = props.value ? cache.get(props.value) : undefined;
+  const selectedOrganizationId = selected?.organizationId ?? '';
+  const { onOrganizationChange } = props;
+  useEffect(() => {
+    onOrganizationChange(selectedOrganizationId);
+  }, [selectedOrganizationId, onOrganizationChange]);
 
   return (
     <Combobox<string>
@@ -528,20 +610,48 @@ function AddressPicker(props: {
  */
 export function OrderCreatePage(): ReactNode {
   const t = useTranslation('core');
+  const tGroups = useTranslation('orders');
+  const groupLabels = useOrderLineGroupLabels();
+  const splitLabels = useOrderSplitLineLabels();
+  const summaryText = useOrderSectionSummaryText();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   // Read once: what the page was opened with does not change under the form.
   const [openedWith] = useState(() => readOpenedWith(searchParams));
 
   const [customerAccountId, setCustomerAccountId] = useState(openedWith.customerAccountId);
-  const [salesChannelId, setSalesChannelId] = useState(openedWith.salesChannelId);
+  const [organizationId, setOrganizationId] = useState('');
+  // Issue #515 — the order's channel, chosen among the customer's
+  // Organization's active channels once they are read. Until they are, no
+  // channel is chosen: not even the one the link named, which is kept only if
+  // it is one of them.
+  const [salesChannelId, setSalesChannelId] = useState('');
   const [deliveryMethodId, setDeliveryMethodId] = useState('');
   const [paymentMethodId, setPaymentMethodId] = useState('');
   const [deliveryChoice, setDeliveryChoice] = useState<AddressChoice>({ mode: 'existing', id: '' });
   const [billingChoice, setBillingChoice] = useState<AddressChoice>({ mode: 'existing', id: '' });
   const [customerNote, setCustomerNote] = useState('');
+  // In display order: each group's lines, then the ungrouped ones (feature 159).
   const [items, setItems] = useState<ItemRow[]>([]);
   const [browserOpen, setBrowserOpen] = useState(false);
+  // Feature 159 — the order's groups, and where the browser's products go (a
+  // group's *Add product* opens it for that group; everything else adds to
+  // Ungrouped).
+  const [groups, setGroups] = useState<Array<{ key: string; name: string }>>([]);
+  const [addTarget, setAddTarget] = useState<string | null>(null);
+  const groupCounter = useRef(0);
+  const lineCounter = useRef(0);
+  const newLineKey = (): string => `line-${(lineCounter.current += 1)}`;
+  // One confirm per opening of the browser: two confirms landing in one tick
+  // must not add their products twice now that a product may be a line twice.
+  const browserConfirmed = useRef(false);
+  const openBrowser = (target: string | null): void => {
+    browserConfirmed.current = false;
+    setAddTarget(target);
+    setBrowserOpen(true);
+  };
+  // Feature 159 (research N-33) — the line whose *Split line* dialog is open.
+  const [splitting, setSplitting] = useState<string | null>(null);
   const itemsId = useId();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -550,6 +660,10 @@ export function OrderCreatePage(): ReactNode {
   // The address the page chose by itself for a customer it was opened with —
   // a selection nobody made is not a draft to warn about.
   const arrivedAddressId = useRef('');
+  // The same for the channel: the one the page chose (from the link, or the
+  // only one offered), so dropping a link's channel that is not allowed is not
+  // a change the operator made either.
+  const arrivedChannelId = useRef('');
   const addressIsDraft = (c: AddressChoice): boolean =>
     addressHasContent(c) && !(c.mode === 'existing' && c.id === arrivedAddressId.current);
 
@@ -558,17 +672,66 @@ export function OrderCreatePage(): ReactNode {
   const dirty =
     !submitted &&
     (customerAccountId !== openedWith.customerAccountId ||
-      salesChannelId !== openedWith.salesChannelId ||
+      salesChannelId !== arrivedChannelId.current ||
       deliveryMethodId !== '' ||
       paymentMethodId !== '' ||
       customerNote !== '' ||
       addressIsDraft(deliveryChoice) ||
       addressIsDraft(billingChoice) ||
-      items.length > 0);
+      items.length > 0 ||
+      groups.length > 0);
   useUnsavedChangesPrompt(dirty);
 
-  // Static reference lists, loaded once on mount.
-  const [channelOptions, setChannelOptions] = useState<ComboboxOption<string>[]>([]);
+  // Issue #515 — the customer's Organization's channels. `null` while there is
+  // no Organization or its channels are being read; empty when it has no
+  // active channel, which the screen says, sending nothing. A failed read says
+  // so with a retry, and nothing is sent either: the server would only refuse.
+  const [channelChoices, setChannelChoices] = useState<OrganizationSalesChannelOption[] | null>(null);
+  const [channelsLoading, setChannelsLoading] = useState(false);
+  const [channelsFailed, setChannelsFailed] = useState(false);
+  const [channelsAttempt, setChannelsAttempt] = useState(0);
+  const channelsReadFor = useRef('');
+  useEffect(() => {
+    // A retry keeps the failure on screen until it is answered; a new Organization starts afresh.
+    if (channelsReadFor.current !== organizationId) {
+      channelsReadFor.current = organizationId;
+      setChannelsFailed(false);
+    }
+    setChannelChoices(null);
+    setSalesChannelId('');
+    arrivedChannelId.current = '';
+    setChannelsLoading(Boolean(organizationId));
+    if (!organizationId) return undefined;
+    let alive = true;
+    void apiClient
+      .get<OrganizationSalesChannelsResponse>(`/api/v1/admin/organizations/${organizationId}/sales-channels`)
+      .then((res) => {
+        if (!alive) return;
+        if (!Array.isArray(res.data?.options)) {
+          setChannelsFailed(true);
+          return;
+        }
+        const { options, preselected } = orderChannelChoices(res.data, openedWith.salesChannelId);
+        setChannelsFailed(false);
+        setChannelChoices(options);
+        arrivedChannelId.current = preselected;
+        setSalesChannelId(preselected);
+      })
+      .catch(() => {
+        if (alive) setChannelsFailed(true);
+      })
+      .finally(() => {
+        if (alive) setChannelsLoading(false);
+      });
+    return (): void => {
+      alive = false;
+    };
+  }, [organizationId, channelsAttempt, openedWith.salesChannelId]);
+  const channelOptions = useMemo<ComboboxOption<string>[]>(
+    () =>
+      (channelChoices ?? []).map((c) => ({ value: c.id, label: pickName(c.name, c.code), description: c.code })),
+    [channelChoices],
+  );
   // The active methods as loaded; the two selects offer the ones the chosen
   // channel offers, so the lists follow the channel select.
   const [paymentMethods, setPaymentMethods] = useState<MethodSummary[]>([]);
@@ -608,21 +771,11 @@ export function OrderCreatePage(): ReactNode {
     let alive = true;
     void (async (): Promise<void> => {
       try {
-        const [channels, payments, deliveries] = await Promise.all([
-          apiClient.get<{ items: SalesChannelSummary[] }>(
-            '/api/v1/admin/sales-channels?pageSize=100&activeOnly=true',
-          ),
+        const [payments, deliveries] = await Promise.all([
           apiClient.get<{ data: MethodSummary[] }>('/api/v1/admin/payment-methods'),
           apiClient.get<{ data: MethodSummary[] }>('/api/v1/admin/delivery-methods'),
         ]);
         if (!alive) return;
-        setChannelOptions(
-          channels.items.map((c) => ({
-            value: c.id,
-            label: pickName(c.name, c.code),
-            description: c.code,
-          })),
-        );
         setPaymentMethods(payments.data.filter((m) => m.status === 'active'));
         setDeliveryMethods(deliveries.data.filter((m) => m.status === 'active'));
       } catch (err) {
@@ -682,14 +835,27 @@ export function OrderCreatePage(): ReactNode {
   }, [customerAccountId, openedWith.customerAccountId, t]);
 
   // The lines that may be priced and sent: an invalid quantity keeps its line on
-  // screen, marked, and out of both requests (FR-022, FR-026).
+  // screen, marked, and out of both requests (FR-022, FR-026). The preview is
+  // asked about the lines only, so moving a line between groups does not
+  // re-price; its order is the display order.
+  // Keyed on what pricing reads, so a regroup that leaves it unchanged asks
+  // the preview nothing. One request line per screen line, a repeated product
+  // included (feature 159, research N-31): the preview answers one line each.
+  // In display order — each group's lines, then the ungrouped ones — whatever
+  // order an edit left the list in.
+  const knownGroupKeys = new Set(groups.map((group) => group.key));
+  const displayItems = [
+    ...groups.flatMap((group) => items.filter((it) => it.groupKey === group.key)),
+    ...items.filter((it) => it.groupKey === null || !knownGroupKeys.has(it.groupKey)),
+  ];
+  const pricedRows = displayItems.flatMap((it) => {
+    const quantity = parsePositiveInt(it.quantityInput);
+    return quantity === null ? [] : [{ row: it, quantity }];
+  });
+  const pricingKey = JSON.stringify(pricedRows.map(({ row, quantity }) => ({ productId: row.productId, quantity })));
   const validItems = useMemo(
-    () =>
-      items.flatMap((it) => {
-        const quantity = parsePositiveInt(it.quantityInput);
-        return quantity === null ? [] : [{ productId: it.productId, quantity }];
-      }),
-    [items],
+    () => JSON.parse(pricingKey) as Array<{ productId: string; quantity: number }>,
+    [pricingKey],
   );
 
   // Live pricing preview — debounced; fires whenever the priced inputs change
@@ -730,36 +896,53 @@ export function OrderCreatePage(): ReactNode {
     };
   }, [customerAccountId, salesChannelId, deliveryMethodId, paymentMethodId, validItems, t]);
 
-  /** Append products as lines, in the order given, skipping any already a line. */
-  const appendLines = (products: readonly ProductBrowserItem[]): void =>
+  /**
+   * Append products as lines, in the order given — a product already a line
+   * included: it becomes a line of its own (feature 159, research N-31) — at the
+   * end of `groupKey`'s section (`null` = Ungrouped, which is last, so the end of
+   * the list). Keys are made here, outside the updater StrictMode runs twice.
+   */
+  const appendLines = (products: readonly ProductBrowserItem[], groupKey: string | null = null): void => {
+    const added = products.map((p) => productLine(p, groupKey, newLineKey()));
+    if (added.length === 0) return;
     setItems((prev) => {
-      const present = new Set(prev.map((row) => row.productId));
-      const added: ItemRow[] = [];
-      for (const p of products) {
-        if (present.has(p.id)) continue;
-        present.add(p.id);
-        added.push(productLine(p));
-      }
-      return added.length === 0 ? prev : [...prev, ...added];
+      if (groupKey === null) return [...prev, ...added];
+      const lastOfGroup = prev.map((row) => row.groupKey).lastIndexOf(groupKey);
+      const at = lastOfGroup >= 0 ? lastOfGroup + 1 : prev.findIndex((row) => row.groupKey === null);
+      const index = at < 0 ? prev.length : at;
+      return [...prev.slice(0, index), ...added, ...prev.slice(index)];
     });
-  const setQuantity = (productId: string, quantityInput: string): void =>
-    setItems((prev) => prev.map((row) => (row.productId === productId ? { ...row, quantityInput } : row)));
-  const removeLine = (productId: string): void =>
-    setItems((prev) => prev.filter((row) => row.productId !== productId));
-  const lineIds = items.map((row) => row.productId);
+  };
+  const setQuantity = (key: string, quantityInput: string): void =>
+    setItems((prev) => prev.map((row) => (row.key === key ? { ...row, quantityInput } : row)));
+  const removeLine = (key: string): void => setItems((prev) => prev.filter((row) => row.key !== key));
 
-  // Per-line price lookup for the items table (keyed by product + quantity, so a
-  // line whose quantity just changed shows nothing until its new price arrives).
-  const lineByKey = new Map<string, PreviewLine>();
-  for (const line of preview?.lines ?? []) lineByKey.set(`${line.productId}:${line.quantity}`, line);
-  const messageCodeByProduct = new Map<string, string>();
-  for (const m of preview?.messages ?? []) messageCodeByProduct.set(m.productId, m.code);
+  // Per-line price lookup for the items table: the preview answers one line per
+  // request line, in order, so a screen line reads the answer at its own index —
+  // only while that answer is still about its product and quantity, so a line
+  // whose quantity just changed shows nothing until its new price arrives.
+  const splitRow = splitting !== null ? items.find((row) => row.key === splitting) : undefined;
+  const previewIndexByKey = new Map(pricedRows.map(({ row }, index) => [row.key, index]));
+  const previewLineOf = (row: ItemRow, quantity: number | null): PreviewLine | undefined => {
+    if (quantity === null) return undefined;
+    const index = previewIndexByKey.get(row.key);
+    const line = index === undefined ? undefined : preview?.lines[index];
+    return line && line.productId === row.productId && line.quantity === quantity ? line : undefined;
+  };
+  const messageByProduct = new Map<string, PreviewMessage>();
+  for (const m of preview?.messages ?? []) messageByProduct.set(m.productId, m);
+  const translateReason = (reason: ReturnType<typeof unavailableReason>): string =>
+    t(reason.key, reason.params);
   // Only a message about a line still on the form blocks submit: a removed
   // line's message lingers until the next preview answers.
-  const hasUnavailable = items.some((row) => messageCodeByProduct.has(row.productId));
+  const hasUnavailable = items.some((row) => messageByProduct.has(row.productId));
   const allQuantitiesValid = validItems.length === items.length;
 
+  // Every group needs a name before the order can be created (FR-002).
+  const groupsNamed = groups.every((group) => group.name.trim() !== '');
+
   const canSubmit =
+    groupsNamed &&
     !!customerAccountId.trim() &&
     !!salesChannelId.trim() &&
     !!deliveryMethodId.trim() &&
@@ -792,6 +975,17 @@ export function OrderCreatePage(): ReactNode {
   const submit = async (): Promise<void> => {
     setBusy(true);
     setError(null);
+    // Feature 159 — with groups, each line names its own group (the server
+    // places the lines as sent, one order line each: each group's lines, then
+    // the ungrouped ones); without, the request is the one it always was.
+    const sentItems =
+      groups.length > 0
+        ? pricedRows.map(({ row, quantity }) => ({
+            productId: row.productId,
+            quantity,
+            groupKey: row.groupKey !== null && knownGroupKeys.has(row.groupKey) ? row.groupKey : null,
+          }))
+        : validItems;
     try {
       const res = await apiClient.post<{ data: { id: string } }>('/api/v1/admin/orders', {
         customerAccountId: customerAccountId.trim(),
@@ -801,7 +995,8 @@ export function OrderCreatePage(): ReactNode {
         ...addressPayload(deliveryChoice, 'deliveryAddressId', 'deliveryAddress'),
         ...addressPayload(billingChoice, 'billingAddressId', 'billingAddress'),
         ...(customerNote.trim() ? { customerNote: customerNote.trim() } : {}),
-        items: validItems,
+        ...(groups.length > 0 ? { groups: groups.map((group) => ({ key: group.key, name: group.name.trim() })) } : {}),
+        items: sentItems,
         ...(openedWith.origin ? { origin: openedWith.origin } : {}),
       });
       setSubmitted(true);
@@ -848,7 +1043,10 @@ export function OrderCreatePage(): ReactNode {
   // Items and Order summary need the two inputs pricing needs (FR-021);
   // payment, delivery and addresses do not gate them.
   const canPrice = customerAccountId !== '' && salesChannelId !== '';
-  const gateHint = canPrice
+  // With the Organization's channels unreadable, or none of them active, the
+  // alert beside the field says why; "choose a sales channel" would be wrong.
+  const channelBlocked = channelsFailed || (channelChoices !== null && channelChoices.length === 0);
+  const gateHint = canPrice || (customerAccountId !== '' && channelBlocked)
     ? null
     : customerAccountId === '' && salesChannelId === ''
       ? t('orderCreate.gate.missingBoth')
@@ -897,14 +1095,51 @@ export function OrderCreatePage(): ReactNode {
               value={customerAccountId === '' ? null : customerAccountId}
               onChange={(next): void => setCustomerAccountId(next ?? '')}
               organizationId={openedWith.organizationId}
+              onOrganizationChange={setOrganizationId}
             />
           </div>
-          {selectField(
-            'salesChannelId',
-            t('orderCreate.field.salesChannel'),
-            salesChannelId,
-            setSalesChannelId,
-            channelOptions,
+          {channelsFailed ? (
+            // Not read, so nothing to offer and nothing sent: said, with a way back.
+            <Alert variant="destructive">
+              <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+                <span>{t('orderCreate.channelsLoadError')}</span>
+                <Button
+                  className="min-h-11 sm:min-h-8"
+                  variant="outline"
+                  size="sm"
+                  disabled={channelsLoading}
+                  onClick={(): void => setChannelsAttempt((n) => n + 1)}
+                >
+                  {t('common.action.retry')}
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ) : channelChoices !== null && channelChoices.length === 0 ? (
+            // Nothing the API would accept: said, never papered over.
+            <Alert variant="destructive">
+              <AlertDescription>{t('orderCreate.noChannelWarning')}</AlertDescription>
+            </Alert>
+          ) : (
+            <div className="space-y-1">
+              <Label htmlFor="salesChannelId">{t('orderCreate.field.salesChannel')}</Label>
+              <Combobox<string>
+                id="salesChannelId"
+                ariaLabel="salesChannelId"
+                options={channelOptions}
+                value={salesChannelId === '' ? null : salesChannelId}
+                onChange={(next): void => setSalesChannelId(next ?? '')}
+                disabled={channelChoices === null}
+                placeholder={t('orderCreate.placeholder.select')}
+                emptyMessage={t('orderCreate.empty.options')}
+              />
+              {channelChoices === null ? (
+                <p className="text-xs text-muted-foreground">
+                  {channelsLoading ? t('orderCreate.loading') : t('orderCreate.address.selectCustomerFirst')}
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">{t('orderCreate.hint.salesChannel')}</p>
+              )}
+            </div>
           )}
           {selectField(
             'paymentMethodId',
@@ -969,7 +1204,7 @@ export function OrderCreatePage(): ReactNode {
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex flex-wrap items-end gap-3">
-              <ProductBrowserTrigger onOpen={(): void => setBrowserOpen(true)} />
+              <ProductBrowserTrigger onOpen={(): void => openBrowser(null)} />
               <div className="min-w-64 flex-1 space-y-1">
                 <Label htmlFor={`${itemsId}-quick-search`}>{t('orderCreate.items.quickSearch')}</Label>
                 <ProductPicker
@@ -980,7 +1215,6 @@ export function OrderCreatePage(): ReactNode {
                   onChange={(): void => {}}
                   onPickProduct={(item): void => appendLines([item])}
                   rules={ORDER_PRODUCT_RULES}
-                  alreadyAddedIds={lineIds}
                   includeArchived
                   placeholder={t('orderCreate.placeholder.product')}
                 />
@@ -990,19 +1224,28 @@ export function OrderCreatePage(): ReactNode {
               open={browserOpen}
               title={t('orderCreate.items.browse')}
               rules={ORDER_PRODUCT_RULES}
-              alreadyAddedIds={lineIds}
+              alreadyAddedIds={NO_IDS}
               onConfirm={(picked): void => {
-                appendLines(picked);
+                if (browserConfirmed.current) return;
+                browserConfirmed.current = true;
+                appendLines(picked, addTarget);
                 setBrowserOpen(false);
+                setAddTarget(null);
               }}
-              onCancel={(): void => setBrowserOpen(false)}
+              onCancel={(): void => {
+                setBrowserOpen(false);
+                setAddTarget(null);
+              }}
             />
 
-            {items.length === 0 ? (
+            {items.length === 0 && groups.length === 0 ? (
               <p className="text-sm text-muted-foreground">{t('orderCreate.items.empty')}</p>
             ) : (
-              <Table>
-                <TableHeader>
+              // Feature 159 — with no group the editor renders the table as it was (FR-033).
+              <LineGroupsEditor<ItemRow>
+                layout="table"
+                columnCount={5}
+                tableHeader={
                   <TableRow>
                     <TableHead>{t('orderCreate.field.product')}</TableHead>
                     <TableHead id={`${itemsId}-qty`} className="w-28">
@@ -1014,73 +1257,169 @@ export function OrderCreatePage(): ReactNode {
                       <span className="sr-only">{t('common.action.delete')}</span>
                     </TableHead>
                   </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {items.map((row) => {
-                    const quantity = parsePositiveInt(row.quantityInput);
-                    const line = quantity === null ? undefined : lineByKey.get(`${row.productId}:${quantity}`);
-                    const rowId = `${itemsId}-${row.productId}`;
-                    const reason =
-                      quantity === null
-                        ? t('orderCreate.line.quantityInvalid')
-                        : line?.unavailable
-                          ? t(unavailableReasonKey(messageCodeByProduct.get(row.productId)))
-                          : null;
-                    return (
-                      <TableRow key={row.productId}>
-                        <TableCell>
-                          <div id={`${rowId}-name`} data-line-name className="font-medium">
-                            {row.name}
-                          </div>
-                          <div className="font-mono text-xs text-muted-foreground">{row.sku}</div>
+                }
+                groups={groups}
+                lines={items}
+                disabled={busy}
+                labels={groupLabels}
+                createGroupKey={(): string => `group-${(groupCounter.current += 1)}`}
+                getLineLabel={(row): string => row.name}
+                onChange={(next): void => {
+                  setGroups(next.groups);
+                  setItems(next.lines);
+                }}
+                renderSummary={(sectionLines): ReactNode => (
+                  <OrderSectionSummary
+                    text={summaryText(
+                      orderSectionTotals(
+                        sectionLines.map((row) => {
+                          const line = previewLineOf(row, parsePositiveInt(row.quantityInput));
+                          const priced = line !== undefined && !line.unavailable;
+                          return {
+                            net: priced ? line.lineTotal : null,
+                            taxRate: priced ? (line.taxRate ?? null) : null,
+                          };
+                        }),
+                      ),
+                      preview?.summary.currency ?? '',
+                    )}
+                  />
+                )}
+                renderSectionFooter={(section): ReactNode =>
+                  section.kind === 'group' && section.key !== null ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(): void => openBrowser(section.key)}
+                    >
+                      {tGroups('lineGroups.addProduct')}
+                    </Button>
+                  ) : null
+                }
+                renderLine={(row, slots): ReactNode => {
+                  const quantity = parsePositiveInt(row.quantityInput);
+                  const line = previewLineOf(row, quantity);
+                  const rowId = `${itemsId}-${row.key}`;
+                  const reason =
+                    quantity === null
+                      ? t('orderCreate.line.quantityInvalid')
+                      : line?.unavailable
+                        ? translateReason(unavailableReason(messageByProduct.get(row.productId)))
+                        : null;
+                  // Feature 159 (research N-33) — part of the line to a new line.
+                  const splitButton =
+                    quantity !== null && canSplitLine(quantity) ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        aria-label={splitLabels.action({ name: row.name })}
+                        title={splitLabels.action({ name: row.name })}
+                        disabled={busy}
+                        onClick={(): void => setSplitting(row.key)}
+                      >
+                        <Split aria-hidden="true" />
+                      </Button>
+                    ) : null;
+                  const removeButton = (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-labelledby={`${rowId}-remove ${rowId}-name`}
+                      onClick={(): void => removeLine(row.key)}
+                    >
+                      <Trash2 aria-hidden="true" />
+                      <span id={`${rowId}-remove`} className="sr-only">
+                        {t('common.action.delete')}
+                      </span>
+                    </Button>
+                  );
+                  return (
+                    <>
+                      <TableCell>
+                        <div id={`${rowId}-name`} data-line-name className="font-medium">
+                          {row.name}
+                        </div>
+                        <div className="font-mono text-xs text-muted-foreground">{row.sku}</div>
+                      </TableCell>
+                      <TableCell>
+                        <Input
+                          id={`${rowId}-qty`}
+                          type="text"
+                          inputMode="numeric"
+                          aria-labelledby={`${itemsId}-qty ${rowId}-name`}
+                          aria-invalid={quantity === null || undefined}
+                          aria-describedby={reason !== null ? `${rowId}-reason` : undefined}
+                          value={row.quantityInput}
+                          onChange={(e): void => setQuantity(row.key, e.target.value)}
+                        />
+                      </TableCell>
+                      {reason !== null ? (
+                        <TableCell colSpan={2} className="text-right">
+                          <span id={`${rowId}-reason`} className="text-sm text-destructive">
+                            {reason}
+                          </span>
                         </TableCell>
-                        <TableCell>
-                          <Input
-                            id={`${rowId}-qty`}
-                            type="text"
-                            inputMode="numeric"
-                            aria-labelledby={`${itemsId}-qty ${rowId}-name`}
-                            aria-invalid={quantity === null || undefined}
-                            aria-describedby={reason !== null ? `${rowId}-reason` : undefined}
-                            value={row.quantityInput}
-                            onChange={(e): void => setQuantity(row.productId, e.target.value)}
-                          />
-                        </TableCell>
-                        {reason !== null ? (
-                          <TableCell colSpan={2} className="text-right">
-                            <span id={`${rowId}-reason`} className="text-sm text-destructive">
-                              {reason}
-                            </span>
+                      ) : (
+                        <>
+                          <TableCell className="text-right text-muted-foreground">
+                            {line ? formatMoney(Number(line.unitPrice), line.currency, undefined, { unitPrice: true }) : null}
                           </TableCell>
+                          <TableCell className="text-right font-medium">
+                            {line ? formatMoney(line.lineTotal, line.currency) : null}
+                          </TableCell>
+                        </>
+                      )}
+                      <TableCell>
+                        {slots.handle === null && slots.moveMenu === null && splitButton === null ? (
+                          removeButton
                         ) : (
-                          <>
-                            <TableCell className="text-right text-muted-foreground">
-                              {line ? formatMoney(Number(line.unitPrice), line.currency) : null}
-                            </TableCell>
-                            <TableCell className="text-right font-medium">
-                              {line ? formatMoney(line.lineTotal, line.currency) : null}
-                            </TableCell>
-                          </>
+                          <div className="flex items-center gap-1">
+                            {slots.handle}
+                            {slots.moveMenu}
+                            {splitButton}
+                            {removeButton}
+                          </div>
                         )}
-                        <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            aria-labelledby={`${rowId}-remove ${rowId}-name`}
-                            onClick={(): void => removeLine(row.productId)}
-                          >
-                            <Trash2 aria-hidden="true" />
-                            <span id={`${rowId}-remove`} className="sr-only">
-                              {t('common.action.delete')}
-                            </span>
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+                      </TableCell>
+                    </>
+                  );
+                }}
+              />
             )}
+            {splitRow ? (
+              <SplitLineDialog
+                lineName={splitRow.name}
+                quantity={Number(splitRow.quantityInput)}
+                targets={[
+                  ...groups.map((group) => ({ key: group.key, name: group.name.trim() || groupLabels.groupName })),
+                  { key: null, name: groupLabels.ungrouped },
+                ]}
+                defaultTargetKey={
+                  splitRow.groupKey !== null && groups.some((group) => group.key === splitRow.groupKey)
+                    ? splitRow.groupKey
+                    : null
+                }
+                labels={splitLabels}
+                onConfirm={(split): void => {
+                  setItems((prev) => [
+                    ...splitLineInto(prev, splitRow.key, split, {
+                      quantityOf: (row) => Number(row.quantityInput),
+                      setQuantity: (row, quantity) => ({ ...row, quantityInput: String(quantity) }),
+                      make: (source, quantity, groupKey) => ({
+                        ...source,
+                        key: newLineKey(),
+                        groupKey,
+                        quantityInput: String(quantity),
+                      }),
+                    }),
+                  ]);
+                  setSplitting(null);
+                }}
+                onClose={(): void => setSplitting(null)}
+              />
+            ) : null}
           </CardContent>
         </Card>
       ) : null}

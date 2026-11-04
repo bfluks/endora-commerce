@@ -94,6 +94,18 @@ describe('CacheAdminService', () => {
       ]);
     });
 
+    it('revalidates the brand tag when the cms-brand namespace is cleared (feature 163)', async () => {
+      // Brand tokens keep no Redis copy; the storefront's Data Cache is the
+      // only one, so the namespace is its tag and nothing else.
+      const revalidator = recordingRevalidator();
+      const svc = new CacheAdminService(fakeRedis([]), new InProcessCacheRegistry(), revalidator.fn);
+
+      const result = await svc.clear(['cms-brand']);
+
+      expect(result.cleared).toEqual([{ key: 'cms-brand', deletedKeysCount: 0 }]);
+      expect(revalidator.tags).toEqual([[CMS_STOREFRONT_CACHE_TAGS.brand]]);
+    });
+
     it('revalidates the menu tag when the megamenu namespace is cleared', async () => {
       const revalidator = recordingRevalidator();
       const svc = new CacheAdminService(fakeRedis([]), new InProcessCacheRegistry(), revalidator.fn);
@@ -158,7 +170,7 @@ describe('CacheAdminService', () => {
     const redis = fakeRedis([
       'blog:v1:a',
       'cms:v1:b',
-      'megamenu:v1:c',
+      'megamenu:v2:c',
       'dictionary:registry:v1:x',
     ]);
     const svc = new CacheAdminService(redis);

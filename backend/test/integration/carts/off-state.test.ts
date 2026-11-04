@@ -34,13 +34,13 @@ import { expectModuleAbsent } from '../../helpers/off-state.js';
  *    the closed axis is a stated fact about `carts` and not an absence a reader
  *    has to infer from a test that is shorter than its neighbours'.
  *
- * The **route** is the surface that moved, and it is nav-less: this module has
- * never had a sidebar entry, so `plan.md`'s Ruling 1 puts the admin-side proof
- * over the route instead —
- * `admin/test/modules/carts.module-owned-surface.test.tsx`. What is asserted
- * here is the half no admin test can see: the API refusing, the presence
- * projection reporting it absent, the configuration not being editable, and the
- * palette advertising nothing.
+ * The **route** is the surface that moved, nav-less at the time, so
+ * `plan.md`'s Ruling 1 put the admin-side proof over the route —
+ * `admin/test/modules/carts.module-owned-surface.test.tsx`, which since issue
+ * #510 drives the sidebar entry too. What is asserted here is the half no admin
+ * test can see: the API refusing, the presence projection reporting it absent,
+ * the configuration not being editable, and the palette withdrawing the
+ * `open-carts` action.
  */
 describe('carts off-state, from a package (Constitution XVII)', () => {
   let h: BackendServerHandle;
@@ -77,22 +77,17 @@ describe('carts off-state, from a package (Constitution XVII)', () => {
     });
   });
 
-  it('advertises no palette action while off, and none while on either', async () => {
+  it('advertises its palette action while on, and none while off', async () => {
     // Principle XVII item 5's palette half, resolved by the server from the
     // manifests against the effective enabled-set — which is why it cannot be
     // asserted from the admin at all.
     //
-    // `carts` declares no `actions`, so what is asserted is that the manifest
-    // and the registry agree in both states, derived rather than written down.
-    // It is *not* one of the fifteen modules `specs/deferred-defects.md` still
-    // owes an action: that population is the modules carrying a **nav entry**,
-    // and this module has none.
+    // `open-carts` arrived with issue #510 (Principle XVI). The expected ids are
+    // read from the manifest, and the manifest is required to declare exactly
+    // that one, so a later action fails here and asks for its own off-state.
     const manifest = REGISTERED_MANIFESTS.find((e) => e.manifest.id === 'carts')?.manifest;
     expect(manifest, 'carts is not a registered module').toBeDefined();
-    expect(
-      manifest?.actions ?? [],
-      'carts now declares a palette action — assert its off-state here rather than deleting this',
-    ).toEqual([]);
+    expect((manifest?.actions ?? []).map((action) => action.id)).toEqual(['open-carts']);
 
     const advertised = async (): Promise<Map<string, string[]>> => {
       const res = await h.app.inject({
@@ -114,7 +109,7 @@ describe('carts off-state, from a package (Constitution XVII)', () => {
     // answering somebody.
     const on = await advertised();
     expect(on.get('analytics'), 'the palette advertises nothing at all').toBeDefined();
-    expect(on.get('carts') ?? []).toEqual([]);
+    expect(on.get('carts') ?? []).toEqual(['open-carts']);
 
     const baseline = registryCache.enabledIds();
     try {
@@ -126,6 +121,7 @@ describe('carts off-state, from a package (Constitution XVII)', () => {
     } finally {
       registryCache.__setEnabledForTesting(baseline);
     }
+    expect((await advertised()).get('carts') ?? []).toEqual(['open-carts']);
   });
 
   it('has no operator axis at all, and that is the module saying so', () => {

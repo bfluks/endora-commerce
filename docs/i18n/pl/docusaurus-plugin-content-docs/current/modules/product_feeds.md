@@ -98,7 +98,7 @@ wymienia każde z nich, zamiast publikować plik z lukami.
 
 ### Zawężanie feedu do części katalogu
 
-Sekcja **Criteria** na karcie Settings to ten sam kreator reguł, którego używają promocje i cenniki.
+Sekcja **Criteria** na karcie Settings to ten sam kreator reguł, którego używają promocje.
 Pusta reguła oznacza „każdy kwalifikujący się produkt tego kanału”. Kryterium kategorii obejmuje
 całe jej poddrzewo.
 
@@ -119,6 +119,91 @@ Dwóch rzeczy reguła nigdy nie zrobi:
 
 Jeśli reguła nic nie dopasuje, generowanie kończy się stanem `empty`, a **wcześniej opublikowany
 plik jest nadal udostępniany**. Panel ostrzega o tym przed zapisem, a nie po nim.
+
+### Ceny w feedzie
+
+Feed publikuje ceny, które w jego kanale sprzedaży zobaczyłby **każdy** — feed pobiera dostawca,
+który nie jest niczyim kupującym, więc żadna cena kontraktowa organizacji ani grupy klientów nigdy do
+niego nie trafia. Każdy produkt jest wyceniany dla ilości 1, w walucie feedu, przez cenniki (moduł
+`price_lists`): jego cena bazowa albo cena z cennika katalogowego dla wszystkich w kanale, albo cena
+promocyjna, gdy jest niższa. Produkt bez ceny w walucie feedu jest pomijany z powodem
+`missing_price`. Pozycje feedu to produkty: produkt z wariantami jest publikowany w cenie samego
+produktu, a nie osobno dla każdego wariantu.
+
+Cena jest zapisywana z dwoma miejscami po przecinku. Feed brutto — domyślna prezentacja — dolicza
+do ceny netto stawkę podatku kraju podatkowego feedu i zaokrągla dokładny wynik połówkowo w górę:
+29,50 przy 23 % trafia do pliku jako 36.29, ta sama cena brutto, którą storefront pokazuje obok tej
+samej ceny netto. Cena z więcej niż dwoma miejscami po przecinku nigdy nie jest zaokrąglana — zob.
+*Cena poniżej jednego grosza* niżej.
+
+#### Cena poniżej jednego grosza
+
+Cennik przechowuje do czterech miejsc po przecinku, więc wkręt może kosztować 0,0125 zł. Feed nie
+potrafi tego wyrazić: Google Merchant Center przyjmuje najwyżej dwa miejsca po przecinku i sam
+zaokrągla dłuższą cenę, więc 0,0125 zł trafiłoby do reklamy jako 0,01 zł, podczas gdy strona
+produktu pokazuje 0,0125 zł — niezgodność ceny, za którą Google odrzuca produkty. Dlatego feed
+**publikuje taki produkt jako opakowanie**:
+
+- cena jest ceną **N sztuk**, gdzie N to najmniejsza z liczb 10, 100, 1 000 i 10 000, przy której
+  cena jest dokładna co do grosza — 0,0125 zł trafia do pliku jako 100 sztuk za 1,25 zł, 9,045 zł
+  jako 10 sztuk za 90,45 zł. Po drodze nic nie jest zaokrąglane;
+- feed brutto dolicza podatek do ceny netto opakowania, tak jak naliczana jest pozycja koszyka z tyloma
+  sztukami: 1,25 zł przy 23 % trafia do pliku jako 1,54 zł;
+- cena i cena przed obniżką jednego produktu dotyczą tego samego opakowania — większego z tych,
+  których wymaga każda z nich;
+- wielkość opakowania trafia do **pól opakowania** szablonu. Szablon Google Merchant Center ma ich
+  trzy: `g:multipack` (N) oraz `g:unit_pricing_measure` i `g:unit_pricing_base_measure` (oba `100ct`
+  dla opakowania 100 sztuk), więc Google pokazuje cenę jednostkową jako *1,25 zł / 100 ct* — dokładną
+  cenę opakowania — a nie zaokrągloną cenę za sztukę. Opakowanie 1 000 albo 10 000 sztuk, którego
+  wymaga tylko cena z pięcioma albo sześcioma miejscami po przecinku, ma samo `g:multipack`: podstawa
+  ceny jednostkowej w Google przyjmuje 1, 10 albo 100 sztuk;
+- każde pole opakowania jest **puste, więc pomijane w pliku**, dla produktu, którego cena ma dwa
+  miejsca po przecinku. Takie produkty są publikowane dokładnie tak jak wcześniej.
+
+Szablon bez pola powiązanego ze źródłem **Wielkość opakowania (ceny poniżej grosza)** nie potrafi
+powiedzieć, czego ceną jest taka cena, więc produkt jest **pomijany w tym feedzie**, a wynik
+generowania wymienia go pod `sub_cent_price_without_pack_field`, podając cenę i potrzebne
+opakowanie. Dotyczy to szablonu katalogu Meta i trzech punktów wyjścia dla marketplace'ów — ta wersja
+nie publikuje do tych dostawców opakowań zbiorczych — oraz kopii szablonu Google zrobionej przed
+0.109.0. Aby publikować takie produkty we własnym szablonie, dodaj w edytorze szablonu pole ze źródłem
+**Wielkość opakowania (ceny poniżej grosza)** z grupy *Cena i stan magazynowy* — oraz dwa źródła
+*opakowania jako liczby sztuk*, jeśli dostawca przyjmuje pola ceny jednostkowej Google. Cena, która
+wymagałaby opakowania większego niż 10 000 sztuk, jest pomijana z
+`sub_cent_price_beyond_pack_limit`; cztery miejsca po przecinku z cennika nigdy go nie wymagają.
+
+Dotyczy to każdego feedu; nie ma na to ustawienia. Strona produktu w storefroncie pokazuje cenę
+jednej sztuki; zasady Google dla opakowań zbiorczych wymagają, by strona docelowa pokazywała też cenę
+opakowania, więc obserwuj diagnostykę Merchant Center dla produktów publikowanych w ten sposób.
+
+Feed można zamiast tego **przypiąć do jednego cennika** — pole `priceListId` feedu, ustawiane przez
+API administracyjne przy tworzeniu albo zmianie feedu (`POST /api/v1/admin/product-feeds`,
+`PATCH /api/v1/admin/product-feeds/:id`); ekrany feedu pokazują opisane niżej ostrzeżenie, ale nie
+mają do tego kontrolki (zgłoszenie #414). Feed publikuje wtedy własne linie tego cennika — ceny stałe oraz procenty i
+korekty liczone od ceny katalogowej, jaką kanał naliczałby bez tego cennika — a **produkt, którego
+cennik nie wycenia, nie trafia do feedu**. Cennik cen bazowych publikuje swoje ceny bazowe.
+Przypięty cennik jest publikowany **tylko wtedy, gdy w chwili generowania obowiązuje kogokolwiek w
+kanale feedu**:
+
+- ma status *Aktywny* albo *Zaplanowany*, a generowanie przypada między jego datą początku i końca;
+- jest przypisany do kanału sprzedaży feedu, a kanał sprzedaje w walucie feedu (cennik cen bazowych
+  nie potrzebuje kanału);
+- jest dla wszystkich — cennik dla wybranych organizacji albo grup klientów nigdy nie jest
+  publikowany, z tego samego powodu, dla którego cena organizacji nigdy nie trafia do feedu
+  nieprzypiętego;
+- jest w walucie feedu i nadal istnieje.
+
+Dopóki któryś z tych warunków nie jest spełniony, strona feedu pokazuje ostrzeżenie, które go
+nazywa, a feed nie publikuje żadnych cen z tego cennika. **Gdy generowanie stwierdzi, że przypięty
+cennik nie obowiązuje, wycofuje opublikowany plik feedu** zamiast wygenerować nowy: generowanie
+kończy się stanem *Wycofany*, z powodem na swojej stronie, a najpóźniej po minucie link feedu
+odpowiada tak jak dla feedu, który nigdy nie został wygenerowany — dopóki cennik znów nie zacznie
+obowiązywać i kolejne generowanie nie opublikuje nowego pliku. Nie jest to generowanie zakończone
+błędem — nie ma powiadomienia o błędzie, nic nie jest dostarczane — a ostatni poprawny plik celowo
+nie jest dalej udostępniany. Wycofany plik nie jest usuwany: nadal można go pobrać z generowania,
+które go utworzyło, a zwykła retencja usuwa go po następnej publikacji. Dopóki ostatnim
+generowaniem feedu jest wycofanie, strona feedu informuje, że plik został wycofany. Liczba
+dopasowań w *Criteria* i kryterium zakresu cen korzystają z tych samych cen, które opublikuje
+następne generowanie.
 
 ### Mapowanie kategorii (Google i Meta)
 
@@ -251,7 +336,7 @@ pozycji, której dotyczą, i eksportem pełnej listy do CSV.
 
 | Powód | Znaczenie |
 | --- | --- |
-| `missing_price` | Nie znaleziono ceny dla waluty i cennika feedu. |
+| `missing_price` | Pole ceny wymagane przez szablon jest puste — żaden cennik nie wycenia produktu w kanale feedu w walucie feedu albo przypięty cennik feedu go nie wycenia. Pozycja została pominięta. |
 | `missing_image` | Produkt nie ma publicznie dostępnego zdjęcia. |
 | `private_image_asset` | Zdjęcia istnieją, ale nie są publiczne, więc nie można było opublikować stałego adresu URL. |
 | `missing_required_field` | Pole wymagane przez dostawcę okazało się puste i nie miało wartości zastępczej — pozycja została pominięta. |
@@ -260,8 +345,11 @@ pozycji, której dotyczą, i eksportem pełnej listy do CSV.
 | `unmapped_provider_category` | Nie zastosowano żadnego mapowania kategorii; pole zostało pominięte. |
 | `stale_provider_category_mapping` | Zmapowany węzeł nie istnieje w zainstalowanej wersji taksonomii. |
 | `zero_tax_rate_on_gross_feed` | Feed z cenami brutto nie znalazł reguły podatkowej dla swojego kraju opodatkowania. |
+| `sub_cent_price_without_pack_field` | Cena ma więcej niż dwa miejsca po przecinku, a szablon nie ma pola wielkości opakowania, by opublikować ją jako cenę opakowania. Pozycja została pominięta (*Cena poniżej jednego grosza*). |
+| `sub_cent_price_beyond_pack_limit` | Cena ma tyle miejsc po przecinku, że żadne opakowanie do 10 000 sztuk nie czyni jej dokładną co do grosza. Pozycja została pominięta. |
 
-Błędy generowania to coś innego niż problemy z pozycjami: kończą generowanie i niczego nie publikują.
+Błędy generowania to coś innego niż problemy z pozycjami: kończą generowanie i niczego nie publikują,
+a wcześniej opublikowany plik jest nadal udostępniany.
 
 | Błąd | Znaczenie |
 | --- | --- |
@@ -271,6 +359,12 @@ Błędy generowania to coś innego niż problemy z pozycjami: kończą generowan
 | `skip_threshold_exceeded` | Pominięto ponad połowę rozważonych pozycji, więc dobry plik nie został zastąpiony złym. |
 | `storage_unavailable` | Magazyn plików odrzucił plik. |
 | `worker_lost` | Worker przestał działać w trakcie generowania; blokada została zwolniona, a częściowy plik usunięty. |
+
+Generowanie może też zakończyć się stanem **wycofany** (`withdrawn`): przypięty cennik feedu nie
+obowiązywał (*Ceny w feedzie* wyżej), więc generowanie usunęło opublikowany plik zamiast utworzyć
+nowy. Nie ma ono kodu błędu; jego powodem jest powód przypiętego cennika (`not_found`,
+`currency_mismatch`, `not_active`, `outside_schedule`, `not_on_channel`, `audience_restricted`) i
+nie wywołuje ono powiadomienia.
 
 Gdy generowanie kończy się błędem, administrator dostaje powiadomienie — **raz przy przejściu w stan
 błędu**, a nie przy każdym uruchomieniu, więc feed zepsuty od doby nie zapełnia listy powiadomień.
@@ -324,7 +418,7 @@ etykietę na ekranie.
 #### Kiedy następuje dostarczenie
 
 Po generowaniu, które **zakończyło się udaną publikacją**, i tylko wtedy. Generowanie zakończone
-błędem, puste albo pominięte, bo poprzednie jeszcze trwało, niczego nie wysyła — plik, który partner
+błędem, puste, wycofane albo pominięte, bo poprzednie jeszcze trwało, niczego nie wysyła — plik, który partner
 już ma, jest nadal aktualny, a ponowne wysłanie zapowiadałoby zmianę, która nie nastąpiła.
 
 Jeśli przesyłanie się nie powiedzie, generowanie pozostaje udane, a opublikowany link nadal działa.
@@ -401,7 +495,10 @@ Cztery właściwości, za które odpowiada ten potok:
 - **Problem z pojedynczą pozycją nigdy nie przerywa generowania.** Pominięcia i ostrzeżenia są
   zapisywane dla każdej pozycji; generowanie kończy tylko błąd konfiguracji.
 - **Publikacja to jedno przestawienie wskaźnika po skompletowaniu obiektu.** Generowanie zakończone
-  błędem, puste albo przekraczające próg pominięć nigdy nie zmienia `published_artefact_id`.
+  błędem, puste albo przekraczające próg pominięć nigdy nie zmienia `published_artefact_id`. Jedyne
+  generowanie, które je czyści, to generowanie `withdrawn` — feedu przypiętego, którego cennik nie
+  obowiązuje (*Wycena* niżej) — które ustawia wskaźnik na `null` tym samym zapytaniem co stan
+  końcowy.
 - **Nakładające się generowania są odrzucane, a nie kolejkowane.** Przejęcie generowania to
   warunkowy `UPDATE` na `product_feeds.current_run_id`; przegrany zapisuje
   `skipped(already_running)`.
@@ -454,6 +551,61 @@ których dotyczy operacja, i usuwa te ciągi znaków, zamiast zgadywać, jak wyg
 Środowisko testowe wstrzykuje adaptery, które odmawiają każdej wysyłki, z tego samego powodu, dla
 którego wstrzykuje moduł pobierania taksonomii niezdolny do pobierania: żaden test w tym
 repozytorium nie może nigdzie wysłać katalogu z cenami.
+
+### Wycena
+
+Generowanie nigdy nie czyta tabel innego modułu. Feed nieprzypięty wycenia każdą partię jednym
+wywołaniem `resolveLinePrices` portu `pricingService` modułu `price_lists`, jako gość
+(`organization: null`, `customerGroupId: null`), w kanale i walucie feedu, dla ilości 1, bez
+wariantu. Feed przypięty czyta `namedListPrices({ priceListId, currencyCode, productIds,
+salesChannelId })` — wiersze cennika inne niż wiersze wariantów, przy ilości 1, liczone od ceny
+katalogowej gościa w kanale wyliczonej **bez przypiętego cennika**; produktu, którego cennik nie
+wycenia, nie ma w odpowiedzi (`services/named-list-price-resolver.ts`). Odpowiedź jest pusta, dopóki
+cennik nie jest publikowany: `namedListPublishability({ priceListId, currencyCode, salesChannelId })`
+w tym samym `FeedPricingPort` (`plugin.ts`) mówi, czy jest, a jeśli nie — dlaczego, jednym z powodów
+`pinnedPriceBookUnpublishableReasonSchema` z `@endora-commerce/contracts` (`not_found`,
+`currency_mismatch`, `not_active`, `outside_schedule`, `not_on_channel`, `audience_restricted`),
+sprawdzanym w chwili wywołania, a nie przez aktualizację statusów modułu `price_lists`.
+`ProductFeedService` pyta o to dla każdego przypiętego feedu na liście i umieszcza powód w wierszu
+feedu w panelu jako `pinnedPriceBookWarning` (`null`, gdy feed nie jest przypięty albo cennik jest
+publikowany), a strona feedu pokazuje go jako ostrzeżenie (`feeds.pinnedBook.<reason>` w katalogu
+`i18n/` modułu). Generowanie feedu przypiętego pyta `namedListPublishability` raz, po kontrolach
+konfiguracji (więc źle skonfigurowany feed nadal kończy się błędem i zachowuje ostatni poprawny
+plik) i przed przejściem katalogu. Gdy cennik nie obowiązuje, generowanie kończy się stanem
+`withdrawn` (`feedRunStatusSchema`) z powodem w `withdrawalReason` (kolumna
+`product_feed_runs.withdrawal_reason`), nie zapisuje pliku i czyści `published_artefact_id`, więc
+publiczny URL odpowiada `404` z jedyną treścią „niedostępny”, tak jak dla feedu nigdy
+niewygenerowanego. Nie wywołuje powiadomienia o błędzie ani dostarczenia. Wcześniejszy plik jest
+odłączany, a nie usuwany — jego wiersz i bajty zostają, do pobrania z jego własnego generowania,
+dopóki retencja po następnej publikacji ich nie usunie. Generowanie usuwa z pamięci podręcznej
+publiczne odpowiedzi dla feedu, które zapisał jego własny proces; pamięć podręczna jest w Redis, a
+indeks według feedu jest osobny w każdym procesie, więc wpis zapisany przez inny proces może
+udostępniać stary plik do wygaśnięcia jego TTL 60 s (`services/feed-cache-invalidator.ts`). Żadna
+ze ścieżek nie przechwytuje `MODULE_DISABLED`: gdy modułu `price_lists` nie ma, generowanie
+kończy się błędem zamiast publikować ceny, których platforma nie podaje.
+
+Cenę jednostkową poniżej grosza (issue #430) rozstrzyga resolver pól pozycji, który pozostaje
+czysty: `feedPackQuantity(net)` z `services/feed-pack.ts` zwraca najmniejszą potęgę dziesięciu N,
+przy której `net × N` ma najwyżej dwa miejsca po przecinku — 1 dla ceny z dwoma znaczącymi
+miejscami, `null` powyżej `MAX_FEED_PACK_QUANTITY` (10 000) — odczytaną z dziesiętnego ciągu znaków,
+nigdy z liczby zmiennoprzecinkowej. `resolveFeedItem` bierze największe N, jakiego wymaga którakolwiek
+cena publikowana przez szablon (`price`, `sale_price`); przy N > 1 pomija pozycję jako
+`sub_cent_price_without_pack_field`, chyba że szablon wiąże pole `pack_quantity`, a jako
+`sub_cent_price_beyond_pack_limit`, gdy N to `null`. Pole ceny publikuje wtedy
+`lineAmountHalfUp(net, N)` — dokładne z racji wyboru N — a w feedzie brutto `grossAmountHalfUp`
+tej kwoty przy `FeedItemPrice.taxRatePercent`, stawce, przy której hydrator policzył cenę brutto
+jednostki (`null` w feedzie netto albo gdy żadna reguła podatkowa nie pasuje — wtedy publikowane
+jest netto). Trzy rodzaje źródeł `pack_quantity`, `pack_unit_pricing_measure` i
+`pack_unit_pricing_base_measure` (`feedFieldSourceKindSchema`) zwracają `N`, `${N}ct` i `${N}ct`
+(dwa ostatnie tylko dla N ≤ 100), a pusty ciąg — pominięte pole — gdy N to 1; to utrzymuje plik z
+ceną o dwóch miejscach bajt w bajt bez zmian (`feed-two-place-output.test.ts` przypina pliki
+wszystkich pięciu dostarczanych szablonów). To, czy szablon potrafi wyrazić opakowanie, rozstrzyga
+**cały** szablon: `ResolveFeedItemInput.templateFields` niesie go, gdy `fields` to jedno pole, jak w
+podglądzie edytora. Predefiniowany szablon Google wiąże te trzy źródła z `g:multipack`,
+`g:unit_pricing_measure` i `g:unit_pricing_base_measure`; rekoncyliator przy starcie nigdy nie edytuje
+zainstalowanego szablonu systemowego, więc migracja
+`20261025T145041_product_feeds_google_template_pack_fields` dodaje je, po `g:sale_price`, do szablonu
+zainstalowanego przed 0.109.0.
 
 ### Zawężenie do kanału
 

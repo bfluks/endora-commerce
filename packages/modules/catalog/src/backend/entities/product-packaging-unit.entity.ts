@@ -17,7 +17,14 @@ import { randomUUID } from 'crypto';
 @Entity({ tableName: 'product_packaging_units' })
 @Unique({ properties: ['productId', 'name'] })
 export class ProductPackagingUnit {
-  [OptionalProps]?: 'id' | 'position' | 'isDefault' | 'createdAt' | 'updatedAt';
+  [OptionalProps]?:
+    | 'id'
+    | 'position'
+    | 'isDefault'
+    | 'minOrderUnits'
+    | 'nameTranslations'
+    | 'createdAt'
+    | 'updatedAt';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -29,6 +36,14 @@ export class ProductPackagingUnit {
   @Property({ type: 'string', length: 160 })
   name!: string;
 
+  /**
+   * Feature 163 (FR-079, R16) — the name per language, `{ "<lang>": "<text>" }`; a
+   * language absent here shows `name`. The basket and quote-request snapshots take it in
+   * the line's language (`effectivePackagingUnitName`) and never re-resolve it.
+   */
+  @Property({ type: 'json' })
+  nameTranslations: Record<string, string> = {};
+
   /** Number of base pieces this unit contains. Always >= 1. */
   @Property({ type: 'integer' })
   baseQuantity!: number;
@@ -39,6 +54,14 @@ export class ProductPackagingUnit {
   /** Whether this unit is the one presented by default on the storefront. */
   @Property({ type: 'boolean' })
   isDefault: boolean = false;
+
+  /**
+   * Feature 155 (FR-002) — the minimum number of units of this packaging
+   * unit per order line, 1…1 000 000, or `null` for none. Deleting the unit
+   * removes the rule with it.
+   */
+  @Property({ type: 'integer', nullable: true })
+  minOrderUnits?: number | null;
 
   @Property({ type: 'datetime', onCreate: () => new Date() })
   createdAt: Date = new Date();

@@ -8,13 +8,24 @@ overrides:
   webpackbar: ^7.0.0
   next>postcss: ^8.5.28
   '@rushstack/node-core-library>ajv': ^8.20.0
-  serialize-javascript@<7.0.5: ^7.0.5
   uuid@<11.1.1: ^11.1.1
   proxy-addr@<2.0.8: ^2.0.8
   shell-quote@<1.11.0: ^1.11.0
   compression@<1.8.2: ^1.8.2
   source-map-js@<1.2.2: ^1.2.2
   fast-copy@>=4.0.0 <4.1.0: 4.1.0
+  tinypool@<2.1.2: ^2.1.2
+  happy-dom@<21.0.4: ^21.0.4
+  serialize-javascript@<7.1.3: ^7.1.3
+  joi@<17.13.9: ^17.13.9
+  follow-redirects@<1.16.2: ^1.16.2
+  undici@>=7.0.0 <7.30.1: ^7.30.1
+  qs@<6.16.1: ^6.16.1
+  postcss-selector-parser@<6.1.5: ^6.1.5
+  fast-uri@>=3.0.0 <3.1.9: ^3.1.9
+  fast-uri@>=4.0.0 <4.2.3: ^4.2.3
+  body-parser@<1.20.9: ^1.20.9
+  launch-editor@<2.14.2: ^2.14.2
 
 importers:
 
@@ -44,6 +55,9 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      vitest:
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   admin:
     dependencies:
@@ -128,6 +142,9 @@ importers:
       '@endora-commerce/mod-document-templates':
         specifier: workspace:*
         version: link:../packages/modules/document_templates
+      '@endora-commerce/mod-forms':
+        specifier: workspace:*
+        version: link:../packages/modules/forms
       '@endora-commerce/mod-google-analytics':
         specifier: workspace:*
         version: link:../packages/modules/google_analytics
@@ -176,6 +193,9 @@ importers:
       '@endora-commerce/mod-product-feeds':
         specifier: workspace:*
         version: link:../packages/modules/product_feeds
+      '@endora-commerce/mod-projects':
+        specifier: workspace:*
+        version: link:../packages/modules/projects
       '@endora-commerce/mod-promotions':
         specifier: workspace:*
         version: link:../packages/modules/promotions
@@ -200,6 +220,9 @@ importers:
       '@endora-commerce/mod-settings':
         specifier: workspace:*
         version: link:../packages/modules/settings
+      '@endora-commerce/mod-tasks':
+        specifier: workspace:*
+        version: link:../packages/modules/tasks
       '@endora-commerce/mod-taxes':
         specifier: workspace:*
         version: link:../packages/modules/taxes
@@ -238,7 +261,7 @@ importers:
         version: 1.2.4(@types/react@19.2.14)(react@19.2.5)
       '@tailwindcss/vite':
         specifier: ^4.2.4
-        version: 4.2.4(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        version: 4.2.4(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       '@tiptap/react':
         specifier: ^3.22.5
         version: 3.31.3(@floating-ui/dom@1.7.6)(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -296,7 +319,7 @@ importers:
         version: 19.2.3(@types/react@19.2.14)
       '@vitejs/plugin-react':
         specifier: ^5.2.0
-        version: 5.2.0(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        version: 5.2.0(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       axe-core:
         specifier: 4.13.0
         version: 4.13.0
@@ -313,11 +336,11 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vite:
-        specifier: ^7.3.2
-        version: 7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0)
+        specifier: ^7.3.7
+        version: 7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0)
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   backend:
     dependencies:
@@ -348,6 +371,9 @@ importers:
       '@endora-commerce/mod-admin-actions':
         specifier: workspace:*
         version: link:../packages/modules/admin_actions
+      '@endora-commerce/mod-admin-feedback':
+        specifier: workspace:*
+        version: link:../packages/modules/admin_feedback
       '@endora-commerce/mod-admin-notifications':
         specifier: workspace:*
         version: link:../packages/modules/admin_notifications
@@ -426,6 +452,9 @@ importers:
       '@endora-commerce/mod-erp-connector':
         specifier: workspace:*
         version: link:../packages/modules/erp_connector
+      '@endora-commerce/mod-forms':
+        specifier: workspace:*
+        version: link:../packages/modules/forms
       '@endora-commerce/mod-google-analytics':
         specifier: workspace:*
         version: link:../packages/modules/google_analytics
@@ -486,6 +515,9 @@ importers:
       '@endora-commerce/mod-product-feeds':
         specifier: workspace:*
         version: link:../packages/modules/product_feeds
+      '@endora-commerce/mod-projects':
+        specifier: workspace:*
+        version: link:../packages/modules/projects
       '@endora-commerce/mod-promotions':
         specifier: workspace:*
         version: link:../packages/modules/promotions
@@ -522,6 +554,9 @@ importers:
       '@endora-commerce/mod-shopping-lists':
         specifier: workspace:*
         version: link:../packages/modules/shopping_lists
+      '@endora-commerce/mod-tasks':
+        specifier: workspace:*
+        version: link:../packages/modules/tasks
       '@endora-commerce/mod-taxes':
         specifier: workspace:*
         version: link:../packages/modules/taxes
@@ -557,7 +592,7 @@ importers:
         version: 9.7.0
       '@fastify/type-provider-zod':
         specifier: ^1.0.0
-        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.5)(openapi-types@12.1.3)(zod@4.3.6)
+        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.8)(openapi-types@12.1.3)(zod@4.3.6)
       '@google-cloud/storage':
         specifier: ^7.19.0
         version: 7.19.0
@@ -589,8 +624,8 @@ importers:
         specifier: ^5.11.0
         version: 5.11.0
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       fastify-plugin:
         specifier: ^6.0.0
         version: 6.0.0
@@ -604,8 +639,8 @@ importers:
         specifier: ^0.57.0
         version: 0.57.0
       nodemailer:
-        specifier: ^10.0.13
-        version: 10.0.13
+        specifier: ^10.1.4
+        version: 10.2.1
       openapi-types:
         specifier: ^12.1.3
         version: 12.1.3
@@ -633,6 +668,9 @@ importers:
       ssh2-sftp-client:
         specifier: ^12.1.1
         version: 12.1.1
+      uqr:
+        specifier: ^0.1.3
+        version: 0.1.3
       web-push:
         specifier: ^3.6.7
         version: 3.6.7
@@ -680,20 +718,20 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   docs:
     dependencies:
       '@docusaurus/core':
         specifier: ^3.10.2
-        version: 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+        version: 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/preset-classic':
         specifier: ^3.10.2
-        version: 3.10.2(@algolia/client-search@5.51.0)(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(@types/react@19.3.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(search-insights@2.17.3)(typescript@5.9.3)
+        version: 3.10.2(@algolia/client-search@5.51.0)(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(@types/react@19.3.0)(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(search-insights@2.17.3)(typescript@5.9.3)
       '@easyops-cn/docusaurus-search-local':
         specifier: ^0.55.3
-        version: 0.55.3(@docusaurus/theme-common@3.10.2(@docusaurus/plugin-content-docs@3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+        version: 0.55.3(@docusaurus/theme-common@3.10.2(@docusaurus/plugin-content-docs@3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@mdx-js/react':
         specifier: ^3.1.1
         version: 3.1.1(@types/react@19.3.0)(react@19.2.5)
@@ -746,6 +784,12 @@ importers:
       '@radix-ui/react-slot':
         specifier: ^1.2.4
         version: 1.2.4(@types/react@19.2.14)(react@19.2.5)
+      '@tiptap/react':
+        specifier: ^3.22.5
+        version: 3.31.3(@floating-ui/dom@1.7.6)(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@tiptap/starter-kit':
+        specifier: ^3.22.5
+        version: 3.31.3
       '@types/react':
         specifier: ^19.2.14
         version: 19.2.14
@@ -774,17 +818,17 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vite:
-        specifier: ^7.3.2
-        version: 7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0)
+        specifier: ^7.3.7
+        version: 7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0)
 
   packages/admin-shell:
     dependencies:
       '@tailwindcss/vite':
         specifier: ^4.2.4
-        version: 4.2.4(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        version: 4.2.4(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       '@vitejs/plugin-react':
         specifier: ^5.2.0
-        version: 5.2.0(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        version: 5.2.0(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       tailwindcss:
         specifier: ^4.2.4
         version: 4.3.0
@@ -826,8 +870,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vite:
-        specifier: ^7.3.2
-        version: 7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0)
+        specifier: ^7.3.7
+        version: 7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0)
 
   packages/cli:
     dependencies:
@@ -842,11 +886,14 @@ importers:
         specifier: ^22.9.0
         version: 22.19.17
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/cms-components:
     dependencies:
+      '@endora-commerce/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@puckeditor/core':
         specifier: '*'
         version: 0.23.0(@floating-ui/dom@1.7.6)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(use-sync-external-store@1.6.0(react@19.2.5))
@@ -915,8 +962,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/contracts:
     dependencies:
@@ -928,8 +975,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/create-endora-commerce:
     dependencies:
@@ -941,8 +988,8 @@ importers:
         specifier: ^22.9.0
         version: 22.19.17
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/demo-composition:
     devDependencies:
@@ -982,6 +1029,12 @@ importers:
       '@endora-commerce/mod-price-lists':
         specifier: workspace:*
         version: link:../modules/price_lists
+      '@endora-commerce/mod-projects':
+        specifier: workspace:*
+        version: link:../modules/projects
+      '@endora-commerce/mod-tasks':
+        specifier: workspace:*
+        version: link:../modules/tasks
       '@endora-commerce/platform':
         specifier: workspace:*
         version: link:../platform
@@ -998,8 +1051,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/email-components:
     devDependencies:
@@ -1022,8 +1075,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/llm-client:
     dependencies:
@@ -1041,8 +1094,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/_i18n:
     devDependencies:
@@ -1065,14 +1118,14 @@ importers:
         specifier: ^22.9.0
         version: 22.19.17
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -1098,8 +1151,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/admin_actions:
     devDependencies:
@@ -1122,14 +1175,41 @@ importers:
         specifier: ^22.9.0
         version: 22.19.17
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+
+  packages/modules/admin_feedback:
+    devDependencies:
+      '@endora-commerce/contracts':
+        specifier: workspace:*
+        version: link:../../contracts
+      '@endora-commerce/platform':
+        specifier: workspace:*
+        version: link:../../platform
+      '@fastify/rate-limit':
+        specifier: ^10.3.0
+        version: 10.3.0
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      fastify:
+        specifier: ^5.12.8
+        version: 5.12.8
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+      zod:
+        specifier: ^4.2.0
+        version: 4.3.6
 
   packages/modules/admin_notifications:
     devDependencies:
@@ -1152,8 +1232,8 @@ importers:
         specifier: ^22.9.0
         version: 22.19.17
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1185,8 +1265,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/admin_search:
     devDependencies:
@@ -1206,8 +1286,8 @@ importers:
         specifier: ^19.2.14
         version: 19.3.0
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -1221,8 +1301,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/admin_users:
     devDependencies:
@@ -1240,7 +1320,7 @@ importers:
         version: 11.0.2
       '@fastify/type-provider-zod':
         specifier: ^1.0.0
-        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.5)(openapi-types@12.1.3)(zod@4.3.6)
+        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.8)(openapi-types@12.1.3)(zod@4.3.6)
       '@mikro-orm/core':
         specifier: ^6.6.13
         version: 6.6.16
@@ -1257,8 +1337,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -1272,8 +1352,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/analytics:
     devDependencies:
@@ -1291,7 +1371,7 @@ importers:
         version: 10.3.0
       '@fastify/type-provider-zod':
         specifier: ^1.0.0
-        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.5)(openapi-types@12.1.3)(zod@4.3.6)
+        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.8)(openapi-types@12.1.3)(zod@4.3.6)
       '@mikro-orm/core':
         specifier: ^6.6.13
         version: 6.6.16
@@ -1308,8 +1388,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -1320,8 +1400,11 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+      zod:
+        specifier: ^4.2.0
+        version: 4.3.6
 
   packages/modules/api_keys:
     devDependencies:
@@ -1336,7 +1419,7 @@ importers:
         version: link:../../platform
       '@fastify/type-provider-zod':
         specifier: ^1.0.0
-        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.5)(openapi-types@12.1.3)(zod@4.3.6)
+        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.8)(openapi-types@12.1.3)(zod@4.3.6)
       '@mikro-orm/core':
         specifier: ^6.6.13
         version: 6.6.16
@@ -1353,8 +1436,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -1365,8 +1448,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/assets_library:
     devDependencies:
@@ -1406,12 +1489,18 @@ importers:
       '@types/react':
         specifier: ^19.2.14
         version: 19.2.14
+      bullmq:
+        specifier: ^5.76.1
+        version: 5.76.1
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       file-type:
         specifier: ^22.0.1
         version: 22.0.1
+      ioredis:
+        specifier: ^5.10.1
+        version: 5.10.1
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -1422,8 +1511,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/audit_logs:
     devDependencies:
@@ -1446,8 +1535,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       react:
         specifier: ^19.2.5
         version: 19.2.5
@@ -1458,8 +1547,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -1482,8 +1571,8 @@ importers:
         specifier: ^22.9.0
         version: 22.19.17
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       fastify-plugin:
         specifier: ^6.0.0
         version: 6.0.0
@@ -1494,8 +1583,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/blog:
     devDependencies:
@@ -1536,8 +1625,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
@@ -1551,8 +1640,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -1565,6 +1654,9 @@ importers:
       '@endora-commerce/contracts':
         specifier: workspace:*
         version: link:../../contracts
+      '@endora-commerce/email-components':
+        specifier: workspace:*
+        version: link:../../email-components
       '@endora-commerce/platform':
         specifier: workspace:*
         version: link:../../platform
@@ -1587,8 +1679,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
@@ -1605,8 +1697,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -1644,8 +1736,8 @@ importers:
         specifier: ^5.76.1
         version: 5.76.1
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
@@ -1662,8 +1754,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -1691,6 +1783,9 @@ importers:
       '@endora-commerce/platform':
         specifier: workspace:*
         version: link:../../platform
+      '@fastify/rate-limit':
+        specifier: ^10.3.0
+        version: 10.3.0
       '@mikro-orm/core':
         specifier: ^6.6.13
         version: 6.6.16
@@ -1713,8 +1808,8 @@ importers:
         specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.14)
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
@@ -1734,8 +1829,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -1779,8 +1874,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -1797,8 +1892,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -1830,8 +1925,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       react:
         specifier: ^19.2.5
         version: 19.2.5
@@ -1842,8 +1937,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -1861,7 +1956,7 @@ importers:
         version: link:../../platform
       '@fastify/type-provider-zod':
         specifier: ^1.0.0
-        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.5)(openapi-types@12.1.3)(zod@4.3.6)
+        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.8)(openapi-types@12.1.3)(zod@4.3.6)
       '@mikro-orm/core':
         specifier: ^6.6.13
         version: 6.6.16
@@ -1878,8 +1973,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       react:
         specifier: ^19.2.5
         version: 19.2.5
@@ -1887,8 +1982,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/crm:
     devDependencies:
@@ -1926,8 +2021,8 @@ importers:
         specifier: ^5.76.1
         version: 5.76.1
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
@@ -1944,8 +2039,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -1960,7 +2055,7 @@ importers:
         version: link:../../platform
       '@fastify/type-provider-zod':
         specifier: ^1.0.0
-        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.5)(openapi-types@12.1.3)(zod@4.3.6)
+        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.8)(openapi-types@12.1.3)(zod@4.3.6)
       '@mikro-orm/core':
         specifier: ^6.6.13
         version: 6.6.16
@@ -1971,14 +2066,14 @@ importers:
         specifier: ^22.9.0
         version: 22.19.17
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/custom_fields:
     devDependencies:
@@ -2007,8 +2102,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
@@ -2025,8 +2120,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/customer_accounts:
     devDependencies:
@@ -2058,8 +2153,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -2070,8 +2165,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -2106,8 +2201,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -2121,8 +2216,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -2154,8 +2249,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -2166,8 +2261,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/dictionaries:
     devDependencies:
@@ -2196,8 +2291,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
@@ -2214,8 +2309,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -2259,8 +2354,8 @@ importers:
         specifier: ^19.2.14
         version: 19.3.0
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       pdfmake:
         specifier: ^0.3.7
         version: 0.3.7
@@ -2274,8 +2369,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -2301,14 +2396,14 @@ importers:
         specifier: ^22.9.0
         version: 22.19.17
       nodemailer:
-        specifier: ^10.0.13
-        version: 10.0.13
+        specifier: ^10.1.4
+        version: 10.2.1
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/erp_connector:
     devDependencies:
@@ -2334,8 +2429,65 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+
+  packages/modules/forms:
+    devDependencies:
+      '@endora-commerce/admin-kit':
+        specifier: workspace:*
+        version: link:../../admin-kit
+      '@endora-commerce/cms-components':
+        specifier: workspace:*
+        version: link:../../cms-components
+      '@endora-commerce/contracts':
+        specifier: workspace:*
+        version: link:../../contracts
+      '@endora-commerce/email-components':
+        specifier: workspace:*
+        version: link:../../email-components
+      '@endora-commerce/platform':
+        specifier: workspace:*
+        version: link:../../platform
+      '@fastify/rate-limit':
+        specifier: ^10.3.0
+        version: 10.3.0
+      '@mikro-orm/core':
+        specifier: ^6.6.13
+        version: 6.6.16
+      '@mikro-orm/migrations':
+        specifier: ^6.6.13
+        version: 6.6.16(@mikro-orm/core@6.6.16)(@types/node@22.19.17)(pg@8.20.0)
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      '@types/react':
+        specifier: ^19.2.14
+        version: 19.3.0
+      bullmq:
+        specifier: ^5.76.1
+        version: 5.76.1
+      fastify:
+        specifier: ^5.12.8
+        version: 5.12.8
+      ioredis:
+        specifier: ^5.10.1
+        version: 5.10.1
+      lucide-react:
+        specifier: ^1.11.0
+        version: 1.11.0(react@19.2.5)
+      react:
+        specifier: ^19.2.5
+        version: 19.2.5
+      react-router-dom:
+        specifier: ^7.18.2
+        version: 7.18.4(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/google_analytics:
     devDependencies:
@@ -2367,8 +2519,8 @@ importers:
         specifier: ^5.76.1
         version: 5.76.1
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
@@ -2382,8 +2534,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -2403,8 +2555,8 @@ importers:
         specifier: ^5.76.1
         version: 5.76.1
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
@@ -2412,8 +2564,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -2436,8 +2588,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -2448,8 +2600,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/inventory:
     devDependencies:
@@ -2481,8 +2633,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -2496,8 +2648,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -2529,8 +2681,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       react:
         specifier: ^19.2.5
         version: 19.2.5
@@ -2538,8 +2690,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -2566,7 +2718,7 @@ importers:
         version: link:../../platform
       '@fastify/type-provider-zod':
         specifier: ^1.0.0
-        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.5)(openapi-types@12.1.3)(zod@4.3.6)
+        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.8)(openapi-types@12.1.3)(zod@4.3.6)
       '@mikro-orm/core':
         specifier: ^6.6.13
         version: 6.6.16
@@ -2589,8 +2741,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -2607,8 +2759,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -2623,7 +2775,7 @@ importers:
         version: link:../../platform
       '@fastify/type-provider-zod':
         specifier: ^1.0.0
-        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.5)(openapi-types@12.1.3)(zod@4.3.6)
+        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.8)(openapi-types@12.1.3)(zod@4.3.6)
       '@mikro-orm/core':
         specifier: ^6.6.13
         version: 6.6.16
@@ -2637,14 +2789,14 @@ importers:
         specifier: ^22.9.0
         version: 22.19.17
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/linkedin_ads:
     devDependencies:
@@ -2673,8 +2825,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       react:
         specifier: ^19.2.5
         version: 19.2.5
@@ -2715,8 +2867,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
@@ -2733,8 +2885,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/meta_ads:
     devDependencies:
@@ -2763,8 +2915,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       react:
         specifier: ^19.2.5
         version: 19.2.5
@@ -2794,7 +2946,7 @@ importers:
         version: 11.0.2
       '@fastify/type-provider-zod':
         specifier: ^1.0.0
-        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.5)(openapi-types@12.1.3)(zod@4.3.6)
+        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.8)(openapi-types@12.1.3)(zod@4.3.6)
       '@mikro-orm/core':
         specifier: ^6.6.13
         version: 6.6.16
@@ -2811,8 +2963,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
@@ -2831,9 +2983,12 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      uqr:
+        specifier: ^0.1.3
+        version: 0.1.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -2883,14 +3038,14 @@ importers:
         specifier: ^6.1.0
         version: 6.1.0
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
       nodemailer:
-        specifier: ^10.0.13
-        version: 10.0.13
+        specifier: ^10.1.4
+        version: 10.2.1
       react:
         specifier: ^19.2.5
         version: 19.2.5
@@ -2901,8 +3056,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -2955,8 +3110,8 @@ importers:
         specifier: ^5.76.1
         version: 5.76.1
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
@@ -2973,8 +3128,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -3012,8 +3167,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -3027,8 +3182,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -3060,8 +3215,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -3075,8 +3230,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/payments:
     devDependencies:
@@ -3111,8 +3266,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -3123,8 +3278,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/pim_connector:
     devDependencies:
@@ -3150,8 +3305,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/price_lists:
     devDependencies:
@@ -3179,9 +3334,15 @@ importers:
       '@types/react':
         specifier: ^19.2.14
         version: 19.2.14
+      bullmq:
+        specifier: ^5.76.1
+        version: 5.76.1
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
+      ioredis:
+        specifier: ^5.10.1
+        version: 5.10.1
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -3195,8 +3356,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -3243,8 +3404,8 @@ importers:
         specifier: ^4.4.0
         version: 4.4.0
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
@@ -3264,8 +3425,68 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+      zod:
+        specifier: ^4.2.0
+        version: 4.3.6
+
+  packages/modules/projects:
+    devDependencies:
+      '@endora-commerce/admin-kit':
+        specifier: workspace:*
+        version: link:../../admin-kit
+      '@endora-commerce/contracts':
+        specifier: workspace:*
+        version: link:../../contracts
+      '@endora-commerce/email-components':
+        specifier: workspace:*
+        version: link:../../email-components
+      '@endora-commerce/platform':
+        specifier: workspace:*
+        version: link:../../platform
+      '@fastify/multipart':
+        specifier: ^10.0.0
+        version: 10.0.0
+      '@mikro-orm/core':
+        specifier: ^6.6.13
+        version: 6.6.16
+      '@mikro-orm/migrations':
+        specifier: ^6.6.13
+        version: 6.6.16(@mikro-orm/core@6.6.16)(@types/node@22.19.17)(pg@8.20.0)
+      '@mikro-orm/postgresql':
+        specifier: ^6.6.13
+        version: 6.6.16(@mikro-orm/core@6.6.16)
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      '@types/react':
+        specifier: ^19.2.14
+        version: 19.3.0
+      bullmq:
+        specifier: ^5.76.1
+        version: 5.76.1
+      fastify:
+        specifier: ^5.12.8
+        version: 5.12.8
+      ioredis:
+        specifier: ^5.10.1
+        version: 5.10.1
+      lucide-react:
+        specifier: ^1.11.0
+        version: 1.11.0(react@19.2.5)
+      react:
+        specifier: ^19.2.5
+        version: 19.2.5
+      react-router-dom:
+        specifier: ^7.18.2
+        version: 7.18.4(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -3297,8 +3518,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -3312,8 +3533,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/prompt_actions:
     devDependencies:
@@ -3339,14 +3560,14 @@ importers:
         specifier: ^22.9.0
         version: 22.19.17
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -3387,8 +3608,8 @@ importers:
         specifier: ^5.76.1
         version: 5.76.1
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
@@ -3405,8 +3626,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       web-push:
         specifier: ^3.6.7
         version: 3.6.7
@@ -3444,8 +3665,8 @@ importers:
         specifier: ^4.4.0
         version: 4.4.0
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       react:
         specifier: ^19.2.5
         version: 19.2.5
@@ -3453,8 +3674,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -3501,8 +3722,8 @@ importers:
         specifier: ^5.76.1
         version: 5.76.1
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
@@ -3519,8 +3740,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -3555,8 +3776,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -3570,8 +3791,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -3600,8 +3821,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       react:
         specifier: ^19.2.5
         version: 19.2.5
@@ -3612,8 +3833,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -3639,8 +3860,8 @@ importers:
         specifier: ^22.9.0
         version: 22.19.17
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       meilisearch:
         specifier: ^0.57.0
         version: 0.57.0
@@ -3648,8 +3869,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -3681,20 +3902,23 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
       react:
         specifier: ^19.2.5
         version: 19.2.5
+      react-router-dom:
+        specifier: ^7.18.2
+        version: 7.18.4(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -3726,8 +3950,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
@@ -3768,14 +3992,14 @@ importers:
         specifier: ^22.9.0
         version: 22.19.17
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/shopping_lists:
     devDependencies:
@@ -3798,11 +4022,71 @@ importers:
         specifier: ^22.9.0
         version: 22.19.17
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      vitest:
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+
+  packages/modules/tasks:
+    devDependencies:
+      '@endora-commerce/admin-kit':
+        specifier: workspace:*
+        version: link:../../admin-kit
+      '@endora-commerce/contracts':
+        specifier: workspace:*
+        version: link:../../contracts
+      '@endora-commerce/email-components':
+        specifier: workspace:*
+        version: link:../../email-components
+      '@endora-commerce/platform':
+        specifier: workspace:*
+        version: link:../../platform
+      '@fastify/multipart':
+        specifier: ^10.0.0
+        version: 10.0.0
+      '@mikro-orm/core':
+        specifier: ^6.6.13
+        version: 6.6.16
+      '@mikro-orm/migrations':
+        specifier: ^6.6.13
+        version: 6.6.16(@mikro-orm/core@6.6.16)(@types/node@22.19.17)(pg@8.20.0)
+      '@mikro-orm/postgresql':
+        specifier: ^6.6.13
+        version: 6.6.16(@mikro-orm/core@6.6.16)
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      '@types/react':
+        specifier: ^19.2.14
+        version: 19.3.0
+      bullmq:
+        specifier: ^5.76.1
+        version: 5.76.1
+      fastify:
+        specifier: ^5.12.8
+        version: 5.12.8
+      ioredis:
+        specifier: ^5.10.1
+        version: 5.10.1
+      lucide-react:
+        specifier: ^1.11.0
+        version: 1.11.0(react@19.2.5)
+      react:
+        specifier: ^19.2.5
+        version: 19.2.5
+      react-router-dom:
+        specifier: ^7.18.2
+        version: 7.18.4(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/taxes:
     devDependencies:
@@ -3831,8 +4115,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -3843,8 +4127,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/modules/transactional_emails:
     devDependencies:
@@ -3885,8 +4169,8 @@ importers:
         specifier: ^19.2.14
         version: 19.2.14
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       lucide-react:
         specifier: ^1.11.0
         version: 1.11.0(react@19.2.5)
@@ -3900,8 +4184,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -3919,7 +4203,7 @@ importers:
         version: link:../../platform
       '@fastify/type-provider-zod':
         specifier: ^1.0.0
-        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.5)(openapi-types@12.1.3)(zod@4.3.6)
+        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.8)(openapi-types@12.1.3)(zod@4.3.6)
       '@mikro-orm/core':
         specifier: ^6.6.13
         version: 6.6.16
@@ -3939,8 +4223,8 @@ importers:
         specifier: ^5.76.1
         version: 5.76.1
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
@@ -3954,8 +4238,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/page-builder-admin:
     devDependencies:
@@ -3999,8 +4283,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vite:
-        specifier: ^7.3.2
-        version: 7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0)
+        specifier: ^7.3.7
+        version: 7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0)
 
   packages/page-builder-core:
     dependencies:
@@ -4027,8 +4311,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/platform:
     dependencies:
@@ -4052,7 +4336,7 @@ importers:
         version: 10.3.0
       '@fastify/type-provider-zod':
         specifier: ^1.0.0
-        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.5)(openapi-types@12.1.3)(zod@4.3.6)
+        version: 1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.8)(openapi-types@12.1.3)(zod@4.3.6)
       argon2:
         specifier: ^0.44.0
         version: 0.44.0
@@ -4091,14 +4375,14 @@ importers:
         specifier: ^22.9.0
         version: 22.19.17
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
       zod:
         specifier: ^4.2.0
         version: 4.3.6
@@ -4124,8 +4408,8 @@ importers:
         specifier: ^8.20.0
         version: 8.20.0
       fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
+        specifier: ^5.12.8
+        version: 5.12.8
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
@@ -4136,8 +4420,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
   storefront:
     dependencies:
@@ -4184,8 +4468,8 @@ importers:
         specifier: ^1.9.4
         version: 1.9.4
       next:
-        specifier: ^15.5.27
-        version: 15.5.27(@babel/core@7.29.7)(@playwright/test@1.64.0)(@types/node@22.19.17)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+        specifier: ^15.5.28
+        version: 15.5.28(@babel/core@7.29.7)(@playwright/test@1.64.0)(@types/node@22.19.17)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       react:
         specifier: ^19.2.5
         version: 19.2.5
@@ -4245,8 +4529,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
 
 packages:
 
@@ -6676,56 +6960,56 @@ packages:
   '@napi-rs/wasm-runtime@0.2.12':
     resolution: {integrity: sha512-ZVWUcfwY4E/yPitQJl481FjFo3K22D6qF0DuFH6Y/nbnE11GY5uguDxZMGXPQ8WQ0128MXQD7TnfHyK4oWoIJQ==}
 
-  '@next/env@15.5.27':
-    resolution: {integrity: sha512-WC5hvVqiuFOcRyz6gKPeJkiVvSMf3scNeAV49CdWtVqxmUlzh8UKR6YHt9yiNkh8LngtzqSlVz07/Ma3ZAzchA==}
+  '@next/env@15.5.28':
+    resolution: {integrity: sha512-xxW5EBI8fMPuVTPBW7LL980IRbuDXlbkUAwp9DDhtb4Lnich3nJ13uYpvrX4VE74hWPf6AvHHAMmGCidcHjbfg==}
 
   '@next/eslint-plugin-next@15.5.19':
     resolution: {integrity: sha512-Ctwb4qYuMbHN/1oXLlTdMchwG8h8Xzwq+wGZZMgF3o6+uwyBKAI2c96bdOsl+C62PaUD0Jkh+QpNkhUeDlam0Q==}
 
-  '@next/swc-darwin-arm64@15.5.27':
-    resolution: {integrity: sha512-fBA9QurmK4+uj4wNhmRTuO5zMVRaBHCvp6H93zTG/5i6Yi6TewbvbesXB8YQNj8T99Cwrow87hHiFV6wL/hyMA==}
+  '@next/swc-darwin-arm64@15.5.28':
+    resolution: {integrity: sha512-dPoQYXcfSIqx5o+TOXVXO7kONK5qbtNRDeiTfII0bT3puGIT6VF5e0QwmxNZfEZ5Zety5f3m9P/p4xqwfiLlPg==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [darwin]
 
-  '@next/swc-darwin-x64@15.5.27':
-    resolution: {integrity: sha512-FGZwJwry8qZNHxD/nfwrCwCHHrqx6epqItkkxbYcBQEQ2uw5S43bY83fQB5zbAsZE7TELMjoYkbhsQ4oKM7wwg==}
+  '@next/swc-darwin-x64@15.5.28':
+    resolution: {integrity: sha512-RgCJ7buBivTH+6sddqaVm+/v8kwMHlFkobvdt3DfETutws5HrxnToMIWSN9X3MZ3aAi7BbKrGZZWUDQLEycXqw==}
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [darwin]
 
-  '@next/swc-linux-arm64-gnu@15.5.27':
-    resolution: {integrity: sha512-GQulAaJYNF1RYuatlsw9/uzbKz4if2V7Ic9nVO+P0ljYPm4yBRTFIl6g5YkKTw40lMLbpy9edLoH44g3jSHMYA==}
+  '@next/swc-linux-arm64-gnu@15.5.28':
+    resolution: {integrity: sha512-OHXQe13olE59aKe++zHavGcJPh5SLHXi6Anret3BBeq1+qhSuOJDNAli/EDDfxs6UTqA4Qddo4uyYry2slyjiQ==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [linux]
 
-  '@next/swc-linux-arm64-musl@15.5.27':
-    resolution: {integrity: sha512-URFFsUmu8Pi0/1qdnUI7tx7keZw1Mt5zHfrIX1RfDG9Nih8DYxK54WZsDJUX2ZTlii1jgotL7qcbwKnSAES6xQ==}
+  '@next/swc-linux-arm64-musl@15.5.28':
+    resolution: {integrity: sha512-nTB7bB6vfn4ezCJNYP43ukt2o8L3+WxKF/sTcTxepdXsJh3SM9RhlU7wrZYbH7L4HO5M87dqDTwm8587vAkCiw==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [linux]
 
-  '@next/swc-linux-x64-gnu@15.5.27':
-    resolution: {integrity: sha512-aJp74z7uvU5jQhyH7lyk+4qSRcTdKbKT9NQE3jiO9kWYkoHZjKi0zzHDbCoZ+v2sJDEiJ/z58R0UlWMGWNF3HA==}
+  '@next/swc-linux-x64-gnu@15.5.28':
+    resolution: {integrity: sha512-WXCfVI32rW3xCusoUX1RpZKtyChWU2Zwe27JUDmM3KrXwcDNc9vV4zEq0GKFAURnuQ/Ouo/XqPvB0yh445XZCg==}
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [linux]
 
-  '@next/swc-linux-x64-musl@15.5.27':
-    resolution: {integrity: sha512-ILl2bQ8MbpvyMpY8AXljb3BXs0MJSC8HXZ6QV5AWpVS7ZELqNPtrHvhUk+SNarvjvICXX8bCS287TCi+gUFVYg==}
+  '@next/swc-linux-x64-musl@15.5.28':
+    resolution: {integrity: sha512-Miq+NDb/HWsXuxseYxMM6fuEOQXgTziarkKIRpVKCn8W69cEfhQaQr+90pO+u4q2CbJR2wzXmUuCFyZaJs/Nng==}
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [linux]
 
-  '@next/swc-win32-arm64-msvc@15.5.27':
-    resolution: {integrity: sha512-1MB9Rh5y8TOPN2x7naNTJNkCZQav9c70AI7EBYXxsEewwOffC4DjjwBwKf20NBvcA+u+5jDv7nVmHxunlP2d7Q==}
+  '@next/swc-win32-arm64-msvc@15.5.28':
+    resolution: {integrity: sha512-5LR79lemgDlgxvG7MQJ+zHCkVcrUoQuO7CiIvq3I58vNW4goSOE2b+19Z6FujRWMouvni4gvudYFuFuNxolGWA==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [win32]
 
-  '@next/swc-win32-x64-msvc@15.5.27':
-    resolution: {integrity: sha512-XtYgpGOswgnyBWXzOEG6q9RhvnSw0CEZ0MbWqCsl5PISgt9EzvJvNW5mU5n1PsphX/lnamzxjgQXH2GUJL8nqg==}
+  '@next/swc-win32-x64-msvc@15.5.28':
+    resolution: {integrity: sha512-GNipvXUYROSTf4PXEyH95FrWImIB5zdaK6uEOg0RP1/X2drnvoMwiBkJ0VWdzX7w3iiBm3y5g2TxkKDGVTOQcg==}
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [win32]
@@ -8440,7 +8724,7 @@ packages:
     peerDependencies:
       '@tiptap/core': 3.31.3
       '@tiptap/pm': 3.31.3
-      happy-dom: ^20.8.9
+      happy-dom: ^21.0.4
 
   '@tiptap/pm@3.31.3':
     resolution: {integrity: sha512-sZime0SWsz/k62W2WvHx5Ig7G2h7kVhrrmnqy+wEgIHfDwEfOlelRjaWCiBCFlF7dxGUntJusCh9FxlLhni0Ag==}
@@ -8765,11 +9049,11 @@ packages:
     peerDependencies:
       vite: ^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0
 
-  '@vitest/expect@4.1.11':
-    resolution: {integrity: sha512-VX2x5vNJXET47KAFzwERI+KRMtTTCSWTfSMKsW7JsUsXV4psq++e3DvZpuTDOpHcxytiDs6p2nhVb2tVDiiUYw==}
+  '@vitest/expect@4.1.12':
+    resolution: {integrity: sha512-vFlTt+YEu9WBpNjdGayNmlMVzrWPi1+sv853/7t2FU7hpO5gAFBKHzQmkCq5Xjpr+evegF2994LQT3hF3mRlqQ==}
 
-  '@vitest/mocker@4.1.11':
-    resolution: {integrity: sha512-2XJVD55d1o5AZous5CCGKS74g/riOj9odEt2bQpCVZeblHyHdnMeFl4jl0XjU21stf4mbjUkew2eXQZt65g5CQ==}
+  '@vitest/mocker@4.1.12':
+    resolution: {integrity: sha512-fKShNpKZzupWZuY0z7egydvL0sqW4INEZBEExMBMAa6izlENEVHwoXgdaTCaBZ5fwlr4xf2o1wXC83n9RpO+NA==}
     peerDependencies:
       msw: ^2.4.9
       vite: ^6.0.0 || ^7.0.0 || ^8.0.0
@@ -8779,20 +9063,20 @@ packages:
       vite:
         optional: true
 
-  '@vitest/pretty-format@4.1.11':
-    resolution: {integrity: sha512-yiZzPbGTS9Sr/JpFl8zHrcIkAofNbFV6k21vIgQN/cY/oxZeXhJv5sc/MBJ5jFKWmWs+oJHw0UXLZjmf931+Vw==}
+  '@vitest/pretty-format@4.1.12':
+    resolution: {integrity: sha512-XW9O8+Mxx4VpCtkYdMJLZQQwsVryP9wk7cPKDxtXFfwSak6yRh5+2fep/Y0XF/ElBvJHq8bcYdi6aeuai0opZA==}
 
-  '@vitest/runner@4.1.11':
-    resolution: {integrity: sha512-LztvUgdwMNJMIkj3hQnnxiC2Xy1zNxq928W/xhjCLaNCzqTZOudjwbQf6v9IntZGPw132i2Lq2rgTRZHD3JHNw==}
+  '@vitest/runner@4.1.12':
+    resolution: {integrity: sha512-NKlVKCr5QnCe8jijdMnmkpHHU+WTqiLFR6G0pHji9uRjXK9xJl1k1nTw6F3pOOj2PDcsDt2GKQMI7wIsaT491w==}
 
-  '@vitest/snapshot@4.1.11':
-    resolution: {integrity: sha512-pN7ikn1ON7h8ee4gIAp4AzyK+zBtJPzVbqOgu5LCEh4VaJVbPQcgYQYJIMGQPXVeJJq1fnfazis7a5pFNPahog==}
+  '@vitest/snapshot@4.1.12':
+    resolution: {integrity: sha512-ko1y1Qgb/slzQ9mr+b89Cuqud8WG1TKtsPD8r7ZUBdvVOGt85Af2HwCqHujrhwJq95hs/9RM7fcAPg57o1vlzw==}
 
-  '@vitest/spy@4.1.11':
-    resolution: {integrity: sha512-apNa/prQy2qCeywhnixOHPRCgGNhvg7T4Dapfl1GahLp/R+uhBm5cPyFoNVyqsNd2h1nJxL6BqqdIjiABL60YA==}
+  '@vitest/spy@4.1.12':
+    resolution: {integrity: sha512-RGq9x4JNGNTZHEJxvN0oSiJjeSCExm0n2gZKKJZHY9cX5AVA6M7VJILBT3ZJ/tJ/0J9uWT7fETV9/btoi//vSg==}
 
-  '@vitest/utils@4.1.11':
-    resolution: {integrity: sha512-zTCVGpyFsGWBhllOyKlTw/vnr6D9qxsfSDyfbyZmTyjHw5N/VuvzHpHoQjm2ZJzn4RJgx5w4r7V0er69CmLgPQ==}
+  '@vitest/utils@4.1.12':
+    resolution: {integrity: sha512-Q3awXrwOfEV+qc3WmO5ONyE0yO7Q1gQ9/oyHxGLZ/pl7N3NO/ZztqQwKLuwMkV+CA1JYSIeO3gkHnRDIo4AVaA==}
 
   '@webassemblyjs/ast@1.14.1':
     resolution: {integrity: sha512-nuBEDgQfm1ccRp/8bCQrx1frohyufl4JlbMMZ4P1wpeOfDhF6FQkxZJ1b/e+PLwr6X1Nhw6OLme5usuBWYBvuQ==}
@@ -9220,8 +9504,8 @@ packages:
   bn.js@4.12.3:
     resolution: {integrity: sha512-fGTi3gxV/23FTYdAoUtLYp6qySe2KE3teyZitipKNRuVYcBkoP/bB3guXN/XVKUe9mxCHXnc9C4ocyz8OmgN0g==}
 
-  body-parser@1.20.8:
-    resolution: {integrity: sha512-JNcyFQ64OiijEkPzUBTCe+hyPXUD/3LEldGQ6iF5LR1w00mx9o7xtDWHXBY2iItjdCFGoilOLNQbH943ut7pHA==}
+  body-parser@1.20.9:
+    resolution: {integrity: sha512-FISIQxV5u91Y9gvuFq3q/tA/qTqLJn3AhRcEvyozyhJTh5OBFFtv827AdHU7Rbyct4r+Ba1/99oFa1Y3yuFsdw==}
     engines: {node: '>= 0.8', npm: 1.2.8000 || >= 1.4.16}
 
   bonjour-service@1.3.0:
@@ -9364,8 +9648,8 @@ packages:
   ccount@2.0.1:
     resolution: {integrity: sha512-eyrF0jiFpY+3drT6383f1qhkbGsLSifNAjA61IUjZjmLCWjItY6LB9ft9YhoDgwfmclB2zhu51Lc7+95b8NRAg==}
 
-  chai@6.2.2:
-    resolution: {integrity: sha512-NUPRluOfOiTKBKvWPtSD4PhFvWCqOi0BGStNWs57X9js7XGTprSmFoz5F0tWhR4WPjNeR9jXqdC7/UpSJTnlRg==}
+  chai@6.3.0:
+    resolution: {integrity: sha512-XWAtwJ6OHO+tj0EKCs0Y2UamnyOxseZWltU4x2U2wh8g4AigdjwvtUjvLP2tqkA/avxHEtzxNaqGq/YGNwckKg==}
     engines: {node: '>=18'}
 
   chainsaw@0.1.0:
@@ -10317,11 +10601,11 @@ packages:
   fast-string-width@3.0.2:
     resolution: {integrity: sha512-gX8LrtNEI5hq8DVUfRQMbr5lpaS4nMIWV+7XEbXk2b8kiQIizgnlr12B4dA3ZEx3308ze0O4Q1R+cHts8kyUJg==}
 
-  fast-uri@3.1.8:
-    resolution: {integrity: sha512-GZMtZUTNRpOVIECoXwLNZS5xUGE+mVNbTB8h/7Rwh2TFWcBQiPzTgyZi05BF9UMZKkLJv8XBRJTlU7zg8+ZfMg==}
+  fast-uri@3.1.9:
+    resolution: {integrity: sha512-hS/0Wt3Ya043oKXs0sIxrMpKQITXhMLIrVAKKXi4gozGC9v7YRWVnXIZzjNPTO02M9BdxLCWqK1yRXgNziVyJQ==}
 
-  fast-uri@4.2.1:
-    resolution: {integrity: sha512-TmHQgewjHtMq1E5QKA0tOE0yeYGQs25KZC/ziJpubRtWI15W92e6vPFydWOeZBVROSHBYw/QhD9d5OefdD6LDg==}
+  fast-uri@4.2.3:
+    resolution: {integrity: sha512-I1PXwP5eAhlNlcdpjt9CgB59op2ZvZfxw+BkqGFVIUOgNpCVTcTqp3HhTX7brxj5vsip+nSY4nTvff+eIA76hg==}
 
   fast-wrap-ansi@0.2.2:
     resolution: {integrity: sha512-7F2Fl+TjRSenLqlU3UjSH0iyqopqoZIu7eZVpEirP2g1GtWa2G/ecEmBdgz31+Mxr+ELclgg6sokpSFIQiZ02Q==}
@@ -10343,8 +10627,8 @@ packages:
   fastify-plugin@6.0.0:
     resolution: {integrity: sha512-fZOty7z3O7vOliF6d8bHE3wiEh1KcNnKEQensSgTk9C1DvN6nRLS++XVd86v33Hw/8u9Un8A1zDrQ8ujcQDHEg==}
 
-  fastify@5.12.5:
-    resolution: {integrity: sha512-OB2k1dlxs5/NAABqeKV2FUHkSD2BbENsCak8yULVcymn3fHIPDVa9TI3SDnJSWYSllZmSYuZXy2gTnsT+Sut1A==}
+  fastify@5.12.8:
+    resolution: {integrity: sha512-moP8exb2sCHLUbJkwp+I6C0padhy4D8lp0SdmzY7HhSdZuqm7O/u3o2aq7u8okaQ//33QDzj3G/u+FsSdB8Qzw==}
 
   fastq@1.20.1:
     resolution: {integrity: sha512-GGToxJ/w1x32s/D2EKND7kTil4n8OVk/9mycTc4VDza13lOvpUZTGX3mFSCtV9ksdGBVzvsyAVLM6mHFThxXxw==}
@@ -10402,8 +10686,8 @@ packages:
     resolution: {integrity: sha512-9ZonPT4ZAK4a+1pUPVPZJapbi7O5qbbJPdYw/NOQWZZbVLdDTYM3A4R9z/DpAM08IDaFGsvPgiGZ82WEwUDWjg==}
     engines: {node: '>=14.16'}
 
-  find-my-way@9.9.0:
-    resolution: {integrity: sha512-sJsgZ1sQH2UDuowPuMKg8az7Qc8F0jnj+SKkFWU/+T0xcFlgV5skgXOGUqmQzOdmW6ALA7AhJINWx3qFBkbLHA==}
+  find-my-way@9.10.0:
+    resolution: {integrity: sha512-eru+uCPQ2g+nLBkf84MHP/KyNNMar0BDy0j+i8Fb72GF9/YHBZ58q7FODUtfVV7XU9nfRUHXSmaM8NmZcIbZ4Q==}
     engines: {node: '>=20'}
 
   find-up@5.0.0:
@@ -10424,8 +10708,8 @@ packages:
   flatted@3.4.2:
     resolution: {integrity: sha512-PjDse7RzhcPkIJwy5t7KPWQSZ9cAbzQXcafsetQoD7sOJRQlGikNbx7yZp2OotDnJyrDcbyRq3Ttb18iYOqkxA==}
 
-  follow-redirects@1.16.0:
-    resolution: {integrity: sha512-y5rN/uOsadFT/JfYwhxRS5R7Qce+g3zG97+JrtFZlC9klX/W5hD7iiLzScI4nZqUS7DNUdhPgw4xI8W2LuXlUw==}
+  follow-redirects@1.16.2:
+    resolution: {integrity: sha512-/kVP2U8z596Ia0gwFrwyIeo74ta5aVmSeU1FfAUMAmcEP5EP7zydmag3SLiN64NaRKef3lxsq7i/g7ltJQDGow==}
     engines: {node: '>=4.0'}
     peerDependencies:
       debug: '*'
@@ -10628,8 +10912,8 @@ packages:
   handle-thing@2.0.1:
     resolution: {integrity: sha512-9Qn4yBxelxoh2Ow62nP+Ka/kMnOXRi8BXnRaUwezLNhqelnN49xKz4F/dPP8OYLxLxq6JDtZb2i9XznUQbNPTg==}
 
-  happy-dom@20.14.5:
-    resolution: {integrity: sha512-x/RzkpWO40bTjIoT30iQtt64FLLmH/iRcUCN2X//bLx7H3ifkdfPXyqsro/OYtqzIAhiLMMA7mmiOR9C3NOKjQ==}
+  happy-dom@21.0.4:
+    resolution: {integrity: sha512-tFm+GaLBgo6o0awHnvHaNoraVo27qJ+2tZEtZ+cIa08hXbeitrxAJajLI05hsUy/2/YTKcUjQYzHe5mCcraLBw==}
     engines: {node: '>=20.0.0'}
 
   has-bigints@1.1.0:
@@ -11186,8 +11470,8 @@ packages:
   jju@1.4.0:
     resolution: {integrity: sha512-8wb9Yw966OSxApiCt0K3yNJL8pnNeIv+OEq2YMidz4FKP6nonSRoOXc80iXY4JaN2FC11B9qsNmDsm+ZOfMROA==}
 
-  joi@17.13.8:
-    resolution: {integrity: sha512-iPKOGmiRw1jxf/JOPwxmCcUQAOdF359mdzYiP2DJ+TMX0YK2zjK3D+zYOaGjpumWxOFF/l2xVWjRVK5bGSLdEw==}
+  joi@17.13.9:
+    resolution: {integrity: sha512-llFCT2rVtfwgBCaIqxtjim+iHqrgss4ONiGSYiiGH9jnjWq90ppSRffqmqKvwpa8W+YfILyQV6XyGcegXX2T4g==}
 
   jose@6.2.3:
     resolution: {integrity: sha512-YYVDInQKFJfR/xa3ojUTl8c2KoTwiL1R5Wg9YCydwH0x0B9grbzlg5HC7mMjCtUJjbQ/YnGEZIhI5tCgfTb4Hw==}
@@ -11335,8 +11619,8 @@ packages:
     resolution: {integrity: sha512-KvNT4XqAMzdcL6ka6Tl3i2lYeFDgXNCuIX+xNx6ZMVR1dFq+idXd9FLKNMOIx0t9mJ9/HudyX4oZWXZQ0UJHeg==}
     engines: {node: '>=14.16'}
 
-  launch-editor@2.14.1:
-    resolution: {integrity: sha512-QWBrQsMpH7gPr965dsKD/3cKWiNoTjpATQf++Xq63N6sKRGMwlVXz41O1IZTMfZQgBctD/K5Zt06+/I6pP6+HA==}
+  launch-editor@2.14.2:
+    resolution: {integrity: sha512-NHJEb30MGBCkmZXLZwz25t37QR4aY03ZzPYUJXOJaOa92uWwExI9SBQUuIznBYc1xkD7cJNGX7oc3Nl3sq2kQQ==}
 
   lazystream@1.0.1:
     resolution: {integrity: sha512-b94GiNHQNy6JNTrt5w6zNyffMrNkXZb3KTkCZJb2V1xaEGCk093vkZ2jk3tpaeP33/OiXC+WvK9AxUebnf5nbw==}
@@ -11922,8 +12206,8 @@ packages:
   neo-async@2.6.2:
     resolution: {integrity: sha512-Yd3UES5mWCSqR+qNT93S3UoYUkqAZ9lLg8a7g9rimsWmYGK8cVToA4/sF3RrshdyV3sAGMXVUmpMYOw+dLpOuw==}
 
-  next@15.5.27:
-    resolution: {integrity: sha512-F82CrlPZ8GRxBH9RIIoR3qU1t5RT3dv1K8moe8SjlDEquiFipvEI13R1Om90TaUOEwShkWCMlg8+gvTNzfMhvg==}
+  next@15.5.28:
+    resolution: {integrity: sha512-JjhLBBY1PNnuwPtcZ7t8yxVeJVYvD2Jyp633J+gRCNbzSt7N0E+xqCf6uQiff3+3qmUkwcF/ksfSsK1xsZ76Tw==}
     engines: {node: ^18.18.0 || ^19.8.0 || >= 20.0.0}
     hasBin: true
     peerDependencies:
@@ -11987,8 +12271,8 @@ packages:
     resolution: {integrity: sha512-kQK9LGGFiHtrWiNhZtA7Qbw17AQz+dmsEKODRIVTXA9+e5MS/2gZEBhYJt13GrAz5/IOZKddH/0Z3TP/Zgo+yw==}
     engines: {node: '>=18'}
 
-  nodemailer@10.0.13:
-    resolution: {integrity: sha512-SzG86OlvcW/NNhUFC6uROMwRTL4n7MswfQqC/T8mhkmnY1YVa23zUEMYi4ijSeXSl9GLz9ZeTJDUatEDuY5FeQ==}
+  nodemailer@10.2.1:
+    resolution: {integrity: sha512-ZrDNsPFoDMwefNs7sJwrYiEJ/CG4ClJWDZv05iNJsEBWa8GRDry1QJHTJxsuTAY9eDDKjX4k+q3SxslXJOao7w==}
     engines: {node: '>=20.0.0'}
 
   normalize-path@3.0.0:
@@ -12699,8 +12983,8 @@ packages:
     peerDependencies:
       postcss: ^8.4
 
-  postcss-selector-parser@6.1.4:
-    resolution: {integrity: sha512-bIoJLOmjCO1S9XdY/DcnR5hJxvrDir1PbGChrzXG3vw0/FOliy/fA3dmdhQ441kah4gKv+TwckGzex6wNS5cnQ==}
+  postcss-selector-parser@6.1.5:
+    resolution: {integrity: sha512-TEHFzb5KRDKaOgJ4TYE+0jyJtFbjLvkdVOu0fZ2b6MTWzoqZd4Le+61aEppWkvTlYePgOX4ATL1wsAIPMLTw6Q==}
     engines: {node: '>=4'}
 
   postcss-selector-parser@7.1.6:
@@ -12733,10 +13017,6 @@ packages:
     engines: {node: ^14 || ^16 || >=18.0}
     peerDependencies:
       postcss: ^8.4.31
-
-  postcss@8.5.28:
-    resolution: {integrity: sha512-RRuzqDtt5Y9h3quz5hWhK+TPnsmVs6WwSU6LkJMeY4HstUEDuYTG8UJSdawMRzmzAtV+KEoG8N3Qg2qLy5vM/A==}
-    engines: {node: ^10 || ^12 || >=14}
 
   postcss@8.5.29:
     resolution: {integrity: sha512-49cGhUbXj8Qenv0iTMxA1cFBzxXoctpC9Ujd77t1WcbJIr6nF/eI7g/8MgxrYldFRuAXvja7xQRwavoW7kgrxQ==}
@@ -12889,8 +13169,8 @@ packages:
     resolution: {integrity: sha512-+Owyggi9IxT1ePKGafcI87ubSmxol6smwJ+RAHDQlx9+9cPwFWDiKFFCPuWhr9ignlGpZ9vDQLw67N4dcTVFEA==}
     engines: {node: '>=20'}
 
-  qs@6.16.0:
-    resolution: {integrity: sha512-h6fhOIaRrID2CbEY2fqs+7t+UXZo+MLAnU5gRIq85uFtdiUPCdsApMlHhXogKVM4HM2DVbIjGNTTYH2OcmP1vA==}
+  qs@6.17.1:
+    resolution: {integrity: sha512-jd3COkaKVgGUW+ZHyEHCG9bH7RoaaiWuMgzsIBjUMVjLAaWGWpoUAVwljVvBHxRu/2qEHnadLGZrkutYUBPQJA==}
     engines: {node: '>=0.6'}
 
   queue-microtask@1.2.3:
@@ -13195,8 +13475,8 @@ packages:
   restructure@3.0.2:
     resolution: {integrity: sha512-gSfoiOEA0VPE6Tukkrr7I0RBdE0s7H1eFCDBk05l1KIQT1UIKNc5JZy6jdyW6eYH3aR3g5b3PuL77rq0hvwtAw==}
 
-  ret@0.5.0:
-    resolution: {integrity: sha512-I1XxrZSQ+oErkRR4jYbAyEEu2I0avBvvMM5JN+6EBprOGRCs63ENqZ3vjavq8fBw2+62G5LF5XelKwuJpcvcxw==}
+  ret@0.5.1:
+    resolution: {integrity: sha512-Z/nyvABwcRnRD2mMP7Kz6G1dFZZqX1mNErOnxF42OCQKE07b9k9hK9SQxHL3LFEZUdzQaLM4dId1E/E6Vm4WhA==}
     engines: {node: '>=10'}
 
   retry-request@7.0.2:
@@ -13257,8 +13537,8 @@ packages:
     resolution: {integrity: sha512-x/+Cz4YrimQxQccJf5mKEbIa1NzeCRNI5Ecl/ekmlYaampdNLPalVyIcCZNNH3MvmqBugV5TMYZXv0ljslUlaw==}
     engines: {node: '>= 0.4'}
 
-  safe-regex2@5.1.1:
-    resolution: {integrity: sha512-mOSBvHGDZMuIEZMdOz/aCEYDCv0E7nfcNsIhUF+/P+xC7Hyf3FkvymqgPbg9D1EdSGu+uKbJgy09K/RKKc7kJA==}
+  safe-regex2@5.1.2:
+    resolution: {integrity: sha512-tAtCGFPPP02VroDVzp4daGi6bC7jWG+41D47GKf18FeH/ubvKQHT9VmhAkvtjNOmJwqtApzWeUpEhkyEYULvmw==}
     hasBin: true
 
   safe-stable-stringify@2.5.0:
@@ -13338,8 +13618,8 @@ packages:
     resolution: {integrity: sha512-VMbMxbDeehAxpOtWJXlcUS5E8iXh6QmN+BkRX1GARS3wRaXEEgzCcB10gTQazO42tpNIya8xIyNx8fll1OFPrg==}
     engines: {node: '>= 0.8.0'}
 
-  serialize-javascript@7.1.2:
-    resolution: {integrity: sha512-GL2BWwVa6JydKO6l/ljVgjAZF4QJ3S7dWDWi53s5GZT8PJzD2fNxi67HANQGKAqPrwEpL5ba7gUBGi0Ls/sEoQ==}
+  serialize-javascript@7.1.4:
+    resolution: {integrity: sha512-FqlEuoTq/zRmA4Lg6aOqyH3lCHbUtCB0bmHCeFniX2GBdDqMJM3FwdvEhlE5Pim1dlt2FfBdVPmUNNiGhhKqpw==}
     engines: {node: '>=20.0.0'}
 
   serve-handler@6.1.7:
@@ -13768,9 +14048,9 @@ packages:
     resolution: {integrity: sha512-pn99VhoACYR8nFHhxqix+uvsbXineAasWm5ojXoN8xEwK5Kd3/TrhNn1wByuD52UxWRLy8pu+kRMniEi6Eq9Zg==}
     engines: {node: '>=12.0.0'}
 
-  tinypool@1.1.1:
-    resolution: {integrity: sha512-Zba82s87IFq9A9XmjiX5uZA/ARWDrB03OHlq+Vw1fSdt0I+4/Kutwy8BP4Y/y/aORMo61FQ0vIb5j44vSo5Pkg==}
-    engines: {node: ^18.0.0 || >=20.0.0}
+  tinypool@2.2.0:
+    resolution: {integrity: sha512-jBrmx4lYmaC9k/mgPbylxs7kBUxHtD8256up+HjLaDFfXScKJQyil+SWXSvhAtT7XHo+yTVlpB81PGmHP8oLSQ==}
+    engines: {node: ^20.0.0 || >=22.0.0}
 
   tinyrainbow@3.2.0:
     resolution: {integrity: sha512-LgO3D9yZJjApUiuUfl9iFAwrtaX4+lok3wJIqttGoKCHlWUqHqbQpnxCf82L8FjgKsh4iGo78hqJwgL8F6To2A==}
@@ -13937,8 +14217,8 @@ packages:
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
-  undici@7.30.0:
-    resolution: {integrity: sha512-dkrQXeHSaoamnItlYbmzG0wFYrM0ZwDxCIg0A7aKjTyyhh9svRzCNFEzV+Vm05/yehjCzjDZ31KXfGEjYSztDQ==}
+  undici@7.30.1:
+    resolution: {integrity: sha512-03KrMbjIFDWQR5RNPrSw3bd1r12JpyFQl9/yxjUbJtqkjmllqC5lFjZh6ujeuJCKr8EOQvRW872Oy/az+nLYxg==}
     engines: {node: '>=20.18.1'}
 
   unicode-canonical-property-names-ecmascript@2.0.1:
@@ -14015,6 +14295,9 @@ packages:
   update-notifier@6.0.2:
     resolution: {integrity: sha512-EDxhTEVPZZRLWYcJ4ZXjGFN0oP7qYvbXWzEgRm/Yql4dHX5wDbvh89YHP6PK1lzZJYrMtXUuZZz8XGK+U6U1og==}
     engines: {node: '>=14.16'}
+
+  uqr@0.1.3:
+    resolution: {integrity: sha512-0rjE8iEJe4YmT9TOhwsZtqCMRLc5DXZUI2UEYUUg63ikBkqqE5EYWaI0etFe/5KUcmcYwLih2RND1kq+hrUJXA==}
 
   uri-js@4.4.1:
     resolution: {integrity: sha512-7rKUyy33Q1yc98pQ1DAmLtwX109F7TIfWlW1Ydo8Wl1ii1SeHieeh0HHfPeL2fMXK6z0s8ecKs9frCuLJvndBg==}
@@ -14094,8 +14377,8 @@ packages:
   vfile@6.0.3:
     resolution: {integrity: sha512-KzIbH/9tXat2u30jf+smMwFCsno4wHVdNmzFyL+T/L3UGqqk6JKfVqOFOZEpZSHADH1k40ab6NUIXZq422ov3Q==}
 
-  vite@7.3.6:
-    resolution: {integrity: sha512-4XP60spRGjSZFf1qYH+dJIkK2znL3zQfl9KkOV9MkkRR/3Dls0dxaBsQPTloEc5BLXWPL9vsOxopxyKoMmDueg==}
+  vite@7.3.7:
+    resolution: {integrity: sha512-AHEzTORMbi7/7aXp7w7KZ5+DCUdSeLsJz0grY8xHpc9DHdYb0vQu6DqJfm2tOw3gDExNgPgnJTXxM6syYFHaCA==}
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
     peerDependencies:
@@ -14134,21 +14417,21 @@ packages:
       yaml:
         optional: true
 
-  vitest@4.1.11:
-    resolution: {integrity: sha512-fhACrNXUidIbGSBr5FlbuBkO7VWC1ZyLl0DO4CU2DrQoAPxX84Ysxs+HeGQpii5lZWV1Q4gBZTTu49mF+A6Edw==}
+  vitest@4.1.12:
+    resolution: {integrity: sha512-5eWdz2yb3ajxWF3C8C4TjkXl7FGm3n2E/VlazALrQHzK7nYMSGFnCZto0bbPNl77AwkOZVLk0YnBAejUu0NiWA==}
     engines: {node: ^20.0.0 || ^22.0.0 || >=24.0.0}
     hasBin: true
     peerDependencies:
       '@edge-runtime/vm': '*'
       '@opentelemetry/api': ^1.9.0
       '@types/node': ^20.0.0 || ^22.0.0 || >=24.0.0
-      '@vitest/browser-playwright': 4.1.11
-      '@vitest/browser-preview': 4.1.11
-      '@vitest/browser-webdriverio': 4.1.11
-      '@vitest/coverage-istanbul': 4.1.11
-      '@vitest/coverage-v8': 4.1.11
-      '@vitest/ui': 4.1.11
-      happy-dom: '*'
+      '@vitest/browser-playwright': 4.1.12
+      '@vitest/browser-preview': 4.1.12
+      '@vitest/browser-webdriverio': ^4.1.11
+      '@vitest/coverage-istanbul': 4.1.12
+      '@vitest/coverage-v8': 4.1.12
+      '@vitest/ui': 4.1.12
+      happy-dom: ^21.0.4
       jsdom: '*'
       vite: ^6.0.0 || ^7.0.0 || ^8.0.0
     peerDependenciesMeta:
@@ -16004,7 +16287,7 @@ snapshots:
       '@pnpm/deps.graph-sequencer': 1100.0.1
       cac: 7.0.0
       import-meta-resolve: 4.2.0
-      launch-editor: 2.14.1
+      launch-editor: 2.14.2
       package-manager-detector: 1.8.0
       semver: 7.8.5
       tinyexec: 1.3.1
@@ -16550,7 +16833,7 @@ snapshots:
       - uglify-js
       - webpack-cli
 
-  '@docusaurus/bundler@3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
+  '@docusaurus/bundler@3.10.0(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
     dependencies:
       '@babel/core': 7.29.7
       '@docusaurus/babel': 3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -16562,7 +16845,7 @@ snapshots:
       clean-css: 5.3.3
       copy-webpack-plugin: 11.0.0(webpack@5.106.2)
       css-loader: 6.11.0(webpack@5.106.2)
-      css-minimizer-webpack-plugin: 5.0.1(clean-css@5.3.3)(webpack@5.106.2)
+      css-minimizer-webpack-plugin: 5.0.1(clean-css@5.3.3)(lightningcss@1.32.0)(webpack@5.106.2)
       cssnano: 6.1.2(postcss@8.5.29)
       file-loader: 6.2.0(webpack@5.106.2)
       html-minifier-terser: 7.2.0
@@ -16591,7 +16874,7 @@ snapshots:
       - uglify-js
       - webpack-cli
 
-  '@docusaurus/bundler@3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
+  '@docusaurus/bundler@3.10.2(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
     dependencies:
       '@babel/core': 7.29.7
       '@docusaurus/babel': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -16603,7 +16886,7 @@ snapshots:
       clean-css: 5.3.3
       copy-webpack-plugin: 11.0.0(webpack@5.106.2)
       css-loader: 6.11.0(webpack@5.106.2)
-      css-minimizer-webpack-plugin: 5.0.1(clean-css@5.3.3)(webpack@5.106.2)
+      css-minimizer-webpack-plugin: 5.0.1(clean-css@5.3.3)(lightningcss@1.32.0)(webpack@5.106.2)
       cssnano: 6.1.2(postcss@8.5.29)
       file-loader: 6.2.0(webpack@5.106.2)
       html-minifier-terser: 7.2.0
@@ -16632,10 +16915,10 @@ snapshots:
       - uglify-js
       - webpack-cli
 
-  '@docusaurus/core@3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
+  '@docusaurus/core@3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
     dependencies:
       '@docusaurus/babel': 3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@docusaurus/bundler': 3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/bundler': 3.10.0(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/logger': 3.10.0
       '@docusaurus/mdx-loader': 3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils': 3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -16672,7 +16955,7 @@ snapshots:
       react-router-dom: 5.3.4(react@19.2.5)
       semver: 7.8.5
       serve-handler: 6.1.7
-      tinypool: 1.1.1
+      tinypool: 2.2.0
       tslib: 2.8.1
       update-notifier: 6.0.2
       webpack: 5.106.2
@@ -16695,10 +16978,10 @@ snapshots:
       - utf-8-validate
       - webpack-cli
 
-  '@docusaurus/core@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
+  '@docusaurus/core@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
     dependencies:
       '@docusaurus/babel': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@docusaurus/bundler': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/bundler': 3.10.2(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/logger': 3.10.2
       '@docusaurus/mdx-loader': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -16735,7 +17018,7 @@ snapshots:
       react-router-dom: 5.3.4(react@19.2.5)
       semver: 7.8.5
       serve-handler: 6.1.7
-      tinypool: 1.1.1
+      tinypool: 2.2.0
       tslib: 2.8.1
       update-notifier: 6.0.2
       webpack: 5.106.2
@@ -16888,13 +17171,13 @@ snapshots:
       - uglify-js
       - webpack-cli
 
-  '@docusaurus/plugin-content-blog@3.10.2(@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
+  '@docusaurus/plugin-content-blog@3.10.2(@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
     dependencies:
-      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/logger': 3.10.2
       '@docusaurus/mdx-loader': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@docusaurus/plugin-content-docs': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@docusaurus/theme-common': 3.10.2(@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@docusaurus/plugin-content-docs': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/theme-common': 3.10.2(@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/types': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils-common': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -16930,13 +17213,13 @@ snapshots:
       - utf-8-validate
       - webpack-cli
 
-  '@docusaurus/plugin-content-docs@3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
+  '@docusaurus/plugin-content-docs@3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
     dependencies:
-      '@docusaurus/core': 3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/core': 3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/logger': 3.10.0
       '@docusaurus/mdx-loader': 3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/module-type-aliases': 3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@docusaurus/theme-common': 3.10.0(@docusaurus/plugin-content-docs@3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@docusaurus/theme-common': 3.10.0(@docusaurus/plugin-content-docs@3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/types': 3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils': 3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils-common': 3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -16970,13 +17253,13 @@ snapshots:
       - utf-8-validate
       - webpack-cli
 
-  '@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
+  '@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
     dependencies:
-      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/logger': 3.10.2
       '@docusaurus/mdx-loader': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/module-type-aliases': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@docusaurus/theme-common': 3.10.2(@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@docusaurus/theme-common': 3.10.2(@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/types': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils-common': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -17010,9 +17293,9 @@ snapshots:
       - utf-8-validate
       - webpack-cli
 
-  '@docusaurus/plugin-content-pages@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
+  '@docusaurus/plugin-content-pages@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
     dependencies:
-      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/mdx-loader': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/types': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -17040,9 +17323,9 @@ snapshots:
       - utf-8-validate
       - webpack-cli
 
-  '@docusaurus/plugin-css-cascade-layers@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
+  '@docusaurus/plugin-css-cascade-layers@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
     dependencies:
-      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/types': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils-validation': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -17067,9 +17350,9 @@ snapshots:
       - utf-8-validate
       - webpack-cli
 
-  '@docusaurus/plugin-debug@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
+  '@docusaurus/plugin-debug@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
     dependencies:
-      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/types': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       fs-extra: 11.3.4
@@ -17095,9 +17378,9 @@ snapshots:
       - utf-8-validate
       - webpack-cli
 
-  '@docusaurus/plugin-google-analytics@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
+  '@docusaurus/plugin-google-analytics@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
     dependencies:
-      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/types': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils-validation': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       react: 19.2.5
@@ -17121,9 +17404,9 @@ snapshots:
       - utf-8-validate
       - webpack-cli
 
-  '@docusaurus/plugin-google-gtag@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
+  '@docusaurus/plugin-google-gtag@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
     dependencies:
-      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/types': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils-validation': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       react: 19.2.5
@@ -17147,9 +17430,9 @@ snapshots:
       - utf-8-validate
       - webpack-cli
 
-  '@docusaurus/plugin-google-tag-manager@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
+  '@docusaurus/plugin-google-tag-manager@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
     dependencies:
-      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/types': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils-validation': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       react: 19.2.5
@@ -17173,9 +17456,9 @@ snapshots:
       - utf-8-validate
       - webpack-cli
 
-  '@docusaurus/plugin-sitemap@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
+  '@docusaurus/plugin-sitemap@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
     dependencies:
-      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/logger': 3.10.2
       '@docusaurus/types': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -17204,9 +17487,9 @@ snapshots:
       - utf-8-validate
       - webpack-cli
 
-  '@docusaurus/plugin-svgr@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
+  '@docusaurus/plugin-svgr@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
     dependencies:
-      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/types': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils-validation': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -17234,22 +17517,22 @@ snapshots:
       - utf-8-validate
       - webpack-cli
 
-  '@docusaurus/preset-classic@3.10.2(@algolia/client-search@5.51.0)(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(@types/react@19.3.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(search-insights@2.17.3)(typescript@5.9.3)':
+  '@docusaurus/preset-classic@3.10.2(@algolia/client-search@5.51.0)(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(@types/react@19.3.0)(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(search-insights@2.17.3)(typescript@5.9.3)':
     dependencies:
-      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@docusaurus/plugin-content-blog': 3.10.2(@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@docusaurus/plugin-content-docs': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@docusaurus/plugin-content-pages': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@docusaurus/plugin-css-cascade-layers': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@docusaurus/plugin-debug': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@docusaurus/plugin-google-analytics': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@docusaurus/plugin-google-gtag': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@docusaurus/plugin-google-tag-manager': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@docusaurus/plugin-sitemap': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@docusaurus/plugin-svgr': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@docusaurus/theme-classic': 3.10.2(@types/react@19.3.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@docusaurus/theme-common': 3.10.2(@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@docusaurus/theme-search-algolia': 3.10.2(@algolia/client-search@5.51.0)(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(@types/react@19.3.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(search-insights@2.17.3)(typescript@5.9.3)
+      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/plugin-content-blog': 3.10.2(@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/plugin-content-docs': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/plugin-content-pages': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/plugin-css-cascade-layers': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/plugin-debug': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/plugin-google-analytics': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/plugin-google-gtag': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/plugin-google-tag-manager': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/plugin-sitemap': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/plugin-svgr': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/theme-classic': 3.10.2(@types/react@19.3.0)(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/theme-common': 3.10.2(@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@docusaurus/theme-search-algolia': 3.10.2(@algolia/client-search@5.51.0)(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(@types/react@19.3.0)(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(search-insights@2.17.3)(typescript@5.9.3)
       '@docusaurus/types': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       react: 19.2.5
       react-dom: 19.2.5(react@19.2.5)
@@ -17279,16 +17562,16 @@ snapshots:
       '@types/react': 19.3.0
       react: 19.2.5
 
-  '@docusaurus/theme-classic@3.10.2(@types/react@19.3.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
+  '@docusaurus/theme-classic@3.10.2(@types/react@19.3.0)(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
     dependencies:
-      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/logger': 3.10.2
       '@docusaurus/mdx-loader': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/module-type-aliases': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@docusaurus/plugin-content-blog': 3.10.2(@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@docusaurus/plugin-content-docs': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@docusaurus/plugin-content-pages': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@docusaurus/theme-common': 3.10.2(@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@docusaurus/plugin-content-blog': 3.10.2(@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/plugin-content-docs': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/plugin-content-pages': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/theme-common': 3.10.2(@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/theme-translations': 3.10.2
       '@docusaurus/types': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -17327,11 +17610,11 @@ snapshots:
       - utf-8-validate
       - webpack-cli
 
-  '@docusaurus/theme-common@3.10.0(@docusaurus/plugin-content-docs@3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
+  '@docusaurus/theme-common@3.10.0(@docusaurus/plugin-content-docs@3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
     dependencies:
       '@docusaurus/mdx-loader': 3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/module-type-aliases': 3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@docusaurus/plugin-content-docs': 3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/plugin-content-docs': 3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/utils': 3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils-common': 3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@types/history': 4.7.11
@@ -17351,11 +17634,11 @@ snapshots:
       - uglify-js
       - webpack-cli
 
-  '@docusaurus/theme-common@3.10.2(@docusaurus/plugin-content-docs@3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
+  '@docusaurus/theme-common@3.10.2(@docusaurus/plugin-content-docs@3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
     dependencies:
       '@docusaurus/mdx-loader': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/module-type-aliases': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@docusaurus/plugin-content-docs': 3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/plugin-content-docs': 3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/utils': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils-common': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@types/history': 4.7.11
@@ -17375,11 +17658,11 @@ snapshots:
       - uglify-js
       - webpack-cli
 
-  '@docusaurus/theme-common@3.10.2(@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
+  '@docusaurus/theme-common@3.10.2(@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
     dependencies:
       '@docusaurus/mdx-loader': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/module-type-aliases': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@docusaurus/plugin-content-docs': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/plugin-content-docs': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/utils': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils-common': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@types/history': 4.7.11
@@ -17399,14 +17682,14 @@ snapshots:
       - uglify-js
       - webpack-cli
 
-  '@docusaurus/theme-search-algolia@3.10.2(@algolia/client-search@5.51.0)(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(@types/react@19.3.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(search-insights@2.17.3)(typescript@5.9.3)':
+  '@docusaurus/theme-search-algolia@3.10.2(@algolia/client-search@5.51.0)(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(@types/react@19.3.0)(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(search-insights@2.17.3)(typescript@5.9.3)':
     dependencies:
       '@algolia/autocomplete-core': 1.19.8(@algolia/client-search@5.51.0)(algoliasearch@5.51.0)(search-insights@2.17.3)
       '@docsearch/react': 4.6.2(@algolia/client-search@5.51.0)(@types/react@19.3.0)(algoliasearch@5.51.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(search-insights@2.17.3)
-      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/core': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
       '@docusaurus/logger': 3.10.2
-      '@docusaurus/plugin-content-docs': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@docusaurus/theme-common': 3.10.2(@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@docusaurus/plugin-content-docs': 3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/theme-common': 3.10.2(@docusaurus/plugin-content-docs@3.10.2(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/theme-translations': 3.10.2
       '@docusaurus/utils': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils-validation': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -17460,7 +17743,7 @@ snapshots:
       '@types/mdast': 4.0.4
       '@types/react': 19.3.0
       commander: 5.1.0
-      joi: 17.13.8
+      joi: 17.13.9
       react: 19.2.5
       react-dom: 19.2.5(react@19.2.5)
       react-helmet-async: '@slorber/react-helmet-async@1.3.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)'
@@ -17481,7 +17764,7 @@ snapshots:
       '@types/mdast': 4.0.4
       '@types/react': 19.2.14
       commander: 5.1.0
-      joi: 17.13.8
+      joi: 17.13.9
       react: 19.2.5
       react-dom: 19.2.5(react@19.2.5)
       react-helmet-async: '@slorber/react-helmet-async@1.3.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)'
@@ -17527,7 +17810,7 @@ snapshots:
       '@docusaurus/utils': 3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils-common': 3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       fs-extra: 11.3.4
-      joi: 17.13.8
+      joi: 17.13.9
       js-yaml: 4.3.2
       lodash: 4.18.1
       tslib: 2.8.1
@@ -17546,7 +17829,7 @@ snapshots:
       '@docusaurus/utils': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils-common': 3.10.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       fs-extra: 11.3.4
-      joi: 17.13.8
+      joi: 17.13.9
       js-yaml: 4.3.2
       lodash: 4.18.1
       tslib: 2.8.1
@@ -17628,10 +17911,10 @@ snapshots:
       cssesc: 3.0.0
       immediate: 3.3.0
 
-  '@easyops-cn/docusaurus-search-local@0.55.3(@docusaurus/theme-common@3.10.2(@docusaurus/plugin-content-docs@3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
+  '@easyops-cn/docusaurus-search-local@0.55.3(@docusaurus/theme-common@3.10.2(@docusaurus/plugin-content-docs@3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)':
     dependencies:
-      '@docusaurus/plugin-content-docs': 3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
-      '@docusaurus/theme-common': 3.10.2(@docusaurus/plugin-content-docs@3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@docusaurus/plugin-content-docs': 3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3)
+      '@docusaurus/theme-common': 3.10.2(@docusaurus/plugin-content-docs@3.10.0(@mdx-js/react@3.1.1(@types/react@19.3.0)(react@19.2.5))(debug@4.4.3)(lightningcss@1.32.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(typescript@5.9.3))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/theme-translations': 3.10.0
       '@docusaurus/utils': 3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@docusaurus/utils-common': 3.10.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -17820,7 +18103,7 @@ snapshots:
     dependencies:
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
-      fast-uri: 3.1.8
+      fast-uri: 3.1.9
 
   '@fastify/busboy@3.2.2': {}
 
@@ -17882,11 +18165,11 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@fastify/type-provider-zod@1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.5)(openapi-types@12.1.3)(zod@4.3.6)':
+  '@fastify/type-provider-zod@1.0.0(@fastify/swagger@9.7.0)(fastify@5.12.8)(openapi-types@12.1.3)(zod@4.3.6)':
     dependencies:
       '@fastify/error': 4.2.0
       '@fastify/swagger': 9.7.0
-      fastify: 5.12.5
+      fastify: 5.12.8
       openapi-types: 12.1.3
       zod: 4.3.6
 
@@ -18412,34 +18695,34 @@ snapshots:
       '@tybys/wasm-util': 0.10.4
     optional: true
 
-  '@next/env@15.5.27': {}
+  '@next/env@15.5.28': {}
 
   '@next/eslint-plugin-next@15.5.19':
     dependencies:
       fast-glob: 3.3.1
 
-  '@next/swc-darwin-arm64@15.5.27':
+  '@next/swc-darwin-arm64@15.5.28':
     optional: true
 
-  '@next/swc-darwin-x64@15.5.27':
+  '@next/swc-darwin-x64@15.5.28':
     optional: true
 
-  '@next/swc-linux-arm64-gnu@15.5.27':
+  '@next/swc-linux-arm64-gnu@15.5.28':
     optional: true
 
-  '@next/swc-linux-arm64-musl@15.5.27':
+  '@next/swc-linux-arm64-musl@15.5.28':
     optional: true
 
-  '@next/swc-linux-x64-gnu@15.5.27':
+  '@next/swc-linux-x64-gnu@15.5.28':
     optional: true
 
-  '@next/swc-linux-x64-musl@15.5.27':
+  '@next/swc-linux-x64-musl@15.5.28':
     optional: true
 
-  '@next/swc-win32-arm64-msvc@15.5.27':
+  '@next/swc-win32-arm64-msvc@15.5.28':
     optional: true
 
-  '@next/swc-win32-x64-msvc@15.5.27':
+  '@next/swc-win32-x64-msvc@15.5.28':
     optional: true
 
   '@noble/ciphers@1.3.0': {}
@@ -18730,13 +19013,13 @@ snapshots:
       '@tiptap/extension-text': 3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))
       '@tiptap/extension-text-align': 3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))
       '@tiptap/extension-underline': 3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))
-      '@tiptap/html': 3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3)(happy-dom@20.14.5)
+      '@tiptap/html': 3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3)(happy-dom@21.0.4)
       '@tiptap/pm': 3.31.3
       '@tiptap/react': 3.31.3(@floating-ui/dom@1.7.6)(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       deep-diff: 1.0.2
       fast-equals: 5.2.2
       flat: 5.0.2
-      happy-dom: 20.14.5
+      happy-dom: 21.0.4
       object-hash: 3.0.0
       react: 19.2.5
       react-hotkeys-hook: 4.6.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -18779,13 +19062,13 @@ snapshots:
       '@tiptap/extension-text': 3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))
       '@tiptap/extension-text-align': 3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))
       '@tiptap/extension-underline': 3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))
-      '@tiptap/html': 3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3)(happy-dom@20.14.5)
+      '@tiptap/html': 3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3)(happy-dom@21.0.4)
       '@tiptap/pm': 3.31.3
       '@tiptap/react': 3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3)(@types/react-dom@19.2.3(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       deep-diff: 1.0.2
       fast-equals: 5.2.2
       flat: 5.0.2
-      happy-dom: 20.14.5
+      happy-dom: 21.0.4
       object-hash: 3.0.0
       react: 19.2.5
       react-hotkeys-hook: 4.6.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -20202,12 +20485,12 @@ snapshots:
       postcss: 8.5.29
       tailwindcss: 4.3.0
 
-  '@tailwindcss/vite@4.2.4(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))':
+  '@tailwindcss/vite@4.2.4(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))':
     dependencies:
       '@tailwindcss/node': 4.2.4
       '@tailwindcss/oxide': 4.2.4
       tailwindcss: 4.2.4
-      vite: 7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0)
+      vite: 7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0)
 
   '@tanstack/react-virtual@3.14.13(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
     dependencies:
@@ -20384,11 +20667,11 @@ snapshots:
       '@tiptap/core': 3.31.3(@tiptap/pm@3.31.3)
       '@tiptap/pm': 3.31.3
 
-  '@tiptap/html@3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3)(happy-dom@20.14.5)':
+  '@tiptap/html@3.31.3(@tiptap/core@3.31.3(@tiptap/pm@3.31.3))(@tiptap/pm@3.31.3)(happy-dom@21.0.4)':
     dependencies:
       '@tiptap/core': 3.31.3(@tiptap/pm@3.31.3)
       '@tiptap/pm': 3.31.3
-      happy-dom: 20.14.5
+      happy-dom: 21.0.4
 
   '@tiptap/pm@3.31.3':
     dependencies:
@@ -20848,7 +21131,7 @@ snapshots:
 
   '@ungap/structured-clone@1.3.0': {}
 
-  '@vitejs/plugin-react@5.2.0(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))':
+  '@vitejs/plugin-react@5.2.0(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))':
     dependencies:
       '@babel/core': 7.29.7
       '@babel/plugin-transform-react-jsx-self': 7.27.1(@babel/core@7.29.7)
@@ -20856,48 +21139,48 @@ snapshots:
       '@rolldown/pluginutils': 1.0.0-rc.3
       '@types/babel__core': 7.20.5
       react-refresh: 0.18.0
-      vite: 7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0)
+      vite: 7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0)
     transitivePeerDependencies:
       - supports-color
 
-  '@vitest/expect@4.1.11':
+  '@vitest/expect@4.1.12':
     dependencies:
       '@standard-schema/spec': 1.1.0
       '@types/chai': 5.2.3
-      '@vitest/spy': 4.1.11
-      '@vitest/utils': 4.1.11
-      chai: 6.2.2
+      '@vitest/spy': 4.1.12
+      '@vitest/utils': 4.1.12
+      chai: 6.3.0
       tinyrainbow: 3.2.0
 
-  '@vitest/mocker@4.1.11(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))':
+  '@vitest/mocker@4.1.12(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))':
     dependencies:
-      '@vitest/spy': 4.1.11
+      '@vitest/spy': 4.1.12
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0)
+      vite: 7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0)
 
-  '@vitest/pretty-format@4.1.11':
+  '@vitest/pretty-format@4.1.12':
     dependencies:
       tinyrainbow: 3.2.0
 
-  '@vitest/runner@4.1.11':
+  '@vitest/runner@4.1.12':
     dependencies:
-      '@vitest/utils': 4.1.11
+      '@vitest/utils': 4.1.12
       pathe: 2.0.3
 
-  '@vitest/snapshot@4.1.11':
+  '@vitest/snapshot@4.1.12':
     dependencies:
-      '@vitest/pretty-format': 4.1.11
-      '@vitest/utils': 4.1.11
+      '@vitest/pretty-format': 4.1.12
+      '@vitest/utils': 4.1.12
       magic-string: 0.30.21
       pathe: 2.0.3
 
-  '@vitest/spy@4.1.11': {}
+  '@vitest/spy@4.1.12': {}
 
-  '@vitest/utils@4.1.11':
+  '@vitest/utils@4.1.12':
     dependencies:
-      '@vitest/pretty-format': 4.1.11
+      '@vitest/pretty-format': 4.1.12
       convert-source-map: 2.0.0
       tinyrainbow: 3.2.0
 
@@ -21056,7 +21339,7 @@ snapshots:
   ajv@8.20.0:
     dependencies:
       fast-deep-equal: 3.1.3
-      fast-uri: 3.1.8
+      fast-uri: 3.1.9
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
 
@@ -21377,7 +21660,7 @@ snapshots:
 
   bn.js@4.12.3: {}
 
-  body-parser@1.20.8:
+  body-parser@1.20.9:
     dependencies:
       bytes: 3.1.2
       content-type: 1.0.5
@@ -21387,7 +21670,7 @@ snapshots:
       http-errors: 2.0.1
       iconv-lite: 0.4.24
       on-finished: 2.4.1
-      qs: 6.16.0
+      qs: 6.17.1
       raw-body: 2.5.3
       type-is: 1.6.18
       unpipe: 1.0.0
@@ -21563,7 +21846,7 @@ snapshots:
 
   ccount@2.0.1: {}
 
-  chai@6.2.2: {}
+  chai@6.3.0: {}
 
   chainsaw@0.1.0:
     dependencies:
@@ -21616,7 +21899,7 @@ snapshots:
       parse5: 7.3.0
       parse5-htmlparser2-tree-adapter: 7.1.0
       parse5-parser-stream: 7.1.2
-      undici: 7.30.0
+      undici: 7.30.1
       whatwg-mimetype: 4.0.0
 
   chokidar@3.6.0:
@@ -21786,7 +22069,7 @@ snapshots:
       globby: 13.2.2
       normalize-path: 3.0.0
       schema-utils: 4.3.3
-      serialize-javascript: 7.1.2
+      serialize-javascript: 7.1.4
       webpack: 5.106.2
 
   core-js-compat@3.49.0:
@@ -21867,17 +22150,18 @@ snapshots:
     optionalDependencies:
       webpack: 5.106.2
 
-  css-minimizer-webpack-plugin@5.0.1(clean-css@5.3.3)(webpack@5.106.2):
+  css-minimizer-webpack-plugin@5.0.1(clean-css@5.3.3)(lightningcss@1.32.0)(webpack@5.106.2):
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       cssnano: 6.1.2(postcss@8.5.29)
       jest-worker: 29.7.0
       postcss: 8.5.29
       schema-utils: 4.3.3
-      serialize-javascript: 7.1.2
+      serialize-javascript: 7.1.4
       webpack: 5.106.2
     optionalDependencies:
       clean-css: 5.3.3
+      lightningcss: 1.32.0
 
   css-prefers-color-scheme@10.0.0(postcss@8.5.29):
     dependencies:
@@ -22573,7 +22857,7 @@ snapshots:
     dependencies:
       accepts: 1.3.8
       array-flatten: 1.1.1
-      body-parser: 1.20.8
+      body-parser: 1.20.9
       content-disposition: 0.5.4
       content-type: 1.0.5
       cookie: 0.7.2
@@ -22592,7 +22876,7 @@ snapshots:
       parseurl: 1.3.3
       path-to-regexp: 0.1.13
       proxy-addr: 2.0.8
-      qs: 6.16.0
+      qs: 6.17.1
       range-parser: 1.2.1
       safe-buffer: 5.2.1
       send: 0.19.2
@@ -22649,7 +22933,7 @@ snapshots:
       '@fastify/merge-json-schemas': 0.2.1
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
-      fast-uri: 3.1.8
+      fast-uri: 3.1.9
       json-schema-ref-resolver: 3.0.0
       rfdc: 1.4.1
 
@@ -22658,7 +22942,7 @@ snapshots:
       '@fastify/merge-json-schemas': 0.2.1
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
-      fast-uri: 4.2.1
+      fast-uri: 4.2.3
       json-schema-ref-resolver: 3.0.0
       rfdc: 1.4.1
 
@@ -22676,9 +22960,9 @@ snapshots:
     dependencies:
       fast-string-truncated-width: 3.0.3
 
-  fast-uri@3.1.8: {}
+  fast-uri@3.1.9: {}
 
-  fast-uri@4.2.1: {}
+  fast-uri@4.2.3: {}
 
   fast-wrap-ansi@0.2.2:
     dependencies:
@@ -22709,7 +22993,7 @@ snapshots:
 
   fastify-plugin@6.0.0: {}
 
-  fastify@5.12.5:
+  fastify@5.12.8:
     dependencies:
       '@fastify/ajv-compiler': 4.0.5
       '@fastify/error': 4.2.0
@@ -22718,7 +23002,7 @@ snapshots:
       abstract-logging: 2.0.1
       avvio: 9.2.0
       fast-json-stringify: 7.0.1
-      find-my-way: 9.9.0
+      find-my-way: 9.10.0
       light-my-request: 6.6.0
       pino: 10.3.1
       process-warning: 5.1.0
@@ -22742,6 +23026,10 @@ snapshots:
   fdir@6.5.0(picomatch@4.0.4):
     optionalDependencies:
       picomatch: 4.0.4
+
+  fdir@6.5.0(picomatch@4.0.7):
+    optionalDependencies:
+      picomatch: 4.0.7
 
   feed@4.2.2:
     dependencies:
@@ -22793,11 +23081,11 @@ snapshots:
       common-path-prefix: 3.0.0
       pkg-dir: 7.0.0
 
-  find-my-way@9.9.0:
+  find-my-way@9.10.0:
     dependencies:
       fast-deep-equal: 3.1.3
       fast-querystring: 1.1.2
-      safe-regex2: 5.1.1
+      safe-regex2: 5.1.2
 
   find-up@5.0.0:
     dependencies:
@@ -22819,7 +23107,7 @@ snapshots:
 
   flatted@3.4.2: {}
 
-  follow-redirects@1.16.0(debug@4.4.3):
+  follow-redirects@1.16.2(debug@4.4.3):
     optionalDependencies:
       debug: 4.4.3
 
@@ -23069,7 +23357,7 @@ snapshots:
 
   handle-thing@2.0.1: {}
 
-  happy-dom@20.14.5:
+  happy-dom@21.0.4:
     dependencies:
       '@types/node': 22.19.17
       '@types/whatwg-mimetype': 3.0.2
@@ -23354,7 +23642,7 @@ snapshots:
   http-proxy@1.18.1(debug@4.4.3):
     dependencies:
       eventemitter3: 4.0.7
-      follow-redirects: 1.16.0(debug@4.4.3)
+      follow-redirects: 1.16.2(debug@4.4.3)
       requires-port: 1.0.0
     transitivePeerDependencies:
       - debug
@@ -23690,7 +23978,7 @@ snapshots:
 
   jju@1.4.0: {}
 
-  joi@17.13.8:
+  joi@17.13.9:
     dependencies:
       '@hapi/hoek': 9.3.0
       '@hapi/topo': 5.1.0
@@ -23732,7 +24020,7 @@ snapshots:
       saxes: 6.0.0
       symbol-tree: 3.2.4
       tough-cookie: 6.0.1
-      undici: 7.30.0
+      undici: 7.30.1
       w3c-xmlserializer: 5.0.0
       webidl-conversions: 8.0.1
       whatwg-mimetype: 5.0.0
@@ -23758,7 +24046,7 @@ snapshots:
   json-schema-resolver@3.0.0:
     dependencies:
       debug: 4.4.3
-      fast-uri: 3.1.8
+      fast-uri: 3.1.9
       rfdc: 1.4.1
     transitivePeerDependencies:
       - supports-color
@@ -23853,7 +24141,7 @@ snapshots:
     dependencies:
       package-json: 8.1.1
 
-  launch-editor@2.14.1:
+  launch-editor@2.14.2:
     dependencies:
       picocolors: 1.1.1
       shell-quote: 1.12.0
@@ -24664,9 +24952,9 @@ snapshots:
 
   neo-async@2.6.2: {}
 
-  next@15.5.27(@babel/core@7.29.7)(@playwright/test@1.64.0)(@types/node@22.19.17)(react-dom@19.2.5(react@19.2.5))(react@19.2.5):
+  next@15.5.28(@babel/core@7.29.7)(@playwright/test@1.64.0)(@types/node@22.19.17)(react-dom@19.2.5(react@19.2.5))(react@19.2.5):
     dependencies:
-      '@next/env': 15.5.27
+      '@next/env': 15.5.28
       '@swc/helpers': 0.5.15
       caniuse-lite: 1.0.30001815
       postcss: 8.5.29
@@ -24674,14 +24962,14 @@ snapshots:
       react-dom: 19.2.5(react@19.2.5)
       styled-jsx: 5.1.6(@babel/core@7.29.7)(react@19.2.5)
     optionalDependencies:
-      '@next/swc-darwin-arm64': 15.5.27
-      '@next/swc-darwin-x64': 15.5.27
-      '@next/swc-linux-arm64-gnu': 15.5.27
-      '@next/swc-linux-arm64-musl': 15.5.27
-      '@next/swc-linux-x64-gnu': 15.5.27
-      '@next/swc-linux-x64-musl': 15.5.27
-      '@next/swc-win32-arm64-msvc': 15.5.27
-      '@next/swc-win32-x64-msvc': 15.5.27
+      '@next/swc-darwin-arm64': 15.5.28
+      '@next/swc-darwin-x64': 15.5.28
+      '@next/swc-linux-arm64-gnu': 15.5.28
+      '@next/swc-linux-arm64-musl': 15.5.28
+      '@next/swc-linux-x64-gnu': 15.5.28
+      '@next/swc-linux-x64-musl': 15.5.28
+      '@next/swc-win32-arm64-msvc': 15.5.28
+      '@next/swc-win32-x64-msvc': 15.5.28
       '@playwright/test': 1.64.0
       sharp: 0.35.5(@types/node@22.19.17)
     transitivePeerDependencies:
@@ -24729,7 +25017,7 @@ snapshots:
 
   node-releases@2.0.57: {}
 
-  nodemailer@10.0.13: {}
+  nodemailer@10.2.1: {}
 
   normalize-path@3.0.0: {}
 
@@ -25116,7 +25404,7 @@ snapshots:
   postcss-calc@9.0.1(postcss@8.5.29):
     dependencies:
       postcss: 8.5.29
-      postcss-selector-parser: 6.1.4
+      postcss-selector-parser: 6.1.5
       postcss-value-parser: 4.2.0
 
   postcss-clamp@4.1.0(postcss@8.5.29):
@@ -25208,7 +25496,7 @@ snapshots:
   postcss-discard-unused@6.0.5(postcss@8.5.29):
     dependencies:
       postcss: 8.5.29
-      postcss-selector-parser: 6.1.4
+      postcss-selector-parser: 6.1.5
 
   postcss-double-position-gradients@6.0.4(postcss@8.5.29):
     dependencies:
@@ -25283,7 +25571,7 @@ snapshots:
       caniuse-api: 3.0.0
       cssnano-utils: 4.0.2(postcss@8.5.29)
       postcss: 8.5.29
-      postcss-selector-parser: 6.1.4
+      postcss-selector-parser: 6.1.5
 
   postcss-minify-font-values@6.1.0(postcss@8.5.29):
     dependencies:
@@ -25307,7 +25595,7 @@ snapshots:
   postcss-minify-selectors@6.0.4(postcss@8.5.29):
     dependencies:
       postcss: 8.5.29
-      postcss-selector-parser: 6.1.4
+      postcss-selector-parser: 6.1.5
 
   postcss-modules-extract-imports@3.1.0(postcss@8.5.29):
     dependencies:
@@ -25511,7 +25799,7 @@ snapshots:
       postcss: 8.5.29
       postcss-selector-parser: 7.1.6
 
-  postcss-selector-parser@6.1.4:
+  postcss-selector-parser@6.1.5:
     dependencies:
       cssesc: 3.0.0
       util-deprecate: 1.0.2
@@ -25535,19 +25823,13 @@ snapshots:
   postcss-unique-selectors@6.0.4(postcss@8.5.29):
     dependencies:
       postcss: 8.5.29
-      postcss-selector-parser: 6.1.4
+      postcss-selector-parser: 6.1.5
 
   postcss-value-parser@4.2.0: {}
 
   postcss-zindex@6.0.2(postcss@8.5.29):
     dependencies:
       postcss: 8.5.29
-
-  postcss@8.5.28:
-    dependencies:
-      nanoid: 3.3.19
-      picocolors: 1.1.1
-      source-map-js: 1.2.2
 
   postcss@8.5.29:
     dependencies:
@@ -25719,7 +26001,7 @@ snapshots:
     dependencies:
       hookified: 2.2.0
 
-  qs@6.16.0:
+  qs@6.17.1:
     dependencies:
       es-define-property: 1.0.1
       side-channel: 1.1.1
@@ -26127,7 +26409,7 @@ snapshots:
 
   restructure@3.0.2: {}
 
-  ret@0.5.0: {}
+  ret@0.5.1: {}
 
   retry-request@7.0.2:
     dependencies:
@@ -26217,9 +26499,9 @@ snapshots:
       es-errors: 1.3.0
       is-regex: 1.2.1
 
-  safe-regex2@5.1.1:
+  safe-regex2@5.1.2:
     dependencies:
-      ret: 0.5.0
+      ret: 0.5.1
 
   safe-stable-stringify@2.5.0: {}
 
@@ -26300,7 +26582,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  serialize-javascript@7.1.2: {}
+  serialize-javascript@7.1.4: {}
 
   serve-handler@6.1.7:
     dependencies:
@@ -26690,7 +26972,7 @@ snapshots:
     dependencies:
       browserslist: 4.29.3
       postcss: 8.5.29
-      postcss-selector-parser: 6.1.4
+      postcss-selector-parser: 6.1.5
 
   supports-color@7.2.0:
     dependencies:
@@ -26789,7 +27071,7 @@ snapshots:
       fdir: 6.5.0(picomatch@4.0.4)
       picomatch: 4.0.4
 
-  tinypool@1.1.1: {}
+  tinypool@2.2.0: {}
 
   tinyrainbow@3.2.0: {}
 
@@ -26948,7 +27230,7 @@ snapshots:
 
   undici-types@6.21.0: {}
 
-  undici@7.30.0: {}
+  undici@7.30.1: {}
 
   unicode-canonical-property-names-ecmascript@2.0.1: {}
 
@@ -27062,6 +27344,8 @@ snapshots:
       semver-diff: 4.0.0
       xdg-basedir: 5.1.0
 
+  uqr@0.1.3: {}
+
   uri-js@4.4.1:
     dependencies:
       punycode: 2.3.1
@@ -27142,12 +27426,12 @@ snapshots:
       '@types/unist': 3.0.3
       vfile-message: 4.0.3
 
-  vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0):
+  vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0):
     dependencies:
       esbuild: 0.28.2
-      fdir: 6.5.0(picomatch@4.0.4)
-      picomatch: 4.0.4
-      postcss: 8.5.28
+      fdir: 6.5.0(picomatch@4.0.7)
+      picomatch: 4.0.7
+      postcss: 8.5.29
       rollup: 4.60.2
       tinyglobby: 0.2.16
     optionalDependencies:
@@ -27159,15 +27443,15 @@ snapshots:
       tsx: 4.23.15
       yaml: 2.9.0
 
-  vitest@4.1.11(@types/node@22.19.17)(happy-dom@20.14.5)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0)):
+  vitest@4.1.12(@types/node@22.19.17)(happy-dom@21.0.4)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0)):
     dependencies:
-      '@vitest/expect': 4.1.11
-      '@vitest/mocker': 4.1.11(vite@7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
-      '@vitest/pretty-format': 4.1.11
-      '@vitest/runner': 4.1.11
-      '@vitest/snapshot': 4.1.11
-      '@vitest/spy': 4.1.11
-      '@vitest/utils': 4.1.11
+      '@vitest/expect': 4.1.12
+      '@vitest/mocker': 4.1.12(vite@7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0))
+      '@vitest/pretty-format': 4.1.12
+      '@vitest/runner': 4.1.12
+      '@vitest/snapshot': 4.1.12
+      '@vitest/spy': 4.1.12
+      '@vitest/utils': 4.1.12
       es-module-lexer: 2.0.0
       expect-type: 1.3.0
       magic-string: 0.30.21
@@ -27179,11 +27463,11 @@ snapshots:
       tinyexec: 1.3.0
       tinyglobby: 0.2.16
       tinyrainbow: 3.2.0
-      vite: 7.3.6(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0)
+      vite: 7.3.7(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.2)(tsx@4.23.15)(yaml@2.9.0)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@types/node': 22.19.17
-      happy-dom: 20.14.5
+      happy-dom: 21.0.4
       jsdom: 29.1.1(@noble/hashes@2.0.1)
     transitivePeerDependencies:
       - msw
@@ -27270,7 +27554,7 @@ snapshots:
       graceful-fs: 4.2.11
       http-proxy-middleware: 2.0.10(@types/express@4.17.25)(debug@4.4.3)
       ipaddr.js: 2.3.0
-      launch-editor: 2.14.1
+      launch-editor: 2.14.2
       open: 10.2.0
       p-retry: 6.2.1
       schema-utils: 4.3.3

@@ -8,7 +8,6 @@ import type {
   RfqCustomerPort,
 } from '@endora-commerce/contracts';
 import { describe, expect, it, vi } from 'vitest';
-import { HttpError } from '@endora-commerce/platform/http';
 import { ModuleDisabledError } from '../../../src/kernel/lifecycle/plugin-helpers.js';
 import { ANONYMOUS_PRODUCT_AUDIENCE, ERROR_CODES } from '@endora-commerce/contracts';
 import { Cart } from '../../../../packages/modules/carts/src/backend/entities/cart.entity.js';
@@ -167,7 +166,7 @@ describe('carts — quote-to-cart conversion reads quote_requests through its po
   } as unknown as QuoteRequestReadPort;
 
   const rfq = {} as unknown as RfqCustomerPort;
-  const ctx = { customerAccountId: 'cust-1', organizationId: 'org-1' };
+  const ctx = { customerAccountId: 'cust-1', organizationId: 'org-1', salesChannelId: 'channel-1' };
 
   /**
    * Issue #259 — the conversion narrows to the request's channel, and these
@@ -217,7 +216,7 @@ describe('carts — quote-to-cart conversion reads quote_requests through its po
       findByIds: async () => [{ id: 'p-1' }],
     } as unknown as CatalogProductReadPort;
     const cartService = {
-      addItem: async () => {
+      addItems: async () => {
         throw new ModuleDisabledError('price_lists');
       },
       getOrCreateForCustomer: async () => cartRow(),
@@ -242,14 +241,23 @@ describe('carts — quote-to-cart conversion reads quote_requests through its po
     const catalog = {
       findByIds: async () => [{ id: 'p-1' }],
     } as unknown as CatalogProductReadPort;
+    // Feature 155 (R12.5) — the batch reports the refusal as a `failed` outcome.
     const cartService = {
-      addItem: async () => {
-        throw new HttpError(
-          400,
-          ERROR_CODES.CART_PRODUCT_QUOTE_ONLY,
-          'This product is sold on request only and cannot be added to the cart.',
-        );
-      },
+      addItems: async () => ({
+        cart: cartRow(),
+        items: [],
+        outcomes: [
+          {
+            index: 0,
+            status: 'failed',
+            error: {
+              status: 400,
+              code: ERROR_CODES.CART_PRODUCT_QUOTE_ONLY,
+              message: 'This product is sold on request only and cannot be added to the cart.',
+            },
+          },
+        ],
+      }),
       getOrCreateForCustomer: async () => cartRow(),
     } as never;
 
@@ -265,6 +273,85 @@ describe('carts — quote-to-cart conversion reads quote_requests through its po
 
     expect(result.droppedLines).toEqual([
       { productId: 'p-1', productName: 'Quoted product', reason: 'no_price_in_customer_list' },
+    ]);
+  });
+});
+
+describe('carts — quote-to-cart conversion maps the batch outcomes (feature 155, R12.5)', () => {
+  const ctx = { customerAccountId: 'cust-1', organizationId: 'org-1', salesChannelId: 'channel-1' };
+  const qrLine = (id: string, productId: string, quantity: number) => ({
+    id,
+    quoteRequestId: 'qr-1',
+    productId,
+    productName: `Quoted ${productId}`,
+    variantId: null,
+    quantity,
+    packagingUnitName: null,
+    packagingUnitBaseQuantity: null,
+  });
+  const quoteRequests = {
+    findById: async () => ({ id: 'qr-1', customerAccountId: 'cust-1' }) as never,
+    listItems: async () => [
+      qrLine('qri-1', 'p-added', 10),
+      qrLine('qri-2', 'p-short', 5),
+      qrLine('qri-3', 'p-hidden', 5),
+      qrLine('qri-4', 'p-quote-only', 1),
+    ],
+  } as unknown as QuoteRequestReadPort;
+  const catalog = {
+    findByIds: async (ids: readonly string[]) => ids.map((id) => ({ id })),
+  } as unknown as CatalogProductReadPort;
+
+  it('reports below_minimum with the minimum, a 404 as not_purchasable, any other failure as no price — in one batch', async () => {
+    const addItems = vi.fn(async () => ({
+      cart: cartRow(),
+      items: [],
+      outcomes: [
+        { index: 0, status: 'added' },
+        {
+          index: 1,
+          status: 'below_minimum',
+          productId: 'p-short',
+          productName: 'Catalogue name',
+          kind: 'pieces',
+          minimum: 10,
+        },
+        { index: 2, status: 'failed', error: { status: 404, code: ERROR_CODES.PRODUCT_NOT_FOUND, message: 'x' } },
+        {
+          index: 3,
+          status: 'failed',
+          error: { status: 400, code: ERROR_CODES.CART_PRODUCT_QUOTE_ONLY, message: 'x' },
+        },
+      ],
+    }));
+    const service = new CartConversionService(
+      ownTablesOnly({}),
+      { addItems, getOrCreateForCustomer: async () => cartRow() } as never,
+      {} as unknown as RfqCustomerPort,
+      quoteRequests,
+      catalog,
+      {} as SalesChannelMembershipPort,
+    );
+
+    const result = await service.createCartFromQuoteRequest('qr-1', ctx, { language: 'pl' });
+
+    expect(addItems).toHaveBeenCalledTimes(1);
+    expect(addItems).toHaveBeenCalledWith(
+      { customer: ctx },
+      [
+        { productId: 'p-added', quantity: 10 },
+        { productId: 'p-short', quantity: 5 },
+        { productId: 'p-hidden', quantity: 5 },
+        { productId: 'p-quote-only', quantity: 1 },
+      ],
+      { onLineError: 'report', language: 'pl' },
+    );
+    expect(result.appendedLineCount).toBe(1);
+    // The name is the buyer's own quote line's, never the catalogue's (R12.5).
+    expect(result.droppedLines).toEqual([
+      { productId: 'p-short', productName: 'Quoted p-short', reason: 'below_minimum', minimum: 10 },
+      { productId: 'p-hidden', productName: 'Quoted p-hidden', reason: 'not_purchasable' },
+      { productId: 'p-quote-only', productName: 'Quoted p-quote-only', reason: 'no_price_in_customer_list' },
     ]);
   });
 });
@@ -288,16 +375,22 @@ describe('carts — cart-to-quote conversion hands quote_requests the cart price
         quantity: 200,
         unitPrice: '4.25',
         currency: 'EUR',
+        packagingUnitId: 'u-paleta',
         packagingUnitName: 'Paleta',
         packagingUnitBaseQuantity: 100,
       } as Partial<CartItem>),
     ];
+    const catalog = {
+      listPackagingUnitsByProductIds: async () => [
+        { id: 'u-paleta', productId: 'p-2', name: 'Paleta', baseQuantity: 100, minOrderUnits: null },
+      ],
+    } as unknown as CatalogProductReadPort;
     const service = new CartConversionService(
       ownTablesOnly({ carts: [cartRow()], items }),
       {} as never,
       rfq,
       {} as unknown as QuoteRequestReadPort,
-      {} as unknown as CatalogProductReadPort,
+      catalog,
       {} as SalesChannelMembershipPort,
     );
     const ctx = { customerAccountId: 'cust-1', organizationId: 'org-1', isOrgAdmin: false };
@@ -312,13 +405,8 @@ describe('carts — cart-to-quote conversion hands quote_requests the cart price
         headerNote: 'Please quote',
         items: [
           { productId: 'p-1', quantity: 2 },
-          {
-            productId: 'p-2',
-            variantId: 'v-2',
-            quantity: 200,
-            packagingUnitName: 'Paleta',
-            packagingUnitBaseQuantity: 100,
-          },
+          // Feature 155 (FR-026) — the unit's id; its name and base are the catalogue's.
+          { productId: 'p-2', variantId: 'v-2', quantity: 200, packagingUnitId: 'u-paleta' },
         ],
       },
       {
@@ -327,6 +415,66 @@ describe('carts — cart-to-quote conversion hands quote_requests the cart price
           { amount: '4.25', currency: 'EUR' },
         ],
       },
+    );
+  });
+});
+
+describe('carts — cart-to-quote conversion sends the packaging unit by id (feature 155, FR-026, US4 #11)', () => {
+  it('sends packagingUnitId for a live unit, plain pieces for a deleted one, after one unit read over the cart', async () => {
+    const createForCustomer = vi.fn(async () => ({ id: 'qr-new' }) as never);
+    const rfq = { createForCustomer } as unknown as RfqCustomerPort;
+    const items = [
+      itemRow({ id: 'item-1', productId: 'p-1', quantity: 3 }),
+      itemRow({
+        id: 'item-2',
+        productId: 'p-2',
+        quantity: 128,
+        packagingUnitId: 'u-live',
+        packagingUnitName: 'Pallet',
+        packagingUnitBaseQuantity: 64,
+      } as Partial<CartItem>),
+      itemRow({
+        id: 'item-3',
+        productId: 'p-3',
+        quantity: 96,
+        packagingUnitId: 'u-gone',
+        packagingUnitName: 'Crate',
+        packagingUnitBaseQuantity: 48,
+      } as Partial<CartItem>),
+    ];
+    const listPackagingUnitsByProductIds = vi.fn(async () => [
+      { id: 'u-live', productId: 'p-2', name: 'Pallet', baseQuantity: 64, minOrderUnits: null },
+    ]);
+    const catalog = { listPackagingUnitsByProductIds } as unknown as CatalogProductReadPort;
+    const service = new CartConversionService(
+      ownTablesOnly({ carts: [cartRow()], items }),
+      {} as never,
+      rfq,
+      {} as unknown as QuoteRequestReadPort,
+      catalog,
+      {} as SalesChannelMembershipPort,
+    );
+    const ctx = { customerAccountId: 'cust-1', organizationId: 'org-1', isOrgAdmin: false };
+
+    await service.convertToQuoteRequest(cartRow(), ctx);
+
+    expect(listPackagingUnitsByProductIds).toHaveBeenCalledTimes(1);
+    const [ids] = listPackagingUnitsByProductIds.mock.calls[0] as unknown as [string[]];
+    // Only the buyer's own cart lines' products (F12).
+    expect(ids.every((id) => ['p-1', 'p-2', 'p-3'].includes(id))).toBe(true);
+    expect(ids).toEqual(expect.arrayContaining(['p-2', 'p-3']));
+    expect(createForCustomer).toHaveBeenCalledWith(
+      ctx,
+      {
+        items: [
+          { productId: 'p-1', quantity: 3 },
+          // A live unit: its id, and no name or base quantity.
+          { productId: 'p-2', quantity: 128, packagingUnitId: 'u-live' },
+          // A deleted unit: plain pieces, the quantity unchanged.
+          { productId: 'p-3', quantity: 96 },
+        ],
+      },
+      expect.anything(),
     );
   });
 });

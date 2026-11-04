@@ -1,5 +1,1469 @@
 # @endora-commerce/contracts
 
+## 0.109.0
+
+### Minor Changes
+
+- e64ed74: **BREAKING — a `POST /api/v1/admin/quote-requests` that omits `salesChannelId`, for an Organization not assigned to the channel the admin request resolves to (the system default, or `X-Sales-Channel`), now answers `422 RFQ_SALES_CHANNEL_NOT_ALLOWED` where it answered `201`.** Recorded at `minor`, which in a `0.x` series already takes every caret dependent out of range. The server is the sole enforcer of the channel (owner decision 2026-10-29 "A"): the channel the request lands on, named or not, must be one of the Organization's active channels. A caller with no request scope — a worker, a CLI script, an in-process call to `RfqAdminService.createOnBehalf` — has no resolved channel and must name `salesChannelId`; without it the call is refused with the same code (`details.code: 'no_channel'`).
+
+  An operator names the sales channel a quote request is created on for a customer. `adminCreateQuoteRequestSchema` gains an optional `salesChannelId`; `POST /api/v1/admin/quote-requests` stores the request on that channel, snapshots its line names in the channel's default language, and reports `PRODUCT_UNAVAILABLE_IN_SCOPE` warnings for that channel, refusing — before anything is written — a channel that is not one of the Organization's active channels (read through the kernel's `SalesChannelMembershipPort.listChannelsForEntity`; `RfqAdminServiceDeps` gains `channelMembership`) with the new `422 RFQ_SALES_CHANNEL_NOT_ALLOWED`. Absent, the request is raised where the admin request resolves (the system default, or `X-Sales-Channel`) — and that channel is checked the same way, as above. The _Create quote request_ screen offers the customer's organization's active channels — preselecting the only one, else requiring a choice —, prefills agreed prices on the chosen channel (`PricePrefillRequest.salesChannelId`), and, when the answer warns, lists the unavailable products before leaving the screen. Until a channel is settled it neither prefills prices nor sends anything: a failed or refused read says so (`rfqCreate.channelsLoadError`) with a retry, inactive while it runs.
+
+- 50338a6: The admin assistant can archive and restore products (product data scopes).
+
+  - **New assistant tools** `catalog.archive_product` and `catalog.restore_product` (`catalog:write`), with the parameter schemas `ArchiveProductsParamsSchema` and `RestoreProductsParamsSchema`. Like every assistant change they are planned first and run only after the operator confirms. Each product runs the same audited Archive / Restore as the admin screens, recorded in the audit log under the confirming admin. More than 50 products run as the bulk Archive / Restore in the background, which can be undone from its operation page.
+  - `catalog.set_product_status` still only switches products on or off. Its description now tells the assistant that it does not archive or restore, and names the new tools.
+  - **Behaviour change — assistant search:** `catalog.search_products` now includes archived products and returns `archived` beside `status`, so an archived product can be found to restore it.
+  - **prompt_actions documentation:** the tool catalogue lists every catalog tool, the two new ones included, and says that archiving is not a status.
+
+- 0e33ca9: Blog posts get a main image, a public list endpoint and a _Latest posts_ page-builder block.
+
+  - `@endora-commerce/mod-blog` adds `blog_posts.main_image_asset_id` (migration `20261023T063013_blog_post_main_image`, nullable, foreign key to the asset library), editable in the post editor through the asset library picker. Deleting an asset a post uses as its main image is refused like any other referenced asset (reference kind `blog_post_main_image`).
+  - `GET /api/v1/blog/posts?limit=&categorySlug=` returns the newest published posts of the request's sales channel as post cards (`limit` 1–24, default 6; an unknown category returns `[]`; a channel with the blog disabled returns `[]`). Cards carry the primary category's name for a chip.
+  - `@endora-commerce/contracts`: `blogPostsListQuerySchema`, `blogPostsListResponseSchema`, `BLOG_POSTS_LIST_MAX_LIMIT`, `BLOG_POSTS_LIST_DEFAULT_LIMIT`; `mainImageAssetId` on `blogPostSummarySchema` (required, nullable) and on the create and patch request schemas (optional); optional `primaryCategoryName` on `blogPostCardSchema`; `blog_post_main_image` in `assetReferenceKindSchema`.
+  - `blog.LatestPosts` (declared by `@endora-commerce/mod-blog`, rendered by `@endora-commerce/cms-components` as `LatestPosts` with the `CmsBlogPostCard` type): the newest posts as a carousel or a grid, optionally from one category, with a header and a read-more label. It is resolved on the server through the block-data seam, renders nothing for customers when there are no posts, and disappears from the editor and the storefront when the blog module is off.
+
+- 22604fa: Attachments per sales channel and language, packaging-unit names per language (product data scopes, FR-078, FR-079).
+
+  - **Attachments:** create and update (`POST` / `PATCH /api/v1/admin/catalog/products/:productId/attachments…`) accept `nameTranslations` and `descriptionTranslations` (language → text; `''` removes a language) and `hiddenInChannels` (replaces the set). A newly hidden channel the product is not a member of is refused with `422 SCOPE_INVALID`; clearing is always allowed. The admin DTO carries all three. The product page leaves out an attachment hidden in the request's channel and serves its name and description in the request's language, else the global ones.
+  - **Packaging units:** create and update accept `nameTranslations` (the admin schemas stay strict). The admin DTO and `CatalogPackagingUnitRecord` carry it. The product page's `packagingUnits[].name` is the name in the request's language, else the global name.
+  - **Basket snapshot:** a basket line ordered by a packaging unit stores the unit's name in the basket's language (`effectivePackagingUnitName`) and keeps it after a rename; the order line copies it. A buyer's quote-request line (create and draft edit) appends the unit's name in the request's language on its channel, else the global name, and keeps it; a line naming its unit by name and base quantity is still matched on the global name.
+  - **Auditing:** these writes run the existing Commands `product_attachment.create` / `.update` and `packaging_unit.create` / `.update`, one audit entry per request. The route-level `attachment.create`, `attachment.update` and `product_packaging_unit` rows are no longer written beside them. The projections carry `productId`, the translations and `hiddenInChannels`; re-sending `before` without `productId` restores the row. They emit `product.updated.v1` with `changedFields: ['attachments']` / `['packagingUnits']`; a request that changes nothing writes and emits nothing. EN/PL audit labels added.
+  - **Scope overview:** lists `attachments:hidden` per channel and `attachments:name`, `attachments:description`, `packagingUnits:name` per language.
+  - **Contracts:** `ATTACHMENT_DESCRIPTION_TRANSLATION_MAX`.
+  - **Migration** `catalog` `attachment_packaging_translations`: columns `product_attachments.name_translations`, `.description_translations`, `product_packaging_units.name_translations`, table `product_attachment_channel_hidden`. No backfill.
+
+- 0e33ca9: The page editor's preview of a product listing shows the same line under each product name as the storefront, and the option says what each line is.
+
+  - `@endora-commerce/contracts` exports `productSummaryText(description)` and `PRODUCT_SUMMARY_MAX_LENGTH`, moved from `@endora-commerce/mod-catalog`, which re-exports them from the same module path. The rule is unchanged.
+  - `@endora-commerce/mod-cms`' admin preview maps a product's description to its card `summary` through it (`mapAdminProductToCmsSummary`), in the language its name is picked in. The summary line, and a Showcase card's default line, were always empty in the editor.
+  - `catalog.ProductGrid` and `catalog.ProductSlider` label `cardTextLine` **Text under the product name**, with **Card style default (SKU; summary on Showcase)**, **Short description (from the product description)**, **SKU** and **None**, in English and Polish. The stored values are unchanged.
+
+- 9ff8307: The product gallery per sales channel and its alt text per language (product data scopes, FR-076, FR-077).
+
+  - **New admin routes:** `GET` / `PUT /api/v1/admin/catalog/products/:productId/gallery/channel-roles` (`catalog:read` / `catalog:write`) read and set a channel's own holder of `base_image`, `small_image` and `thumbnail` — keyed `baseImage`, `smallImage` and `thumbnail` in `roles` (`null` = use the global holder). `PATCH …/gallery/:itemId` accepts `altText` (language → text; `''` removes a language) and `hiddenInChannels` (replaces the set). These writes run as the Command `product.media.update` — one audit entry per request whose `before` restores the item — and emit `product.updated.v1` with `changedFields: ['media']`. A channel the product is not a member of is refused with `422 SCOPE_INVALID`; clearing an override there is always allowed. The route-level `gallery.update` audit row is no longer written beside the Command's.
+  - **Admin DTO:** gallery items carry `altText` and `hiddenInChannels`.
+  - **Storefront reads:** the product page's `gallery`, the listing card's image (also for related products and grouped / bundle children) and the OG image follow the request's channel: a hidden image is never served there, also not through its legacy `product_assets` twin, and a role resolves to its channel holder. `gallery[].altText` is the product's alt text at the request's language, else the asset's.
+  - **Contracts:** `translationAt`, `applyTranslationPatch`, `translationMapPatchSchema`, `effectivePackagingUnitName`, `galleryChannelRolesSchema`, `putGalleryChannelRolesRequestSchema`, `GALLERY_ALT_TEXT_MAX`, `SCOPED_CHANNELS_MAX`; `sameLanguage` now lives in `scoped-translations.ts` and is re-exported unchanged.
+  - **Scope overview:** lists `media:roles` and `media:hidden` per channel, `media:altText` per language, and `seo:<field>` overrides at L, C and C × L (none while `seo` is off).
+  - **Migration** `catalog` `product_media_scopes`: tables `gallery_item_channel_labels`, `gallery_item_channel_hidden`, column `gallery_items.alt_text`. No backfill.
+
+- 0e33ca9: Products carry a short plain-text summary, and the product listing blocks gain a showcase card for marketing pages.
+
+  - `@endora-commerce/mod-catalog` derives `summary` from the product description already on the row — markup stripped, entities decoded, at most 160 characters cut at a word boundary with `…`, in the request language with the same channel override as the product page — and returns it on the storefront product list and product reads; `null` when there is no description. No extra query per product. `@endora-commerce/contracts` adds the optional `summary` to `productSummarySchema`.
+  - `catalog.ProductGrid` and `catalog.ProductSlider` (rendered by `@endora-commerce/cms-components`, declared by `@endora-commerce/mod-catalog`) keep every option and default they had and add a header (heading, lead, button), `cardVariant` (`default` or `showcase`), a card link label `ctaLabel` and a `footerButton`. The slider takes the Carousel's options; a stored slider keeps its look through `productSliderFromLegacy` (arrows over the edges, dots below, pixel gap). The new texts are translatable, and the field labels ship in English and Polish.
+  - `CmsProductCardView` accepts `variant: 'showcase'`: image on a neutral backdrop, name, summary and a "more" link labelled by `ctaLabel`, without price or SKU. `CmsProductSummary` gains the optional `summary`; `PRODUCT_CARD_VARIANTS` and the shared listing fields are exported from `components/catalog/product-listing-parts`.
+
+- 07f3764: Minimum order quantity and "returnable" per sales channel (product data scopes, FR-100).
+
+  - **Behaviour change:** a product's channel override of its minimum order quantity or its returnable flag (`product_channel_scopes`, written through `PATCH /api/v1/admin/catalog/products/:id/scopes`) now applies in that channel. Adding to the basket (single, batch and quick-order build), the basket view, submitting a basket for approval, the checkout preview, placement, the admin order preview, quote requests (create, draft edit, resubmit, the operator's per-line warning) and the buyer's quick-order import judge the minimum of the basket's, order's or request's channel; a channel minimum of 1 means no minimum there. Placement stamps `order_items.returnable_at_purchase` from the order channel's flag, so returns follow it. Without an override nothing changes.
+  - **Storefront read model:** `minOrderQuantity` on the product detail and listing summaries is the request channel's value.
+  - **Contracts:** new `withChannelOrderRules(records, rules)` puts the rules of `catalogProductAvailabilityPort.effectiveOrderRules` into a set of product records for one seam; `CatalogProductRecord.minOrderQuantity` / `returnable` keep meaning the global values.
+
+- 0e33ca9: Brand tokens for page-builder content: one set of colours, colour schemes, fonts, a type scale, button sizes, spacing and layout widths that every block reads, set globally and optionally overridden per sales channel.
+
+  - `@endora-commerce/contracts` exports the token shape and its rules: `cmsBrandTokensSchema` / `CmsBrandTokens`, `DEFAULT_BRAND_TOKENS`, `BRAND_TYPE_TOKENS`, `BRAND_SPACE_TOKENS`, `BRAND_SCHEMES`, `brandFontSourceSchema` (system, library asset or `https:` stylesheet), the contrast helpers `assessBrandContrast`, `contrastRatio`, `relativeLuminance`, `CONTRAST_REQUIRED_BODY` / `CONTRAST_REQUIRED_LARGE`, and the HTTP shapes `putCmsBrandTokensRequestSchema`, `putCmsBrandTokensResponseSchema`, `cmsBrandTokensAdminReadSchema`, `cmsBrandTokensStorefrontResponseSchema`. `CMS_STOREFRONT_CACHE_TAGS.brand` (`cms:brand`) is the storefront cache tag a save revalidates.
+  - `@endora-commerce/mod-cms` stores the tokens in a new `cms_brand_tokens` table (migration `20261022T163218_cms_brand_tokens`), serves `GET`/`PUT /api/v1/admin/cms/brand-tokens` (read with `cms.read`, write with the new permission `cms.brand`; optimistic version check, audited, a stale write is `409`) and `GET /api/v1/storefront/cms/brand-tokens` (answers on a closed sales channel too). The page-builder descriptor carries the effective `brandTokens` and accepts `?salesChannelId=`. The Admin UI adds a _Brand_ screen at `/cms/brand` with live preview and contrast warnings (saving is never blocked by them), reachable from the content navigation and the command palette (`open-cms-brand`); the page editor's preview applies the page's channel tokens.
+  - `@endora-commerce/cms-components` exports `brandTokensToCss` (also at `@endora-commerce/cms-components/brand/brand-css`), which renders the tokens as `--cmsb-*` custom properties plus font links. Every block style that reads a `--cmsb-*` variable keeps the previous literal as its fallback, so a storefront that never emits the variables renders exactly as before.
+  - `@endora-commerce/page-builder-core` re-exports the token types from its barrel and the values from the new `@endora-commerce/page-builder-core/brand-tokens` subpath. Colour fields may store a brand role as `token:<role>`: `BRAND_COLOR_ROLES`, `brandColorRole`, `brandColorFallback` and `resolveColorValue` (`token:primary` → `var(--cmsb-color-primary, <default>)`); the palette context gains an opt-in `brandRoles` flag, and `backgroundToStyle` resolves tokens.
+  - `@endora-commerce/page-builder-admin`: `PageBuilderColorPaletteProvider` takes an optional `brandColors`; when set, the palette lists the brand colours first and a pick stores the role token. Leave it unset where content is rendered without the brand stylesheet, such as e-mail.
+  - `@endora-commerce/mod-settings` lists the `cms-brand` cache namespace on the cache screen; `@endora-commerce/mod-i18n` adds the `pageBuilder.colorPalette.*` labels (English and Polish).
+
+- 0e33ca9: CMS pages get a breadcrumb parent, breadcrumb display options and a sharing image.
+
+  - `@endora-commerce/mod-cms` adds four columns to `cms_pages` (migration `20261023T052237_cms_page_tree_and_share`): `parent_page_id` (self-reference, cleared when the parent is deleted), `breadcrumbs_visible` (default `true`), `breadcrumbs_scheme` (`light`, `muted` or `dark`, default `light`) and `share_image_asset_id`. The parent only shapes the breadcrumb trail; it never changes the page's URL. A parent that would create a cycle, or a tree deeper than eight levels, is refused with `422` (`CMS_PAGE_PARENT_CYCLE` for a cycle) and nothing is written or audited. Saving a page invalidates the cached pages below it.
+  - The storefront page read returns `breadcrumbs: { visible, scheme, trail }` (each crumb's `slug` is `null` when the ancestor is not published on the request's sales channel), `share: { imageUrl }` (the page's own public image, else the new per-channel setting `cms.default_share_image_asset_id`) and `languages` (the page's languages that carry content). A page that sets nothing keeps today's trail and look.
+  - The page editor adds a _Breadcrumbs_ card (parent page, visibility, scheme) and a _Sharing_ card (image from the asset library). Deleting an asset used as a sharing image is refused like any other referenced asset.
+  - `@endora-commerce/contracts`: `cmsBreadcrumbsSchemeSchema` / `CmsBreadcrumbsScheme`; `parentPageId` on the admin page summary; `breadcrumbsVisible`, `breadcrumbsScheme` and `shareImageAssetId` on the page detail (all required in responses, optional on create and patch); `breadcrumbs`, `share` and `languages` on `cmsResolvedPageSchema`; `parentPageId` on `CmsPageRecord`; the error code `CMS_PAGE_PARENT_CYCLE`. Code that constructs these response objects or a `CmsPageRecord` must supply the new fields.
+
+- ea892d5: Exports `ATTACHMENT_NAME_MAX` and `PACKAGING_UNIT_NAME_MAX` (both 160), the longest attachment name and packaging-unit name, global or per language, so a form can bound its inputs by the same number the schemas enforce.
+- 678fed1: **BREAKING — `ProductDetail` gains a required field, `paths`.** Recorded at `minor`, which in a `0.x` series already takes every caret dependent out of range. Code that builds a `ProductDetail` literal (a test fixture, an overlay serving the product page) must add `paths` — `{ canonical, alternates }` from `productPagePathsSchema`; a reader is unaffected.
+
+  `productDetailSchema` gains the required `paths` field (`productPagePathsSchema`, exported from `product-url-keys`): the product page's canonical path and its alternate-language paths, built by the backend with `productPath()`. `CatalogProductUrlKeyReadPort` is now registered as `catalogProductUrlKeyReadPort` by `catalog`. A consumer that constructs a `ProductDetail` literal must add `paths`.
+
+- dcbd154: **BREAKING — `CatalogBulkImportPort` gains a required method, `exportScopedStatuses()`.** Recorded at `minor`, which in a `0.x` series already takes every caret dependent out of range. An implementer of the port (an overlay replacing catalog's import / export) must add it; it answers the products' scoped statuses as `ScopedStatusExport`. Callers are unaffected.
+
+  `ProductImportRow.scopedStatus` (`ScopedStatusCell[]`), `ScopedStatusExport`, `scopedStatusColumn()` / `parseScopedStatusColumn()` for the products file's `status@<channel code>[/<language>]` columns, and `CatalogBulkImportPort.exportScopedStatuses()` — an implementer of that port must add the method. `CatalogProductScopeWritePort` is now registered as `catalogProductScopeWritePort` by `catalog`.
+
+- a76d6ee: **BREAKING — `seoMetaOverrideSchema.locale` is `string | null`.** Recorded at `minor`, which in a `0.x` series already takes every caret dependent out of range. An override saved for a whole sales channel has no language, so a reader that typed `locale` as `string` must handle `null`; `channelId` is new and nullable beside it.
+
+  `upsertSeoMetaOverrideRequestSchema.locale` is optional and the schema gains `channelId`; new `seoMetaScopeQuerySchema` (`locale?`, `channelId?`) for the meta GET and DELETE; `seoMetaOverrideSchema` has a nullable `locale` and a nullable `channelId`. `SeoProductMetaPort` is registered as `seoProductMetaPort` by `seo`. A caller that reads `seoMetaOverrideSchema['locale']` as a string must handle `null` (a sales channel override).
+
+- 22604fa: **BREAKING — `CatalogGalleryPort.listForProducts` and `CatalogGalleryPort.baseImageUrls` gain a required second parameter, `channelId: string | null`.** Recorded at `minor`, which in a `0.x` series already takes every caret dependent out of range. A caller passes the sales channel it serves, or `null` for the previous, global answer: `listForProducts(ids)` → `listForProducts(ids, channelId)`, `baseImageUrls(ids)` → `baseImageUrls(ids, channelId)`. An implementer of the port (an overlay replacing catalog's gallery) adds the parameter and leaves out the items hidden in that channel; with `null` it answers as before.
+
+  A gallery image hidden in a sales channel no longer reaches that channel's product feeds or comparisons (product data scopes).
+
+  - **Contracts:** `CatalogGalleryPort.listForProducts(productIds, channelId)` and `CatalogGalleryPort.baseImageUrls(productIds, channelId)` take the channel the caller serves; `null` keeps the global answer.
+  - **catalog:** `listForProducts` leaves out the items hidden in the channel. `baseImageUrls` answers the channel's own `base_image` holder, else the global one, and `null` when that holder is hidden there. Each is still one statement per batch.
+  - **product_feeds:** a feed's images are read in the feed's channel.
+  - **comparisons:** the base-image column is read in the viewer's resolved channel.
+
+- 9a38360: **BREAKING — `cartViewLineSchema.productSlug` is `string | null | undefined`.** Recorded at `minor`, which in a `0.x` series already takes every caret dependent out of range. A basket line whose product is unavailable carries `productSlug: null`, so a reader that typed it as `string | undefined` must handle `null` (render the line without a product link); `productSku` is new beside it.
+
+  Product data scopes reach the basket view and the two external API seams that did not follow them yet.
+
+  - **Basket view:** a line whose product is no longer available at the basket's sales channel and language keeps its `productName` and `productSku`, reads `unavailable: true` (`unavailableReason: 'not_purchasable'`), and has `productSlug: null`, so the storefront shows it without a link to a product page that answers `404` there. Placing the order still refuses it. `cartViewLineSchema` types `productSlug` as nullable and gains `productSku`.
+  - **External order intake** (`POST /api/v1/external/orders`): after the existing per-line checks, every line's product must be available at the key's sales channel (its default language) to the calling key's Organization — not switched off there, inside its publication window, admitted by the channel's audience rule. A product that is not answers what a product hidden from the bound Organization already answered: `404 PRODUCT_NOT_FOUND`, no name, nothing placed. An unknown or unpublished SKU keeps its per-line `422 VALIDATION_FAILED` (`SKU_NOT_IN_ASSORTMENT`), which takes precedence. The availability rule decides the status, so the SKU read no longer drops a product that is off globally: one that is on in the key's channel is orderable, one that is off there answers the `404`. `OrderApiIntakeService` takes `catalogAvailability`, and `place` takes the caller's `audience`.
+  - **External bulk prices** (`POST /api/v1/external/catalog/prices`): a product not available to the calling key's Organization at the key's channel gets no price and reads `sku_not_in_assortment` — before, a product restricted away from that Organization was priced. `resolveBulkPrices` takes the caller's `audience`; the external catalogue namespace is mounted only with `catalog`'s own availability port.
+
+- 0e33ca9: The dark scheme's decorative backdrop can be given as a URL, `cms.Tabs` can keep its tab bar in one scrolling line, and a `cms.Column` can distribute its blocks vertically and reorder them per breakpoint.
+
+  Nothing changes for a page that does not use them: the default markup and look are the ones the blocks had.
+
+  - **Backdrop by URL.** The brand tokens' schemes gain an optional `decorativeUrl`, validated by the new `brandMediaUrlSchema` and `BRAND_MEDIA_URL_RE` in `@endora-commerce/contracts`. It accepts an `https:` URL, or a path starting with `/`, of up to 2048 characters, with no quotes, parentheses, backslashes, angle brackets or whitespace. The library asset (`decorativeAssetId`) wins when both are set. `brandTokensToCss` takes a new `mediaUrl` option, which rebases a `/path` (the storefront and the admin pass their API origin). It checks the stored value again and writes it as an escaped CSS string. The brand screen has a **Decorative backdrop URL** field under the dark scheme's asset picker. `@endora-commerce/page-builder-core/brand-tokens` re-exports `BRAND_MEDIA_URL_RE`.
+  - **Scrolling tab bar.** `cms.Tabs` gains `barOverflow: 'wrap' | 'scroll'`. Unset, it wraps as before. `scroll` adds `cmsc-pb-tabs--scroll` and keeps the bar in one line that scrolls sideways inside the block, with scroll snapping and no page overflow. The roles and the keyboard model are unchanged. A tab chosen with the pointer is scrolled into the bar's view. The tab focus ring (`.cmsc-pb-tabs__tab:focus-visible`), lost in an earlier stylesheet edit, is restored.
+  - **Column distribution.** `cms.Column` gains `distribute`: `'start'` (the default), `'center'`, `'end'`, `'space-between'` or `'last-to-bottom'`. It is written as `data-pb-distribute`. The column's published block slot now carries the class `cmsc-pb-column-stack`.
+  - **Block order per breakpoint.** `withHideOn` offers `stackOrder`: `'auto'`, `'first'`, `'1'`–`'6'` or `'last'`, one value per breakpoint, on the Responsive tab. The field appears only when the block's parent is in the new `BLOCK_ORDER_PARENTS` export (`['cms.Column']`), through a `resolveFields` it now adds to every wrapped block, so no block's static fields change. The value is written on the wrapper as `data-pb-order` and `--pb-order(-md|-lg)`, and the stylesheet reads it as the CSS `order`. Only the visual order changes: the DOM and focus order stay the stored order. `STACK_ORDER_VALUES` and the `StackOrder` type are exported.
+
+  The `cms`, `catalog`, `blog` and `newsletter` bundles carry the English and Polish labels.
+
+- 0e33ca9: An inline icon can have its own size and vertical offset, and a Section's or a Section group's image background and decorative backdrop can have a size, a repeat and a position.
+
+  Nothing changes for content that does not use them: an icon with no size or offset is drawn at 1 em on the line as before, and a background with none of the new values renders the same markup and look.
+
+  - **Inline icon size and offset.** The `inlineIcon` node of `InlineRichText` accepts optional `size` (`'0.5em'`–`'3em'` or `'8px'`–`'200px'`, `isInlineIconSize`) and `offset` (em of the text, −1 to 1, `isInlineIconOffset`), each also as `null`. `InlineRich` draws the icon at that size and moves it with `vertical-align`; `inlineIconPresentation` is exported for editors that draw it. `inlineIconNode` writes them as `data-cms-icon-size` / `data-cms-icon-offset`, the same through the DOM-free serializer and TipTap's, and reads them back. The icon dialog of the inline rich-text field sets both, edits a selected icon (**Edit icon**), and is translated through the page builder's field text.
+  - **Background size, repeat and position.** `sectionBackgroundSchema` gains `size` and `repeat` for an image (`'cover' | 'contain' | 'auto' | {px} | {percent}` and `'no-repeat' | 'repeat' | 'repeat-x' | 'repeat-y'`), and `decorativeSize`, `decorativeRepeat` and `decorativePosition` for the decorative backdrop; `BACKGROUND_SIZE_KEYWORDS`, `BACKGROUND_REPEATS` and `backgroundSizeToCss` are exported. An image with a natural or fixed size or a repeat is painted as a CSS background (`.cmsc-section__tile`, with the mobile image below 768 px); `contain` keeps the picture. The backdrop's values are written on the section or the group's paint layer. The Section background field offers them, with `cover`, no repeat and the top position as the defaults.
+
+  `@endora-commerce/mod-i18n` adds the English and Polish `pageBuilder.fieldText.section.*` and `pageBuilder.fieldText.inlineIcon.*` labels; the `cms` module's documentation describes both.
+
+- 0e33ca9: A rich-text "read more" can place its summary and open upwards, an accordion gains look options, both open and close with an animation, and a highlighted phrase can take any brand colour or hex.
+
+  Nothing changes for content that does not use them: the default markup and look are the ones the blocks had.
+
+  - **Read more position and reveal above.** The rich-text `readMore` node gains `chevronPosition` (`'start' | 'center' | 'end'`, `'start'` by default) and `revealAbove` (`false` by default). They add `cmsc-read-more--center` / `--end` and `cmsc-read-more--reveal-above` to the `<details>`, the same through the DOM-free serializer and TipTap's, and are parsed back from them. The sanitiser is unchanged. Reveal above shows the open passage's content above its summary through CSS order only: the summary stays the first child and the one control. The rich-text toolbar gains **Read more position** and **Show the revealed text above the summary**.
+  - **Animated open and close.** A read-more passage animates its `::details-content` height and an accordion panel its height and opacity, only without reduced motion and only where the browser supports `interpolate-size` (instant elsewhere). An accordion animates only after hydration (`data-animate`), so a panel open by default does not animate on page load. Every accordion panel stays in the server HTML, `hidden` while closed.
+  - **Accordion look.** `cms.Accordion` gains `icon` (`'plus' | 'chevron'`), `itemStyle` (`'plain' | 'boxed'`), `dividers` (`'none' | 'between' | 'all'`, for plain items) and `titlePadding` / `titlePaddingPx` (a spacing token or Custom px per breakpoint, on the Responsive tab). Each is unset by default and writes nothing then.
+  - **Emphasis colour.** The inline rich-text `emphasis` mark accepts an optional `color` (`#rrggbb` or `token:<role>`, `null` as unset) in `inlineRichTextSchema`. It renders `data-cms-em-color` and an inline `color` on the variant's span, in `InlineRich` and through both TipTap serializers. A colour outside that grammar renders today's span. The rich-text sanitiser keeps `data-cms-em-color` on a `<span>` with a colour value only. The inline toolbar gains **Highlight colour** (brand colours, a hex, **Remove colour**). The translation codec carries the mark unchanged.
+  - **Labels.** The new toolbar and dialog labels are page-builder field text (`pageBuilder.fieldText.emphasisColor.*`, `pageBuilder.fieldText.readMore.*`), and the accordion fields are labelled in English and Polish.
+
+- 0e33ca9: A new `cms.SectionGroup` block holds a run of Sections and paints one background behind all of them, so the decorative backdrop no longer shows a seam at every Section boundary.
+
+  - `@endora-commerce/contracts`: `sectionGroupSettingsSchema` and `SectionGroupSettings` describe the group's props: `anchor`, `scheme` (default `inherit`), `background`, and `spaceTop` / `spaceBottom` per breakpoint (default `none`).
+  - `@endora-commerce/page-builder-core`:
+    - `ROOT_ONLY_TYPES` now lists `cms.SectionGroup` beside `cms.Section`.
+    - `shouldRevertPuckAction` lets a Section into a group's `content` slot and reverts anything else dropped there. The new exports are `SECTION_GROUP_TYPE`, `SECTION_GROUP_CHILD_TYPES` and `isSectionGroupContentZone`.
+    - A move out of a slot zone now reads the moved block's type from its parent's slot prop.
+    - `collectAnchors` lists a top-level group's anchor and the anchors of the Sections in it.
+  - `@endora-commerce/cms-components`:
+    - `cms.SectionGroup` (`SectionGroup`, `SECTION_GROUP_RESPONSIVE_FIELDS`, `SECTION_GROUP_SLOT_ALLOW`) is a top-level block whose slot accepts only `cms.Section`. Its fields are Colour scheme, Background (with the decorative backdrop), Anchor, and Space above / Space below on the Responsive tab.
+    - It renders through the new `SectionGroupFrame`: a `.cmsc-section-group` wrapper with one `.cmsc-section-group__paint` layer across the window behind all its Sections.
+    - A Section in a group renders as a top-level Section (`data-in-group`). It inherits the group's scheme unless it sets its own. While the group paints, a Section with no background of its own and no other scheme is transparent (`data-transparent`).
+    - The first Section of a group can overlap the block before the group.
+    - An empty group drops its own spacing, as an empty Section does.
+    - The hero's lead-image lookup sees through a first group.
+    - Every other slot (Section, Column, Slide, tab and accordion panels) refuses the group.
+  - `@endora-commerce/mod-cms`:
+    - The manifest declares `cms.SectionGroup` in the `layout` palette, with English and Polish labels.
+    - The anchor guard counts a top-level group's anchor and its Sections' anchors.
+    - A section preset inserted while a block inside a grouped Section is selected goes into that group.
+
+- 0e33ca9: `cms.Section` can overlap the section before it, and an empty Section no longer leaves a blank band.
+
+  - `@endora-commerce/contracts`: `sectionSettingsSchema` gains an optional `overlap`, a spacing token or a pixel value per breakpoint (`Responsive<SpaceValue>`). Unset means no overlap.
+  - `@endora-commerce/page-builder-core`: `createSectionSpaceField` takes an optional `defaultValue` (`SectionSpaceFieldOptions`). It is the value shown, inherited and seeded until one is set. It stays `'l'` unless given; the overlap uses `'none'`.
+  - `@endora-commerce/cms-components`: `cms.Section` gains the **Overlap with the previous section** field on the Responsive tab. When an overlap is set, the section carries `data-overlap` and `--cmsc-section-overlap(-md|-lg)`. The stylesheet then pulls its content frame up by that amount, above the previous section's background (`z-index: 1`). The section's own background stays in place, and the page's first block is never pulled. The editor canvas does not move the content. Instead, a hatched band shows the overlap of the previewed breakpoint.
+  - A published Section whose blocks all render nothing loses its padding, minimum height and pull-up. Examples are a news list with no posts, or blocks hidden at that breakpoint. A CSS `:has()` rule decides this, so the markup of a non-empty Section is unchanged. A Section with an image or video background keeps its size. Browsers without `:has()` keep the padding, as before.
+  - `@endora-commerce/mod-cms` lists `overlap` among the Section's `responsiveFields`. The field has English and Polish labels.
+
+- 0e33ca9: A new Page Builder block, `cms.Section`, carries the section settings and a slot for any other blocks: a colour scheme (`inherit`, `light`, `muted`, `dark`), a width (`contained`, `wide`, `full`, `viewport`, `bleed`, `custom`), spacing above and below per breakpoint (a brand space token or pixels), a background (colour, gradient, image or video per breakpoint, overlay, decorative backdrop), a content position per breakpoint, an entrance reveal and an anchor id for in-page links. The settings are the Section's own props — `anchor`, `scheme`, `background`, `width`, `contentWidth` (offered with a `full`, `viewport` or `bleed` width: the content frame — page container, wide, to the edges or custom — inside a background of that extent, so a full-screen band can hold contained content without the viewport's full height), `customMaxWidthPx` (one px value, offered with the custom width or content width), `reveal`, and per breakpoint `spaceTop`, `spaceBottom` and `contentPosition`, which the editor shows on its Responsive tab and edits per breakpoint through its scope switcher. A Section stands only at the top level of a page: every slot refuses it, the editor reverts a drop into one, and a Section stored nested renders its children without the section wrapper. No other block carries section settings.
+
+  - `@endora-commerce/contracts`: `sectionSettingsSchema` / `SectionSettings`, `SECTION_CONTENT_WIDTHS` / `sectionContentWidthSchema`, `sectionBackgroundSchema`, `sectionOverlaySchema`, `sectionAnchorSchema`, `SECTION_ANCHOR_RE`, `RESERVED_ANCHORS` (ids the storefront layout already uses), and the error codes `CMS_DUPLICATE_ANCHOR` and `CMS_RESERVED_ANCHOR`.
+  - `@endora-commerce/page-builder-core`: the Section's custom editor fields `createSectionBackgroundField` (with `isSectionBackgroundField`, by which a host gives it an asset picker), `createSectionSpaceField` (a responsive field), `createSectionAnchorField` and `createSectionRevealField`, `isTopLevelParent`, the section value types and option lists, and the depth context that decides "top level": `useSectionContext()` (`{ depth, topLevel }`), `BlockDepthContext` and `EmbeddedBlockDepth` (wrap an embedded document so its blocks count from the embed's level). `withHideOn` provides that context; its markup is unchanged. `collectAnchors(data)` lists the anchors of a document's top-level Sections for the in-page link kind. The editor guard `shouldRevertPuckAction` also reverts an insert or a move of a root-only block (`ROOT_ONLY_TYPES`, today `cms.Section`) into any zone but the page's own list; `isRootZone` is exported beside it. The editor outline now lists blocks inside array-item slots.
+  - `@endora-commerce/cms-components`: the `Section` block (`cms.Section`) and `SECTION_SLOT_DISALLOW`, the `SectionFrame` renderer it draws through, `useSectionAnchor()` (the anchor of the Section a block stands in) and `useBreakpointVideo`. The slots of `cms.Column`, `cms.Slide` and the Tabs and Accordion panels refuse `cms.Section`. A `viewport`-wide section is at least the viewport tall.
+  - `@endora-commerce/mod-cms` declares `cms.Section` in the `layout` palette section, and refuses a save of a page, reusable block or template whose top-level Section anchors or heading anchors repeat (`422 CMS_DUPLICATE_ANCHOR`) or use a reserved id (`422 CMS_RESERVED_ANCHOR`), with the anchor in `details.anchor`; nothing is written or audited.
+
+- 0e33ca9: Shared prop shapes for page-builder blocks, with one renderer and one editor field each, so every block links, shows buttons, images and short formatted text the same way.
+
+  - `@endora-commerce/contracts` exports the shapes as Zod schemas and types: `linkValueSchema` / `LinkValue` (URL, page, product, category, file or a section anchor on the same page; `javascript:` and protocol-relative URLs refused), `buttonSpecSchema` / `ButtonSpec` (label, link, style, fill, size, icon and per-breakpoint values), `responsiveImageSchema` / `ResponsiveImage` (desktop and mobile source, alt text, aspect ratio per breakpoint, fit, focal point), `inlineRichTextSchema` / `InlineRichText` (bold, italic, link, line break and the `gradient` / `accent` / `muted` emphasis), `colorValueSchema` (hex or `token:<role>`), `responsiveSchema(inner)` / `Responsive<T>`, and the space, scheme and width enums. The zod-free helpers (`normalizeAnchor`, `isSafeLinkUrl`, `isAspectToken`, `plainTextToInlineRichText`, `inlineRichTextToPlain`, the regular expressions and token lists) are also importable from `@endora-commerce/contracts/page-builder-values` without bundling Zod.
+  - `@endora-commerce/page-builder-core` re-exports these types and helpers from its barrel.
+  - `@endora-commerce/cms-components` exports the renderers: `ButtonView`, `Picture` (art-directed `<picture>`, lazy unless `priority`), `InlineRich` / `countInlineRichWords`, `resolveLinkHref`, `colorValueToCss` / `iconColorProps`, and the inline rich-text editor field `createInlineRichTextField` with `InlineRichTextEditor`, `inlineRichTextExtensions` and the `emphasisMark` TipTap mark. Button styles are the new `cmsc-btn` classes in the shipped stylesheet.
+  - `@endora-commerce/page-builder-admin` exports the editor fields: `createLinkField` / `LinkFieldControl` / `LINK_KINDS`, `createButtonListField` (up to six buttons, optionally per breakpoint), `createButtonSpecField`, `DEFAULT_BUTTON_SPEC`, `createResponsiveImageField` / `ResponsiveImageControl`, `createFileAssetField` and `listPageBuilderLinkPages`. `createButtonLinkSlugField`, the previous slug-only link picker, is exported from here as well and keeps the stored value it always wrote.
+  - `@endora-commerce/mod-i18n` adds the `pageBuilder.linkField.*` and `pageBuilder.imageField.*` labels (English and Polish).
+
+- 0e33ca9: The tab size can differ per breakpoint, carousel arrows can be drawn arrows, inline rich text can hold an icon, and rich-text headings follow the brand type scale.
+
+  Nothing changes for a block that does not use them: the default markup and look are the ones the blocks had.
+
+  - **Tab size per breakpoint.** `cms.Tabs` gains `tabSize` (`'s' | 'm' | 'l'`, or one per breakpoint), a top-level prop on the Responsive tab, listed in the block's `responsiveFields`. It replaces the `size` key of `tabStyle` in the editor. A size stored in `tabStyle.size` still applies, and the editor's `resolveData` moves it to `tabSize` (`tabSizeMoved`). The phone's size writes the existing `cmsc-pb-tabs--size-s|l` class; a larger breakpoint whose size differs adds `cmsc-pb-tabs--size-md-*` or `cmsc-pb-tabs--size-lg-*`.
+  - **Arrow icon.** `controls.arrowIcon` (`'chevron' | 'arrow'`) on the Carousel, `catalog.ProductSlider` and `blog.LatestPosts`, and the `CarouselShell` prop `arrowIcon`. `arrow` draws the icon catalog's arrows as inline SVG hidden from assistive technology; the chevron glyphs stay the default.
+  - **Inline icon.** `InlineRichText` accepts an `inlineIcon` node (`{type: 'inlineIcon', attrs: {name}}`, the name matching `INLINE_ICON_NAME_RE`), an icon of the page builder's catalog. `InlineRich` renders it as `1em` inline SVG with `aria-hidden`; an unknown name renders nothing. `inlineRichTextToPlain` drops it. The inline rich-text field gains an **Insert icon** button. `inlineIconNode` (in `rich-content-shared`) serializes it as an empty `span.cmsc-inline-icon[data-cms-icon]`, the same through the DOM-free serializer and TipTap's. Page translation carries it as one atomic tag.
+  - **Rich-text headings follow the type scale.** For each heading level `h1`–`h6` whose type style is set, `brandTokensToCss` writes one rule giving the headings inside rich text (`cms.RichContent` and the blocks' rich bodies) that level's size, line height, weight and letter spacing. With no brand tokens it writes nothing.
+
+  The `cms`, `catalog` and `blog` bundles carry the English and Polish field labels. The `blocks.tabs.fields.tabStyle.fields.size` keys are replaced by `blocks.tabs.fields.tabSize`.
+
+- bdef54c: The product editor's SEO tab ends with a new admin zone, `product.editor.seo.after` (props: the product id). `seo` contributes the link to its meta-tag editor there, shown while `seo` is on and the admin holds `catalog:write`; `catalog` no longer names `seo`. The tab's former "Page title (preview)" input, which saved nothing, is gone.
+- 1b4f2b7: A product's storefront page follows its availability at once. `catalog` now drops the storefront's cached product-page reads of a product — tagged by its id, slug, URL keys and former keys — after `product.updated.v1`, `product.archived.v1` and a product's `sales_channels.membership_changed`, and its keys after `product.deleted.v1`, through the storefront revalidate endpoint it already uses for categories (`STOREFRONT_BASE_URL` + `REVALIDATE_SECRET`; a no-op without them). Any `product.updated.v1` counts — a gallery, attachment, packaging-unit or name change drops the product's page as well, since the event does not say which writes change availability. A short trailing debounce (150 ms, at most 1 s) gathers a bulk operation into one call, chunked at 200 tags; past 500 pending products the shared `catalog:product` tag is dropped once instead; one call is in flight at a time. `product.deleted.v1` now carries `formerUrlKeys`, the redirect keys the deletion removed, so a deleted product's pages are dropped by key too (the shared tag only when its keys cannot be read). Best-effort: a failed key read or call is logged and never fails the write. Next keeps only a `200` in its Data Cache, so a product switched off, archived or moved out of a channel used to go on showing until the storefront restarted. The tag vocabulary is `CATALOG_PRODUCT_STOREFRONT_CACHE_TAGS` (`product`, `productKey(key)`, `maxLength`), shared by both sides.
+- d560d58: Product data scopes per sales channel and language: the availability rule, the admin shapes, URL keys and the ports, all additive.
+
+  - **New module `product-scopes`** (re-exported from the package root): the one rule of effective availability — `isProductEffectivelyAvailable(input)` (not deleted or archived, a member of the channel, the language offered by the channel, effectively `active` there, inside the publication window, admitted by the effective audience rule) with its parts `effectiveStatus`, `isOn`, `effectiveWindow`, `isInsideWindow` (inclusive at both ends, to the millisecond), `effectiveAudience` (a channel override replaces the whole rule) and `effectiveOrderRules`; `pairsTurningOn(before, after, channels)`, the (channel, language) pairs a status write turns on; `resolveScopeLanguage(channel, tag)`, which picks the content language of a request from the channel's own languages. Constants and records: `PRODUCT_SCOPE_STATUSES`, `productScopeStatusSchema`, `PublicationWindow`, `AudienceRule`, `ProductChannelScopeRecord`, `ProductChannelLanguageScopeRecord`, `ProductGlobalScopeFields`, `ScopeChannel`, `ScopeSnapshot`.
+  - **Admin shapes:** `productScopesResponseSchema` (its `data.organizations` names, as `{ id, name }`, the organizations the channel audience rules name), `patchProductScopesRequestSchema` / `patchProductScopesResponseSchema` (absent = untouched, `null` = use inherited), `scopeWarningSchema`, `scopeMissingValueSchema` (`'name' | 'urlKey' | 'attribute:<key>'`), `scopeInvalidDetailsSchema`, `scopeIncompleteDetailsSchema`, `scopeOverviewResponseSchema`, `attributeScopeChangePreviewResponseSchema`, `SCOPE_COMPLETENESS_GATE_MODES`.
+  - **New module `product-url-keys`:** `productPath({ key, languageCode, channelDefaultLanguage })` — `/p/<key>`, plus `?lang=<L>` outside the channel's default language; the one place a product URL is composed — `productSlugSchema`, `productUrlKeysResponseSchema`, `putProductUrlKeysRequestSchema`, `productKeyResolutionSchema` (a PUT's `languageKeys`, `channelKeys` and `confirmTakeover` are each capped at 64 entries), `urlKeyTakenDetailsSchema`, `urlKeyRedirectTakeoverRequiredDetailsSchema`, `urlRedirectNotFoundDetailsSchema`, `urlKeyWriteOutcomeSchema`, `ProductUrlKeyWrite`.
+  - **New port types:** `CatalogProductAvailabilityPort` (container name `catalogProductAvailabilityPort`), `CatalogProductScopeWritePort` (`catalogProductScopeWritePort`) and `CatalogProductUrlKeyReadPort` (`catalogProductUrlKeyReadPort`), owner `catalog`; `SeoProductMetaPort` (`seoProductMetaPort`), owner `seo`, with `SeoProductMetaValues`, `SeoProductMetaField`, `SeoProductMetaSource`. `catalog` provides `catalogProductAvailabilityPort`; the others are not provided yet.
+  - **New error codes in `ERROR_CODES`:** `SCOPE_INVALID`, `SCOPE_INCOMPLETE`, `URL_KEY_TAKEN`, `URL_KEY_REDIRECT_TAKEOVER_REQUIRED`, `URL_REDIRECT_NOT_FOUND`.
+  - **Bulk product update:** `fields.scopedStatus` (`{ channelId, languageCode | null, value: 'active' | 'inactive' | 'inherit' }`) is accepted and counts as a field; combined with `fields.status` it is refused on the `scopedStatus` path. Result reasons gain `scope_invalid` and `completeness_gate`.
+  - **`CatalogProductRecord`** gains optional `publishFrom` and `publishUntil` (the global publication window); they stay optional, so record literals built without them keep compiling.
+  - **`updateProductRequestSchema`** accepts optional, nullable `publishFrom` / `publishUntil` (ISO instants).
+  - **`resolveScopeLanguage`** ignores a quality parameter carried with the tag (`de;q=0.9`).
+  - **`CatalogQuickSearchParams`** gains optional `languageCode` (the request's language tag; absent = the channel default).
+  - **`ProductAvailabilityScope.languageCode`** is `string | null` — `null` asks at the channel's default language.
+  - **Quote requests:** `ADMIN_QUOTE_REQUEST_WARNING_CODES` (`PRODUCT_UNAVAILABLE_IN_SCOPE`), `adminQuoteRequestWarningSchema`, `AdminQuoteRequestWarning`.
+  - **`CatalogSellableProductQuery.scope`** (optional `{ channelId, languageTag }`) and **`ResolvedSearchChannel.languages`** (optional).
+
+- dd6deb2: **BREAKING — the product status is `active` | `inactive`, and archiving is its own action.** Recorded at `minor`, which in a `0.x` series already takes every caret dependent out of range.
+
+  - **`productStatusSchema`** narrows from `draft | active | inactive` to `active | inactive`, and so do `ProductStatus`, `PRODUCT_SCOPE_STATUSES` / `productScopeStatusSchema` and the bulk `fields.scopedStatus.value` (still with `inherit`). `draft` is removed with no alias: send `'inactive'` where you sent `'draft'`.
+  - **`coerceProductStatusWrite` and `productStatusWriteSchema` are removed.** Use `productStatusSchema`. The legacy `archived` write alias is gone with them: `status: 'archived'` is refused like `draft`, with `400 VALIDATION_FAILED`, on `POST` / `PATCH /api/v1/admin/catalog/products`, on the bulk update, on `POST …/products/resolve-ids` and on the API-key upsert `PUT /api/v1/catalog/products/by-sku/:sku`.
+  - **`inactive` no longer archives.** It is plain off at every scope; a status write neither sets nor clears `archivedAt`, and setting `active` never restores an archived product. To archive, call `POST /api/v1/admin/catalog/products/:id/archive` (and `…/restore` to bring it back), both behind `catalog:write`, or the bulk update with `fields: { archived: true }` (`false` restores) as the only field of the request. Each is an audited `product.archive` / `product.restore` Command; repeating one answers `200` and changes nothing.
+  - **`product.archived.v1`** now means "archived by the Archive action", not "status moved to `inactive`": it is sent after `product.updated.v1` with `changedFields: ['archivedAt']`. Restore sends `product.updated.v1` with `['archivedAt']` only. A bulk-operation undo now announces every product it reverts (`product.updated.v1` with the restored fields, and `product.archived.v1` where it re-archives).
+  - **Admin product list:** `counts.draft` → `counts.archived` (`counts` is `{ all, active, inactive, archived }`, the first three over products that are not archived); the `status=archived` filter → `archived=only` (`archived=exclude|include|only`, default `exclude`; `includeArchived=1` still means `include`); `status=draft`, `status=archived` or any unknown status answers `400 VALIDATION_FAILED`. `resolveProductIdsRequestSchema` gains the same `archived` mode (`productArchivedModeSchema`), whose default stays "include".
+  - **New and duplicated products are `inactive`** (and a duplicate is never archived), where they used to be `draft`.
+  - **`pairsTurningOn`** compares the effective status only: setting an archived product `active` turns its pairs on, and a Restore turns nothing on.
+  - **`SetProductStatusParamsSchema`** (the assistant's `catalog.set_product_status`) and **`quickOrderSearchResultSchema.status`** take `active | inactive`; the assistant's status tool switches products on or off and never archives.
+  - **Migration `product_status_drop_draft` (catalog).** Every product that is `inactive` at the upgrade stays archived — it keeps its `archived_at`, or gets its `updated_at` when it had none — and **needs an explicit Restore**: setting it `active` alone leaves it archived. `draft` becomes `inactive` in `products` and in both scope tables without archiving anything. The status column now refuses any other value (`products_status_check`) and defaults to `inactive`. Product-feed criteria stored with `status = draft` are not rewritten; they match nothing, as before.
+  - **`errors.PRODUCT_ARCHIVED`** reads "Product is archived." / "Produkt jest zarchiwizowany.".
+
+- 3f697a3: The assistant's product mutation tools take at most `PROMPT_PRODUCT_IDS_MAX` (10 000, the bulk product route's cap) product ids: `AssignProductsToCategoryParamsSchema`, `RemoveProductsFromCategoryParamsSchema`, `SetProductStatusParamsSchema`, `SetProductsVisibilityParamsSchema`, `ArchiveProductsParamsSchema` and `RestoreProductsParamsSchema` refuse a longer `productIds`. `PROMPT_PRODUCT_IDS_MAX` is exported. Catalog's tools treat a repeated id as one product, so its preview no longer answers 404 and it is written once; a per-product failure reported to the assistant names only an `HttpError`'s message, `failed` otherwise.
+- df0a90e: A buyer's quote line is judged at the request's scope language, as a basket line is. `CreateForCustomerOptions` gains `languageTag` — the request's first `Accept-Language` tag, resolved against the channel's own languages — and `RfqService.createForCustomer`, `patchDraft` and `resubmit` ask `catalogProductAvailabilityPort` and snapshot line and unit names at it; absent, at the channel's default language. `language` is now a message language only: it used to decide the scope too, so a buyer asking in a language the message bundles do not carry (`de-DE` answered in Polish) was quoted a product switched off in that language. The customer quote routes, the basket's conversion to a quote request (`CartConversionService.convertToQuoteRequest`'s options gain `languageTag`) and the buyer's quick-order build to a quote request (`QuickOrderBuildOptions.languageTag`) pass the tag.
+- 3ccf23b: An art-directed image, or a section background, can keep its mobile art up to the desktop breakpoint.
+
+  - `@endora-commerce/contracts`: `responsiveImageSchema` and `sectionBackgroundSchema` gain an optional `desktopFrom: 'tablet' | 'desktop'` (`DESKTOP_FROM_TIERS`, `DesktopFromTier` in `page-builder-values`). Unset means `tablet`, the 768 px switch, as before.
+  - `@endora-commerce/page-builder-core` re-exports `DESKTOP_FROM_TIERS` and `DesktopFromTier`. The section background field offers **Mobile image or video shown on** once a mobile image or video is set; the default stores nothing.
+  - `@endora-commerce/page-builder-admin`: the responsive image field offers **Mobile image shown on** once a mobile image is set.
+  - `@endora-commerce/cms-components`: `Picture` writes `(max-width: 1023.98px)` on the mobile `<source>` for `desktopFrom: 'desktop'` (new export `pictureMobileMedia`). A section background's tiled image and video pair carry `data-desktop-from="desktop"` on `.cmsc-section__media`, and `useBreakpointVideo` takes an optional third argument, `{ mobileMedia }`, the query under which the mobile video plays.
+  - `@endora-commerce/mod-i18n` carries the English and Polish copy.
+
+- 3ccf23b: `cms.Section` takes its width per breakpoint, and a custom width may be wider than the page container.
+
+  - `@endora-commerce/contracts`: `sectionSettingsSchema.width` is `responsiveSchema(sectionWidthSchema)` (a single width still parses as it is). `SECTION_OUTSET_PX_MAX` (400, the Column's background outset limit) is exported from `page-builder-values`. A consumer reading `SectionSettings['width']` now gets `Responsive<SectionWidth>`.
+  - `@endora-commerce/page-builder-core` re-exports `SECTION_OUTSET_PX_MAX`.
+  - `@endora-commerce/cms-components`: the Section's **Width** moves to the Responsive tab. When the breakpoints agree, the markup is unchanged (`data-width="<width>"`); when they differ, the section carries `data-width="tiered"` and each tier's box and frame as `--cmsc-section-box-*` / `--cmsc-section-frame-*` (`-md`, `-lg`). A custom width wider than the page container now widens the section, centred, up to the viewport less the gutters; it used to be capped at the container.
+  - `@endora-commerce/mod-cms` lists `width` among the Section's `responsiveFields`, with English and Polish labels.
+
+- 3ccf23b: A CMS page can include its parent page's path in its address, for nested URLs such as `/services/consulting/workshops`.
+
+  - `@endora-commerce/mod-cms` adds `parent_path_in_url` to `cms_pages` (migration `20261027T165458_cms_page_parent_path_in_url`, `boolean not null default false`). Off, a page keeps its flat `/<slug>`, so no stored page changes address. On, the page is served at its parent's public path, a `/` and its slug; the parent's own path follows the same rule. The path is computed on read for each sales channel from the slug that channel serves a page under, so renaming or moving a parent moves the nested pages below it; their old path stops answering.
+  - `GET /api/v1/cms/pages/by-slug?slug=` takes the whole path. A nested page's own slug still resolves; its answer's `path` is the canonical address, and the storefront answers that request with a permanent (308) redirect. A parent the channel does not serve leaves the page at its own slug in that channel.
+  - A save that would give two pages of one sales channel the same address — the page saved or a nested page below it — is refused with `409 CMS_SLUG_CONFLICT` (details `{ path }`), and nothing is written or audited. `parentPathInUrl` is part of the `cms_page.update` audit entry.
+  - Page Builder links of kind `page` are rendered at the target's path in the request's channel. Breadcrumb links, the canonical link, `og:url` and the sitemap use the path. A write that moves a nested page's path drops every cached page answer, because other pages link to it.
+  - The page editor adds _Include the parent page's path in the address_ under the parent picker, and its _Public address_ shows the resulting path.
+  - `@endora-commerce/contracts`: `parentPathInUrl` on the admin page summary and detail (required in responses) and on create and patch (optional); optional `path` on `cmsResolvedPageSchema`, on each breadcrumb crumb and on `cmsPageIndexEntrySchema`; `cmsPagePublicPaths`, `CMS_PAGE_PATH_MAX_LEVELS` and `CmsPagePathNode`; optional `addressesMoved` on the page `CmsContentChange`. Code that constructs an admin page summary or detail must supply `parentPathInUrl`.
+
+- 3ccf23b: Buttons inside blocks take the Button block's look options, and an icon-only button can be a pill.
+
+  - `ButtonSpec` (`buttonSpecSchema`) gains optional `transparentOutline`, `borderColor` and `iconOnlyShape` (`'circle' | 'pill'`). A button saved before parses and renders as it did.
+  - A hero's, a card's, a panel's, a header's or a listing's button renders them through the same `ButtonView` path as `cms.Button`, whose own block-level look options are unchanged and win over the spec's. `cms.Button` gains `iconOnlyShape`.
+  - A pill is `cmsc-btn--icon-pill`, 1.15 times its height.
+  - `createButtonSpecField` takes `look: false` (used for `cms.Button`); `BUTTON_LOOK_FIELDS` is exported, its labels translated once in the `core` bundle (`pageBuilder.sharedFields.button*`).
+
+- 3ccf23b: Brand settings: a type and spacing scale for tablets and small desktops.
+
+  The brand tokens take an optional `tierScale` with a `tablet` and a `smallDesktop` factor (0.5–2). `brandTokensToCss` then rebinds every type size and spacing step from 768 to 1023 px to the mobile value times the tablet factor, and from 1024 to 1279 px to the desktop value times the small-desktop factor. The gutters and the container are not scaled, nor are sizes a block sets in its own pixels.
+
+  Without factors (or with 1) the CSS output is byte for byte what it was, and a stored set without `tierScale` parses as before. The **Brand** screen offers both factors in its Layout card, empty meaning 1, with English and Polish labels.
+
+- 3ccf23b: Brand settings: desktop sizes that grow with the window, and button heights in the tier scale.
+
+  All optional; a stored set without them parses as before and `brandTokensToCss` writes the same CSS byte for byte.
+
+  - `tierScale.fluidDesktop` with `tierScale.fluidUntilPx` (else `layout.containerMaxPx`): from 1280 px, each desktop type size and spacing step is `clamp(<px × factor>px, <px × 100 / end>vw, <px>px)`, rising from the small-desktop factor to the full size. Needs a small-desktop factor below 1.
+  - `tierScale.buttons: true` scales `--cmsb-btn-h-s|m|l` in the tablet, small-desktop and fluid blocks; icon-only and pill buttons follow.
+  - The **Brand** screen's Layout card offers each one (empty or off stores nothing), with English and Polish labels.
+
+- 3ccf23b: A CMS page can show its breadcrumb trail over its first section instead of in a band above it.
+
+  - `@endora-commerce/mod-cms` adds `breadcrumbs_overlay` to `cms_pages` (migration `20261028T090524_cms_page_breadcrumbs_overlay`, `boolean not null default false`), so every stored page keeps its band. It is part of the `cms_page.update` audit entry, and the storefront read answers `breadcrumbs.overlay: true` only when it is on.
+  - The page editor's Breadcrumbs card adds _Show the breadcrumbs over the first section_, with English and Polish labels. The storefront then draws the trail in a zero-height layer over the first section, in the brand container, painting no band, so nothing below moves down; the scheme still sets its colours. The first section's top padding is the editor's to set.
+  - `@endora-commerce/contracts`: `breadcrumbsOverlay` on the admin page detail (required in responses) and on create and patch (optional); optional `overlay` on `cmsResolvedPageSchema.breadcrumbs`. Code that constructs an admin page detail must supply `breadcrumbsOverlay`.
+
+- 774d23e: A CMS page can have its own name, slug and description in each of its languages.
+
+  - `@endora-commerce/mod-cms` adds `translations` to `cms_pages` (migration `20261029T131218_cms_page_translations`, `jsonb not null default '{}'`): `{ "<lang>": { "name", "slug", "description" } }`. The page's own `name`, `slug` and `description` stay the default; a blank or absent field inherits it, so every stored page reads as before. An override counts only while the page has its language — removing a language keeps its overrides stored but unused. A create or patch naming a language the page does not have is refused with `400 CMS_LANGUAGE_NOT_IN_CHANNEL_SCOPE`. `translations` is part of the `cms_page.update` audit entry, and the admin page list's search also matches it.
+  - Each language is served at its own slug, and a nested page at its ancestors' slugs in that language. `GET /api/v1/cms/pages/by-slug` finds the page by its address in the requested language, then the channel's default, then any other language, then the page's own slug, and serves it in the requested language. The answer's `path` is the page's address in the served language, so a visitor who switches language is sent to the page's slug in the new one. The storefront answers a permanent (308) redirect when the address asked for differs.
+  - An address is unique within one sales channel and one language: a save that would give a page, or a nested page below it, a language address another page already has is refused with `409 CMS_SLUG_CONFLICT` (details `{ path, language }`), and nothing is written or audited. One slug in two languages of two pages is allowed. Every language slug is checked against the reserved first segments.
+  - A URL in a language other than the channel's default carries `?lang=<language>`, as a product URL does. The resolved page answers `url` (its canonical) and `alternates` (one `{ language, url }` per language it is served in), and its `name`, breadcrumb names and links, and Page Builder `page` links are in the served language. The storefront passes `?lang=` on as the CMS page's language, declares the alternates as `hreflang` links, marks the content with its language, and lists every language's URL in the sitemap. The CMS-backed home page `/` is unchanged.
+  - The page editor adds a _Language version_ card: the name, slug, description and meta fields of the language the canvas shows, each empty field showing the inherited value, with the address in that language. Meta fields are now read and saved for every language: before, the editor read them from `en-US` whatever the page's languages and saved only the active language's, which removed the other languages' meta on the server.
+  - `@endora-commerce/contracts`: `translations` on the admin page summary and detail (required in responses) and on create and patch (optional, replaced whole); `cmsPageTranslationSchema`, `cmsPageTranslationsSchema`, `cmsLocalizedPage` and `cmsPageUrl`; optional `url` and `alternates` on `cmsResolvedPageSchema` and `cmsPageIndexEntrySchema`. Code that constructs an admin page summary or detail must supply `translations`.
+
+- 4cb0a7d: Product data scopes — checkpoint C/E/Q review fixes.
+
+  - **Platform:** new `withSystemScopeActingFor(adminUserId, reason, fn)` in `@endora-commerce/platform/tenancy` — a worker's system scope acting for the admin who queued the work, so its Commands are audited with that admin.
+  - **Catalog — audit:** a queued bulk Archive / Restore and a queued bulk scoped-status edit audit each product with the admin who requested the operation (it was a null actor). The API-key upsert `PUT /api/v1/catalog/products/by-sku/:sku` of an existing product is now the audited `product.update` Command, its entry naming the key (`apiKeyId` in the after-state); it is still never checked by the completeness gate.
+  - **Catalog — Archive / Restore** lock the product row, so a concurrent single and bulk Archive transition the product once: one audit entry, one `product.archived.v1`.
+  - **Catalog:** a composition that cannot build the completeness gate logs one warning instead of running unchecked silently.
+  - **SEO:** the cached sitemaps are marked stale on a change of the global status, archive, visibility or organization list, and on `product.archived.v1`, as they already were on the scoped values and URL keys.
+  - **Behaviour change for API clients (contracts, SEO):** an override's `ogImageUrl` must be an `http(s)` URL or a path starting with a single `/` (`ogImageUrlSchema`); `javascript:`, `data:` and other schemes are refused with `400 VALIDATION_FAILED`. The read shape accepts any stored string.
+  - **Contracts:** `effectiveOrderRules` and `effectiveKeys` are documented as applying no availability — a buyer-facing caller filters with `filterAvailable` first.
+
+- 0e33ca9: The shop's identity gains a logo and social profiles, for the storefront's `Organization` structured data.
+
+  - `@endora-commerce/mod-settings` registers `shop.logo_asset_id` (an asset id, `''` while unset) and `shop.social_profiles` (a list of URLs, `[]` by default). Social profile URLs must be `https:`; anything else is refused with `422 VALIDATION_FAILED` and nothing is stored. The shop-info read resolves the logo to its public URL (a missing or non-public asset reads as `null`) and returns only `https:` profiles. No existing default changes.
+  - **`@endora-commerce/mod-settings` now declares a dependency on `assets_library`** to resolve the logo. Both modules are non-deactivatable, so no installation changes, but a deployment that composes `settings` without `assets_library` now fails the module dependency check.
+  - `@endora-commerce/contracts`: `ShopInfoSchema` gains `logoUrl` (`string | null`) and `socialProfiles` (`string[]`), both required in the response.
+
+- f148418: The storefront probes that take a bare product id follow product data scopes per sales channel and language.
+
+  - **Behaviour change for API clients — price and stock probes:** `GET /api/v1/storefront/products/:id/resolved-price`, `GET /api/v1/storefront/pricing/display-mode/:productId`, `GET /api/v1/storefront/inventory/stock/:id` and both notify-when-available routes (`POST /api/v1/storefront/inventory/notify-when-available`, `POST /api/v1/catalog/products/:id/notify-when-available`) answer only about a product available at the request's channel and language to the caller now. A product that is switched off there, outside its publication window, sold on another channel or outside the channel's audience rule gets each route's existing `404`, the same body an id nobody sells gets; a notify-when-available request for such a product can no longer reach `409 PRODUCT_UNMANAGED_STOCK` or `422 PRODUCT_IN_STOCK`.
+  - **Composition:** `price_lists`' plugin options and `inventory`'s plugin options take `catalogAvailability` (`catalogProductAvailabilityPort`), required; `AvailabilityNotificationService` takes it in place of the sales-channel membership port, and `SubscribeInput` gains `languageTag`.
+  - **Caching:** `markPersonalisedPricing` now marks every response for an authenticated caller `private, no-store`, not only one naming an organisation; `GET /api/v1/catalog/filters` and `GET /api/v1/catalog/categories` call it, since their counts and tree follow the caller's audience. Anonymous responses stay unstamped.
+  - **Product page:** an archived product answers `410` only where it would be available with the archive taken away; otherwise (switched off in that channel or language, outside its window) it answers the absent product's `404`.
+  - **Buyer seams name their channel:** `CreateForCustomerOptions.salesChannelId` (and the draft-edit and resubmit options) carry the channel the buyer's route resolved; quick order's pasted-SKU lookup takes it too; the basket asks availability at its own channel. The audience-only answer remains only for callers outside a request.
+  - **Helpers:** `@endora-commerce/contracts` exports `toScopeChannel`, `scopeLanguageOf` and `firstLanguageTag`. `BundleService.validateConfiguration` requires its availability filter.
+
+- 8ef189b: Per-administrator Admin UI preferences (feature 164).
+
+  - **New `admin-preferences` exports.** `ADMIN_PREFERENCE_KEYS` — the closed set `sidebarPins`, `sidebarCollapsedGroups`, `sidebarRailMode`, `listPageSizes`; the write schemas `adminPreferencesPatchSchema` (strict: an unknown preference, a wrong shape, a duplicate or a value beyond a bound is refused) and `adminPreferencesLegacyImportSchema`; the tolerant read schema `adminPreferencesSchema`, `adminPreferencesResponseSchema` and `ADMIN_PREFERENCES_DEFAULTS`; the bounds `ADMIN_SIDEBAR_PINS_MAX` (200), `ADMIN_SIDEBAR_COLLAPSED_GROUPS_MAX` (32) and `ADMIN_LIST_PAGE_SIZES_MAX` (128); `ADMIN_PINNED_GROUP_KEY` (`'pinned'`, deliberately not an `AdminNavSectionName`).
+  - **`ADMIN_LIST_PAGE_SIZE_OPTIONS`** (`[5, 10, 20, 50, 100, 500]`) and `ADMIN_LIST_PAGE_SIZE_DEFAULT` (20) now live here, so the server validates a page size against the same array the Admin UI offers. `@endora-commerce/admin-kit`'s `PAGE_SIZE_OPTIONS` is this array, re-exported.
+  - **`adminMeResponseSchema` gains `preferences`** — the signed-in admin's own document, or `null` when the server could not read it. A consumer that ignores the field is unaffected; a consumer that parses `/admin/me` with the schema now requires the key.
+
+- 4bc5c7f: Asset references can now say who may see them (`specs/166-asset-reference-visibility/`).
+
+  - `AssetReferenceDescriptor.findReferences(assetIds)` returns `AssetReferenceHit[]`: an `AssetReference` plus the `assetId` it points at. A descriptor that still returns plain `AssetReference[]` compiles and is answered correctly, but the registry then asks it one asset at a time wherever it must attribute a batch — tag your hits.
+  - New optional, readonly data property `AssetReferenceDescriptor.readerRestriction` (`AssetReferenceReaderRestriction`): `visibleEntityIds(entityIds)`, `assetIdsWithHiddenReferences()` and `allReferencedAssetIds()`. Absent, the references never hide an asset; present, a library reader who may see none of the records using an asset does not see the asset.
+  - `AssetReadPort` gains the **required** method `visibleToCaller(assetIds)`: which of the ids the ambient caller may see in the asset library (missing, hidden and non-uuid ids are all absent). A test double or an alternative implementation of the whole port must add it; one that picks methods (`Pick<AssetReadPort, …>`) is unaffected.
+
+- eba4fd8: A quote's validity date now binds order placement, not only the conversion into a basket (issue #167). A basket line filled by `convert-to-order` names its quote (`CartItemRecord.quoteRequestId`, column `cart_items.quote_request_id`, backfilled from the basket's `source_quote_request_id`), and placement refuses every line still priced at its agreement with `410 QUOTE_VALIDITY_ENDED` once that quote's `expiresAt` has passed (`details.code: 'lapsed'`), once it no longer applies — re-opened, cancelled, expired or gone (`'withdrawn'`) — or while `quote_requests` is off and nothing can confirm the prices (`'unavailable'`, fail-closed; this used to place the basket at the agreed prices). The order-total preview answers the same verdict as `quoteCommitmentRefusal` (`quoteCommitmentRefusalSchema` in `@endora-commerce/contracts`), `null` when nothing is refused. `QUOTE_VALIDITY_ENDED` declares the three reasons as refusal tokens, with sentences in English and Polish.
+- 61fc321: The storefront language is part of the URL path (`/pl/p/wiertarka`, `/en/p/drill`, issue #396).
+
+  **Upgrade note for operators: existing sales channels keep their addresses.** The migration
+  `Migration20261029T152922CoreSalesChannelsPrefixDefaultLanguage` adds the per-channel setting
+  _Prefix the default language in URLs_ and switches it **off** on every channel that exists when it
+  runs, so default-language URLs stay unprefixed; channels created later start **on**. To adopt
+  prefixes for the default language too, switch _Prefix the default language in URLs_ on in
+  _Sales channels_ → the channel. Other languages are prefixed either way: a former
+  `/p/<key>?lang=<L>` link answers a permanent redirect to `/<prefix>/p/<key>`. A CMS page whose slug
+  starts with a channel language prefix can no longer be saved.
+
+  `@endora-commerce/contracts`:
+
+  - New: `channelUrlLanguages`, `channelUrlLanguageAliases`, `storefrontPagePath`,
+    `storefrontPagePathFor`, `storefrontDefaultPath`, `channelUrlLanguageSchema`,
+    `channelUrlLanguageAliasSchema`, `URL_LANGUAGE_PREFIX_PATTERN`, types `ChannelUrlFacts`,
+    `ChannelUrlLanguage`, `ChannelUrlLanguageAlias`; `productDefaultPath(key)`.
+  - **`productPath` takes the channel's URL facts and never appends `?lang=`:**
+    `productPath({ key, languageCode, channelDefaultLanguage })` (`/p/drill?lang=en-US`) becomes
+    `productPath({ key, languageCode, channel })` (`/en/p/drill`), where `channel` is any
+    `{ languages, defaultLanguage, prefixDefaultLanguage }` — the cached channel satisfies it.
+  - `productKeyResolutionSchema`'s `redirect` requires `permanent` (`false` for a key of another
+    channel language, answered 307); `productPagePathsSchema` requires `xDefault`.
+  - Sales channel shapes carry `prefixDefaultLanguage` (create defaults to `true`); the public
+    channel read answers `prefixDefaultLanguage`, `urlLanguages` and `urlLanguageAliases`.
+  - `cmsPageUrl` (163 R24) takes the channel's URL facts and composes the prefixed path:
+    `cmsPageUrl({ path, languageCode, channelDefaultLanguage })` (`/about-us?lang=en-US`) becomes
+    `cmsPageUrl({ path, languageCode, channel })` (`/en/about-us`). The resolved CMS page's `url` and
+    `alternates`, and the storefront page index, therefore carry each language's own slug under its
+    prefix.
+  - `CmsPageRecord` gains optional `languages` and `translations` (the `seo` sitemap lists each
+    language at its own slug); `cmsPageSummarySchema` gains an optional
+    `shadowedByLanguagePrefix` (any of the page's slugs, per-language ones included).
+
+  Emitters (catalog, seo sitemap, product feeds, organizations, customers, newsletter, comparisons,
+  mfa, invoices) compose prefixed storefront URLs; the product feed `link` uses the product's key in
+  the feed language; the invoice e-mail links the storefront order page; the admin password reset
+  links `/password-reset/confirm`. `cms-components` localizes block links through the render
+  context's `localizePath`.
+
+- 9b3e7f0: The megamenu becomes the storefront's navigation bar (`specs/168-megamenu-navigation-bar/`, issue #522).
+
+  **Breaking** (owner ruling: no backward compatibility for stored menus or the megamenu wire contract):
+
+  - A top-level item is a **tab** and must carry a `presentation` — `link`, `dropdown`, `mega` or `catalog` — and may carry an `alignment` (`start`, `end`); no other item may carry either. `PUT /api/v1/admin/megamenu/menus/:id/items` refuses a tab without one, a tab of kind `asset`, `cms-block-embed` or `category-tree` (`400 MEGAMENU_KIND_NOT_ALLOWED_AS_TAB`), a `link` tab with children or of kind `group` (`400 MEGAMENU_LINK_TAB_INVALID`), and an `external-link`, `button` or `group` with no label (`400 MEGAMENU_LABEL_REQUIRED`).
+  - `ResolvedMenuItem.id` and `parentId` are strings, not uuids: a category a `category-tree` expands to has the id `<tree item id>:<category id>`. Tabs carry `presentation` and `alignment`. A `category-tree` never appears in a resolved tree.
+  - The migration `20261029T162855_megamenu_navigation_bar` adds `presentation`, `alignment` and `audience` to `megamenu_items` and makes every stored top-level item a start-aligned `mega` tab; nothing else is converted. The Redis prefix moves to `megamenu:v2:`.
+  - The storefront header renders the menu's tabs and nothing else: the hard-coded _Wszystkie kategorie_ trigger and Quick Order button are gone, and so is the mobile drawer's Quick Order promo. A deployment that wants them configures them as tabs; the demo menu does.
+
+  Added:
+
+  - `@endora-commerce/contracts`: item kinds `group` (a heading; a column of a `mega` panel) and `category-tree` (`{ rootCategoryId, depth: 1–3 }`); `megamenuPresentationSchema`, `megamenuAlignmentSchema`, `megamenuAudienceSchema`, `MEGAMENU_TAB_KINDS`, `MEGAMENU_LABEL_INHERITING_KINDS`; `CmsPageReadPort.findStorefrontLinks`; `effectiveCustomerGroupId`, moved from `@endora-commerce/mod-price-lists`, which re-exports it.
+  - `@endora-commerce/mod-megamenu`: a `category-tree` expands to the catalogue's live categories on every resolution, from one catalogue read; an empty label on a category link, page link or tree inherits the target's name; a page link follows the page's name, slug and parent path per language. Every item has an audience — everyone, guests, signed-in customers, or customers whose effective customer group is one of the chosen ones — and the storefront API answers each visitor only their items, with `Cache-Control: private, no-store` for an identified caller. Every write runs as a Command with one audit entry (`megamenu.*`), and the module joins the Command Bus coverage check. New dependencies on `customer_accounts` and `organizations`, both non-deactivatable. The editor shows a tab's presentation and alignment, offers the kinds a level allows, sets audiences with customer groups, configures category trees, and marks hidden items in the tree.
+  - `@endora-commerce/mod-megamenu`: a tab with a link of its own and a panel can follow its link on click (`clickNavigates`, migration `20261029T190956_megamenu_tab_click_navigates`); the storefront renders it as its link plus a separate toggle for the panel. The `catalog` presentation is named _Panel with side list_ in the editor, and its _All in …_ link appears only for a category.
+  - `@endora-commerce/mod-cms`: `findStorefrontLinks(ids, { salesChannelId, language, channelDefaultLanguage })` on the page read port — a page's localised name and its URL in the channel's tree for that language.
+  - `@endora-commerce/mod-settings`: the cache flush names `megamenu:v2:*`.
+  - `@endora-commerce/mod-catalog`: the demo categories carry Polish names.
+  - `@endora-commerce/demo-composition`: the demo menu is a _Wszystkie kategorie_ catalogue tab over the demo category tree, and a Quick Order button at the end of the bar.
+
+- ecdd2f7: A **Contact form** Page Builder block (`cms.ContactForm`) that e-mails a visitor's message to the shop and stores nothing.
+
+  - **Block:** a fixed field set the server knows — name (shown by default), e-mail and message (always), phone, company, subject and a select with editor-defined options (on request), a required privacy consent and an optional marketing consent, both with inline rich labels. Per field: show, label, placeholder, required, and its width with two columns. Layout and look are presets: one or two columns, field look `boxed` / `underline` / `pill` from the colour scheme, label above or visually hidden, the submit button through the existing button look (no link) with its alignment, and editable "sent", "not accepted" and "unavailable" messages. Posts to the storefront's `/forms/contact` and works without JavaScript; with JavaScript it checks itself and shows the outcome inline. Unset words read the page language's defaults through the new optional `contactFormText` render-context entry.
+  - **`ButtonView`:** an additive `type="submit"` rendering (a `<button type="submit">` with the same classes) and `disabled`; every existing rendering is unchanged.
+  - **Endpoint:** `POST /api/v1/storefront/cms/contact-form` (public, rate limited to 10 submissions per client address in 10 minutes, honeypot field `website`) sends one e-mail per recipient through the platform mailer, Reply-To the visitor, written in the channel's default language, with a fixed subject and no `meta`, so nothing typed reaches the delivery record. Answers `400 VALIDATION_FAILED`, `409 CMS_CONTACT_FORM_UNAVAILABLE` (new error code: no recipients on the channel), `429`, `500`, and `503` with `cms` off.
+  - **Setting:** `cms.contact_form_recipients` (`string_list`, per sales channel, group "Contact form", at most 10 valid addresses, refused otherwise), with the palette action `open-contact-form-settings`. `cms` now depends on `email` and `_i18n` (both non-deactivatable).
+  - **Contracts:** `contactFormSubmissionSchema`, `contactFormSubmissionResponseSchema`, `contactFormEmailSchema`, `CONTACT_FORM_LIMITS`, `CONTACT_FORM_MAX_RECIPIENTS` and `ERROR_CODES.CMS_CONTACT_FORM_UNAVAILABLE`.
+
+- ecdd2f7: `EmailMailerSendInput` gains an optional `replyTo`. The SMTP driver sends it as the `Reply-To` header and the console driver logs it beside the recipient; the recording mailer passes it to the transport and does not write it to the delivery record. Absent, every message is sent exactly as before.
+- b7baf8a: Admin order creation, one-click buy and the external order intake no longer empty and close the
+  customer's active basket (issue #169). They place the order from a separate **working basket**
+  written from the request's lines, through the same `placeOrder`; the customer's basket — one
+  filled from an accepted quote request included — is left exactly as it was, whether the order is
+  placed or refused.
+
+  - **`@endora-commerce/contracts`** — `CartWritePort.addItems`' option `replaceExisting` is
+    replaced by `workingBasket`. Old: `addItems(actor, lines, { onLineError: 'throw', replaceExisting: true })`
+    emptied the active basket and wrote the lines into it. New:
+    `addItems(actor, lines, { onLineError: 'throw', workingBasket: true })` writes them into a new
+    cart in status `working` and returns it; the active basket is not touched. Pass the returned
+    `cart.id` as `OrderPlacementPort.placeOrder`'s new option `workingBasketId` to place from it.
+    `cartStatusSchema` gains `'working'`.
+  - **`@endora-commerce/mod-carts`** — migration `cart_status_working` widens `carts_status_check`
+    to `working`. `CartPlacementApplyPort` gains `readWorkingForPlacement(em, ctx & { cartId })` and
+    `discardWorkingBasket({ cartId, customerAccountId })`; an implementation of the port has to
+    provide both. A working basket ends `completed` with `completed_order_id` set, or is deleted
+    when the placement is refused; it is never listed (admin carts list, organization carts list,
+    the customer's carts panel) and never swept.
+  - **`@endora-commerce/mod-orders`** — `OrderService.placeOrder` accepts `workingBasketId`; admin
+    order creation and the external intake place from a working basket.
+  - **`@endora-commerce/mod-quick-order`** — one-click buy places from a working basket.
+
+- 56e237d: A product feed publishes a sub-cent unit price as the exact price of a pack instead of rounding it (issue #430).
+
+  - **Behaviour change.** A price with a third or fourth significant decimal place (0.0125) was written rounded to two (0.01), against a product page showing 0,0125 zł. It is now published as the price of N units — N the smallest of 10, 100, 1 000, 10 000 that makes it exact (0.0125 → 100 at 1.25; a gross feed publishes the gross of that pack's net) — with N in the template's pack fields. A template with no `pack_quantity` field leaves the item out with the run issue `sub_cent_price_without_pack_field`; a price needing a pack above 10 000 with `sub_cent_price_beyond_pack_limit`. A price with two decimal places is published byte for byte as before.
+  - **`feedFieldSourceKindSchema`** (contracts) gains `pack_quantity`, `pack_unit_pricing_measure` and `pack_unit_pricing_base_measure`; **`feedRunIssueReasonSchema`** gains `sub_cent_price_without_pack_field` and `sub_cent_price_beyond_pack_limit`.
+  - **The predefined Google Merchant Center template** binds them to `g:multipack`, `g:unit_pricing_measure` and `g:unit_pricing_base_measure`, after `g:sale_price`; migration `Migration20261025T145041ProductFeedsGoogleTemplatePackFields` adds them to an installed template.
+  - **Resolver SPI**: `FeedItemPrice.taxRatePercent: number | null` (required) and `ResolveFeedItemInput.templateFields` (optional, the whole template when `fields` is one field). New `feedPackQuantity` / `MAX_FEED_PACK_QUANTITY` in `services/feed-pack.ts`.
+
+- d50b874: A discount that is real but rounds to no cent is no longer shown as 0,00 (issue #430).
+
+  - **`DocumentValue`** (contracts): a `money` value may carry `belowMinorUnit: true`. `formatDocumentValue` prints it as `DOCUMENT_BELOW_MINOR_UNIT_TEXT` ("—"), and `sumDocumentValues` keeps the mark while the sum is zero.
+  - **Quote document** (quote_requests): `lineDiscount` and `discountTotal` carry the mark when a line has a unit discount but its rounded line discount is 0.00, so the PDF prints "—"; the amount stays 0, so list value − discount = net.
+  - **Admin quote screen** (quote_requests): the _Difference_ column keeps a difference of unit prices at four places (`referenceDifference(...).amount`) and shows its significant places (`RfqNumberFormat.signedUnitAmount`), instead of rounding it to 0.00.
+
+- 0a816a0: Display mode `none` now withholds every amount on the server (issue #491). Until now it hid prices
+  in the storefront only: the API still sent the price, the base, the sale, the list price and every
+  tier — a buyer's own included — so a shop configured to show prices only after sign-in
+  (`pricing.unauthenticated_display_mode = none`) disclosed them to anyone reading the network tab.
+
+  - **`@endora-commerce/mod-price-lists`.** Where the viewer's display mode resolves to `none`,
+    `resolveListingPriceDetails` answers `price: { source: 'none' }`, `basePrice` and `salePrice`
+    `null`, no `listPrice` and every `tiers` entry `null`; `resolveListingPrices` answers the `none`
+    arm; `resolveEngine` names no book, bracket, sale, source or compare-at. `displayMode: 'none'`
+    stays, so the storefront still renders "price on request". The catalogue listing, product page,
+    home cards, search hits and suggestions, comparisons, product links and
+    `GET /api/v1/storefront/products/:id/resolved-price` therefore send no amount. A line
+    (`resolveLinePrices`) keeps its amount beside the mode — it is the charging path, which the cart,
+    the admin order preview and order intake refuse as quote-only.
+  - **Price sort and range.** A product whose own display-mode step (its override, else its
+    category's) is `none` is left out of the price surface: a price-sorted listing shows it after the
+    priced products, in both directions, and a price range leaves it out. This replaces spec 086's
+    clarification 2, under which such a product kept its position in the order. A product or
+    category display-mode override now marks the products it concerns for the surface worker, so the
+    order follows it at the worker's turnaround, like a price change. `PriceListService` gains
+    `anyProductStepWithholds()`; `BookPricingDeps` gains the optional `anyProductStepWithholds`.
+  - **`@endora-commerce/contracts`.** New `displayModeWithholdsAmounts(mode)`, the one statement of
+    the rule for a consumer that publishes a line amount. The documentation of
+    `productResolvedPriceSchema`, `resolvedPriceEngineSchema`, `ListingPrice`, `ListingPriceDetail`
+    and `LinePriceResult` says what each carries under `none`; no shape changes.
+  - **`@endora-commerce/mod-catalog`.** The external catalogue API (`/api/v1/external/catalog/*`)
+    withholds a bound key's price, tier ladder and bulk price for a product whose display mode is
+    `none` for the bound Organization: `price: null` with `priceUnavailable: true`, no `priceTiers`
+    rung, and `reason: 'price_unavailable'` in a bulk answer.
+
+  **Behaviour change for API consumers.** A client that read amounts under `displayMode: 'none'` —
+  none should have — now reads `null`. Product feeds are unchanged: a feed publishes deliberately.
+
+- f261ed3: The sales channel's `isPublic` flag is retired in favour of the pricing display-mode chain
+  (issue #492; closes #467). The flag was documented as anonymous-price visibility, but every read of
+  it withheld prices from **everyone** on the channel, signed-in buyers included, beside a chain that
+  already says "prices after sign-in" per channel: `pricing.unauthenticated_display_mode = none`.
+
+  **Behaviour change.** Signed-in buyers on a channel that had `isPublic = false` now see prices
+  according to the display-mode chain (their organization's override, else the channel's
+  `pricing.default_display_mode`), where they used to see none — on the catalogue listing, the product
+  page, product links, search, comparisons, and the price sort and range, which are no longer refused
+  to them. Anonymous visitors on such a channel still see no prices: the migration below carries that
+  half of the flag over. A channel that had `isPublic = false` **and** its own value for
+  `pricing.unauthenticated_display_mode` keeps that value, so its anonymous visitors now see prices if
+  that value is a priced mode. A new channel, the boot-time default channel included, no longer starts
+  with prices hidden from everyone; it follows the chain like any other.
+
+  The display-mode chain itself is unchanged (owner ruling of 2026-10-28): a product or category
+  override takes precedence over the channel's `pricing.unauthenticated_display_mode`, also for
+  anonymous visitors, so a product overridden to `gross_only` shows its price to guests on a channel
+  whose guest mode is `none`. An organization override still applies to signed-in buyers only.
+
+  - **`@endora-commerce/platform`.** New migration `Migration20261028T173317CoreSalesChannelsRetireIsPublic`
+    (core): every channel with `is_public = false` and no value of its own for
+    `pricing.unauthenticated_display_mode` gets `"none"` as its per-channel value, then
+    `sales_channels.is_public` is dropped. It refuses — rather than migrating into showing prices — a
+    database that has a non-public channel but no registered `pricing.unauthenticated_display_mode`
+    setting; start the platform once on the previous release, so the settings reconciler registers
+    it, and migrate again. Because the column is dropped, stop processes running the previous release
+    before migrating. `SalesChannel.isPublic` and `CachedChannel.isPublic` are removed;
+    `SALES_CHANNELS_CACHE_KEY_PREFIX` moves from `sales-channels:v3:` to `sales-channels:v4:`, so no
+    process reads an entry cached in the other shape. The default-channel reconciler no longer sets
+    the flag.
+  - **`@endora-commerce/contracts`.** `ResolvedSearchChannel.isPublic` is removed — drop it from the
+    context you hand `SearchQueryPort`. No public HTTP shape carried the flag, so no response changes
+    shape. The `SALES_CHANNEL_AUDIT_ACTIONS` documentation now says who writes each row: the identity
+    Commands (with `stateBefore` / `stateAfter` snapshots) since #484.
+  - **`@endora-commerce/mod-catalog`.** `CatalogResolvedChannel.isPublic` and the `isPublic` field of
+    `ProductLinkService`'s storefront context are removed. The catalogue no longer skips pricing on
+    a channel: prices follow the viewer's display mode (a viewer whose mode is `none` gets the
+    withheld answer, `resolvedPrice.displayMode: 'none'`, where the channel used to answer
+    `resolvedPrice: null`). The price controls are refused only where the page's display mode is
+    `none`; the reason "This sales channel does not publish prices…" is gone.
+  - **`@endora-commerce/mod-search`.** The service's `ResolvedSearchChannel.isPublic` is removed, and
+    hits are always resolved for the viewer.
+  - **`@endora-commerce/mod-comparisons`.** A comparison is priced for the viewer on every channel.
+  - **`@endora-commerce/mod-sales-channels`.** The channel form's _Open to anonymous visitors_ hint
+    gains a second line pointing to the guest display mode, with a link to _Pricing settings_
+    (`identity.anonymousAccess.pricesHint`, `identity.anonymousAccess.pricesLink`, English and
+    Polish). New channels are no longer written with the flag.
+  - **`@endora-commerce/mod-price-lists`, `@endora-commerce/mod-i18n`.** _Pricing settings_ states,
+    under the two default modes, that a channel's own value wins over them and that a product or
+    category override takes precedence over both, for anonymous visitors too
+    (`priceLists.displayModes.settings.precedenceHint`).
+  - **`@endora-commerce/demo-composition`.** The `pl_b2b_vip` channel is created without the flag and
+    a new step, _the VIP channel hides prices until sign-in_, sets its
+    `pricing.unauthenticated_display_mode` to `none`; its signed-in buyers see prices. `pl_retail`
+    publishes prices to everyone, as before.
+  - **`@endora-commerce/mod-settings`, `@endora-commerce/cli`.** Comments only: the cache-clear
+    namespace names the new key prefix, and the channel-resolution rule no longer cites the flag.
+
+- c73366c: `ModuleActionSchema` gains an optional `keywordsKey` and `emailVariableDescriptorSchema` an optional `sampleValueKey` (issue #560). Both are translation keys relative to the declaring module's namespace, the same form as `labelKey`, so a manifest keeps its `keywords` and `sampleValue` in English and carries the other languages' words in its own `i18n/<lang>.json`. A `keywordsKey` bundle value is a comma-separated list; the new `parseBundleKeywords(value)` export reads it. `AdminActionView.keywords` — the `GET /api/v1/admin/admin-actions` row — is now the manifest's `keywords` followed by the words the action's `keywordsKey` resolves to in the requested language, de-duplicated. A manifest that declares neither field parses and behaves exactly as before.
+- b25d8be: A blog post's related products are shown as product cards priced for the viewer (issue #590).
+
+  - **`@endora-commerce/contracts`** — `productListQuerySchema` gains an optional `ids`
+    (`productListIdsSchema`: a comma-separated list of distinct uuids, at most
+    `PRODUCT_LIST_MAX_IDS` = 24). `blogResolvedPostSchema` gains an optional `relatedProductIds`:
+    the post's related products by id, in the editor's order, with no price. Additive; a payload
+    without either still parses.
+  - **Deprecated, removed in a later minor:** `blogProductCardSchema`, the `BlogProductCard` type and
+    `blogResolvedPostSchema.relatedProducts`. No shipped composition ever filled them, and their
+    `price` could not be a correct one: the post payload is cached per channel and language for
+    every visitor. Read `relatedProductIds` and fetch the products from
+    `GET /api/v1/catalog/products?ids=…` as the viewer instead.
+  - **`@endora-commerce/mod-catalog`** — `GET /api/v1/catalog/products?ids=<id>,<id>` restricts the
+    listing to the named products: the subset the viewer may see, priced like any listing card for
+    that viewer, in the listing's order, always from PostgreSQL. More than 24 ids or a value that is
+    not a uuid is `400 VALIDATION_FAILED`.
+  - **`@endora-commerce/mod-blog`** — the storefront post payload carries `relatedProductIds`.
+    `BlogStorefrontDeps.resolveProductCard` is deprecated: nothing reads what it produces any more,
+    and it is removed in a later minor.
+
+- 1fd4822: The audit-log row type inferred from `auditLogEntrySchema` is now `AuditLogEntryResponse`, in line with the package's `…Response` suffix for API shapes. `@endora-commerce/platform/kernel` publishes `AuditLogEntry` as the MikroORM entity of an `audit_logs` row, so a consumer importing both packages met two different declarations under one name (issue #84).
+
+  **Deprecation:** `AuditLogEntry` is still exported from `@endora-commerce/contracts` as a `@deprecated` alias of `AuditLogEntryResponse`, and is removed in the next minor release. Replace `import type { AuditLogEntry } from '@endora-commerce/contracts'` with `import type { AuditLogEntryResponse } from '@endora-commerce/contracts'`; the shape is unchanged. `auditLogEntrySchema` keeps its name.
+
+- 0f5bcde: The new-organization notification is no longer Polish on every installation.
+
+  - `@endora-commerce/contracts` exports `supportedLanguageOf(tag)`: the shipped language
+    (`'en'` or `'pl'`) a BCP-47 tag such as a sales channel's `defaultLanguage` is written in,
+    `LANGUAGE_FALLBACK` for any other.
+  - `mod-organizations`: the admin bell entry recorded when an organization registers carries an
+    English `title`/`body` and a `titleMessage`/`bodyMessage` key, so each administrator reads it
+    in their own language (a Polish administrator sees the same text as before). The fallback
+    e-mail sent when no `new_org_registration` template is defined, and the `statusLabel`
+    variable passed to that template, are written in the system-default sales channel's
+    language from the module's bundle, English when the bundle cannot answer. On a channel whose
+    default language is Polish the e-mail is unchanged. New bundle keys:
+    `notifications.newRegistration.*`. `OrgRegistrationNotifier` takes two optional
+    dependencies, `translate` and `resolveLanguage`.
+
+- c72a83e: A bulk operation's log trail is readable in each administrator's language.
+
+  - `@endora-commerce/contracts`: `bulkOperationLogEntrySchema` gains an optional `messageKey`
+    (`{ key, params? }`, a key in `catalog`'s bundle and the values that fill it) beside
+    `message`, which stays the finished English sentence.
+  - `mod-catalog`: new log entries store `messageKey` and an English `message` where they stored
+    a Polish sentence; the bulk-operations detail screen draws the key in the reader's language
+    and falls back to `message` — so entries written before this release still show as they
+    did. A Polish reader sees the same sentences as before. New bundle keys:
+    `bulkOperations.log.*`.
+
+- ed85493: `adminNotificationRecordPort` gains `recordWithin(em, input)`, a co-transactional twin of `record`: the bell entry is created and persisted on the **caller's** EntityManager, with no fork and no flush, so it commits or rolls back with the caller's transaction (`specs/165-task-management/` SC-004 — a Task reminder's delivery row and its bell entry are one write, which makes the bell exactly once). It refuses what `record` refuses, before anything is persisted; the recipient's older entries are pruned by their next `record`. `record(input)` is unchanged.
+
+  `AdminNotificationRecordPort` now takes a type parameter, `AdminNotificationRecordPort<EM = unknown>`, the caller's MikroORM `EntityManager` (the contracts hold no `@mikro-orm` import). Existing consumers that only call `record` compile unchanged; a test double typed as the port must add `recordWithin`.
+
+- 3174251: The cart-view schemas describe what the cart routes answer (issue #128).
+
+  Parsing real replies of `GET /api/v1/cart`, `GET /api/v1/cart?view=mini` and the line mutations (`POST`/`PATCH`/`DELETE /api/v1/cart/items…`) with the published schemas failed on every one of them. Nothing on the wire changed; the schemas were widened to it, and no schema was narrowed — every value that parsed before parses now.
+
+  - **`cartFullPayloadSchema`** — `createdAt`, `updatedAt` and `lastActivityAt` are `string | null`: the empty basket (no basket yet, `id: null`) answers `null` for all three.
+  - **`cartViewLineSchema`** — `productName` is `string | null`: the line-mutation replies do not resolve product names and answer `null`. `productThumbnailUrl` is optional: no cart route has ever answered it.
+  - **`cartMiniPayloadSchema`** — `status`, `approvalStatus`, `grandTotal` and `primaryCta` are optional: the mini view has never answered them (it skips the coupon and promotion work on purpose). It now declares the **`subtotal`** it does answer (optional, so older values still parse).
+  - **`cartMiniLineSchema`** — declares the **`variantId`** every mini line carries; `productName` and `productThumbnailUrl` are optional, because the mini view does not answer them.
+
+  Upgrading: the inferred types `CartFullPayload`, `CartViewLine`, `CartMiniPayload` and `CartMiniLine` change accordingly. Code that read one of the fields above as always present was reading `null` or `undefined` at run time already; the compiler now says so. Read `grandTotal`, `status` or `primaryCta` from the full view, not the mini one.
+
+- 55864a1: Task management (`specs/165-task-management/`). **Breaking** for consumers of the Tasks shapes — a minor in the `0.x` series.
+
+  - **Statuses are codes of a configurable workflow.** `TASK_STATUSES`, `taskStatusSchema`, `TaskStatus` and `TASK_CLOSED_STATUSES` are removed. Use `taskStatusCodeSchema` (any snake_case code), `TASK_DEFAULT_STATUS_CODES` (the four seeded codes), `TASK_STATUS_CATEGORIES` / `taskStatusCategorySchema` (`open`, `done`, `cancelled`) and `TASK_CLOSED_STATUS_CATEGORIES` / `isClosedTaskStatusCategory`. Before: `TASK_CLOSED_STATUSES.includes(task.status)`; after: `task.closed` on `TaskSummary`, or `record.closed` on `TaskRecord`.
+  - **A Task has a list of assignees.** `TaskSummary.assignee` becomes `assignees: TaskAssignee[]`; `TaskSummary.status` becomes `{code, name, color, category}` with `closed: boolean` beside it. `TaskRecord.assignedAdminUserId` becomes `assigneeIds: string[]`, and `TaskRecord` gains `statusCategory`, `statusName`, `statusDefaultName`, `statusColor`, `closed`, `dueAt`, `draft`, `private` and `updatedAt`. `NewContextTask.assignedAdminUserId` becomes `assigneeIds`, and it gains `sourceKey` (≤ 100 characters; a key already present in the context is not created again) and `contextGroupId`; `NewContextTaskSchema` validates it.
+  - **Events.** `tasks.task.assigned.v1` (`TaskAssignedEvent`, `TASKS_EVENTS.ASSIGNED`) is replaced by `tasks.task.assignees_changed.v1` (`TaskAssigneesChangedEvent {taskId, added, removed}`, `TASKS_EVENTS.ASSIGNEES_CHANGED`). `TaskCreatedEvent.assignedAdminUserId` becomes `assigneeIds`; `TaskStatusChangedEvent.from`/`to` are codes and it gains `toCategory`.
+  - `TaskContextDescriptor` gains an optional `existingContexts(ids)`, asked only under the system actor by the Tasks maintenance pass; a contributor without it is never cleaned up.
+  - New request and response schemas for the Tasks admin API: list sorting and filters (`TaskListQuerySchema` — with `cardValues` for a board lane's further cards —, `MyTasksQuerySchema`, `TaskBoardQuerySchema`), `TaskStatusChangeBodySchema`, comments, attachments, record links, reminders, lookups, workflow statuses and transitions, priorities, tags, board card fields, the time zone and the daily digest, with the limits `TASK_ASSIGNEES_MAX`, `TASK_TAGS_MAX`, `TASK_HIERARCHY_DEPTH_MAX`, `TASK_STATUS_REASSIGN_MAX`, `TASK_ATTACHMENT_MAX_BYTES`, `TASK_REMINDER_GRACE_MS` and `TASK_REMINDERS_MAX`. `UpdateTaskBodySchema` no longer accepts `status`: a status change goes through `POST /tasks/:id/status`. `TASKS_ERROR_CODES` gains seventeen codes.
+  - The shared reference grammar gains `opportunity` and `project`: `RECORD_REFERENCE_TYPES` and `RECORD_DOCUMENT_KINDS` (now `order`, `quote_request`, `task`, `opportunity`, `project`). A text holding `[[opportunity:<uuid>]]` or `[[project:<uuid>]]` now extracts them; a consumer with an exhaustive map over the types needs two entries.
+  - `OpportunityReadPort` and `ProjectReadPort` gain `findByIds(ids)` and `search({q, limit})` (with `OpportunitySearchQuery`, `ProjectSearchQuery` and a limit of 20). An implementation of either port must add both.
+  - `supportedEntityTypeSchema` gains `'task'`; `assetReferenceKindSchema` gains `'task_attachment'` (a file attached to a Task, named when the asset library refuses to delete it).
+  - `ERROR_CODES` gains `TASK_PRIORITY_UNKNOWN`, `TASK_TAG_UNKNOWN`, `TASK_TAG_NAME_TAKEN`, `TASK_ATTACHMENT_REFUSED`, `TASK_WORKFLOW_INVALID`, `TASK_STATUS_IN_USE_TOO_MANY`, `TASK_VIEW_NAME_TAKEN`, `TASK_PARENT_CYCLE`, `TASK_HIERARCHY_TOO_DEEP`, `TASK_LINK_INVALID`, `TASK_REMINDER_INVALID`, `TASK_PRIVATE_ASSIGNEE` and `TASK_ALREADY_PUBLISHED`.
+  - `createTaskSavedViewRequestSchema` and `updateTaskSavedViewRequestSchema` in `saved-list-views.ts`.
+  - Admin preferences gain `listViewModes`: `{[listId]: 'list' | 'board'}`, merged per list, `null` forgetting a list; the read side falls back to `{}`. `ADMIN_LIST_VIEW_MODES`, `adminListViewModeSchema`, `ADMIN_LIST_VIEW_MODES_MAX`.
+  - `TaskAssigneeLookupQuerySchema` gains `contextType` and `contextId`, both or neither (#506).
+
+- 11b0eb8: The contract surface of the new `tasks` and `projects` modules, one shared reference grammar,
+  and a new sidebar section.
+
+  **`@endora-commerce/contracts`** gains, exported from the package root:
+
+  - `tasks.ts` — the Tasks admin API schemas (`TaskListQuerySchema`, `CreateTaskBodySchema`,
+    `UpdateTaskBodySchema`, `TaskSummarySchema`, `TaskDetailSchema`, `TaskContextSchema` and their
+    siblings, with inferred types), `TASKS_EVENTS` and the event payload types, `TASKS_ERROR_CODES`,
+    and the interfaces another module uses: `TaskReadPort`, `TaskWritePort`,
+    `TaskContextRegistryPort` with `TaskContextDescriptor`;
+  - `projects.ts` — the Projects admin API schemas (`ProjectListQuerySchema`,
+    `CreateProjectBodySchema`, `CloseProjectBodySchema`, `ProjectTemplateBodySchema`,
+    `ProjectAnalyticsQuerySchema`, `ProjectDetailSchema` and their siblings), `PROJECTS_EVENTS` and
+    the event payload types, `PROJECTS_ERROR_CODES`, and `ProjectReadPort`,
+    `ProjectStageGuardRegistryPort` with `ProjectStageGuard`;
+  - `record-references.ts` — the `[[<type>:<uuid>]]` reference grammar under neutral names
+    (`recordReferenceTypeSchema`, `formatRecordReferenceToken`, `extractRecordReferenceTokens`,
+    `splitRecordReferenceText`, `mentionedAdminUserIds`, `RecordReferenceSchema`), the `@@` lookup
+    answer `RecordDocumentLookupResponseSchema`, and the shared `RecordHistoryPageSchema`;
+  - `record-rich-text.ts` — the formatted-text grammar (`parseRecordRichText`,
+    `formatRecordRichText`, `recordRichTextToPlain`, `isSafeRecordRichHref`).
+
+  `ERROR_CODES` gains the codes the two modules raise — `TASK_NOT_FOUND`, `TASK_CONTEXT_INVALID`,
+  `TASK_ASSIGNEE_INVALID` and the `PROJECT_*` codes of `PROJECTS_ERROR_CODES`.
+
+  **`AdminZoneNameSchema` has a new member, `'task.detail.after'`**, with its props
+  `TaskDetailZoneProps { taskId }` in `AdminZonePropsMap` — the zone a Task's screen mounts after its
+  content. A consumer that switches exhaustively over `AdminZoneName` gets a compile error until it
+  handles the new member.
+
+  **The reference grammar reads five types where it read three**: `quote_request` and `task` join
+  `product`, `order` and `admin_user`. Every CRM name — `opportunityReferenceTypeSchema`,
+  `formatOpportunityReferenceToken`, `extractOpportunityReferenceTokens`,
+  `splitOpportunityReferenceText`, `OpportunityReferenceSchema`, `parseOpportunityRichText` and the
+  rest of `crm.ts` §9 and `crm-rich-text.ts` — is still exported, now as an alias of the shared
+  one. A text stored before reads as it did. A consumer that switches exhaustively over
+  `OpportunityReferenceType`, or indexes a `Record` by it, gets a compile error until it handles
+  the two new members.
+
+  **`assetReferenceKindSchema` has a new member, `'project_attachment'`** — a file a Project
+  uses, which the media library then refuses to delete. A consumer that switches exhaustively over
+  `AssetReferenceKind` gets a compile error until it handles the new member.
+
+  **`AdminNavSectionNameSchema` has a new member, `'work'`**, and `@endora-commerce/admin-shell`
+  declares the section after _CRM_, labelled "Projects & tasks" / "Projekty i zadania"
+  (`appShell.section.work` in `@endora-commerce/mod-i18n`). It renders only while a module
+  contributes a visible entry to it. A consumer that switches exhaustively over
+  `AdminNavSectionName` gets a compile error until it handles the new member.
+
+- b8b6eed: An Opportunity's texts follow the reference standard shared with Projects: `@@` is one document
+  list — Orders · Quote requests · Tasks — and a Quote Request or a Task can be referred to in the
+  description, a note or a message. The Opportunity's screens are drawn with the admin kit's
+  collaboration components, and the screen ends with a zone other modules can fill.
+
+  **`@endora-commerce/mod-crm`**:
+
+  - **`@@` opens the document list**, where it searched the Organization's Orders alone. _Insert
+    document_ replaces _Insert order_. Orders and Quote Requests are the Opportunity's
+    Organization's (on the create form, the Organization chosen there); Tasks are any the reader
+    may see. Each group is offered only to a holder of `orders:read`, `rfqs:handle` or `tasks:read`
+    respectively, and only while its module is on; a role holding none of the three keeps `@@` as
+    typed.
+  - **`[[quote_request:<uuid>]]` and `[[task:<uuid>]]` are stored and resolved** like the other
+    three types: `references` names a Quote Request by its number (`/quote-requests/<id>`) and a
+    Task by its number (`/tasks/<id>`), and answers `available: false` without a label for a reader
+    without `rfqs:handle` / `tasks:read`, for a Task its context hides, for a target that is gone,
+    and while Quote Requests / Tasks are switched off. Texts stored before are unchanged byte for
+    byte, and read as they did.
+  - New route `GET /api/v1/admin/crm/lookups/documents?opportunityId=…&q=…` (`crm:write`; or
+    `organizationId=…` before the Opportunity exists) answering `RecordDocumentLookupResponse`, at
+    most ten documents per group — the shape Projects serves at `GET /projects/lookups/documents`.
+  - New migration `crm_opportunity_reference_documents`: the `crm_opportunity_references`
+    target-type check admits `quote_request` and `task`. Its `down` deletes the rows of those two
+    types first; the texts keep their tokens.
+  - A new `degrades-without` edge on `tasks` (`taskReadPort`): with Tasks off or absent, Task
+    references read as unavailable and Tasks are not offered after `@@`. Tasks stays switchable
+    while CRM is on.
+  - Notes, messages, references, attachments, the change history and the list pager are drawn with
+    the `@endora-commerce/admin-kit/components` collaboration components; apart from `@@` above,
+    what these screens show and do is unchanged. The package no longer declares `@tiptap/react` or
+    `@tiptap/starter-kit` — the editor is the kit's. A chip's token attribute is now
+    `data-reference-token` (was `data-crm-token`), and an Order chip's `data-order-reference` (was
+    `data-crm-order-reference`); a chip copied from the earlier editor still pastes as a chip.
+  - The Opportunity's screen mounts the `opportunity.detail.after` zone once, after the card
+    holding its tabs, handing over the Opportunity's id and nothing else. With nobody contributing
+    — no module, one that is switched off, or a person without the contribution's permission — the
+    screen is unchanged. CRM names no contributor; the first is the Projects module's _Project_
+    panel.
+
+  **`@endora-commerce/contracts`**:
+
+  - `OpportunityDocumentLookupQuerySchema` (`opportunityId?`, `organizationId?`, `q?`) and its type,
+    the query of the new route; the answer is `RecordDocumentLookupResponseSchema`.
+  - `AdminZoneNameSchema` gains `'opportunity.detail.after'`, with its props
+    `OpportunityDetailZoneProps { opportunityId }` in `AdminZonePropsMap`. A consumer that switches
+    exhaustively over `AdminZoneName` gets a compile error until it handles the new member.
+
+- 2aa2c9b: _Project_ is a record type of Custom Fields: an operator defines fields on Projects on
+  `/custom-fields` as on Opportunities, and the Projects module validates, stores and shows them.
+
+  **`@endora-commerce/mod-custom-fields`**:
+
+  - New entity type `project` (_Project_ / _Projekt_), owned by the `projects` module: offered on
+    the entity-types listing, and its definitions created, changed or deleted, only while Projects
+    is on — while it is off the type is absent and a definition write answers 409
+    `CUSTOM_FIELD_HOST_MANAGED`, as for the other owned types. Definitions and stored values are
+    kept and served again when Projects is back.
+  - A Project definition may be marked as a list filter; no carry targets.
+  - The values live in `projects.custom_field_values`; the definition-change guards and the
+    list-filter condition read that column.
+
+  **`@endora-commerce/contracts`**:
+
+  - `supportedEntityTypeSchema` gains `'project'`. A consumer that switches exhaustively over
+    `SupportedEntityType`, or holds a `Record<SupportedEntityType, …>`, gets a compile error until
+    it handles the new member.
+
+- 883d192: TOTP enrolment shows a QR code, and a second-factor code admits exactly one sign-in (`specs/166-mfa-totp-hardening/`).
+
+  - `mfaSetupResponseSchema` gains `qrSvg`: every setup answer — `POST /api/v1/account/mfa/setup`, `POST /api/v1/admin/account/mfa/setup` and the set-up ticket's `begin` — carries the QR code of `otpauthUri` as an SVG document, drawn on the server. Render it as an image (a `data:image/svg+xml` URI), not as HTML. The Admin UI's Account security shows it beside the manual key.
+  - `@endora-commerce/mod-mfa` gains the peer `uqr` (MIT, no dependencies); an instance's `backend` declares it.
+  - The TOTP replay guard and the recovery-code spend are each one conditional `UPDATE`: the same valid code sent on several sign-in challenges at once used to be accepted by each of them, and is now accepted once. No migration.
+
+- 5114576: An invoice's `paidTotal` deducts every refund made before it was issued, each once: what `payments` recorded, plus the issued refunds of the order's settled returns that never pass through `payments` — a credit-limit top-up, and a money refund of an order not paid through a gateway — and an order an operator marked `refunded` counts as refunded everything received — its total with nothing captured, what was captured otherwise — taken as the larger of the recorded refunds and what was received, never their sum. An order refunded in full that way is not invoiced (`422 INVOICE_ORDER_REFUNDED`). `@endora-commerce/mod-returns` publishes the new `returnRefundReadPort` (`ReturnRefundReadPort`, `OrderReturnRefund` in `@endora-commerce/contracts`), which `@endora-commerce/mod-invoices` reads as a `degrades-without` dependency.
+
+  `InvoiceDetail.amountDue` is now `max(0, grossTotal − paidTotal)` and never negative, and the new required `InvoiceDetail.overpayment` is `max(0, paidTotal − grossTotal)`. The invoice PDF's totals block prints it as _Nadpłata_ (`showOverpayment`, `labelOverpayment`), the admin invoice screen as _Overpayment_, and `{{var invoice.overpayment}}` is a new merge field. A consumer that built an `InvoiceDetail` by hand adds the field.
+
+- 8f7c38e: A reporting time zone: the setting `analytics.reporting_time_zone` (_Reporting time zone_, in the
+  _Analytics_ section of the settings screen) is the calendar reports count days in — a range of days
+  runs from midnight of its first day to midnight after its last, in that zone. Default `UTC`. It
+  belongs to `@endora-commerce/mod-analytics` rather than to a reporting module, so that any report
+  can read it: Projects analytics does, CRM is to follow. Other modules read it through the gated
+  port `reportingTimeZonePort` and count in `UTC` while Analytics is switched off. A write of a zone
+  the runtime does not know is refused with `422` `VALIDATION_FAILED`. `@endora-commerce/contracts`
+  exports the code as `ANALYTICS_REPORTING_TIME_ZONE_SETTING`, the port as `ReportingTimeZonePort`
+  and the check as `isIanaTimeZone`. `mod-analytics` now declares `settings` as a dependency and
+  `zod` as a peer.
+
+### Patch Changes
+
+- d2acc82: `adminAttributeResponseSchema.numericKind` accepts `null`: the admin attribute route answers `numericKind: null` for an attribute that is not a slider, which the schema used to refuse. `AdminAttributeResponse['numericKind']` is now `'number' | 'price' | null | undefined`.
+- 22604fa: The admin attribute response carries `channelScoped` and `languageScoped` (create, update, read and list), so the attribute editor shows the stored scope flags. `adminAttributeResponseSchema` declares both.
+- 5038a3a: Multi-factor sign-in is now called **two-step verification** (Polish: **weryfikacja dwuetapowa**) in every user-facing string, replacing "two-factor authentication", "uwierzytelnianie dwuskładnikowe" and bare "2FA". Identifiers, permission codes (`mfa:reset`, `mfa:manage`), setting keys (`mfa.admin.totp_enforced` and its siblings) and error codes are unchanged.
+
+  - `@endora-commerce/mod-mfa`: the four TOTP setting names (now "Admin UI — allow two-step verification", "Admin UI — enforce two-step verification", "Storefront — allow two-step verification", "Storefront — enforce two-step verification"; the `MFA_DEACTIVATION_BLOCKED` sentence quotes the new name), the English and Polish error sentences, permission labels, the Admin UI account-security screen, the manifest's module, setting and permission descriptions, and the federated sign-in refusal sentence. The `open-security` palette action also matches "two-step verification" / "weryfikacja dwuetapowa"; "two-factor", "2fa" and "dwuskładnikowe" still match.
+  - `@endora-commerce/mod-i18n`: `adminRoles.field.requires2fa`, `adminUsers.column.twoFactor` and `organizations.detail.twoFactor`.
+  - `@endora-commerce/mod-customers`: the reset actions on the customer list and detail screens.
+  - `@endora-commerce/admin-kit`: the sentence shown when an administrator's password sign-in needs a second-step setup.
+  - `@endora-commerce/contracts`: the validation message of the MFA disable request body.
+  - `@endora-commerce/mod-admin-users`, `mod-admin-roles`, `mod-auth`, `mod-customer-accounts`: module documentation pages.
+
+- df95f59: `ModuleErrorCodeDeclarationSchema`'s documentation now states that a code raised with a computed `details.code` must declare its `tokens`, and that `tokens: []` is a declaration — the raise's `details` never carries a `code` — rather than an absence. The schema itself is unchanged.
+
+## 0.108.0
+
+### Minor Changes
+
+- 0bd5a2b: Minimum order quantities and a per-product returnable flag, as shapes, codes and one shared rule.
+
+  - **New module `order-minimums`** (re-exported from the package root): `evaluateOrderMinimums(lines, rules)` — the one implementation of the rule (a pieces minimum per product, a units minimum per packaging unit, both judged on the product's total over every line and variant; a unit total is summed and compared exactly, so lines of 7, 1, 1 and 1 pieces on a 10-piece unit make one unit) — with its record types `OrderMinimumLine`, `OrderMinimumProduct`, `OrderMinimumPackagingUnit`, `OrderMinimumRules`, `OrderMinimumViolation`, `OrderMinimumBelowViolation`; `minimumRefusal(...)`, which builds the 422 envelope from minimum violations; `ORDER_MINIMUM_MAX` (`1_000_000`), `isValidOrderMinimum(value)` and `isOrderMinimumEligibleType(type)` (`simple` and `configurable` only).
+  - **New `pickLocalized(field, language)`** — a per-language JSONB value (a product's `name`) in one language, falling back to the same primary language, then `en-US`, `en` and the first non-empty value. Every minimum refusal names its product with it, in `request.responseLanguage()`.
+  - **New `toCartDroppedLines(skipped)`** (with `ShoppingListDroppedLine`) — a shopping-list conversion's skipped items as the carts bridge's `droppedLines`: `below_minimum` with its `minimum`, everything else `not_purchasable`. A composition root calls it instead of carrying its own copy.
+  - **New bounds:** `ADMIN_ORDER_MAX_ITEMS` (`200`, admin order create/preview and the external order API) and `QUICK_ORDER_BUILD_MAX_ITEMS` (`200`, quick-order build).
+  - **New error codes in `ERROR_CODES`:** `PRODUCT_BELOW_MINIMUM_QUANTITY`, `PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY`, `PACKAGING_UNIT_MISMATCH`, `RETURN_LINE_NOT_RETURNABLE`.
+  - **Additive response fields (behaviour change for API clients — new fields appear):** catalogue storefront and admin product shapes `minOrderQuantity`, admin `returnable`, packaging unit `minOrderUnits`; comparison item `minOrderQuantity`; cart line `minOrderQuantity` and `belowMinimum`; cart dropped-line reason `below_minimum` with `minimum`; checkout preview-total `belowMinimumLines[]`; admin order preview message code `BELOW_MINIMUM_QUANTITY` with `minimum`; quick-order import reason `below_minimum`, row `warning`, `minimum`/`productTotal`, summary `warningCount`, build `rejected[]` (with `packagingUnitName`); shopping-list skip reason `below_minimum` with `minimum`; quote line `packagingUnitId` and admin `minimumWarning`; returns line `returnable` and `notReturnableReason`, return case item `returnableAtPurchase` (optional, nullable), response reason `no_returnable_lines`. Request schemas gain the optional `minOrderQuantity`, `returnable` and `minOrderUnits` (bounded by `ORDER_MINIMUM_MAX`) and the quote line's `packagingUnitId`.
+  - **`returnableLineSchema.returnable` is required.** A producer or a test fixture of `GET /api/v1/orders/:orderId/returnable` lines must now set it.
+  - **Port and record changes — implementers must add the members:** `CatalogProductReadPort.listPackagingUnitsByProductIds(productIds)` (typed stubs of the port must implement it; like every method of the port it applies no visibility policy, so callers pass only vetted ids); `CatalogProductRecord.minOrderQuantity` and `.returnable`; `CatalogPackagingUnitRecord.minOrderUnits`; `CartWritePort.addItems(actor, lines, { onLineError, onBelowMinimum?, replaceExisting?, language? })` with `CartBatchLineInput` and `CartBatchLineOutcome` (a `failed` outcome's `error` carries the refusal's `details` when it had any; `onBelowMinimum: 'throw'` refuses the whole batch before anything is written; `replaceExisting` makes the batch the customer's whole basket, cleared only once the batch has passed); an optional `options.language` on `CartWritePort.addItem` and `OrderPlacementPort.placeOrder`, and `CreateForCustomerOptions.language`; `CartItemRecord.quoteSeededQuantity` and `isQuoteSeededLineExempt(cart, item)`; `OrderReturnContextLine.returnableAtPurchase` (`boolean | null`, required); `CreateForCustomerOptions.minimums` (`'enforce' | 'warn'`) and the quote-request line's `packagingUnitId`. New port type `OrderQuoteSourcePort` (container name `orderQuoteSourcePort`, owner `orders`) with `QuoteSourceBasketLine`.
+
+- 20af5d5: Shared shapes for filtering admin lists on custom fields, and the code that refuses a filter a list does not offer.
+
+  **For a consumer of the contracts.**
+
+  - `customFieldFilterSchema` (type `CustomFieldFilter`) is one custom field's filter: `contains`,
+    `in`, `is`, `min`/`max` (decimal strings) and `from`/`to` (calendar dates), strict. Which
+    operators apply is the field's value type to say: the admin lists refuse any other with 400
+    `VALIDATION_FAILED`, and only the CRM board ignores it.
+  - `customFieldFiltersSchema` (type `CustomFieldFilters`) is a request's filters keyed by
+    definition key, with the key grammar of a definition (so `__proto__`, dotted or prefixed keys
+    are refused) and two caps: at most `CUSTOM_FIELD_FILTERS_MAX_KEYS` (10) keys and at most
+    `CUSTOM_FIELD_FILTERS_MAX_IN_VALUES` (100) `in` values summed over every key.
+  - `customFieldFiltersQueryParamSchema` reads that record from a `customFieldFilters` query
+    parameter holding JSON of at most 8000 characters. It is idempotent: an already-parsed object
+    is validated rather than refused, and a repeated parameter is refused.
+  - `customFieldDefinitionSchema` and `CustomFieldDefinitionRecord` carry `listFilter: boolean`;
+    the create and update requests accept it optionally (absent on create is `false`, absent on
+    update leaves it unchanged). `customFieldEntityTypeInfoSchema` carries `listFilter`, saying
+    whether definitions of that type may be marked as list filters. `CUSTOM_FIELD_DEFINITION_ERROR_CODES`
+    gains `list_filter_unsupported`.
+  - `customFieldListFilterFieldSchema` and `customFieldListFilterFieldsResponseSchema` describe the
+    fields an admin list offers as filters: key, value type, labels and options only.
+  - `CustomFieldListFilterPort`, `CustomFieldListFilterCondition`,
+    `CustomFieldFilterUnavailableFailure` and the guard `isCustomFieldFilterUnavailableFailure` are
+    the in-process seam the `custom_fields` module publishes for these lists.
+  - `CUSTOM_FIELD_FILTER_OPERATORS` names the operators each value type applies, and
+    `assertCustomFieldFilterOperators` throws the `ZodError` naming every operator of a filter that
+    does not apply to its field, at `[key, operator]`. `customFieldFilterUnavailable(keys)` builds
+    the failure `isCustomFieldFilterUnavailableFailure` narrows. `assertCustomFieldFilterRanges`
+    throws the `ZodError` naming an inverted range (a minimum above its maximum, a start after its end).
+  - `ERROR_CODES` gains `CUSTOM_FIELD_OPTION_IN_USE` (`details: { value, label }`),
+    `CUSTOM_FIELD_VALUE_TYPE_LOCKED` and `CUSTOM_FIELD_STORED_VALUES_EXIST` (`details: { key }`).
+  - `updateCustomFieldOptionSchema` (type `UpdateCustomFieldOptionRequest`) is the body of an option
+    patch: `label`, `labelDefault`, `isDefault` and `sortOrder`, each optional and without a default,
+    and never `value`. `customFieldOptionSchema.partial()` is not a patch shape: it fills an absent
+    member with its create default.
+  - `calendarDateSchema` and `isCalendarDate` (a `YYYY-MM-DD` day the calendar has) are published
+    from the shared primitives; the CRM schemas use the same one.
+  - `adminOrdersListQuerySchema` accepts `customFieldFilters`.
+  - `ERROR_CODES.CUSTOM_FIELD_FILTER_UNAVAILABLE`: an admin list was asked to filter on a custom
+    field it does not offer; its `details` are `{ key, keys }`.
+
+  **Same shape, one object.** CRM's `OpportunityFieldFilterSchema` is now
+  `customFieldFilterSchema` itself; what it accepts is unchanged, and the board's
+  `OpportunityFieldFiltersSchema` keeps its own 20-field cap.
+
+- cf7a9c0: CRM free text gains a formatted-text grammar, and an Order reference says more than its number.
+
+  - **New exports (`crm-rich-text`)**: `parseOpportunityRichText(text)` reads a description, a comment body or an Event description into blocks — paragraphs, bulleted and numbered lists, bold (`**…**`), italic (`_…_`, never inside a word), strikethrough (`~~…~~`), links (`[label](https://…)`, `http`/`https`/`mailto` only) and the existing `[[type:id]]` reference tokens; `formatOpportunityRichText(blocks)` writes them back; `opportunityRichTextToPlain(text)` drops the formatting for a plain-text surface; `isSafeOpportunityRichHref(href)`. Types `OpportunityRichBlock`, `OpportunityRichInline`, `OpportunityRichMark`. Stored text is still a string: plain text written before reads as the paragraphs it was, so nothing needs migrating.
+  - **`OpportunityReferenceSchema`** gains an optional `order` (`OpportunityReferenceOrderSchema`: `status`, `total`, `currency`, `placedAt`, `customerName`), present on an available Order reference only. Consumers that rebuild the object field by field keep working; one that compares references with strict equality sees the new key.
+
+- c8aa175: Named, ordered line groups for quote requests and orders.
+
+  - **New module `line-groups`** (re-exported from the package root): `LINE_GROUP_LIMITS` (50 groups, names 1–120 characters), `lineGroupKeySchema`, `lineGroupNameSchema`, `lineGroupSchema` (`{ id, name, position }`), `lineGroupInputSchema` / `newLineGroupInputSchema`, `refineLineGrouping(ctx, body)` (unique keys and ids, every line's `groupKey` declared, at most 50 groups, `groups` only with `items`), and the one display ordering `arrangeLineGroups(groups, lines, options)` with `flattenSections`.
+  - **Quote requests.** `adminPatchQuoteRequestSchema` and `adminCreateQuoteRequestSchema` accept `groups` and a per-line `groupKey`; both are now refined objects (`.superRefine`), so `.extend()`/`.omit()` on them is no longer available. `quoteRequestItemSchema` gains `groupId` (default `null`) and `position` (default `0`), `quoteRequestSchema` gains `itemGroups` (default `[]`) and answers `items` in display order. `quoteRequestHistoryChangeSchema` gains `group_added`, `group_removed`, `group_renamed`, `line_group` and `line_order`; `rfqDiffEntrySchema` gains `{ kind: 'grouping' }`, and its line entries an optional `groupName` (`null` = ungrouped) naming the group of a product that sits on several lines; `quoteRequestHistoryLineRefSchema` gains the same optional `groupName`. `adminPatchQuoteRequestLineSchema` gains an optional `splitFromId` — the stored line a new line was split off. `QuoteRequestLineRecord` gains optional `position` and `group`. `quoteRequestDocumentDataSchema` gains `groups` (default `[]`) and per line `groupId` / `position` (defaulted).
+  - **Orders.** `orderItemSchema` gains `groupId` and `position`, `orderSchema` gains `itemGroups` (all defaulted). `adminCreateOrderRequestSchema` accepts `groups` and a per-line `groupKey` through the new `adminCreateOrderLineSchema`; `adminOrderPreviewRequestSchema` is unchanged, so a `groupKey` sent to the preview is stripped.
+  - **Carts.** `CartWritePort.addItems` options gain `keepRepeatedLines` (with `replaceExisting` only): every line stays a line of its own, priced at its own quantity, and the basket reads back in the batch's order.
+  - Because the new reply keys are defaulted, their **inferred output types are required**: code that builds a `QuoteRequest`, `QuoteRequestItem`, `Order`, `OrderItem` or `QuoteRequestDocumentData` object literal must now supply them (`itemGroups: []`, `groupId: null`, `position: 0`, `groups: []`).
+
+- 1284428: `adminOrderPreviewLineSchema` gains an optional `taxRate` (a fraction, e.g. `0.23`): the rate a priced preview line is taxed at, from the same authority as the preview's `summary.taxTotal`. Absent on an unavailable line. The admin create-order screen sums a line group's VAT from it (feature 159).
+- 1df7a5e: The Line items table prints a document's groups.
+
+  - **Contracts.** `DocumentCollectionDeclaration` gains an optional `sections(data)` answering `DocumentItemSection[]` (`{ key, kind: 'group' | 'ungrouped', label, itemIndexes, summary }`, with `documentItemSectionSchema` and `DOCUMENT_UNGROUPED_SECTION_KEY`); `isValidSectionPartition(sections, itemCount)` checks one. `itemsTableGroupingSchema` is now a union of `{ by: 'sections', otherItemsLabel, showItemCount }`, `{ by: 'none' }` and the existing field shape (with `by: 'field'` optional) — `itemsTableSectionsGroupingSchema`, `itemsTableNoGroupingSchema`, `itemsTableFieldGroupingSchema`; `itemsTableGroupingMode(raw)` reads a stored value. `documentCollectionDetailSchema` gains `sampleSections` (default `[]`). `documentSectionTexts(language)` answers the default _Other items_ heading and the plural item count in English and Polish.
+  - **Changed meaning of a stored `grouping: null`.** It meant _No grouping_; it now means **the document's groups**, which is also what an absent setting means. A document with no group prints exactly as before (the flat definition is unchanged), so this changes nothing until a document has groups — then every template, including those saved before this release, prints them without being edited. A table that must stay flat whatever the document says stores `{ by: 'none' }` (_No grouping_ in the editor).
+  - **Document templates.** In that mode, a document holding a group prints per section a heading row (the group's name, the item count when enabled), its rows and one subtotal row per totals row of the table over the section's totals, then _Other items_ and the document's totals. The renderer reads `sections()` once per collection per render; a host that throws, or answers a partition that does not cover its lines, is logged and the table prints flat. Route 2 serves `sampleSections`; the editor's _Grouping_ field offers _Document's groups_, _By field_ and _No grouping_, the _Other items_ heading and _Show item count_, and the canvas draws the sample's groups.
+  - **Quote requests.** The quote's `lines` collection declares its sections (`quoteLineSections`), each with the quote's totals rule over its own lines; the editor's sample quote has two groups and an ungrouped line.
+
+- 14bcf1d: Pricing model v2 (feature 160, D-287 P1): price books replace the Application-rule price lists. **Breaking in the 0.x sense — every removal below has a replacement named beside it.**
+
+  - **New** — `price-books.ts`: the book (`PriceBook`, `PriceBookSummary`, `priceBookCreateSchema`, `priceBookPatchSchema`, `priceBookDuplicateSchema`), its rows (`PriceBookRow`, `priceBookRowInputSchema`, the batch and dry-run shapes), base prices, the explanation with ranked candidates, the target pickers, the precedence read, and `PriceSource` / `priceSourceSchema`.
+  - **Removed: the Application rule.** `ApplicationRule`, `applicationRuleSchema`, the rule-node types, `ruleCriterionTypeSchema`, `PriceListResolutionContext`, `PriceListRuleEvaluation` and `evaluateApplicationRule`. Old: a list's `applicationRule` decided who it priced. New: a book's audience set (`audience: { kind: 'everyone' | 'customer_groups' | 'organizations', memberIds }`) and channel set (`channelIds`).
+  - **Removed: the old list, bracket and matrix shapes.** `priceListEngineSchema`, `create/patchPriceListEngineRequestSchema`, `priceListBracketSchema`, `replaceBracketsRequestSchema`, `productAssignmentSchema`, `replaceProductsRequestSchema`, the `bulkAddPriceListProducts*` schemas, `priceListIdParamsSchema`, every `priceMatrix*` schema and type, `PRICE_MATRIX_MAX_ENTRIES_PER_LIST`, `PriceBracketInput` and `PriceListBracketSummary`. Old: `PUT …/price-lists-engine/:id/products/:productId/brackets` with `{ PLN: [brackets] }`. New: `PUT /api/v1/admin/price-books/:id/rows` with `priceBookRowInputSchema` rows (`{ selection, minQuantity, maxQuantity, price: { type: 'fixed' | 'percent' | 'amount', … } }`), and base prices through `PUT /api/v1/admin/price-books/base-prices/:productId`.
+  - **Removed: `PriceListAdminPort`** (`priceListAdminPort`), **replaced by `PriceBookWritePort`** (`priceBookWritePort`, owner `price_lists`, fails closed while it is absent). Old → new: `getById(priceListId)` → none (a base book is addressed by its currency); `listProducts(priceListId)` → `basePrices(productId)` (`byCurrency[code].product`, and `.variants`); `addProduct(priceListId, productId)` → none (books have no roster — writing the tiers is enough); `replaceBrackets(priceListId, productId, bracketsByCurrency)` → `replaceProductBaseTiers(productId, tiersByCurrency)` (variant rows kept; amounts are decimal strings) or `replaceBasePrices(productId, { byCurrency })` (product and variant rows); `summarizeBracketsForProduct(productId)` → `booksPricingProduct(productId, variantId?)` (`PriceBookSummary[]`, each with `matches[]`). Both writes are the admin base-price command, refused for its reasons. `productBasePricesSchema` / `ProductBasePrices` describe what `basePrices` answers.
+  - **Reshaped: `PriceListRecord` / `PriceListReadPort`.** The record drops `code`, `isDefault`, `applicationRule` and `modifiedAt`, renames `currency` to `currencyCode`, gains `audienceKind`, and `type` is `'regular' | 'sale'` (was `'base' | 'sale'`). The port drops `findByCode` (books have no code) and gains `listForOrganization({ organizationChain, customerGroupId })` (the books that apply to an organization, with `reason` and `depth`).
+  - **Reshaped: `ListingPrice`.** The `source: 'product'` arm — the product's own `defaultPrice` — is removed: a product has no price of its own. Old: `switch (price.source) { case 'price_list': …; case 'product': …; case 'none': … }`. New: `'price_list'` and `'none'` only; the `price_list` arm carries `priceSource`, `compareAtAmount`, `variesByVariant` and `maxAmount`.
+  - **Reshaped line and engine results.** `LinePriceResult`, `ListingPriceDetail` and the resolved-price shapes carry the price source (`base | catalogue | buyer | sale`, plus `agreed` on a cart line), the compare-at price of a charged sale and, when `pricing.show_list_price` is on, the list price.
+  - **Catalogue:** `ProductVariant.priceOverride`, `CatalogProductVariantRecord.priceOverride` and `createVariantRequestSchema.priceOverride` are removed. Old: `POST …/variants` with `priceOverride: 49.99`. New: a variant row of the base book (`PUT /api/v1/admin/price-books/base-prices/:productId`). `PRICE_FIELDS_REFUSED_ON_PRODUCTS` and `PRICE_FIELDS_REFUSED_ON_VARIANTS` name what a write refuses.
+  - **Error codes:** `PRICE_SET_IN_PRICE_BOOKS` (catalogue writes naming an old price field), and the price-book codes `PRICE_BOOK_CHANNEL_CURRENCY`, `PRICE_BOOK_AUDIENCE_KIND`, `PRICE_BOOK_IMMUTABLE_FIELD`, `PRICE_BOOK_NOT_APPLICABLE`, `PRICE_BOOK_ROW_OVERLAP`, `PRICE_BOOK_ROW_SHAPE`, `PRICE_BOOK_ROW_TARGET`, `PRICE_BOOK_ROW_LIMIT`, `PRICE_BOOK_STALE`, `PRECEDENCE_CHANGE_UNAVAILABLE`.
+  - `ChannelMemberEntityTypeSchema` gains `'price-list'` (a book's channel set is a registered sales-channel bridge).
+
+- 789f917: A product feed pinned to a price book publishes the book's prices only while the book applies to an anonymous buyer on the feed's channel (feature 160, FR-029, owner ruling 2026-10-23).
+
+  - **`@endora-commerce/contracts`.** New `pinnedPriceBookUnpublishableReasonSchema` (`not_found`, `currency_mismatch`, `not_active`, `outside_schedule`, `not_on_channel`, `audience_restricted`) and the `PinnedPriceBookPublishability` type. `productFeedSchema` gains `pinnedPriceBookWarning` (the reason, or `null`).
+  - **`@endora-commerce/mod-price-lists`.** `pricingService.namedListPrices` answers nothing unless the book is `active` or `scheduled` inside its schedule window, bound to the feed's channel with the channel offering its currency (a base book is channel-independent) and for everyone; before, it ignored status, dates, channel and audience. New `pricingService.namedListPublishability({ priceListId, currencyCode, salesChannelId })` says whether, and why not. The catalogue price a pinned book's percentage and amount rows are taken off is now the channel's catalogue price **without** that book (an everyone book was taken off its own result).
+  - **`@endora-commerce/mod-product-feeds`.** `FeedPricingPort` requires `namedListPublishability`; the admin feed list and detail rows carry `pinnedPriceBookWarning`, and the feed page shows it as a warning (English and Polish). What a run of such a feed does is `160-pinned-feed-withdrawal.md`'s.
+
+- d231c48: A product feed whose pinned price book does not apply at generation time withdraws its published file (feature 160, FR-029, owner ruling 2026-10-23).
+
+  - **`@endora-commerce/contracts`.** `feedRunStatusSchema` gains `withdrawn`. `productFeedRunSummarySchema` (and so a feed's `lastRun` and every run) gains `withdrawalReason`: on a `withdrawn` run, one of `pinnedPriceBookUnpublishableReasonSchema`'s reasons; `null` otherwise. A consumer that switches exhaustively on the run status has one more case. `feedRunFailureCodeSchema` drops `price_list_unavailable`, which nothing ever raised: a run whose pinned book does not apply is a withdrawal, not a failure.
+  - **`@endora-commerce/mod-product-feeds`.** A run of a feed pinned to a book that does not apply ends `withdrawn` with the reason, before the catalogue is walked: it produces no file, clears the feed's published file, and the public feed URL then answers exactly as for a feed that has never been generated (`404`, the one not-available body). It is not a failed run, so no failed-run notification is sent; the earlier file is detached, not deleted, and is purged by the usual artefact retention. When the book applies again, the next run publishes as usual. A failed run (a configuration error, the skip threshold, storage) still keeps the last good file serving, as before. New column `product_feed_runs.withdrawal_reason` (migration `20261023T195611_product_feeds_run_withdrawal_reason`). `FeedGenerationService` requires a `pinnedPriceBookPublishability` dependency. The admin shows the outcome as _Withdrawn_ on the run badge, the run page and the feed page (English and Polish); the warning for a pinned book that no longer exists no longer points at a Settings control that does not exist.
+
+- e47b84b: The four price-matrix error codes are gone (feature 160): `ERROR_CODES.PRICE_MATRIX_ENTRY_NOT_FOUND`, `PRICE_MATRIX_ENTRY_OVERLAP`, `PRICE_MATRIX_ATTRIBUTE_NOT_ELIGIBLE` and `PRICE_MATRIX_ENTRY_LIMIT` are no longer exported or declared by `price_lists`, and their sentences and the unused `priceMatrix.*` admin strings are removed from both bundles. Nothing has raised them since the matrix entries became price-book rows: a row is refused with `PRICE_BOOK_ROW_SHAPE`, `PRICE_BOOK_ROW_OVERLAP`, `PRICE_BOOK_ROW_TARGET` or `PRICE_BOOK_ROW_LIMIT`.
+- 9434cbc: `resolvedPriceEngineSchema` describes what `GET /api/v1/storefront/products/:id/resolved-price` answers (feature 160, FR-018).
+
+  - **`@endora-commerce/contracts`.** Amounts are decimal strings (`{ amount: '199.0000', currency: 'PLN' }`), as the route has always sent them — the schema declared numbers. An unpriced product has `baseListId`, `basePrice` and `quantityBracket` all `null` (they were declared non-null); the three are `null` together or set together.
+  - **`@endora-commerce/mod-price-lists`.** The route answers `baseListId: null` for an unpriced product instead of an empty string.
+
+- 87ac085: A price is rounded to two places the same way everywhere: half-up on its decimal digits.
+
+  - **`@endora-commerce/contracts`.** New `roundAmountHalfUp(value: string | number): string` — an amount at two places, half-up on its decimal digits (half away from zero when negative). A number is read as the shortest decimal that round-trips it.
+  - **`@endora-commerce/mod-carts`.** The basket line stores the resolver's four-place amount through `roundAmountHalfUp`, and the placement drift check (`storedPriceDiffers`) compares with it. `Number(amount).toFixed(2)` rounded the binary double, so a 9.0450 price was stored and charged as 9.04 while the card showed 9.05, and 1.0050 as 1.00 against 1.01.
+  - **`@endora-commerce/mod-orders`.** The admin order preview rounds its line prices the same way.
+  - **`@endora-commerce/mod-quote-requests`.** A quote line's stored reference price is rounded the same way.
+  - **`@endora-commerce/mod-product-feeds`.** Feed prices (`123.45 PLN`) are rounded the same way.
+
+- 87f673d: A gross price is computed on decimals and rounded half-up, the same way everywhere.
+
+  - **`@endora-commerce/contracts`.** New `grossAmountHalfUp(net: string | number, ratePercent: string | number): string` — `net × (1 + rate / 100)` at two places, half-up on the exact decimal product, beside `roundAmountHalfUp`. A number is read as the shortest decimal that round-trips it.
+  - **`@endora-commerce/mod-product-feeds`.** A gross feed (the default presentation) computes its price with it. It rounded the binary double, so 29.50 at 23 % was published as 36.28 instead of 36.29, 4.30 at 5 % as 4.51 instead of 4.52, and 31.50 at 23 % as 38.74 instead of 38.75.
+
+- ad341ed: `decimalText(value)` is exported: a string trimmed, or a number as the shortest decimal that round-trips it (an exponent form read as an integer or at twelve places). `roundAmountHalfUp` and `grossAmountHalfUp` read their arguments through it instead of each carrying a copy, and `grossAmountHalfUp` takes an optional third argument, `'percent'` (the default) or `'fraction'`, so a rate such as `0.23` is read as written rather than shifted by hand. The storefront's gross derivation uses it and drops its own decimal-point shifting.
+- 301a69f: An admin read of a product's variants (feature 161, Checkpoint 5 review).
+
+  - **`GET /api/v1/admin/catalog/products/:productId/variants`** (`catalog:read`): every variant of the product by SKU, serialized as the variant writes answer them (`id`, `parentProductId`, `sku`, `variantAttributeValues`, `stockLevel`, `createdAt`, `updatedAt`), whatever the product's status, sales channels or audience; an unknown or deleted product is `404`. `CatalogAdminService.listVariants(productId)` is new. The storefront's `GET /api/v1/catalog/products/:id`, which answers an inactive product `410` and an out-of-channel one `404`, is unchanged.
+  - **Contracts:** `adminProductVariantSchema`, `adminProductVariantsResponseSchema` and their types.
+  - **The price-book grid** expands a product line through this read (the action is absent without `catalog:read`).
+
+- 1377dc8: Response schemas the price-book editor's client parses (feature 161, T045), additive — the routes already answered these shapes.
+
+  - **`priceBookRowsResponseSchema`** (`PriceBookRowsResponse`): `GET /api/v1/admin/price-books/:id/rows` — `{ data: PriceBookRow[], meta: { page, pageSize, totalCount } }`.
+  - **Picker answers** of `GET /api/v1/admin/price-books/targets/*`, each `{ data: { items } }`: `priceBookTargetOrganizationsResponseSchema` (`{ id, name, taxId }`), `priceBookTargetCustomerGroupsResponseSchema` (`{ id, code, name }`), `priceBookTargetCategoriesResponseSchema` (`{ id, slug, name: Record<language, string>, parentCategoryId, sortOrder }`), `priceBookTargetAttributesResponseSchema` (`{ key, label, valueType, options: { value, label }[] }`), `priceBookTargetSalesChannelsResponseSchema` (`{ id, code, name: Record<language, string>, currencies, defaultCurrency }`) and `priceBookTargetCurrenciesResponseSchema` (`{ code, exposedByChannels }`), with their item schemas (`priceBookTarget<Kind>Schema`) and types (`PriceBookTarget<Kind>`).
+
+- af57b55: The price-book editor's API gaps (feature 161, G11–G17), additive on the wire; two are new required members for code that builds these types itself.
+
+  - **Writable for the caller (G11).** `priceBookSchema` and `priceBookSummarySchema` gain `writable: boolean`; `priceBookListResponseSchema.meta` gains `creatableAudienceKinds: PriceBookAudienceKind[]`; `productBasePricesSchema` gains `writable: boolean` (also on `PriceBookWritePort.basePrices` answers, always `true` there). A producer of `PriceBook`, `PriceBookSummary` or `ProductBasePrices` objects must now set the field. Old: `{ ...book }`. New: `{ ...book, writable }`.
+  - **Book lines (G15).** New `priceBookLinesQuerySchema` (`kind`, `search`, `page`, `pageSize` ≤ `PRICE_BOOK_LINES_MAX_PAGE_SIZE` = 500), `priceBookLineSchema`, `priceBookVariantLineSchema`, `priceBookLinesResponseSchema` (`meta.totalLines`) for `GET /api/v1/admin/price-books/:id/lines`.
+  - **`CatalogProductReadPort.pageProductsByAdminName(query)` (G15)** — new **required** method (`CatalogAdminNamePageQuery`: `membership` (`CatalogProductMembership`, a `{ sql, params }` subquery), `search?`, `language`, `offset`, `limit`, `withTotal?` → `{ ids, total: number | null }`). A hand-written implementation or test double of the port must add it. Old: an object literal with the port's previous methods. New: add `pageProductsByAdminName: async () => ({ ids: [], total: 0 })` (or a real one).
+  - **Admin name fold (G15).** `foldAdminName(text)`, `adminNameLanguage(tag)` and `ADMIN_NAME_LANGUAGES` (`admin-name.ts`): the case and accent fold catalog's stored admin name keys are built with, for code that orders by the same rule.
+  - **Named runner-ups (G16).** `priceBookExplanationCandidateSchema` gains `bookName: string` and `labels: PriceBookRowLabels`. `priceBookRowLabelsSchema` is now declared before the explanation schemas (same export).
+  - **List price on the catalogue DTOs (G14) and on search suggestions (G19).** `searchSuggestItemSchema` gains optional `listPrice: { amount, currency }`.
+  - **List price on the catalogue DTOs (G14).** `productResolvedPriceSchema` (and so `ProductSummary.resolvedPrice`) gains optional `listPrice: { amount, currency }` — the catalogue price beside a lower buyer price while `pricing.show_list_price` is on.
+  - **Decimal helpers (G17).** `parseUnits`, `formatUnits`, `parseSignedUnits`, `parseSignedPercentHundredths`, `applySignedPercent`, `applyAmountAdjustment`, `normaliseAmount` and `compareDecimal` are exported from the barrel (`price-book-decimal.ts`): the integer, half-up, four-place arithmetic the resolver prices with, for previews that round as the server does.
+
+- 49d82dd: Which picked products already have a line in a price book, in one request (feature 161, Checkpoint 5 review).
+
+  - **`GET /api/v1/admin/price-books/:id/product-lines?productIds=a,b`** (`price_lists:read`, the book's visibility): answers `{ data: { productIds } }`, the named products with a line in the book (a row of the product or of one of its variants), read from `price_list_product_lines`. At most 200 ids (`PRICE_BOOK_PRODUCT_LINES_MAX_IDS`); none, a non-uuid or more is `400`; an out-of-scope book `404`. `PriceBookReads.productLines(bookId, productIds, scope)` is new.
+  - **Contracts:** `priceBookProductLinesQuerySchema`, `priceBookProductLinesResponseSchema` and their types.
+  - **The grid** asks it before adding products from the browser: a product already in the book is not added again (its stored price is never overwritten) and is offered to be opened where it is.
+
+- 72f9cec: A refused price-book row names the rule it broke (feature 161, Checkpoint 11 ruling 2; `specs/conventions/module-i18n.md`: the backend returns codes, the consumer translates them).
+
+  - **Contracts:** `priceBookRowErrorSchema` gains an optional `reason`, one of the new `PRICE_BOOK_ROW_ERROR_REASONS` (`priceBookRowErrorReasonSchema`, `PriceBookRowErrorReason`). The values are:
+    - `row_invalid`, `selection_combined`, `max_below_min`, `fixed_on_all`, `variant_needs_product`, `base_book_kind`, `base_product_fixed`;
+    - `product_unknown`, `variant_unknown`, `variant_other_product`, `category_unknown`;
+    - `attribute_not_selectable`, `attribute_value_unknown`, `attribute_value_boolean`;
+    - `row_not_in_book`, `rows_overlap`, `book_row_limit`.
+
+    `priceBookRowShapeIssues` returns each issue's `reason`. The change is additive: `code`, `field` and `message` are unchanged.
+
+  - **`PUT /api/v1/admin/price-books/:id/rows`** (and its `?dryRun=true` preview) sets `reason` on every row error. Old: the attribute refusal was one `PRICE_BOOK_ROW_TARGET` whose English message told the cases apart. New: three reasons. An unknown variant id is now `variant_unknown`; a variant of another product is `variant_other_product`.
+  - **Admin:** the grid's cell reasons (`errors.reason.*`) and the CSV preview's refusals (`import.reason.*`) translate the rule in English and Polish; the preview no longer quotes the server's English. The display-mode override row's help line and its two errors are in the module's bundle (Checkpoint 11 ruling 3). The import preview notes when refused lines were not compared.
+
+- 0d0a1c6: Shared shapes for carrying custom-field values between Quote Requests, Orders and Sales Opportunities, and the code that refuses a carry that cannot work.
+
+  **For a consumer of the contracts.**
+
+  - `customFieldCarryToSchema` is the list of entity types a definition's values carry to: at most
+    `CUSTOM_FIELD_CARRY_MAX_TARGETS` (2) entries, no duplicates.
+  - `customFieldDefinitionSchema` carries `carryTo` (required on the wire);
+    `createCustomFieldDefinitionSchema` defaults it to `[]`; `updateCustomFieldDefinitionSchema`
+    takes it optionally, and an absent `carryTo` leaves the stored one unchanged.
+  - **Required member — type-level change for hand-built fakes.** `CustomFieldDefinitionRecord`
+    gains `carryTo: SupportedEntityType[]`, and `CustomFieldEntityTypeInfo` gains `carryTargets`
+    (parsed with a default of `[]`): the entity types a definition of that type may carry to.
+    A hand-built record or entity-type value now needs the member.
+  - `assessCustomFieldCarry(source, target)` is the one compatibility rule of a carry pair: it
+    returns every `CustomFieldCarryIncompatibility` — `target_missing`, `value_type_mismatch` (no
+    widening), `options_missing` (the source option values the target lacks) and
+    `audience_mismatch` (an internal value into a customer-visible field) — in that order, `[]`
+    meaning compatible. Pure; safe in the browser.
+  - `CustomFieldCarryPort` (`plan`) answers which values carry into a target bag, as a
+    `CustomFieldCarryPlan` of `values`, `carried` keys and `skipped` keys, each a
+    `CustomFieldCarrySkip` with a `customFieldCarrySkipReasonSchema` reason (`target_missing`,
+    `value_type_mismatch`, `audience_mismatch`, `value_invalid`). A skip also carries an optional
+    `label` (`customFieldCarrySkipLabelSchema`: `labelDefault` and a per-locale `labels` map), the
+    source field's label when the value was skipped; a skip stored without one still parses.
+    `customFieldCarrySkipRecord(skip)` makes the plain copy a record stores.
+  - `CustomFieldCarryReceiverPort` (`receiveCarriedValues`, answering a `CustomFieldCarryReceipt`)
+    is how a Sales Opportunity's values are pushed to the Order or Quote Request created from it.
+  - `orderCommentSystemNoteSchema` (type `OrderCommentSystemNote`) is an author-less system note
+    in an Order's comments naming the custom-field values not carried into it;
+    `orderCommentSchema` gains an optional, nullable `systemNote` (admin replies only).
+  - `rfqEventTypeSchema` gains `custom-field-carry-skipped`; `quoteRequestHistoryEntryKindSchema`
+    gains `custom_field_carry_skipped`, whose entries carry `customFieldCarry` (the source
+    Opportunity and the skipped keys). Admin replies only.
+  - `CUSTOM_FIELD_DEFINITION_ERROR_CODES` gains `carry_incompatible`, so
+    `isCustomFieldDefinitionFailure` recognises a refused carry option.
+  - `ERROR_CODES.CUSTOM_FIELD_CARRY_INCOMPATIBLE` — 422 when a definition's carry option is turned
+    on towards a target that cannot take its values; `details.code` names why (`target_missing`,
+    `value_type_mismatch`, `options_missing`, `audience_mismatch`, `pair_unsupported`,
+    `target_unavailable`).
+
+- 61a1188: A reorder reports the lines that no longer have a price (issue #166).
+
+  - **Behaviour change — reorder.** `POST /api/v1/orders/:id/reorder` and the admin reorder seed every line at the price the buyer may order it at now, and leave out a line nothing prices for this buyer (or that is sold on request only), reporting it in `unavailableItems` with `reason: 'no_price'` beside the discontinued products. Such a line used to be seeded at the old order's price without being reported, and placement then refused the basket.
+  - **`CartSeedOptions.dropUnorderable`** (contracts): `CartWritePort.replaceItemsForCustomer` leaves out the seed lines that have no orderable price and names them in the answer's new optional `unorderable` (`CartSeedUnorderableLine[]`: `productId`, `variantId`, `reason: 'unpriced' | 'quote_only'`). Ignored for an agreed seed. Absent, behaviour is unchanged.
+  - **`CartService.repriceLinesForCustomer`** (carts) now answers the lines it could not price, by cart item id, with the reason; it still prices them all in one batched call.
+
+- 56b075d: The _Place order_ action on an approved Quote Request in the Admin UI works. It posted to the storefront's `POST /api/v1/quote-requests/:id/convert-to-order`, which is customer-only: an administrator's session answered `401`, which the Admin UI reads as an expired session, so the operator was signed out — and an accepted call would have seeded the administrator's own basket.
+
+  `@endora-commerce/mod-quote-requests` adds `POST /api/v1/admin/quote-requests/:id/prepare-customer-basket`, behind the module's `rfqs:handle` permission and the sales-representative scope of the other admin actions. It puts the approved request's lines into the basket of the customer who owns the request, at the agreed unit prices — replacing what that basket held, exactly as the customer's own conversion does and under the same rules — and records `quote_request.prepare_customer_basket` in the audit log. The customer completes the order at checkout. `@endora-commerce/contracts` exports its response schema, `adminPrepareCustomerBasketResponseSchema` (`cartId`, `customerAccountId`, `itemCount`).
+
+  The Admin UI button calls it after a confirmation that names the replaced basket, and is labelled _Prepare the customer's basket_ (`@endora-commerce/mod-i18n`, English and Polish).
+
+- 53e88c7: New `admin-feedback` contract (issue #379): `AdminFeedbackRequestSchema` (what the Admin UI sends to its instance), `AdminFeedbackRelayPayloadSchema` (what the instance relays — the words plus the platform release, the Admin UI and API addresses and the sending administrator), `adminFeedbackPhoneSchema`, `ADMIN_FEEDBACK_MESSAGE_MAX_LENGTH`, `ADMIN_FEEDBACK_ERROR_CODES`, `ADMIN_FEEDBACK_SETTING_CODES` and `ADMIN_FEEDBACK_DEFAULT_RELAY_URL` (the commerce.endora.software relay, with its trailing slash). `ERROR_CODES` gains `ADMIN_FEEDBACK_NOT_CONFIGURED` and `ADMIN_FEEDBACK_DELIVERY_FAILED`.
+- 359ee2b: `CatalogProductReadPort` answers products the way pricing resolves them, without building a record of each (issue #416).
+
+  - **New, required on every implementation of the port:** `listPricingRefs()` and `findPricingRefsByIds(ids)`, answering `CatalogProductPricingRef` (`{ id, attributeValues }`, exported from `@endora-commerce/contracts`). `listPricingRefs()` answers the products `listAll()` answers, ordered by id; `findPricingRefsByIds(ids)` answers the ones `findByIds(ids)` answers. Soft-deleted and inactive products are included in both. An implementation outside this repository has to add both methods. It can map `listAll()` and `findByIds()` to `{ id, attributeValues }`.
+  - `@endora-commerce/mod-catalog` answers each with one statement and no entity hydration. The price surface's worker reads the catalogue at the start of every whole build. On a 50 000-product catalogue, `listAll()` took 3.8 s for that, most of it hydrating `Product` entities whose fields the build does not use.
+
+- 8f0fd0e: A typed money amount with more than two decimal places is refused with `400 AMOUNT_PRECISION_EXCEEDED`, never rounded (issue #417, owner ruling of 2026-10-24).
+
+  - `@endora-commerce/contracts`: new `money-input` module — `twoDecimalAmount(schema)` for a number schema, `twoDecimalAmountString(schema)` for a decimal string, `addAmountPrecisionIssue(ctx, path)` for a `superRefine` that decides per field, `hasAtMostTwoDecimals(value)`, `isAmountPrecisionIssue(issue)` and the `AMOUNT_PRECISION_EXCEEDED` constant; new `ERROR_CODES.AMOUNT_PRECISION_EXCEEDED`.
+  - `@endora-commerce/platform`: the error envelope answers `400 AMOUNT_PRECISION_EXCEEDED` when every failed issue of a request is the precision issue, whether the route validated through the type provider or parsed the body itself; a request failing anything else as well stays `VALIDATION_FAILED`, the precision issue listed among its details.
+  - `@endora-commerce/mod-i18n`: declares the code in the platform block, with its sentence in English and Polish.
+
+- cc98507: Exact decimal money arithmetic for every amount computed from a price (issue #417).
+
+  - **New module `money-decimal`** (re-exported from the package root), the sibling of `price-book-decimal`: every value is read as the decimal it is written as (`decimalText`), carried as an integer with a scale, and rounded **half-up** (half away from zero for a negative amount) only where asked.
+    - `roundHalfUp(value, places = 2)` — `roundAmountHalfUp` at any number of places (4 for a unit price).
+    - `decimalSum(...values)`, `decimalDifference(a, b)`, `decimalProduct(a, b)` — exact and unrounded; `compareDecimals(a, b)` for signed decimals of any scale.
+    - `moneySum(values, places = 2)`, `moneyDifference(a, b, places = 2)` — rounded once, at the end.
+    - `lineAmountHalfUp(unitPrice, quantity)`, `percentOfHalfUp(amount, percent)`, `quotientHalfUp(dividend, divisor, places = 2)`, and `wholeMultiples(amount, step)` — how many whole steps fit in an amount (`Math.floor(0.3 / 0.1)` is 2).
+    - `taxAmountHalfUp(net, rate, unit)`, `taxAmountExact(net, rate, unit)`, `grossFromNetHalfUp(net, rate, unit)` (a negative net allowed) and `netFromGrossHalfUp(gross, rate, unit)` — `unit` is `'fraction'` (`0.23`) or `'percent'` (`23`) and is required.
+  - Replaces `Number#toFixed(2)` and `Math.round(x * 100) / 100` on doubles, which round the binary value: 29.50 × 1.23 is the double 36.28499…, so the binary rounding gave 36.28 where half-up gives 36.29.
+
+- ced7b20: One VAT method, shared by every document an order produces (issue #417, owner ruling of 2026-10-24; art. 106e ust. 1 pkt 13–14 of the Polish VAT Act).
+
+  - **`vatByRate(lines, unit)`** — per rate, the VAT on the sum of the nets at that rate, rounded half-up once; gross = net + VAT; totals are the sums of the rows. It also answers each line's informational share of its rate's VAT, so line grosses add up to the total.
+  - **`allocateHalfUp(total, parts, places = 2)`** — a total shared over parts, each rounded half-up and the difference handed back cent by cent.
+  - **`netForGrossAtRate(gross, rate, unit)`** — the net a gross came from under that rule (what a correction credits net), with `exact: false` and the VAT as the remainder for a gross the rule cannot produce.
+
+- f3598cd: A correction credits an order-level discount the way the invoice charged it (issue #417, review of PR #423). `CorrectiveInvoiceLine` gains an optional `discount` (`@endora-commerce/contracts`): the part of the order's discount the line's refund carries. The goods are credited at `amount + discount` at their VAT rate, and the discount comes back on a negative 0 % line mirroring the invoice's own discount line, so the correction totals the refund and credits the goods' VAT as charged: a full return of 100.00 net at 23 % with a 50.00 discount credits 123.00 of goods (23.00 VAT) and −50.00 of discount, 73.00 in all, where it credited 73.00 of goods with 13.65 VAT. Earlier corrections' discount lines stay out of the goods' cumulative nets.
+- 6177c81: An opportunity's `manualValue` (`CreateOpportunityRequestSchema` and the schemas that share its decimal-amount shape) refuses more than two decimal places with the platform's one precision code, `400 AMOUNT_PRECISION_EXCEEDED` (issue #417), rather than a `VALIDATION_FAILED` of its own. A value that is not a non-negative decimal at all is still `VALIDATION_FAILED`.
+- c8b20f6: An order refunded in full before it is invoiced is not invoiced (issue #417, owner ruling of 2026-10-24): there is no sale left to document. When the refunds of its captured payments equal what was captured and cover the whole order total, issuing a VAT invoice answers `422 INVOICE_ORDER_REFUNDED` and draws no number; the automatic issuance on an order status skips the order and logs the reason instead of failing. An order refunded in part is invoiced as before, with what was kept as paid. `ERROR_CODES` gains `INVOICE_ORDER_REFUNDED` (`@endora-commerce/contracts`), declared by `invoices` with an English and a Polish sentence.
+- 29180cd: `vatByRate`'s per-line `gross` is the line's own rounding, `round(net × (1 + rate))`, instead of the line's allocated share of its rate's VAT (owner ruling of 2026-10-24, issue #417): 29.50 at 23 % shows 36.29 even beside another 23 % line. The rows' VAT and the totals are unchanged, so a document's line grosses may add up to a cent more or less than its total. `allocateHalfUp` stays for exact shares of a refund.
+- 52884d6: `OrderReturnContext.productsPaidTotal` takes the order-level discount off: subtotal + tax total − discount total, which is what the products were charged (issue #417, review of PR #423). An order of 100.00 net + 23.00 VAT with a 50.00 discount and 10.00 delivery charged 83.00, of which 73.00 for the products; a full return used to read 123.00. `OrderReturnContext` gains `discountTotal` (`@endora-commerce/contracts`), the stored discount a return credits back in part.
+- 0071cd7: Orders take VAT per rate on the sum of the nets at that rate, rounded half-up once (owner ruling of 2026-10-24, issue #417; `vatByRate`), in placement, the checkout preview and the admin preview. This replaces the sum of every line's exact tax across all rates rounded once: 29.50 at 23 % with 4.30 at 5 % now carries 7.01 VAT and a total of 40.81 — the figure the invoice carries — where it carried 7.00 and 40.80. The paid amount, the proforma, the credit reservation and the order total are that one figure. A line's stored `lineTotal` is its net plus its share of its rate's VAT, so the line totals add up to the products' gross; `orderLineMoney` is removed and `orderTotalsMoney` answers each line's amounts under `lines`.
+
+  `OrderReturnContextPort` answers `paidLineAmount` under the same method over the whole order — what the order line and the invoice charged (9.05 × 3 at 8 % is 29.32, not 29.31) — `paidUnitAmount` as that over the quantity, and two new fields on `OrderReturnContextLine` (`@endora-commerce/contracts`): `unitNetPrice` and `taxRate`, so a return prices a returned quantity under the same method.
+
+- 3e949eb: Orders record the VAT method they were placed under, and report what an order charged from what it stored (issue #417, review of PR #423, owner ruling of 2026-10-24).
+
+  - New nullable column `orders.vat_method` (migration `Migration20261024T145147OrdersVatMethod`, no backfill): placement writes `per_rate`; `null` is an order placed before 0.108.0, whose totals followed the rule of their day.
+  - A new order line's stored `lineTotal` is the line's own rounding of its gross, `round(net × (1 + rate))`; the order's VAT and total are still per rate on the net sums, so the line totals may differ from the total by a cent.
+  - `OrderReturnContextPort` no longer recomputes what was paid: `paidLineAmount` is the stored `lineTotal`, `paidUnitAmount` that over the quantity, and `OrderReturnContext` (`@endora-commerce/contracts`) gains `vatMethod` and `productsPaidTotal` (stored subtotal + tax total). `paidAmounts` is removed.
+
+- 403ccc1: Promotions sum and scale amounts exactly everywhere (issue #417, review of PR #423): the cart subtotal and a line-scoped base (`linesSubtotal`) are exact sums — 10 % of 0.01 + 2.34 is 0.24, not 0.23 — `spend_x_percent_off` multiplies its steps by the percentage exactly (3 × 0.15 % of 10.00 is 0.05, not 0.04), and the free-unit actions sum unit prices exactly (`unitsTotal`). The dead `cartSubtotal` helper is removed.
+
+  A promotion's typed money amounts refuse more than two decimal places with `400 AMOUNT_PRECISION_EXCEEDED` (`@endora-commerce/contracts`): the action `amount` and `spendStep`, the legacy `value` of an `amount_off` promotion (a percentage is left alone) and `minCartSubtotal`.
+
+- 2b8bd26: The quote request list's `totalAtCustomerPrice` and `totalAtAgreedPrice` are exact sums (issue #417, review of PR #423): 3 × 9.05 was published as `27.150000000000002`, now `27.15`. A typed `desiredUnitPrice` (`createQuoteRequestLineSchema`) and `agreedUnitPrice` (`adminCreateQuoteRequestLineSchema`, `adminPatchQuoteRequestLineSchema`) with more than two decimal places is refused with `400 AMOUNT_PRECISION_EXCEEDED` (`@endora-commerce/contracts`).
+- ec14b96: More typed money fields refuse more than two decimal places with `400 AMOUNT_PRECISION_EXCEEDED` (issue #417, owner ruling of 2026-10-24), instead of being rounded: `deliveryMethodUpsertSchema.cost`, `paymentMethodUpsertSchema.additionalPrice`, `returnDeliveryMethodCreateSchema.returnCost` and `returnDeliveryMethodUpdateSchema.returnCost`, `settlementRequestSchema.lines[].approvedRefundAmount`, `adminOrderRefundRequestSchema.amount`, `grantCreditLimitRequestSchema.grantedAmount` and `adjustCreditLimitRequestSchema.grantedAmount`, and an ERP integration's decimal strings in `erpSaleDocumentUpsertInputSchema` (`netTotal`, `taxTotal`, `grossTotal`, `paidTotal`).
+- a4cd906: A correction that cannot be made never follows money that moved (issue #417, review of PR #423).
+
+  - `CorrectiveInvoicePort` gains `validateCorrection(input)` (`@endora-commerce/contracts`): it refuses, writing nothing, what `createCorrection` would refuse for the same input. `invoices` implements both from one preparation step.
+  - The returns settlement builds its correction once and validates it **before** the refund or the credit top-up; a refusal leaves the case in `received` with nothing moved. With `invoices` switched off, a settlement asking for a correction is refused before the credit, where it used to credit first and refuse after.
+  - A cancelled correction no longer counts against the cap or the cumulative nets of later corrections.
+
+- 5bddd11: Batched pricing ports, one customer-group rule, and the price split on catalogue summaries (D-287 P0).
+
+  - **New `LinePricesPort`** (container `pricingService`): `resolveLinePrices({ lines, context })` prices many `LinePriceRequest`s (`{ key, product, variantId?, quantity }`) for one buyer in one call and answers a `Map<key, LinePriceResult | null>` identical, key by key, to one `resolveLinePrice` per line. `OrgLinePricePort` is unchanged; a caller that needs both names `OrgLinePricePort & LinePricesPort`.
+  - **New `ListingPriceDetailPort`** (container `pricingService`): `resolveListingPriceDetails(input)` answers, per product, a `ListingPriceDetail` — the listing chain's `price` (`ListingPrice`) plus `basePrice`, `salePrice` and `displayMode` from the same resolution. `ListingPricePort`'s input is now the named type `ListingPriceInput`.
+  - **New `PricingBuyerContext`** documents the one rule: effective group = the explicit `customerGroupId` ?? the customer account's own group ?? the organisation's. `customerAccountId?: string | null` is added to the contexts of `ListingPricePort`, `LinePricePort` and `ListingPriceViewerContext`.
+  - **`ProductAudience.customerAccountId?`** — the signed-in customer account; not a visibility input.
+  - **`ProductSummary.resolvedPrice?`** (`productResolvedPriceSchema`: `basePrice`, `salePrice`, `displayMode`, nullable, optional) — inherited by `ProductDetail` and `SearchSuggestItem`.
+
+- a8919dc: A unit price keeps up to four decimal places, unrounded, from the price book to the invoice line; only the line value is rounded (owner ruling of 2026-10-25).
+
+  - `@endora-commerce/contracts`: new `unitPriceHalfUp(value)` (a unit price at its four places, as `numeric(14,4)` stores it), `unitPriceFractionDigits(value)` and `unitPriceDisplayText(value)` (the one display rule: two places when places three and four are zero, otherwise the significant places, up to four), `grossUnitPriceHalfUp(net, rate, unit?)` (a displayed gross unit price: two places for a two-place net, four for a sub-cent one) and `UNIT_PRICE_PLACES`. In `money-input`: `fourDecimalUnitPrice(schema)`, `fourDecimalUnitPriceString(schema)`, `hasAtMostFourDecimals(value)`, `isUnitPricePrecisionIssue(issue)` and the `UNIT_PRICE_PRECISION_EXCEEDED` constant; new `ERROR_CODES.UNIT_PRICE_PRECISION_EXCEEDED`. A quote's `desiredUnitPrice` (`createQuoteRequestLineSchema`) and `agreedUnitPrice` (`adminCreateQuoteRequestLineSchema`, `adminPatchQuoteRequestLineSchema`) now accept four places; a fifth is refused with the new code. Typed money amounts keep `twoDecimalAmount`. A `money` document value (`documentValueSchema`, `DocumentValue`) takes an optional `unitPrice: true`, and `formatDocumentValue` shows such a value with its significant places, up to four, never fewer than the format's `decimals`.
+  - `@endora-commerce/platform`: the error envelope answers `400 UNIT_PRICE_PRECISION_EXCEEDED` when every failed issue of a request is the unit-price precision issue; a request refused for an amount and a unit price at once stays `VALIDATION_FAILED`.
+  - `@endora-commerce/mod-i18n`: declares `UNIT_PRICE_PRECISION_EXCEEDED` in the platform block, with its sentence in English and Polish.
+
+### Patch Changes
+
+- 6f1e0ec: Custom-field carry review fixes.
+
+  - **`@endora-commerce/contracts`** — every string of `customFieldCarrySkipLabelSchema` is at most 200 characters (`CUSTOM_FIELD_CARRY_SKIP_LABEL_MAX`, new export); a longer `labelDefault` or per-locale label is refused.
+  - **`@endora-commerce/mod-custom-fields`** — the carry port cuts a skip's label snapshot to that limit, since a definition's per-locale labels are not capped, so every skip it plans parses.
+  - **`@endora-commerce/mod-quote-requests`** — the Opportunity → Quote Request carry takes the request's row `for update` and plans over the bag it re-reads under the lock, so an administrator's concurrent edit is never overwritten. A carry that fills a field still raises the request's `version`.
+
+- eda7da8: Storefront product reads show a product's per-sales-channel value overrides.
+
+  - **Behaviour change for API clients — channel overrides are now visible on the storefront.** `GET /api/v1/catalog/products/:idOrSlug` (name, description, `seo`, `structuredDataJsonLd`, `attributeValues`, `visibleAttributes`, grouped children and bundle options) and every `GET /api/v1/catalog/products` card name now return the override written in the product scope editor for the request's sales channel and language. The resolver's override slots are walked over the storefront's own baseline language order — the `Accept-Language` language, the channel's default language, `en-US`, `en`, the first stored language — taking the (channel, language) override at each language until the baseline has text for one, so an override never replaces baseline text of an earlier language in that order; the channel-only slot is asked last. Product-link tiles (in the product page's `links` and `GET /api/v1/catalog/products/:idOrSlug/links`) show overrides too, walked over their own pick, which has no channel-default leg. Channel-scoped user attributes return their channel override. A product without an override for that channel answers exactly as before.
+  - Override rows are read for the request's sales channel only, once per read section, never per card.
+  - **Search result cards show the same name.** Every card of the Meilisearch-served listing (`GET /api/v1/catalog/products?q=…` and `GET /api/v1/search/suggest`) now shows the name the catalogue's listing card shows for the request's sales channel and language, rather than the baseline text. The indexed name is still what the index ranks and sorts by. The request channel's override rows are read once per results page.
+  - `@endora-commerce/contracts` exports the slot choice both modules share (`overrideLanguages`, `channelOverrideFor`, `effectiveSystemText`, `StorefrontOverrideContext`) and the resolver's `isNonEmpty` presence test the walk reuses, and `CatalogProductReadPort.listValueOverridesByProductIds` takes an optional `{ channelId }` that narrows the read to one sales channel's rows. Existing callers and implementations are unaffected.
+
+- 2effab9: An ERP sale document's `netTotal`, `taxTotal`, `grossTotal` and `paidTotal` are trimmed before the decimal grammar (issue #417, review of PR #423): an integration that sends surrounding whitespace keeps working, and the trimmed value is what is stored.
+- 0f09369: The money-input grammar (issue #417, review of PR #423): trailing zeros are not significant — an ERP integration's `"123.4500"` is a valid 123.45 — and only a significant digit beyond the second place is refused with `AMOUNT_PRECISION_EXCEEDED`. A string that is not a decimal at all (`""`, `"abc"`, `"1e3"`, `"+5.00"`, `"1 234,56"`) is refused with a format issue under `VALIDATION_FAILED`, never with the precision code. `twoDecimalAmountString(schema, { pattern, message })` takes the format to check first; an opportunity's `manualValue` uses it, so a malformed value carries its one format issue and no precision issue on top.
+- 8a2fc1b: `settlementRequestSchema` refuses a settlement that names one return case line twice (`400 VALIDATION_FAILED`, issue `duplicate_line` on the repeated `returnCaseItemId`), before anything moves (issue #417, review of PR #423).
+
+## 0.107.0
+
+### Minor Changes
+
+- fcf4d09: New shapes for selecting many products at once in the admin, and named codes for the admin order preview.
+
+  **For a consumer of the contracts.**
+
+  - `ADMIN_PRODUCT_SELECTION_MAX` (`200`) is the most products one admin selection may carry. The
+    admin product browser stops at it, and every request that submits such a selection in one call
+    uses it as its upper bound.
+  - Bulk add to a price list: `bulkAddPriceListProductsRequestSchema` (`{ productIds }`, 1 to
+    `ADMIN_PRODUCT_SELECTION_MAX` uuids), `bulkAddPriceListProductsResultSchema`
+    (`{ added, unchanged, failed: [{ productId, reason }] }`),
+    `bulkAddPriceListProductFailureReasonSchema` (`'product_not_found'`),
+    `bulkAddPriceListProductsResponseSchema` (the result under `data`), and
+    `priceListIdParamsSchema` (`{ id }`) for the price-list routes, each with its inferred type.
+    They describe `POST /api/v1/admin/price-lists-engine/:id/products/bulk-add`, which adds the
+    products to the list in one audited write and reports a product already on the list as
+    `unchanged`, so sending the same request again is safe.
+  - Admin order preview: `adminOrderPreviewMessageCodeSchema`, its type
+    `AdminOrderPreviewMessageCode`, and `ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE` name the four
+    reasons a preview line can be unavailable, in the order they are decided: `PRODUCT_NOT_FOUND`,
+    `PRODUCT_NOT_VISIBLE_TO_CUSTOMER`, `PRODUCT_NOT_IN_SALES_CHANNEL`, `QUOTE_ONLY`. A line carries
+    at most one message, the first that applies. The two middle codes are new answers of the
+    preview.
+
+  **Nothing changes on the wire for existing fields.** `adminOrderPreviewResponseSchema`'s
+  `messages[].code` is still a plain string, not narrowed to the new enum, so a client built
+  against this version keeps parsing an answer that carries a code it does not know yet — map an
+  unknown code to a generic "unavailable" reason rather than failing.
+
+  The documentation of `isProductVisibleTo` now records why the admin order preview may report
+  visibility and sales-channel assortment as two distinct codes while every buyer-facing answer
+  keeps a single "product not found".
+
+- 70bb5e5: New quote-request shapes for reference prices, a readable history and a per-customer price negotiation lock. The new shapes and fields are additive, and existing callers and structural stubs compile unchanged — with **one behaviour change**: the customer create and draft-edit schemas now cap `items`.
+
+  - **Behaviour change — at most 200 items.** `createQuoteRequestSchema` and `patchQuoteRequestSchema` accept at most 200 `items`; a longer list, which validated before, now fails validation (the API answers `400`). A caller that sends more than 200 lines must split the request. Their strictness is unchanged — an unknown key in the create body is still stripped.
+
+  - **Quote request items** (`quoteRequestItemSchema`) gain optional `referencePrice` (`{ amount, currency, capturedAt } | null`), `customerProposedUnitPrice`, `packagingUnitName` and `packagingUnitBaseQuantity`. `referencePrice` and `customerProposedUnitPrice` are sent in admin replies only; `quoteRequestSchema` likewise gains an admin-only optional `salesChannelId`.
+  - **History**: `QUOTE_REQUEST_HISTORY_EVENT_WINDOW` (`100`, how many of the most recent events a history is built from), `quoteRequestHistorySchema` (`{ entries, truncated }`), `quoteRequestHistoryEntrySchema`, `quoteRequestHistoryEntryKindSchema`, `quoteRequestHistoryChangeSchema`, `quoteRequestHistoryActorSchema`, `quoteRequestHistoryLineRefSchema` and their types, for `GET /api/v1/admin/quote-requests/:id/history`.
+  - **Price negotiation**: `quoteRequestOrgNegotiationSchema`, `setQuoteRequestOrgNegotiationSchema`, `quoteRequestNegotiationOverrideSchema` (`'inherit' | 'allowed' | 'not_allowed'`), `quoteRequestAccountNegotiationSchema`, `setQuoteRequestAccountNegotiationSchema` and `storefrontQuoteRequestNegotiationSchema`, with their types. The two `set*` admin bodies are strict.
+  - **Error code** `RFQ_PRICE_PROPOSAL_NOT_ALLOWED` in `ERROR_CODES`.
+  - **`QuoteRequestLineRecord`** gains optional `referenceUnitPrice` and `referenceCurrency` (decimal string and ISO code, both `null` when no reference is stored). Export readers of `quoteRequestReadPort.listItems` should read a cart-converted line's price from `referenceUnitPrice`: those lines now carry `desiredUnitPrice = null`.
+  - **`RfqCustomerPort.createForCustomer`** takes an optional third argument, `CreateForCustomerOptions` (`{ lineReferencePrices? }`): server-side reference prices index-aligned with `input.items`, for in-process callers that hold a snapshot the buyer could not have forged. Two-argument callers and implementations stay valid.
+  - **`BuyerLinePricePort`** with `BuyerLinePriceQuery`, `BuyerLinePriceLine` and `BuyerLinePriceAnswer`: the net unit price a buyer would pay for many lines on a given sales channel. A new port, so `LinePricePort` and its stubs are unchanged.
+
+- 76f9757: Price matrix contracts and a product read for attribute selections.
+
+  - `price-lists`: `priceMatrixEntryInputSchema`, `priceMatrixEntryPatchSchema`,
+    `priceMatrixListQuerySchema`, `priceMatrixEntrySchema`, `priceMatrixListResponseSchema`,
+    `priceMatrixEntryResponseSchema`, `priceMatrixAttributeTargetSchema`, the price, selection-kind
+    and inactive-reason enums, `priceMatrixSelectionKind()`, `priceMatrixEntryShapeIssues()` and
+    `PRICE_MATRIX_MAX_ENTRIES_PER_LIST` (5 000), with their types.
+  - `ERROR_CODES` gains `PRICE_MATRIX_ENTRY_NOT_FOUND`, `PRICE_MATRIX_ENTRY_OVERLAP`,
+    `PRICE_MATRIX_ATTRIBUTE_NOT_ELIGIBLE` and `PRICE_MATRIX_ENTRY_LIMIT`.
+  - `CatalogProductReadPort` gains `listProductIdsByAttributeValue({ key, value, match })`
+    (`CatalogAttributeValueQuery`, `match: 'scalar' | 'array' | 'boolean'`). This is a new required
+    member: a hand-written implementation or test stub of the port must add it.
+
+- 05d0650: Additive contract surface for order and quote status push notifications.
+
+  - `PWA_SETTING_CODES.PUSH_ORDER_STATUS_ENABLED` (`pwa.push_order_status_enabled`) and
+    `PWA_SETTING_CODES.PUSH_QUOTE_STATUS_ENABLED` (`pwa.push_quote_status_enabled`).
+  - `PwaPublicConfigSchema` gains the required booleans `orderStatusPushEnabled` and
+    `quoteStatusPushEnabled` — the effective values for the request's channel.
+    `PwaAdminConfigSchema` gains the same two fields (raw values for the scope) and
+    `UpdatePwaConfigRequestSchema` accepts both as optional booleans.
+  - New `PushPreferencesSchema` / `PushPreferences` (`{ orderStatus, quoteStatus }`) and
+    `UpdatePushPreferencesRequestSchema` / `UpdatePushPreferencesRequest` (strict, at least one
+    field) for `GET`/`PUT /api/v1/storefront/pwa/preferences`.
+  - `OrderReadPort.findStatusDefinition(code)` returning the new `OrderStatusDefinitionRecord`
+    (`{ code, name, defaultName }`) or `null`. A test double that implements `OrderReadPort` in
+    full must add the method.
+  - `QuoteRequestRecord.salesChannelId: string | null` — the channel the request was raised on.
+
+- bf9881f: New `admin-search` exports for admin global search, and two optional criteria on the customer admin search.
+
+  - Schemas: `AdminSearchEntityTypeSchema`, `AdminSearchFieldCodeSchema`, `AdminSearchLabelKeySchema`,
+    `AdminSearchQuerySchema`, `AdminSearchHitSchema`, `AdminSearchTargetRouteSchema`,
+    `AdminSearchGroupSchema`, `AdminSearchResultSchema`, `AdminSearchResponseSchema`,
+    `AdminSearchCapabilitySchema`, `AdminSearchCapabilityQuerySchema`,
+    `AdminSearchConfigurationViewSchema`, `UpdateAdminSearchConfigurationRequestSchema`,
+    `AdminSearchStoredConfigurationSchema` and their inferred types, plus
+    `ADMIN_SEARCH_DEFAULT_STORED_CONFIGURATION` and the limits `ADMIN_SEARCH_MAX_FIELDS`,
+    `ADMIN_SEARCH_MAX_ENTITY_TYPES`, `ADMIN_SEARCH_MAX_QUERY_LENGTH`, `ADMIN_SEARCH_MAX_LIMIT`.
+  - Provider contract: `AdminSearchProvider`, `AdminSearchFieldDescriptor`, `AdminSearchProviderQuery`,
+    `AdminSearchProviderHit`, `AdminSearchProviderResult`, `AdminSearchAbortSignal` and
+    `AdminSearchProviderRegistryPort` (container name `adminSearchProviderRegistry`, owner
+    `admin_search`). A module makes its records findable by pushing a provider into that registry from a
+    contribution-only boot hook.
+  - `CustomerAccountAdminSearchCriteria` gains `qFields?: ('email' | 'name')[]` — match `q` only against
+    those fields, literally, most relevant first — and `excludeDeleted?: boolean` — leave out deleted and
+    anonymized accounts. Both are optional; a caller that sets neither gets exactly what it got before.
+
+- 8397b0f: LLM configurations can now reach DeepSeek and any OpenAI-compatible endpoint. The `llm` credential type gains the provider `openai_compatible` ("OpenAI-compatible (custom endpoint)"), whose Base URL is required; every `llm` provider's Base URL is validated on save as an absolute `http://` or `https://` URL through the new optional `FieldDefinition.format: 'url'`, and the credential form renders such a field as a URL input. `createLlmAdapter` honours the Base URL for `openai`, `deepseek` (default `https://api.deepseek.com`) and `openai_compatible`, and throws `LlmConfigurationError` for a missing or invalid one. `LlmProviderSchema` in `@endora-commerce/contracts` is the one provider list (`PromptActionsProviderSchema` is now its alias), and the AI assistant accepts DeepSeek and OpenAI-compatible configurations where it used to report them as not configured.
+- 8397b0f: Page Builder translation. A **Translate** action in the Page Builder toolbar translates the canvas of the language tab being edited — or only the selected component or text — with the LLM configured in Settings → Page Builder (`cms.page_builder.translation.enabled`, `…llm_credentials`, `…max_source_characters`; off by default), behind the new permission `cms.translate`, through `GET /api/v1/admin/cms/page-builder/translation` and `POST /api/v1/admin/cms/page-builder/translate`. The result is an unsaved change with _Restore previous content_; every request that sent text is audited as `cms.page_builder.translate`.
+
+  For block authors: `BlockDefinition` gains an optional `translatable: [{ path, format? }]` (`format` `plain` | `tiptap` | `html`, paths like `items[].title`) naming the props that are prose; it is served on the Page Builder descriptor. A block without it is never sent to a model. Every CMS-context block of `cms` and `catalog` declares it. `PageBuilderHeaderActions` gains an optional `extraActions` slot, and the blog post and category editors pass the editor what the action needs.
+
+- dd939be: Document templates — the shapes of `specs/152-compare-pdf-template/`.
+
+  **New in `@endora-commerce/contracts`** (`document-templates.ts`):
+
+  - The template content envelope and its limits: `documentTemplateContentSchema`
+    (`{ schemaVersion: 1, languages: { <lang>: <tree> } }`), `documentTemplateTreeSchema`,
+    `documentRootPropsSchema`, `DOCUMENT_TEMPLATE_LIMITS`, `GENERIC_DOCUMENT_PAGE_DEFAULTS`,
+    `documentContentByteSize`, `CORE_BLOCK_NAMES`, `documentTypeCodeSchema`, `mergeFieldKeyRe`.
+  - The host seams: `DocumentTypeRegistration<TData, TPrepared>` (blocks, `coreBlocks`, `selection`,
+    `languages`, `variables`/`resolveVariables`, `defaultContent`, `renderBuiltIn`, `pageDefaults`,
+    `suggestOrientation`, `prepareRender`, `sampleData`), `DocumentBlockRenderer`,
+    `DocumentTypeRegistryPort` (container name `documentTypeRegistry`), `DocumentRenderPort`
+    (`documentRenderPort`) with `DocumentRenderInput` / `DocumentRenderResult`.
+  - The admin API DTOs of `/api/v1/admin/document-templates`, and six error codes in `ERROR_CODES`:
+    `DOCUMENT_TEMPLATE_NOT_FOUND`, `DOCUMENT_TYPE_NOT_AVAILABLE`, `DOCUMENT_TEMPLATE_INVALID`,
+    `DOCUMENT_TEMPLATE_IS_DEFAULT`, `DOCUMENT_TEMPLATE_NOT_SELECTABLE`, `DOCUMENT_RENDER_FAILED`.
+  - `comparisonDocumentDataSchema` / `ComparisonDocumentData` and `invoiceDocumentDataSchema` /
+    `InvoiceDocumentData` — what `comparisons` and `invoices` hand the render port.
+
+  **Widened enums** (additive): `pageBuilderContextSchema` gains `'document'`, and
+  `AdminBlockContributionSchema.context` gains `'document'` — a module contributes the canvas
+  renderer of its document blocks with `context: 'document'`.
+
+- d571d8c: Line collections, the Line items table and the quote request PDF (`specs/153-quote-request-pdf-template/`).
+
+  **New** (`document-templates.ts`, `document-values.ts`, re-exported from the package root):
+
+  - Typed document values and the functions shared by the PDF renderer and the editor canvas:
+    `DocumentValue`, `documentValueSchema`, `documentValueHasValue`, `formatDocumentValue`,
+    `evaluateDocumentCondition` (`DocumentCondition`: `always`, `never`, `has_value`,
+    `any_has_value`, over a scope of items, one item or the totals), `sumDocumentValues`,
+    `resolveDocumentAlign`, `documentFieldPathRe`, `isReservedFieldPath`, `DOCUMENT_POSITION_FIELD`.
+  - `DocumentCollectionDeclaration`, `DocumentFieldDefinition`, `DocumentItem`; the optional
+    `collections` member of `DocumentTypeRegistration`; `COLLECTION_BLOCK_NAMES`,
+    `ITEMS_TABLE_BLOCK_NAME`, `ITEMS_TABLE_LIMITS` and `itemsTablePropsSchema` (the stored settings of
+    `document_templates.ItemsTable`).
+  - `documentTypeDetailSchema` gains `collections` (defaults to `[]`).
+  - **`DocumentRenderPort` gains a required `listChoices({ documentType, salesChannelId })`**
+    answering `DocumentTemplateChoices` (`documentTemplateChoicesSchema`). An implementation of the
+    port outside `document_templates` must add it; callers are unaffected.
+  - Quote requests: `QUOTE_REQUEST_DOCUMENT_TYPE`, `QUOTE_REQUEST_PDF_LIMITS`,
+    `quoteRequestDocumentDataSchema`, `quoteRequestDocumentChoicesSchema`,
+    `setQuoteRequestDocumentTemplateSchema`, `quoteRequestPdfQuerySchema`,
+    `quoteRequestPdfSendRequestSchema`, `quoteRequestPdfSendResultSchema`; `quoteRequestSchema` gains
+    the optional admin-only `documentTemplateId`; `rfqEventTypeSchema` gains `'pdf-sent'` and the
+    history entry kind `'pdf_sent'` with an optional `delivery`.
+  - Error codes `QUOTE_REQUEST_PDF_TOO_LARGE`, `QUOTE_REQUEST_PDF_EMAIL_UNAVAILABLE`,
+    `QUOTE_REQUEST_PDF_SEND_FAILED`.
+
+- 34f97ae: `CartCustomerContext.salesChannelId` is now **required** (`specs/154-sales-channel-access/`, User
+  Story 6). A customer holds one active basket per sales channel, so every caller of
+  `CartReadPort` and `CartWritePort` names the channel whose basket it means — the channel of its
+  own request, or the channel an operator-created order names.
+
+  Before: `cartWritePort.getOrCreateForCustomer({ customerAccountId, organizationId })`.
+  After: `cartWritePort.getOrCreateForCustomer({ customerAccountId, organizationId, salesChannelId })`.
+
+- f61fea3: `storefrontCrawlerFilesSchema` gains an optional `anonymousAccess` boolean: `false` on a sales
+  channel closed to anonymous visitors, whose `robots.txt` then disallows everything and whose
+  `llms.txt` lists nothing. Optional so that an answer from an earlier backend, which never sends
+  it, still parses; read its absence as `true`.
+- afaa86a: Admin shapes for an Organization's sales channels and for creating an Organization
+  (`specs/154-sales-channel-access/`).
+
+  - `OrganizationSalesChannelsResponseSchema` — `GET`/`PUT /api/v1/admin/organizations/:id/sales-channels`:
+    the assigned channel ids and every channel option, each `OrganizationSalesChannelOptionSchema`
+    (`SalesChannelOptionSchema` plus `systemDefault`).
+  - `OrganizationSalesChannelsUpdateBodySchema` — `{ salesChannelIds }`, 1 to 100 distinct uuids.
+  - `OrganizationSalesChannelOptionsResponseSchema` — `GET /api/v1/admin/organizations/sales-channel-options`.
+  - `AdminOrganizationCreateBodySchema` — `POST /api/v1/admin/organizations`: the organization part of
+    `registerOrganizationRequestSchema` plus `status` (`active` by default, or `pending_verification`)
+    and `salesChannelIds` (at least one). `AdminOrganizationCreateRequest` is the body before defaults.
+
+- 248a9df: Sales-channel access shapes (`specs/154-sales-channel-access/`).
+
+  - `SalesChannelSummarySchema` / `SalesChannelDetailSchema` gain a required `anonymousAccess`;
+    `SalesChannelCreateBodySchema` accepts it (default `true`) and `SalesChannelUpdateBodySchema`
+    accepts it optionally. `SalesChannelCreateRequest` is the body a client sends before defaults
+    apply.
+  - `PublicSalesChannelSchema` gains `anonymousAccess`.
+  - New `SalesChannelAccessResponseSchema` for `GET /api/v1/storefront/sales-channel/access`.
+  - `ERROR_CODES` gains `SALES_CHANNEL_SIGN_IN_REQUIRED`, `SALES_CHANNEL_NOT_PERMITTED` and
+    `ORDER_SALES_CHANNEL_MISMATCH`.
+  - `CartCustomerContext` gains an optional `salesChannelId`.
+
+- cb098b7: The permalink rule for library assets, the request shapes for setting a permalink and restoring a previous file version, and seven new error codes.
+
+  **For a consumer of the contracts.**
+
+  - `validateAssetPermalink(value)` — the one permalink rule the server and the admin form share.
+    It answers `{ ok: true }` or `{ ok: false, reason }`, the reason being the first broken rule
+    of, in this order: `empty`; `too_long` (more than `ASSET_PERMALINK_MAX_LENGTH`, `200`,
+    characters); `invalid_characters` (anything outside letters, digits, `-`, `_`, `.` and `/`);
+    `invalid_segment` (a leading or trailing `/`, `//`, or a `.` or `..` part); `uuid_shaped`
+    (the whole value has the shape of an asset id, in either case). A value such as
+    `<uuid>.pdf` is accepted. The reason union is exported as `AssetPermalinkInvalidReason`.
+  - `isAssetIdShaped(segment)` — true for a UUID in either case; it is how a file URL decides
+    whether its path names an asset id or a permalink.
+  - `assetPreviousVersionSchema` (`AssetPreviousVersion`) — the one kept previous version of an
+    asset's file: `filename`, `mimeType`, `sizeBytes`, `contentVersion`, `replacedAt`,
+    `replacedBy` (`{ id, displayName }` or `null`) and `restorableUntil`.
+  - `setAssetPermalinkRequestSchema` (`SetAssetPermalinkRequest`) — `{ permalink, confirmReuse? }`.
+    The schema only bounds the length of `permalink`; its shape is judged by
+    `validateAssetPermalink`. `confirmReuse: true` acknowledges taking a permalink whose last
+    holder was a different asset.
+  - `restorePreviousAssetVersionRequestSchema` (`RestorePreviousAssetVersionRequest`) —
+    `{ expectedContentVersion, expectedPreviousContentVersion }`, both required and non-empty, so
+    a restore always names the file it replaces and the file it brings back.
+  - Seven `ERROR_CODES` members, all owned by the assets library: `ASSET_REPLACE_KIND_MISMATCH`,
+    `ASSET_LEGACY_CANNOT_REPLACE`, `ASSET_REPLACE_CONFLICT`, `ASSET_NO_PREVIOUS_VERSION`,
+    `ASSET_PERMALINK_TAKEN`, `ASSET_PERMALINK_PREVIOUSLY_USED` and `ASSET_PERMALINK_INVALID`
+    (whose `details.code` carries the validator's reason).
+
+  **New members on existing shapes — additive for a reader, required for anyone constructing one.**
+
+  - `assetSummarySchema` (and so `AssetSummary`, `AssetDetail` and every response carrying them)
+    gains four required members: `fileUrl` (the stable, unversioned file URL, the same across
+    replaces), `permalink` (string or `null`), `permalinkUrl` (the absolute permalink URL, or
+    `null`) and `contentVersion` (the identity of the bytes the asset currently holds).
+  - `AssetRecord` gains `contentVersion: string` and `permalink: string | null`.
+
+  - `AssetDetail` gains `retentionDays` (a whole number, at least 1): the retention, in days, the sweep applies — how long a replaced file stays restorable.
+  - `AssetDetail` gains `replaceable` (boolean): whether the file can be replaced in place — false for a legacy row and for a row with no storage key.
+  - New `folderPermalinkCountResponseSchema` (`{ data: { permalinkedAssets } }`) for the folder delete confirmation's count.
+
+  A client that only reads these shapes needs no change. Code that builds an `AssetSummary`,
+  `AssetDetail` or `AssetRecord` by hand — a test fixture, a mock, an optimistic list update — must
+  add the new members. The `url` and `storageUrl` members keep their shape (a string), but their
+  values now carry `?v=<contentVersion>` for public assets — see the
+  `@endora-commerce/mod-assets-library` changeset of this release for which values change and why.
+
+  The routes that use the request schemas arrive with the assets library release that ships them.
+
+- 3d5a203: A product sold on request only is refused by the cart whether or not a price list holds it. `CartService.addItem` read the display mode off the resolved list price, so a product no price list prices — priced from the catalogue attribute — resolved nothing, the `CART_PRODUCT_QUOTE_ONLY` guard was skipped, and `POST /api/v1/cart/items` added the line with `200`. It now answers `400 CART_PRODUCT_QUOTE_ONLY` for it too.
+
+  `@endora-commerce/contracts` publishes `ProductDisplayModePort` — `resolveDisplayMode({ productId, organizationId, salesChannelId, customerKind })` — and `@endora-commerce/mod-price-lists` provides it as `productDisplayModePort`, over the same Product → Category → Organization → Settings chain its storefront display-mode route answers with. `CartService` takes it as a new required constructor argument, after `channelMembership`; the module's own composition wires it.
+
+- 5865c59: The API description is available to administrators with the `platform.api_description.read` permission and to API keys with the `platform.api_description.read` scope.
+
+  **`@endora-commerce/platform`.**
+
+  - New permission `platform.api_description.read` (_Read the API description_), declared by `_lifecycle`'s manifest with English and Polish labels. The platform administrator grants it through an admin role.
+  - `GET /api/v1/_openapi.json` and `GET /api/v1/_docs` now answer only an administrator holding the code or an API key whose scopes include it. Anybody else is answered `401 UNAUTHORIZED` (no administrator session or key, a customer session included) or `403 FORBIDDEN` (an administrator or a key without the code). Both stay outside the sales-channel access rule (`salesChannelAccess: 'open'`). Responses carry `Cache-Control: private, no-store`.
+  - New admin route `GET /api/v1/admin/api-description`, gated on the same code, serving the same document to the Admin UI.
+  - `buildServer` no longer mounts the two routes. It decorates the root instance with `apiDescription(): OpenAPIV3_1.Document` (built on first call, as before), and `_lifecycle` mounts the routes where `auth`'s `requireAdmin` port is available. A composition that mounts no `_lifecycle` serves no API description; one that called `buildServer` and read `/api/v1/_openapi.json` in-process reads `app.apiDescription()` instead, or sends credentials. `registerOpenApiRoutes` is removed; it was reachable only through the host-internal `./http/openapi` subpath.
+  - The reference page loads `swagger-ui-dist@5.33.3` from jsDelivr with Subresource Integrity on both files (`swagger-ui.css` `sha384-Ov4/wv3j2bmct8cDc5X4ngJZohVPzEmc6uDPH8WeljUxO5vtoykvMEfbu9Vh6RaW`, `swagger-ui-bundle.js` `sha384-h00llMzD1afyNow1pDmnZKlHsUZgp9KE9HXLFXF2CvbwsBY0+WBO4f75SfGwvM4K`) and `crossorigin="anonymous"`; it used to load an unpinned version.
+  - A command-palette action, _API description_, targets `/api-description` and requires the new code.
+
+  **`@endora-commerce/contracts`.** `apiKeyScopeSchema` gains `'platform.api_description.read'`, so an administrator who holds the code can issue an API key that reads the API description.
+
+  **`@endora-commerce/admin-shell`.** New kernel-served screen `/api-description` (_System → API description_, gated on `platform.api_description.read`): the document's title, version and endpoint count, a JSON download, and a link that opens the interactive reference on the API's own address in a new tab, carrying the administrator session.
+
+  **`@endora-commerce/mod-i18n`.** The screen's strings and its navigation label in English and Polish (`platform.apiDescription.*`, `appShell.nav.platformApiDescription`).
+
+  **`@endora-commerce/mod-api-keys`.** The module page lists the new scope.
+
+- e9a92b9: Saved views on the admin product list (#289).
+
+  - The Product list's toolbar carries the admin kit's saved-views control: a selector of the admin's own views and every shared view, _Save view_ and _Delete view_. A view is named, private or shared, and stores the list's status tab, type chip and search text — only the ones not at their default. The Stock, Category and Channel chips are not saved. Loading a view replaces status, type and search, returns Stock to _All_, goes back to the first page and clears the row selection; a status or type the list no longer offers loads as _All_, and keys the list does not know are ignored. Any admin who can open the Product list (`catalog:read`) can use it.
+  - Four new routes, gated by `catalog:read`: `GET` and `POST /api/v1/admin/catalog/products/list-views`, `PATCH` and `DELETE /api/v1/admin/catalog/products/list-views/{id}`. A view stores the list's filters only (`sort` and `visibleColumns` in a request body are ignored). `GET` returns the caller's own views and every shared view, ordered by name; every item carries `ownedByCaller` and `canModify`. Another admin's private view answers `404`; a shared view is modified or deleted only by its owner or a platform admin (any role except `sales_representative`), `403` otherwise. All four routes answer `401 UNAUTHORIZED` when no admin session resolves.
+  - A `PATCH` that changes nothing — an empty body, or every value as already stored — writes nothing and logs nothing; it answers `200` with the current view. It is still refused (`403`/`404`) to a caller who may not modify the view.
+  - `PATCH` and `DELETE` answer an `id` that is not a UUID with the same `404 NOT_FOUND` as a view that does not exist.
+  - Names are trimmed, 1–160 characters, without control or format characters. One admin cannot hold two views on the product list whose names differ only by letter case or surrounding spaces: `POST`, and a `PATCH` that changes the name, answer `409 PRODUCT_SAVED_VIEW_NAME_TAKEN` with a translated message (English and Polish). The rule binds the view's owner.
+  - New table `product_list_saved_views`, created by the migration `Migration20261014T170531CatalogProductListSavedViews`, with a unique index on the owner and the lower-cased name.
+  - When a platform admin changes or deletes another admin's view, the `catalog` module logs one `info` record (`event: 'saved_view.updated' | 'saved_view.deleted'`, `list`, `viewId`, `ownerAdminUserId`, `actorAdminUserId`).
+
+  `@endora-commerce/contracts` gains the `ERROR_CODES.PRODUCT_SAVED_VIEW_NAME_TAKEN` member.
+
+- d76291d: Storefront catalogue reads can be priced in the currency the shopper selected. `GET /api/v1/catalog/products`, `GET /api/v1/catalog/products/:idOrSlug` and `GET /api/v1/catalog/products/:idOrSlug/links` accept `?currency=` (an ISO 4217 code, any case). The listing price, the price ordering, the price-range filter, the link tiles and the Meilisearch-served listing are all resolved in that currency when the request's sales channel lists it in its `currencies`, and in the channel's `defaultCurrency` otherwise. A malformed code answers `400 VALIDATION_FAILED`. Without the parameter, every read asks the pricing engine exactly what it asked before.
+
+  `@endora-commerce/contracts` exports the pieces both modules use: `listingCurrencyQuerySchema` (the parameter), `resolveListingCurrency(requested, channel)` (requested if the channel offers it, else its default) and `listingPriceChannelContext(channel, currency)` (the `salesChannel` and `currencyCode` half of a `ListingPriceViewerContext`, with the default currency left implicit). `SearchQueryContext` gains an optional `currency`.
+
+  `@endora-commerce/mod-price-lists`: a listing priced in a currency other than the channel's default no longer falls back to the Product's own `defaultPrice` / `price` attribute. That attribute has no currency of its own and was entered in the default one, so the fallback would have quoted, for example, 100 PLN as 100 EUR; such a product now has no listing price in that currency (`source: 'none'`). In the default currency nothing changes.
+
+- ecd23de: `importExportEntitySchema` (and so `importExportEntitiesResponseSchema`) gains two required
+  booleans, `canExport` and `canImport`: whether the caller may export and import the entity.
+  `GET /api/v1/admin/import-export/entities` lists an entity only when one of them is true. An
+  entity whose import is supported but not permitted keeps its `importHeader` and carries
+  `canImport: false`; `importHeader: null` still means the import does not exist.
+- 3acae57: Behaviour change for API clients of the order list's saved views (`/api/v1/admin/orders/list-views`).
+
+  - Names are stored trimmed. One admin can no longer hold two saved views on the order list whose names differ only by letter case or surrounding spaces: `POST`, and a `PATCH` that changes a view's name, answer `409 ORDER_SAVED_VIEW_NAME_TAKEN` with a translated message (English and Polish). The rule binds the view's owner — a platform admin renaming a colleague's shared view is refused when the colleague already uses that name. Duplicates saved before this release are kept, and a `PATCH` that does not change the name is never refused for one.
+  - Every item returned by `GET`, `POST` and `PATCH` carries two booleans computed for the caller: `ownedByCaller`, and `canModify` (the caller owns the view, or the view is shared and the caller is a platform admin).
+  - A `PATCH` that changes nothing — an empty body, or every value as already stored — writes nothing and logs nothing; it answers `200` with the current view. It is still refused (`403`/`404`) to a caller who may not modify the view.
+  - `PATCH` and `DELETE /api/v1/admin/orders/list-views/{id}` answer an `id` that is not a UUID with the same `404 NOT_FOUND` as a view that does not exist, instead of `500`.
+  - All four routes answer `401 UNAUTHORIZED` when no admin session resolves, instead of acting under an empty owner id.
+  - Who counts as a platform admin for saved views is now read from the request's tenant context (`mode === 'all'`: any role except `sales_representative`), as on the product and quote request lists. It fails closed: an admin whose reach cannot be resolved — no admin tenant scope composed, or no resolvable role — is no longer treated as a platform admin, so `canModify` is `false` on other admins' shared views and modifying or deleting one answers `403`.
+  - When a platform admin changes or deletes another admin's view, the `orders` module logs one `info` record (`event: 'saved_view.updated' | 'saved_view.deleted'`, `list`, `viewId`, `ownerAdminUserId`, `actorAdminUserId`).
+
+  `@endora-commerce/contracts` gains the `ERROR_CODES.ORDER_SAVED_VIEW_NAME_TAKEN` member.
+
+- b96321c: Saved views on the admin Quote Request list (#290).
+
+  - The Quote Request list's toolbar carries the admin kit's saved-views control beside the column picker: a selector of the admin's own views and every shared view, _Save view_ and _Delete view_. A view is named, private or shared, and stores the list's visibility scope, organization, status selection, search text, sort and visible columns. Loading a view replaces all six and goes back to the first page; a status or column the list no longer offers is dropped, an empty column selection loads the default columns, an unknown sort loads _Newest_, and a view without a scope loads the viewer's default (_All_ for a platform admin, _My organizations_ otherwise). Any admin who can open the Quote Request list (`rfqs:handle`) can use it.
+  - Loading a view never widens what the loader sees: the list request that follows is the loader's own, narrowed to the organizations they reach, and a saved `scope: 'mine'` means the loader's assignments. A view stores an organization by id only, and the list never shows the name of an organization the loader cannot see — a captured organization outside their scope shows as an id prefix and an empty list.
+  - Four new routes, gated by `rfqs:handle` and by the module's presence: `GET` and `POST /api/v1/admin/quote-requests/list-views`, `PATCH` and `DELETE /api/v1/admin/quote-requests/list-views/{id}`. A view stores the list's filters, and optionally its sort (`{ field, dir }`) and visible columns; `null` for either means the list's default. `GET` returns the caller's own views and every shared view, ordered by name; every item carries `ownedByCaller` and `canModify`. Another admin's private view answers `404`; a shared view is modified or deleted only by its owner or a platform admin (any role except `sales_representative`), `403` otherwise. All four routes answer `401 UNAUTHORIZED` when no admin session resolves.
+  - A `PATCH` that changes nothing — an empty body, or every value as already stored — writes nothing and logs nothing; it answers `200` with the current view. It is still refused (`403`/`404`) to a caller who may not modify the view.
+  - `PATCH` and `DELETE` answer an `id` that is not a UUID with the same `404 NOT_FOUND` as a view that does not exist.
+  - While `quote_requests` is switched off, all four routes answer `503 MODULE_DISABLED` exactly as the Quote Request list does; saved views are kept and are served again once the module is back.
+  - Names are trimmed, 1–160 characters, without control or format characters. One admin cannot hold two views on the quote request list whose names differ only by letter case or surrounding spaces: `POST`, and a `PATCH` that changes the name, answer `409 RFQ_SAVED_VIEW_NAME_TAKEN` with a translated message (English and Polish). The rule binds the view's owner.
+  - New table `quote_request_list_saved_views`, created by the migration `Migration20261014T173236QuoteRequestsQuoteRequestListSavedViews`, with a unique index on the owner and the lower-cased name.
+  - When a platform admin changes or deletes another admin's view, the `quote_requests` module logs one `info` record (`event: 'saved_view.updated' | 'saved_view.deleted'`, `list`, `viewId`, `ownerAdminUserId`, `actorAdminUserId`).
+
+  `@endora-commerce/contracts` gains the `ERROR_CODES.RFQ_SAVED_VIEW_NAME_TAKEN` member.
+
+- 9d8f8c5: New `saved-list-views` exports — the one wire shape and write rule shared by the order, product and quote-request saved-view endpoints: `savedListViewSchema` (with `savedListViewListResponseSchema`, `savedListViewResponseSchema`, `savedListViewDeleteResponseSchema`), `savedListViewNameSchema`, `savedListViewSortSchema`, `savedListViewFiltersSchema`, `savedListViewColumnsSchema`, `createProductSavedViewRequestSchema` / `updateProductSavedViewRequestSchema` (filters only; `sort` and `visibleColumns` are stripped), `createQuoteRequestSavedViewRequestSchema` / `updateQuoteRequestSavedViewRequestSchema`, the constants `SAVED_LIST_VIEW_NAME_MAX` (160), `SAVED_LIST_VIEW_FILTERS_MAX_BYTES` (8192), `SAVED_LIST_VIEW_COLUMNS_MAX` (64) and `SAVED_LIST_VIEW_TOKEN_MAX` (64), and the helpers `hasForbiddenNameCharacters` and `savedListViewNameKey` (trim, then case-insensitive and independent of the host locale — the key two names are compared by for uniqueness).
+
+  `orderSavedViewSchema` gains two required booleans, `ownedByCaller` and `canModify`; its `sort` stays required and non-null. A reader parsing a reply gains the fields; code that builds an `OrderSavedView` by hand must now supply them.
+
+  `createOrderSavedViewRequestSchema` and `updateOrderSavedViewRequestSchema` keep their names but tighten what they accept. An order saved-view name is now trimmed before its 1–160 character limit is applied, so a whitespace-only name is refused, and it may not contain control or format characters (`\p{Cc}`, `\p{Cf}` — NUL, bidi overrides, zero-width characters). `filters` is limited to 8192 UTF-8 bytes of its JSON, `visibleColumns` to 64 entries of at most 64 characters each, and `sort.field` to 64 characters (it may no longer be empty). A body breaking any of these fails validation.
+
+### Patch Changes
+
+- edac0be: `POST /api/v1/admin/orders` now honours the sales channel the operator chose for the order.
+
+  - A `salesChannelId` that names no sales channel is refused with `404 NOT_FOUND` before anything is written; the customer's basket is left as it was. It used to be accepted and the order was placed on the system-default channel.
+  - The ordered products are checked against the assortment of the order's channel rather than the channel the admin request itself resolved (the system default, unless a channel header is sent). A product the chosen channel sells is now accepted even when the default channel does not sell it, and a product the chosen channel does not sell is refused with `404 PRODUCT_NOT_FOUND` even when the default channel sells it.
+
+  `CartWritePort.addItem` accepts an optional `salesChannelId` in its input: the channel whose assortment decides whether the product may be added. Without it the request's resolved channel decides, as before. Buyer-facing cart, shopping-list and quick-order paths do not pass it and behave exactly as before.
+
+- fe48d6d: Administrators hand out only the permissions their own role holds. A holder of the wildcard `*` is unaffected.
+
+  - `PUT /api/v1/admin/admin-roles/:code` refuses a role holding a permission the actor lacks, and refuses to change a role that already holds one, with `403 ADMIN_ROLE_GRANT_EXCEEDED` (`details.permissions` names the missing codes). A role the platform or a module seeds — `platform_admin` included, with its `requiresTwoFactor` flag — is changed only by a holder of `*`; anybody else is answered `409 ADMIN_ROLE_PROTECTED` with `details.code: 'modify'`.
+  - `POST` and `PATCH /api/v1/admin/admin-users` assign a role only if the actor holds every permission it grants (`403 ADMIN_ROLE_GRANT_EXCEEDED`). An account whose role holds a permission the actor lacks is not edited, given a password, deactivated or deleted by them: `403 ADMIN_USER_OUTRANKS_ACTOR`.
+  - `POST /api/v1/admin/api-keys` issues a key only with scopes the issuing administrator's role holds: `403 API_KEY_SCOPE_NOT_HELD`, with the missing scopes in `details.scopes`. `api_keys` now declares `admin_roles` as a dependency.
+
+  `AdminRolePort.upsertByCode(input, options?)` takes an optional `{ grantor: { permissions } }`. Pass it for a write made on an administrator's behalf; leave it out for a platform write — a module seeding its roles, an upgrade step, the bootstrap command — which is not held to the ceiling. `@endora-commerce/contracts` exports `permissionsNotHeld(requested, held)` and `ADMIN_PERMISSION_WILDCARD`, and three new `ERROR_CODES` members.
+
+- 4f9daef: `POST /api/v1/analytics/events` now stores, and forwards to GA4, the identity the server resolved
+  for the request rather than the one the event body names: `customerAccountId` and
+  `organizationId` come from the signed-in customer (none for any other caller), and
+  `salesChannelId` is the request's resolved sales channel. The three body fields on
+  `ingestAnalyticsEventSchema` are still accepted, so existing senders keep validating, but they are
+  ignored and marked `@deprecated`.
+
+  The route also carries its own rate limit, `ANALYTICS_INGEST_RATE_LIMIT` (60 batches per minute
+  per client IP), on top of the host's global ceiling. `AnalyticsIngestService.ingest` takes a
+  required `context` (`IngestContext`) carrying the resolved channel and identity.
+
+- 7d2d00f: Two new members of `ERROR_CODES`: `CART_PRODUCT_UNPRICED` (a product with no price cannot be
+  added to a cart) and `CART_PRICE_CHANGED` (an order placement refused because a cart line's stored
+  price is no longer current; `details.lines` names the lines).
+- 1525d86: Customer sign-in, the customer second factor and password-reset requests are now limited per
+  account, the way administrator sign-in already was.
+
+  - `@endora-commerce/platform/kernel` publishes `AuthenticationAttemptThrottle`, the attempt
+    counter administrator sign-in used, with the profile types an owner of accounts builds one
+    over (`AttemptThrottleProfile`, `AttemptPolicy`, `AttemptCounterStore`, `ThrottledAttempt`,
+    `ThrottledCheckResult`, `ThrottledCredentialState`) and `ADDRESS_POLICY`, `ACCOUNT_POLICY`,
+    `ABANDONED_AFTER_SECONDS`, `DEFAULT_STORE_DEADLINE_MS`, `addressOrigin`. `admin_users`' own
+    throttle is now a profile over it; its keys, cookie values, codes and audit rows are unchanged.
+  - `@endora-commerce/contracts` adds `CustomerAuthenticationThrottlePort` (container name
+    `customerAuthenticationThrottlePort`, owner `customer_accounts`) with
+    `CustomerAuthenticationAttempt`, `CustomerAuthenticationCheckResult`,
+    `CustomerAuthenticationOrigin` and `CustomerAuthenticationFactor`; the error codes
+    `CUSTOMER_AUTHENTICATION_THROTTLED` (429, with `Retry-After`) and
+    `CUSTOMER_AUTHENTICATION_UNAVAILABLE` (503); the cookie name
+    `CUSTOMER_KNOWN_DEVICE_COOKIE_NAME` (`b2b_customer_device`) and its lifetime. Optional
+    additions: `CustomerLoginInput.knownDevice`, `CustomerLoginResult.knownDevice`, and a second
+    `context` argument on `CustomerPasswordResetPort.requestReset`.
+  - `customer_accounts` counts wrong passwords per folded e-mail address (50 in 30 minutes from a
+    device the account has not signed in on, 10 from a known one), and password-reset requests per
+    address (5 an hour). There is no per-address counter: the storefront signs shoppers in from its
+    own server. A completed sign-in sets the signed `b2b_customer_device` cookie, and an attempt
+    carrying it is held to that device's own budget. Asking for a new reset link retires the
+    earlier unused ones.
+  - `mfa` checks customer second-factor codes inside the customer throttle (20 in 30 minutes,
+    10 from a known device) and sets the customer known-device cookie when a customer sign-in
+    completes there.
+  - `organizations` reads and sets the customer known-device cookie on
+    `POST /api/v1/auth/customer/login` and reads it on `POST /api/v1/auth/password-reset/request`.
+
+- 0472475: Two changes that keep a stored protection from being dropped as a side effect of another change.
+
+  - **`mfa` is not switched off while administrators are required to use a second factor.** `POST /api/v1/admin/modules/mfa/activation` with `{ active: false }` answers `409 MFA_DEACTIVATION_BLOCKED` (`details.setting: 'mfa.admin.totp_enforced'`) while that setting is on, and changes nothing. Turn the requirement off first; the switch-off then goes through as before, and switching `mfa` back on is never refused. `mfa` publishes the answer as `mfaDeactivationGuardPort` (`MfaDeactivationGuardPort` in `@endora-commerce/contracts`).
+  - **A stored credential secret is not carried over to a changed endpoint.** `PUT /api/v1/admin/credentials/:code` that changes a field saying where the record's secrets are sent — an LLM `baseUrl`, an SMTP `host` — answers `422 CREDENTIAL_SECRET_REENTRY_REQUIRED` (`details.fields` lists the secret keys) unless every stored secret is re-entered in the same request. The admin form marks those secret fields as soon as the endpoint is edited. `FieldDefinition` gains an optional `endpoint` flag (defaulting to `true` for `format: 'url'` fields) and `@endora-commerce/contracts` exports `isCredentialEndpointField`; a module registering its own configuration type gets the rule for its URL fields without a change, and declares `endpoint: true` on a host field that is not a URL.
+
+- dd9ab59: Campaign e-mails can carry open and click tracking, switched on by an operator. When it is on
+  and a campaign is sent, each recipient's message gets an invisible 1×1 image and its absolute
+  `http(s)` links are routed through the click redirect, each with a signed token bound to the recipient's send record, a link id
+  (`link-1`, `link-2`, … in document order) and the link's destination. `mailto:`, `tel:`, in-page
+  anchors, relative links and the module's own unsubscribe and confirmation links are left as they
+  are; the plain-text part is sent unchanged. The per-campaign opened and clicked counts and the
+  per-link clicks reflect what recipients do while tracking is on.
+
+  The two public trackers take their token in the query string, because a signed token is longer
+  than the router's 100-character path-parameter limit and the path form was answered `414`
+  before reaching the handler:
+
+  - `GET /api/v1/newsletter/o/:token.gif` is now `GET /api/v1/newsletter/open.gif?token=<token>`
+  - `GET /api/v1/newsletter/c/:token?u=<url>` is now `GET /api/v1/newsletter/click?token=<token>&u=<url>`
+
+  The click redirect still leads only to the destination its token binds, sends a mismatching
+  destination to the storefront home page and answers an invalid or missing token `410`.
+
+  Two new settings in the Newsletter group, `newsletter.tracking.opens_enabled` and
+  `newsletter.tracking.clicks_enabled`, switch the two kinds of tracking independently. Both
+  default to off, so an instance sends campaigns untracked until an operator switches them on; they
+  can be set per sales channel, and are labelled in English and Polish on the
+  Settings screen. A campaign with `trackingEnabled: false` is sent without either. Automation
+  e-mails are not tracked. `NEWSLETTER_SETTING_CODES` in `@endora-commerce/contracts` gains
+  `TRACKING_OPENS_ENABLED` and `TRACKING_CLICKS_ENABLED`.
+
+- 30c61d9: New constant `MFA_CHALLENGE_COOKIE_NAME` (`'b2b_mfa_challenge'`): the storefront's pending second-step cookie, now set both by the storefront's password sign-in and by the backend when a federated sign-in hands over to the second step.
+
 ## 0.106.0
 
 ### Minor Changes

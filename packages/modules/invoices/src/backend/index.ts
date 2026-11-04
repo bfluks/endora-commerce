@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { EventBus } from '@endora-commerce/platform/events';
 import type {
+  AdminI18nTranslatePort,
   AdminRolePort,
   AssetReadPort,
   AssetsLibraryPort,
@@ -19,12 +20,23 @@ import type {
   InvoicePdfPort,
   InvoiceReadPort,
   OrderReadPort,
+  PaymentAttemptStatus,
+  PaymentReadPort,
+  ReturnRefundReadPort,
   SettingWriteValidatorRegistryPort,
   SettingsAdminPort,
   TransactionalEmailSender,
 } from '@endora-commerce/contracts';
+import { moneySum } from '@endora-commerce/contracts';
+
+/**
+ * A payment attempt whose amount was captured: paid, or paid and since
+ * refunded in part or in full (a refund is the return's to record, not the
+ * invoice's).
+ */
+const CAPTURED: ReadonlySet<PaymentAttemptStatus> = new Set(['paid', 'partially_refunded', 'refunded']);
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
-import { effectiveState, enterSystemScope, lazyPort } from '@endora-commerce/platform/kernel';
+import { effectiveState, lazyPort } from '@endora-commerce/platform/kernel';
 import { z } from 'zod';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import type { FastifyRequest } from 'fastify';
@@ -43,6 +55,7 @@ import { createNumberingPatternValidator } from './services/numbering-write-vali
 import {
   createAssetImageLoader,
   createChannelLanguageResolver,
+  createChannelUrlFactsResolver,
   createRecipientEmailResolver,
 } from './services/cross-module-context.js';
 import { INVOICE_ISSUED_DEFAULT } from './email-templates/invoice-issued.default.js';
@@ -50,6 +63,7 @@ import { InvoiceExternalAttachment } from './entities/invoice-external-attachmen
 import { InvoiceLine } from './entities/invoice-line.entity.js';
 import { InvoiceNumberCounter } from './entities/invoice-number-counter.entity.js';
 import { createInvoiceDocumentType } from './document/invoice-document-type.js';
+import type { InvoicesTranslate } from './invoices-prose.js';
 import { GRANT_DONE_SETTING, grantDocumentTemplatesAccess } from './document/document-templates-grant.js';
 import { Invoice } from './entities/invoice.entity.js';
 
@@ -130,6 +144,15 @@ export interface InvoicesCradle {
 }
 
 export function registerModule(ctx: ModuleContext): void {
+  // This module's bundle, for the invoice labels and line names it writes in
+  // the invoice's language (issue #95). Resolved per call, so the gate stays live.
+  const translate: InvoicesTranslate = (key, language, params) =>
+    lazyPort<AdminI18nTranslatePort>(ctx, 'adminI18nService').translate(
+      'invoices',
+      key,
+      language,
+      params,
+    );
   ctx.di.register({
     /**
      * Feature 078, D-95.3 / D-95.4 — the boot-time numbering configuration.
@@ -193,6 +216,7 @@ export function registerModule(ctx: ModuleContext): void {
           // `orders` an operator had switched off. `orders` is already a
           // binding dependency of this manifest and the edge stays fail-closed.
           orderReadPort: lazyPort<OrderReadPort>(ctx, 'orderReadPort'),
+          translate,
           assetReadPort: lazyPort<AssetReadPort>(ctx, 'assetReadPort'),
           assetsLibrary: lazyPort<AssetsLibraryPort>(ctx, 'assetsLibraryPort'),
           // Feature 134, T061 — this module's own registry, not a connector's
@@ -227,10 +251,36 @@ export function registerModule(ctx: ModuleContext): void {
             lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
           ),
           resolveLanguage: createChannelLanguageResolver(emFactory),
+          channelUrlFactsFor: createChannelUrlFactsResolver(emFactory),
           loadAssetImage: createAssetImageLoader(lazyPort<AssetReadPort>(ctx, 'assetReadPort')),
           // `specs/152-compare-pdf-template/` — every invoice PDF is produced
           // by `document_templates`, which this manifest binds (owner answer N2).
           documents: lazyPort<DocumentRenderPort>(ctx, 'documentRenderPort'),
+          // Issue #417 — what was captured for an order, from `payments` when
+          // it is present (a `degrades-without` dependency of this manifest).
+          capturedPayments: {
+            capturedFor: async (orderId) => {
+              if (!effectiveState.isPresent('payments')) return null;
+              const captured = (await lazyPort<PaymentReadPort>(ctx, 'paymentReadPort').listByOrderId(orderId)).filter(
+                (p) => CAPTURED.has(p.status),
+              );
+              if (captured.length === 0) return null;
+              // Each captured attempt once, and what was refunded from it (review of PR #423).
+              return {
+                captured: moneySum(captured.map((p) => p.amount)),
+                refunded: moneySum(captured.map((p) => p.refundedAmount)),
+              };
+            },
+          },
+          // Issue #428 — what a settled return refunded outside `payments` (a
+          // manual transfer, a credit-limit top-up), from `returns` when it is
+          // present (a `degrades-without` dependency of this manifest).
+          returnRefunds: {
+            refundsFor: async (orderId) => {
+              if (!effectiveState.isPresent('returns')) return [];
+              return lazyPort<ReturnRefundReadPort>(ctx, 'returnRefundReadPort').listForOrder(orderId);
+            },
+          },
           ledgerRouting: {
             numberingModeFor: async (salesChannelId) => {
               if (!effectiveState.isPresent('invoice_ledger')) return 'endora';
@@ -479,6 +529,7 @@ export function registerModule(ctx: ModuleContext): void {
       createInvoiceDocumentType({
         contributed: invoicePdfBlockRegistry,
         loadAssetImage: invoices.handle.loadAssetImage,
+        translate,
       }),
     );
   });
@@ -490,24 +541,28 @@ export function registerModule(ctx: ModuleContext): void {
    * (D-68): with invoicing off nothing is written, and the grant runs the first
    * boot invoicing is present again. Once it has run, a hidden setting says so
    * and it never runs again.
+   *
+   * It opens no scope of its own. The platform runs every boot hook inside the
+   * system scope it enters for that module (`boot: invoices`, entry point
+   * `boot`), so the hook already crosses organisations and that access is
+   * already recorded. `enterSystemScope` is for starting a detached execution
+   * — a worker, a timer — and calling it here recorded a second widening on
+   * every boot, labelled `worker` although nothing but the boot ran it.
    */
   ctx.onBoot(async () => {
     if (!effectiveState.isPresent('invoices')) return;
     const settings = lazyPort<InvoicesModuleOptions['settingsService']>(ctx, 'settingsReadPort');
     const settingsAdmin = lazyPort<SettingsAdminPort>(ctx, 'settingsAdminService');
-    await enterSystemScope('invoices: one-time document template access grant', () =>
-      grantDocumentTemplatesAccess({
-        roles: lazyPort<AdminRolePort>(ctx, 'adminRolePort'),
-        isDone: () => settings.get(GRANT_DONE_SETTING, null, z.boolean()),
-        markDone: async () => {
-          await settingsAdmin.setValueForAllChannels(GRANT_DONE_SETTING, true, null, { actorAdminUserId: null });
-        },
-      }).then((outcome) => {
-        if (outcome.status === 'granted' && outcome.roleCodes.length > 0) {
-          ctx.log.info({ roleCodes: outcome.roleCodes }, '[invoices] granted document template access to roles');
-        }
-      }),
-    );
+    const outcome = await grantDocumentTemplatesAccess({
+      roles: lazyPort<AdminRolePort>(ctx, 'adminRolePort'),
+      isDone: () => settings.get(GRANT_DONE_SETTING, null, z.boolean()),
+      markDone: async () => {
+        await settingsAdmin.setValueForAllChannels(GRANT_DONE_SETTING, true, null, { actorAdminUserId: null });
+      },
+    });
+    if (outcome.status === 'granted' && outcome.roleCodes.length > 0) {
+      ctx.log.info({ roleCodes: outcome.roleCodes }, '[invoices] granted document template access to roles');
+    }
   });
 
 }

@@ -12,8 +12,8 @@
 
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
-  AssetReference,
   AssetReferenceDescriptor,
+  AssetReferenceHit,
   AssetReferenceRegistryPort,
 } from '@endora-commerce/contracts';
 
@@ -29,19 +29,28 @@ function megamenuAssetReferenceDescriptor(
 ): AssetReferenceDescriptor {
   return {
     ownerModuleId: 'megamenu',
-    async findReferences(assetIds: string[]): Promise<AssetReference[]> {
+    async findReferences(assetIds: string[]): Promise<AssetReferenceHit[]> {
       if (assetIds.length === 0) return [];
       const em = emFactory();
       const placeholders = assetIds.map(() => '?').join(', ');
+      // One row per (item, matched asset): the item's `assetId` and its
+      // `iconAssetId` may each name an asked asset, and each hit is tagged with
+      // the one it matched (feature 166, R-6). `union` keeps an item whose two
+      // fields name the same asset to one hit, as before.
       const rows = (await em.execute(
-        `select mi.id::text as item_id, m.name as menu_name
+        `select mi.id::text as item_id, m.name as menu_name, mi.target->>'assetId' as asset_id
            from megamenu_items mi
            join megamenus m on m.id = mi.megamenu_id
-          where mi.target->>'assetId'     in (${placeholders})
-             or mi.target->>'iconAssetId' in (${placeholders})`,
+          where mi.target->>'assetId' in (${placeholders})
+         union
+         select mi.id::text as item_id, m.name as menu_name, mi.target->>'iconAssetId' as asset_id
+           from megamenu_items mi
+           join megamenus m on m.id = mi.megamenu_id
+          where mi.target->>'iconAssetId' in (${placeholders})`,
         [...assetIds, ...assetIds],
-      )) as Array<{ item_id: string; menu_name: string }>;
+      )) as Array<{ item_id: string; menu_name: string; asset_id: string }>;
       return rows.map((r) => ({
+        assetId: r.asset_id,
         kind: 'megamenu_item_target',
         entityId: r.item_id,
         label: `Megamenu "${r.menu_name}"`,

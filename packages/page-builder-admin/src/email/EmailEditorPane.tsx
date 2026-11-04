@@ -28,7 +28,7 @@ import {
 import {
   buildPaletteCategories,
   contextAdmits,
-  countBlockNames,
+  countComponentNames,
   filterConfigByContext,
   type PageBuilderContext,
 } from '@endora-commerce/page-builder-core';
@@ -892,7 +892,7 @@ export function EmailEditorPane({
    * almost never does (the CMS editor's reasoning, feature 096 T602).
    */
   const storedBlockNamesKey = useMemo(
-    () => [...countBlockNames(data ?? emptyData).keys()].sort().join('\n'),
+    () => [...countComponentNames(data ?? emptyData).keys()].sort().join('\n'),
     [data],
   );
 

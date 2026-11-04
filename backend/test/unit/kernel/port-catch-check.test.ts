@@ -3,6 +3,7 @@ import {
   checkPortCatches,
   findPortCatches,
   keyOf,
+  PORT_CATCH_PINS,
   PORT_CATCHES_TO_DRAIN,
 } from '../../../scripts/check-port-catches.js';
 
@@ -1141,5 +1142,624 @@ describe('findPortCatches — an alias carries only the gates visible where it i
     expect(strip(findPortCatches({ sources: sources(true), manifests }))).toEqual(
       strip(findPortCatches({ sources: sources(false), manifests })),
     );
+  });
+});
+
+/**
+ * A property name is not a binding (issue #100).
+ *
+ * `{ value: lazyPort(…) }` made every bare identifier `value` in the module read
+ * as the port, so an unrelated local of that spelling became a site. The value is
+ * now followed through the expression that reads the property instead — a
+ * property access, a call through a property that holds a carrying closure, a
+ * destructuring, a class's own method returning one — and each of those shapes is
+ * pinned below with a local **spelled differently** from the property, which is
+ * what proves the analysis follows the value rather than the spelling.
+ */
+describe('findPortCatches — a property is reached through the expression that reads it (#100)', () => {
+  const PROMOTIONS = [
+    'modules/promotions/backend.ts',
+    'export function registerModule(ctx: ModuleContext): void {\n' +
+      "  ctx.di.providePort('promotionService', ctx.asFunction(() => x).singleton());\n}",
+  ] as const;
+
+  const EMAILS = [
+    'modules/transactional_emails/backend.ts',
+    'export function registerModule(ctx: ModuleContext): void {\n' +
+      "  ctx.di.providePort('transactionalEmailSenderAccessor', ctx.asFunction(() => () => s).singleton());\n}",
+  ] as const;
+
+  const sitesOf = (sources: Map<string, string>): string[] =>
+    findPortCatches({ sources }).map((entry) => `${entry.file}:${entry.port}`);
+
+  it('does not read an unrelated local as the port because it shares a property`s name', () => {
+    const found = sitesOf(
+      new Map([
+        PROMOTIONS,
+        [
+          'modules/carts/backend.ts',
+          "import { lazyPort } from '../../kernel/index.js';\n" +
+            "const deps = { value: lazyPort<Promo>(ctx, 'promotionService') };",
+        ],
+        [
+          // The control: the property, read where it is reached.
+          'modules/carts/services/cart-pricing.ts',
+          'export class CartPricing {\n' +
+            '  async price(): Promise<number> {\n' +
+            '    try { return await this.deps.value.applyToCart({}); } catch { return 0; }\n' +
+            '  }\n}',
+        ],
+        [
+          // Three unrelated bindings of the same spelling: a call result, an
+          // identifier, a parameter. None of them is the property.
+          'modules/carts/services/engine.ts',
+          'export function fromCall(make: () => Engine): number {\n' +
+            '  const value = make();\n' +
+            '  try { value.apply(); } catch { return 0; }\n' +
+            '  return 1;\n}\n' +
+            'export function fromIdentifier(engine: Engine): number {\n' +
+            '  const value = engine;\n' +
+            '  try { value.apply(); } catch { return 0; }\n' +
+            '  return 1;\n}\n' +
+            'export function fromParameter(value: Engine): number {\n' +
+            '  try { value.apply(); } catch { return 0; }\n' +
+            '  return 1;\n}',
+        ],
+      ]),
+    );
+    expect(found).toEqual(['modules/carts/services/cart-pricing.ts:value']);
+  });
+
+  /**
+   * `crm`, `projects`, `quote_requests` and `tasks`: the deps object holds a
+   * closure over the gated accessor, and the factory calls it before its `try`.
+   */
+  const accessorTree = (service: string): Map<string, string> =>
+    new Map([
+      EMAILS,
+      [
+        'modules/crm/backend.ts',
+        "import { createReminderEmail } from './services/reminder-email.js';\n" +
+          'export function registerModule(ctx: ModuleContext): void {\n' +
+          '  const email = createReminderEmail({\n' +
+          '    sender: () => ctx.cradle<Cradle>().transactionalEmailSenderAccessor(),\n' +
+          '    log: (message: string) => ctx.log.warn(message),\n' +
+          '  });\n}',
+      ],
+      ['modules/crm/services/reminder-email.ts', service],
+    ]);
+
+  const reminderEmail = (binding: string, local: string): string =>
+    'export function createReminderEmail(deps: Deps) {\n' +
+    '  return {\n' +
+    '    async send(input: Input): Promise<boolean> {\n' +
+    `      ${binding}\n` +
+    `      if (!${local}) return false;\n` +
+    `      try { await ${local}.send(input); return true; } catch { return false; }\n` +
+    '    },\n' +
+    '  };\n}';
+
+  it('follows a call through a property that holds a closure over the port', () => {
+    const findings = findPortCatches({
+      sources: accessorTree(reminderEmail('const mailer = deps.sender();', 'mailer')),
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      file: 'modules/crm/services/reminder-email.ts',
+      port: 'mailer',
+      handled: false,
+      gates: ['transactionalEmailSenderAccessor'],
+    });
+  });
+
+  it('follows the same call when the local shares the property`s spelling, as the tree writes it', () => {
+    expect(
+      sitesOf(accessorTree(reminderEmail('const sender = deps.sender();', 'sender'))),
+    ).toEqual(['modules/crm/services/reminder-email.ts:sender']);
+  });
+
+  it('does not read a call through a property that holds no port as one', () => {
+    expect(sitesOf(accessorTree(reminderEmail('const mailer = deps.log();', 'mailer')))).toEqual(
+      [],
+    );
+  });
+
+  const destructuringTree = (service: string): Map<string, string> =>
+    new Map([
+      PROMOTIONS,
+      [
+        'modules/carts/backend.ts',
+        "import { lazyPort } from '../../kernel/index.js';\n" +
+          "const deps = { promotion: lazyPort<Promo>(ctx, 'promotionService'), log: console };",
+      ],
+      ['modules/carts/services/cart-pricing.ts', service],
+    ]);
+
+  it('follows a destructured property, renamed', () => {
+    expect(
+      sitesOf(
+        destructuringTree(
+          'export class CartPricing {\n' +
+            '  async price(): Promise<number> {\n' +
+            '    const { promotion: promo, log } = this.deps;\n' +
+            '    try { return await promo.applyToCart({}); } catch { log.warn(); return 0; }\n' +
+            '  }\n}',
+        ),
+      ),
+    ).toEqual(['modules/carts/services/cart-pricing.ts:promo']);
+  });
+
+  it('follows a destructured parameter', () => {
+    expect(
+      sitesOf(
+        destructuringTree(
+          'export async function price({ promotion }: Deps): Promise<number> {\n' +
+            '  try { return await promotion.applyToCart({}); } catch { return 0; }\n}',
+        ),
+      ),
+    ).toEqual(['modules/carts/services/cart-pricing.ts:promotion']);
+  });
+
+  it('follows a class`s own method that returns the property', () => {
+    expect(
+      sitesOf(
+        destructuringTree(
+          'export class CartPricing {\n' +
+            '  #promotions(): Promo { return this.deps.promotion; }\n' +
+            '  async price(): Promise<number> {\n' +
+            '    const discounts = this.#promotions();\n' +
+            '    try { return await discounts.applyToCart({}); } catch { return 0; }\n' +
+            '  }\n}',
+        ),
+      ),
+    ).toEqual(['modules/carts/services/cart-pricing.ts:discounts']);
+  });
+});
+
+/**
+ * A holder built from a deps bag carries **per method** (issue #576; feature
+ * 134 D18 §2, half 2).
+ *
+ * `new C({ k: lazyPort(…) })` used to carry nothing, because letting it carry
+ * as a value tainted every method of `C`, the ones that never touch the port
+ * included. Now the holder is followed as a holder: a call on it reaches what
+ * the **method** it names reaches, and nothing else. The shapes are the real
+ * ones the blind spot hid, cut down to what decides them.
+ */
+describe('findPortCatches — a holder built from a deps bag carries per method (#576)', () => {
+  const provides = (moduleId: string, ...ports: string[]): [string, string] => [
+    `modules/${moduleId}/backend.ts`,
+    'export function registerModule(ctx: ModuleContext): void {\n' +
+      ports
+        .map((port) => `  ctx.di.providePort('${port}', ctx.asFunction(() => x).singleton());\n`)
+        .join('') +
+      '}',
+  ];
+
+  /**
+   * `projects`' `read.list(…).catch(…)`: a class holder registered on the
+   * container, handed to the routes by key, destructured under another name —
+   * and reaching a second bag-built holder (`access`) inside the method.
+   */
+  const projects = (handler: string, rowRead = ''): Map<string, string> =>
+    new Map([
+      provides('admin_roles', 'permissionService'),
+      provides('organizations', 'organizationDetailsPort'),
+      [
+        'modules/projects/backend.ts',
+        "import { lazyPort } from '../../kernel/index.js';\n" +
+          "import { ProjectAccess } from './access.js';\n" +
+          "import { ProjectReadService } from './read.js';\n" +
+          "import { registerProjectRoutes } from './routes.js';\n" +
+          'export function registerModule(ctx: ModuleContext): void {\n' +
+          '  ctx.di.register({\n' +
+          '    projectsAccess: ctx\n' +
+          '      .asFunction(() => new ProjectAccess({\n' +
+          "        permissions: lazyPort<P>(ctx, 'permissionService'),\n" +
+          '      }))\n' +
+          '      .singleton(),\n' +
+          '    projectsReadService: ctx\n' +
+          '      .asFunction(({ emFactory, projectsAccess }: Cradle) => new ProjectReadService({\n' +
+          '        emFactory,\n' +
+          '        access: projectsAccess,\n' +
+          "        organizations: lazyPort<O>(ctx, 'organizationDetailsPort'),\n" +
+          '      }))\n' +
+          '      .singleton(),\n' +
+          '  });\n' +
+          '  ctx.routes(async (app, cradle) => {\n' +
+          '    await registerProjectRoutes(app, { projectReadService: cradle.projectsReadService });\n' +
+          '  });\n' +
+          '}',
+      ],
+      [
+        'modules/projects/access.ts',
+        'export class ProjectAccess {\n' +
+          '  constructor(private readonly deps: Deps) {}\n' +
+          '  async currentViewer(): Promise<string[]> { return this.deps.permissions.listPermissions(); }\n' +
+          '}',
+      ],
+      [
+        'modules/projects/read.ts',
+        'export class ProjectReadService {\n' +
+          '  constructor(private readonly deps: Deps) {}\n' +
+          '  async list(): Promise<unknown[]> {\n' +
+          '    await this.deps.access.currentViewer();\n' +
+          '    return this.#summaries();\n' +
+          '  }\n' +
+          '  async #summaries(): Promise<unknown[]> { return this.deps.organizations.findByIds([]); }\n' +
+          '  async getOrFail(id: string): Promise<unknown> { return this.deps.emFactory().findOneOrFail(id); }\n' +
+          '}',
+      ],
+      [
+        'modules/projects/routes.ts',
+        'export async function registerProjectRoutes(app: App, deps: Deps): Promise<void> {\n' +
+          '  const { projectReadService: read } = deps;\n' +
+          `  app.get('/projects', async () => read.list().catch(${handler}));\n` +
+          rowRead +
+          '}',
+      ],
+    ]);
+
+  it('judges `read.list(…).catch(…)` under the gates `list` reaches, through both holders', () => {
+    const found = findPortCatches({ sources: projects('(error) => { throw error; }') });
+    expect(found.map((entry) => ({ key: keyOf(entry), handled: entry.handled, gates: entry.gates }))).toEqual([
+      {
+        key: 'modules/projects/routes.ts:read#promise',
+        handled: true,
+        gates: ['organizationDetailsPort', 'permissionService'],
+      },
+    ]);
+  });
+
+  it('reports it the moment the handler stops re-throwing', () => {
+    const result = checkPortCatches({ sources: projects('() => []') }, {});
+    expect(result.violations.map(keyOf)).toEqual(['modules/projects/routes.ts:read#promise']);
+  });
+
+  it('reads the #100 pin over `read` as stale, because the analysis follows it now', () => {
+    const pins = {
+      'modules/projects/routes.ts:read': {
+        gates: ['permissionService'],
+        reason: 'A holder built from a deps bag (D18); retires with per-method attribution (#576).',
+      },
+    };
+    const { stalePins } = checkPortCatches(
+      { sources: projects('(error) => { throw error; }'), pins },
+      {},
+    );
+    expect(stalePins).toEqual([expect.stringContaining('already follows the name')]);
+  });
+
+  it('does not taint a method of the same holder that only reads a row', () => {
+    const rowRead =
+      "  app.get('/projects/:id', async () => {\n" +
+      "    try { return await read.getOrFail('1'); } catch { return null; }\n" +
+      '  });\n';
+    expect(
+      findPortCatches({ sources: projects('(error) => { throw error; }', rowRead) }).map(keyOf),
+    ).toEqual(['modules/projects/routes.ts:read#promise']);
+  });
+
+  /**
+   * `tasks`' digest: a **factory** built from a bag, returning a closure — the
+   * key holds a function, and calling it runs that closure. `#dueFor` reaches
+   * the port only through it, and the D-88 hop carries that into the `try`.
+   */
+  const tasks = (catchBody: string): Map<string, string> =>
+    new Map([
+      provides('admin_roles', 'permissionService'),
+      [
+        'modules/tasks/backend.ts',
+        "import { lazyPort } from '../../kernel/index.js';\n" +
+          "import { createTaskAudience } from './audience.js';\n" +
+          "import { TaskDigestService } from './digest.js';\n" +
+          'export function registerModule(ctx: ModuleContext): void {\n' +
+          '  ctx.di.register({\n' +
+          '    tasksAudience: ctx\n' +
+          '      .asFunction(() => createTaskAudience({\n' +
+          "        permissions: lazyPort<P>(ctx, 'permissionService'),\n" +
+          '      }))\n' +
+          '      .singleton(),\n' +
+          '    tasksDigestService: ctx\n' +
+          '      .asFunction(({ tasksAudience }: Cradle) => new TaskDigestService({ audience: tasksAudience }))\n' +
+          '      .singleton(),\n' +
+          '  });\n' +
+          '}',
+      ],
+      [
+        'modules/tasks/audience.ts',
+        'export function createTaskAudience(deps: Deps) {\n' +
+          '  return async function maySee(adminUserId: string): Promise<boolean> {\n' +
+          '    const held = await deps.permissions.listPermissions(adminUserId);\n' +
+          '    return held.length > 0;\n' +
+          '  };\n' +
+          '}',
+      ],
+      [
+        'modules/tasks/digest.ts',
+        'export class TaskDigestService {\n' +
+          '  constructor(private readonly deps: Deps) {}\n' +
+          '  async pass(): Promise<void> {\n' +
+          "    try { await this.#dueFor('a'); } catch (error) {" +
+          catchBody +
+          '}\n' +
+          '  }\n' +
+          '  async #dueFor(id: string): Promise<boolean> { return this.deps.audience(id); }\n' +
+          '}',
+      ],
+    ]);
+
+  it('follows a factory`s returned closure into the method that calls it (`#dueFor`)', () => {
+    const found = findPortCatches({ sources: tasks(' rethrowIfModuleDisabled(error); ') });
+    expect(found.map((entry) => ({ key: keyOf(entry), handled: entry.handled, gates: entry.gates }))).toEqual([
+      { key: 'modules/tasks/digest.ts:#dueFor', handled: true, gates: ['permissionService'] },
+    ]);
+    const result = checkPortCatches({ sources: tasks(' log(error); ') }, {});
+    expect(result.violations.map(keyOf)).toEqual(['modules/tasks/digest.ts:#dueFor']);
+  });
+
+  /**
+   * `crm`'s `carryIntoDocument`: the same factory shape, reaching only ports a
+   * locked module owns. Judged — and `OWNER LOCKED`, not a violation: the
+   * gates are the ones the closure reaches, not the whole bag's.
+   */
+  it('derives OWNER LOCKED from the gates the closure reaches, not from the bag', () => {
+    const sources = new Map([
+      provides('orders', 'orderCarryPort'),
+      provides('comparisons', 'comparisonService'),
+      [
+        'modules/crm/backend.ts',
+        "import { lazyPort } from '../../kernel/index.js';\n" +
+          "import { createCarryIntoDocument } from './carry.js';\n" +
+          "import { OriginLinkService } from './origin.js';\n" +
+          'export function registerModule(ctx: ModuleContext): void {\n' +
+          '  ctx.di.register({\n' +
+          '    crmOriginLinkService: ctx\n' +
+          '      .asFunction(() => new OriginLinkService({\n' +
+          '        carryIntoDocument: createCarryIntoDocument({\n' +
+          "          orders: lazyPort<R>(ctx, 'orderCarryPort'),\n" +
+          "          comparisons: lazyPort<C>(ctx, 'comparisonService'),\n" +
+          '        }),\n' +
+          '      }))\n' +
+          '      .singleton(),\n' +
+          '  });\n' +
+          '}',
+      ],
+      [
+        'modules/crm/carry.ts',
+        'export function createCarryIntoDocument(deps: Deps): (id: string) => Promise<void> {\n' +
+          '  return async (id) => { await deps.orders.receiveCarriedValues(id); };\n' +
+          '}',
+      ],
+      [
+        'modules/crm/origin.ts',
+        'export class OriginLinkService {\n' +
+          '  constructor(private readonly deps: Deps) {}\n' +
+          '  async #carry(id: string): Promise<void> {\n' +
+          '    try { await this.deps.carryIntoDocument(id); } catch (error) { this.deps.warn(error); }\n' +
+          '  }\n' +
+          '}',
+      ],
+    ]);
+    const result = checkPortCatches(
+      { sources, manifests: [{ id: 'orders', activation: { nonDeactivatable: true } }] },
+      {},
+    );
+    expect(result.violations).toEqual([]);
+    expect(result.ownerLocked.map((entry) => ({ key: keyOf(entry), gates: entry.gates }))).toEqual([
+      { key: 'modules/crm/origin.ts:carryIntoDocument', gates: ['orderCarryPort'] },
+    ]);
+  });
+  /**
+   * `product_feeds`' inline delivery: the run's `.catch` around a closure whose
+   * holder method **consumes** the presence answer itself, on purpose
+   * (`DeliveryService#deliverInline`, feature 134 D18). What escapes the method
+   * is what a caller's `catch` could swallow — and here nothing does.
+   */
+  const delivery = (inlineCatch: string): Map<string, string> =>
+    new Map([
+      provides('credentials', 'credentialsService'),
+      [
+        'modules/product_feeds/plugin.ts',
+        "import { lazyPort } from '../../kernel/index.js';\n" +
+          "import { DeliveryService } from './delivery.js';\n" +
+          "import { FeedGeneration } from './generation.js';\n" +
+          'export function build(ctx: ModuleContext, inline: boolean): FeedGeneration {\n' +
+          "  const deliveryService = new DeliveryService({ credentials: lazyPort<C>(ctx, 'credentialsService') });\n" +
+          '  return new FeedGeneration({\n' +
+          '    ...(inline\n' +
+          '      ? { deliverArtefact: async (id: string) => { await deliveryService.deliverInline(id); } }\n' +
+          '      : {}),\n' +
+          '  });\n' +
+          '}',
+      ],
+      [
+        'modules/product_feeds/delivery.ts',
+        'export class DeliveryService {\n' +
+          '  constructor(private readonly deps: Deps) {}\n' +
+          '  async deliverInline(id: string): Promise<string> {\n' +
+          '    try { return await this.deliver(id); } catch (err) {' +
+          inlineCatch +
+          '}\n' +
+          '  }\n' +
+          '  async deliver(id: string): Promise<string> { return this.deps.credentials.reveal(id); }\n' +
+          '}',
+      ],
+      [
+        'modules/product_feeds/generation.ts',
+        'export class FeedGeneration {\n' +
+          '  constructor(private readonly deps: Deps) {}\n' +
+          "  async run(): Promise<void> { await this.deps.deliverArtefact?.('a').catch(() => undefined); }\n" +
+          '}',
+      ],
+    ]);
+  const deliveryKeys = (inlineCatch: string): string[] =>
+    findPortCatches({ sources: delivery(inlineCatch) }).map(keyOf);
+
+  it('does not judge a caller for an answer the holder method consumed itself', () => {
+    expect(
+      deliveryKeys(
+        ' if (!(err instanceof ModuleDisabledError)) throw err; return this.record(id, err); ',
+      ),
+    ).toEqual(['modules/product_feeds/delivery.ts:deliver']);
+  });
+
+  it('judges the caller once the holder method lets the answer through', () => {
+    const keys = [
+      'modules/product_feeds/delivery.ts:deliver',
+      'modules/product_feeds/generation.ts:deliverArtefact#promise',
+    ];
+    expect(deliveryKeys(' rethrowIfModuleDisabled(err); return this.record(id, err); ')).toEqual(keys);
+    expect(deliveryKeys(' if (err instanceof ModuleDisabledError) throw err; return "x"; ')).toEqual(keys);
+    expect(deliveryKeys(' log(err); throw err; ')).toEqual(keys);
+  });
+
+  /**
+   * Receiver-aware, which the value tables are not: a key is read in the bag the
+   * receiver holds. A closure under `resolve` in one class's bag must not answer
+   * for an unrelated `container.resolve()` elsewhere in the same module.
+   */
+  it('reads a key in the bag the receiver holds, not by its spelling across the module', () => {
+    const sources = new Map([
+      provides('admin_users', 'adminUserReadPort'),
+      [
+        'modules/packages/backend.ts',
+        "import { lazyPort } from '../../kernel/index.js';\n" +
+          "import { Directory } from './directory.js';\n" +
+          "import { Runtime } from './runtime.js';\n" +
+          'export function registerModule(ctx: ModuleContext): void {\n' +
+          "  const directory = new Directory({ users: lazyPort<U>(ctx, 'adminUserReadPort') });\n" +
+          '  const runtime = new Runtime({ resolve: (id: string) => directory.lookup(id) });\n' +
+          '  void runtime;\n' +
+          '}',
+      ],
+      [
+        'modules/packages/directory.ts',
+        'export class Directory {\n' +
+          '  constructor(private readonly deps: Deps) {}\n' +
+          '  async lookup(id: string): Promise<unknown> { return this.deps.users.findById(id); }\n' +
+          '}',
+      ],
+      [
+        'modules/packages/runtime.ts',
+        'export class Runtime {\n' +
+          '  constructor(private readonly deps: Deps) {}\n' +
+          '  async owner(id: string): Promise<unknown> {\n' +
+          '    try { return await this.deps.resolve(id); } catch { return null; }\n' +
+          '  }\n' +
+          '}',
+      ],
+      [
+        'modules/packages/other.ts',
+        'export async function load(container: Container): Promise<unknown> {\n' +
+          "  try { return container.resolve('x'); } catch { return null; }\n" +
+          '}',
+      ],
+    ]);
+    expect(findPortCatches({ sources }).map(keyOf)).toEqual(['modules/packages/runtime.ts:resolve']);
+  });
+});
+
+/**
+ * Declared aliases — `PORT_CATCH_PINS` (maintainer ruling on issue #100,
+ * 2026-10-30). Its one real entry, `projects`' `read`, was retired by issue
+ * #576 — through the staleness clause proved below and again in the #576 block.
+ *
+ * A pin puts a `catch` around a real port reach the value analysis cannot follow
+ * back into the judged population. It has to be able to go **red** in each of
+ * the four ways it can stop describing the tree, or it is an exemption with
+ * extra steps.
+ */
+describe('checkPortCatches — a pinned alias keeps a site judged, and goes stale (#100, #576)', () => {
+  const PERMISSIONS = [
+    'modules/admin_roles/backend.ts',
+    'export function registerModule(ctx: ModuleContext): void {\n' +
+      "  ctx.di.providePort('permissionService', ctx.asFunction(() => x).singleton());\n}",
+  ] as const;
+
+  /** A holder built from a deps bag — the D18 shape the analysis does not follow. */
+  const routes = (handler: string): Map<string, string> =>
+    new Map([
+      PERMISSIONS,
+      [
+        'modules/projects/backend.ts',
+        "import { lazyPort } from '../../kernel/index.js';\n" +
+          'export function registerModule(ctx: ModuleContext): void {\n' +
+          "  const reads = new ProjectReads({ permissions: lazyPort<P>(ctx, 'permissionService') });\n}",
+      ],
+      [
+        'modules/projects/routes.ts',
+        'export async function routes(deps: Deps): Promise<unknown> {\n' +
+          '  const { projectReadService: read } = deps;\n' +
+          `  return read.list().catch(${handler});\n}`,
+      ],
+    ]);
+
+  const pin = (gates: readonly string[] = ['permissionService']) => ({
+    'modules/projects/routes.ts:read': {
+      gates,
+      reason: 'A holder built from a deps bag (D18); retires with per-method attribution (#576).',
+    },
+  });
+
+  it('does not see the site without the pin — the blind spot the pin exists for', () => {
+    expect(findPortCatches({ sources: routes('(error) => { throw error; }') })).toEqual([]);
+  });
+
+  it('judges the site with the pin, under the pinned gates', () => {
+    const found = findPortCatches({
+      sources: routes('(error) => { throw error; }'),
+      pins: pin(),
+    });
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({
+      file: 'modules/projects/routes.ts',
+      port: 'read',
+      form: 'promise',
+      handled: true,
+      gates: ['permissionService'],
+    });
+    const result = checkPortCatches({ sources: routes('(error) => { throw error; }'), pins: pin() }, {});
+    expect(result.stalePins).toEqual([]);
+  });
+
+  it('reports the pinned site as a violation the moment it stops re-throwing', () => {
+    const result = checkPortCatches({ sources: routes('() => []'), pins: pin() }, {});
+    expect(result.violations.map(keyOf)).toEqual(['modules/projects/routes.ts:read#promise']);
+  });
+
+  it('reads stale when no site reaches a port through the name any more', () => {
+    const sources = routes('(error) => { throw error; }');
+    sources.set('modules/projects/routes.ts', 'export const routes = (): number => 1;');
+    const { stalePins } = checkPortCatches({ sources, pins: pin() }, {});
+    expect(stalePins).toEqual([expect.stringContaining('no site in its file reaches')]);
+  });
+
+  it('reads stale when the analysis already follows the name without it', () => {
+    const sources = routes('(error) => { throw error; }');
+    sources.set(
+      'modules/projects/routes.ts',
+      "import { lazyPort } from '../../kernel/index.js';\n" +
+        "const read = lazyPort<P>(ctx, 'permissionService');\n" +
+        'export const routes = () => read.list().catch((error) => { throw error; });',
+    );
+    const { stalePins } = checkPortCatches({ sources, pins: pin() }, {});
+    expect(stalePins).toEqual([expect.stringContaining('already follows the name')]);
+  });
+
+  it('reads stale when it names a gate no module provides', () => {
+    const { stalePins } = checkPortCatches(
+      { sources: routes('(error) => { throw error; }'), pins: pin(['noSuchPort']) },
+      {},
+    );
+    expect(stalePins).toEqual([expect.stringContaining('noSuchPort')]);
+  });
+
+  it('gives every real pin a reason and the ledger`s key shape', () => {
+    for (const [key, entry] of Object.entries(PORT_CATCH_PINS)) {
+      expect(key).toMatch(/^[\w./-]+\.ts:\w+$/);
+      expect(entry.reason.length, `${key} needs a reason`).toBeGreaterThan(80);
+      expect(entry.gates.length, `${key} names no gate`).toBeGreaterThan(0);
+    }
   });
 });

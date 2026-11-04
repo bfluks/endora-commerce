@@ -369,6 +369,35 @@ describe('every published package ships a LICENSE and a README (FR-020, FR-021)'
       expect(run.readmes[0]!.content).toContain('Fresh sentence.');
       expect(run.readmes[0]!.content).not.toContain('Stale sentence.');
     });
+
+    it('covers a package whose first manifest this run is about to write (issue #445)', () => {
+      // A module just scaffolded or moved into place has no `package.json` on
+      // disk, so it is not yet a workspace member — and its LICENSE and README
+      // used to wait for a second `manifests:generate`, which refuses until
+      // the package is built. The manifest this run writes makes it a member.
+      const files = checkoutWith(libraryMember('alpha'));
+      const run = renderPackageIdentityFiles(
+        ROOT,
+        fixtureFs({ ...files, [`${ROOT}/packages/fresh/src/manifest.ts`]: '' }),
+        new Map([
+          [
+            `${ROOT}/packages/fresh`,
+            JSON.stringify({
+              name: '@endora-commerce/fresh',
+              description: 'A package born in this run.',
+              license: 'MIT',
+            }),
+          ],
+        ]),
+      );
+      expect(run.memberNames).toContain('@endora-commerce/fresh');
+      expect(run.licenses.map((entry) => entry.outputPath)).toContain(
+        `${ROOT}/packages/fresh/LICENSE`,
+      );
+      expect(run.readmes.map((entry) => entry.outputPath)).toContain(
+        `${ROOT}/packages/fresh/README.md`,
+      );
+    });
   });
 
   it('counts what it opened', () => {

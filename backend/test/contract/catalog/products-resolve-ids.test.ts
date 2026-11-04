@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ERROR_CODES } from '@endora-commerce/contracts';
 import {
@@ -8,6 +9,10 @@ import {
 
 /**
  * Feature 033 — POST /api/v1/admin/catalog/products/resolve-ids
+ *
+ * Feature 163 (T156d, R30.4) — the selection takes the list's `archived` mode
+ * (`exclude` | `include` | `only`) beside the legacy `includeArchived`, whose default
+ * stays "include"; `draft` and `archived` are no status.
  */
 
 describe('POST /api/v1/admin/catalog/products/resolve-ids', () => {
@@ -37,7 +42,7 @@ describe('POST /api/v1/admin/catalog/products/resolve-ids', () => {
       method: 'POST',
       url: '/api/v1/admin/catalog/products/resolve-ids',
       cookies: { b2b_session: 'stub-admin-session' },
-      payload: { status: 'active', includeArchived: true },
+      payload: { status: 'active', archived: 'exclude' },
     });
     expect(resolveRes.statusCode).toBe(200);
     const resolveBody = resolveRes.json() as {
@@ -79,5 +84,73 @@ describe('POST /api/v1/admin/catalog/products/resolve-ids', () => {
       if (prev === undefined) delete process.env['CATALOG_MAX_RESOLVE_IDS'];
       else process.env['CATALOG_MAX_RESOLVE_IDS'] = prev;
     }
+  });
+
+  describe('the archived mode (spec 163, R30.4)', () => {
+    const admin = { cookies: { b2b_session: 'stub-admin-session' } };
+    const run = randomUUID().slice(0, 8);
+
+    async function create(sku: string, status: 'active' | 'inactive'): Promise<string> {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/catalog/products',
+        ...admin,
+        payload: {
+          sku,
+          type: 'simple',
+          name: { 'en-US': sku },
+          description: { 'en-US': 'desc' },
+          categoryIds: [],
+          attributeValues: {},
+          visibility: 'public',
+          status,
+        },
+      });
+      expect(res.statusCode).toBe(201);
+      return (res.json() as { data: { id: string } }).data.id;
+    }
+
+    async function resolve(payload: Record<string, unknown>): Promise<string[]> {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/catalog/products/resolve-ids',
+        ...admin,
+        payload: { q: `RSLV-${run}`, ...payload },
+      });
+      expect(res.statusCode).toBe(200);
+      return [...(res.json() as { data: { productIds: string[] } }).data.productIds].sort();
+    }
+
+    it('selects archived products of both statuses with archived: only', async () => {
+      const live = await create(`RSLV-${run}-LIVE`, 'inactive');
+      const archivedActive = await create(`RSLV-${run}-ARCH-A`, 'active');
+      const archivedInactive = await create(`RSLV-${run}-ARCH-I`, 'inactive');
+      for (const id of [archivedActive, archivedInactive]) {
+        const res = await h.app.inject({
+          method: 'POST',
+          url: `/api/v1/admin/catalog/products/${id}/archive`,
+          ...admin,
+        });
+        expect(res.statusCode).toBe(200);
+      }
+      expect(await resolve({ archived: 'only' })).toEqual([archivedActive, archivedInactive].sort());
+      expect(await resolve({ archived: 'exclude' })).toEqual([live]);
+      expect(await resolve({ archived: 'include' })).toEqual([live, archivedActive, archivedInactive].sort());
+      // The selection's default stays "include", as before.
+      expect(await resolve({})).toEqual([live, archivedActive, archivedInactive].sort());
+      expect(await resolve({ includeArchived: false })).toEqual([live]);
+      expect(await resolve({ archived: 'only', status: 'active' })).toEqual([archivedActive]);
+    });
+
+    it.each(['draft', 'archived'])('refuses status %s with 400 VALIDATION_FAILED', async (status) => {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/catalog/products/resolve-ids',
+        ...admin,
+        payload: { status },
+      });
+      expect(res.statusCode).toBe(400);
+      expect((res.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.VALIDATION_FAILED);
+    });
   });
 });

@@ -66,6 +66,9 @@ vi.mock('../../../../packages/modules/organizations/src/admin/panels/VatValidati
 vi.mock('../../../../packages/modules/organizations/src/admin/panels/RestrictionsPanel', () => ({
   RestrictionsPanel: () => null,
 }));
+vi.mock('../../../../packages/modules/organizations/src/admin/panels/SalesChannelsPanel', () => ({
+  SalesChannelsPanel: () => null,
+}));
 vi.mock('../../../../packages/modules/organizations/src/admin/components/OrganizationSalesRepsTab', () => ({
   OrganizationSalesRepsTab: () => null,
 }));

@@ -1,6 +1,6 @@
-import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -20,7 +20,7 @@ export default async function LegacyEmailVerificationRedirect({
   const params = await searchParams;
   const token = params.token;
   if (token) {
-    redirect(`/verify?token=${encodeURIComponent(token)}`);
+    return await localeRedirect(`/verify?token=${encodeURIComponent(token)}`);
   }
-  redirect('/verify');
+  return await localeRedirect('/verify');
 }

@@ -60,6 +60,7 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 
 | Akcja | Otwiera | Uprawnienie |
 | --- | --- | --- |
+| `new-organization` | `/organizations/new` | `customers:manage` |
 | `open-organizations` | `/organizations` | `customers:read` |
 
 ## Ustawienia

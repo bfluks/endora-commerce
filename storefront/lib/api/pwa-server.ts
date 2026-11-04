@@ -9,6 +9,7 @@ import type {
   UpdatePushPreferencesRequest,
 } from '@endora-commerce/contracts';
 import { backendBaseUrl } from '../env.mjs';
+import { activeChannelHeaders } from './channel-headers';
 import type { RequestContext } from './client';
 import { apiGetAuthed, apiMutate } from './mutations';
 
@@ -34,7 +35,7 @@ export async function fetchPwaConfig(channelCode?: string): Promise<PwaPublicCon
   const baseUrl = backendBaseUrl();
   try {
     const res = await fetch(`${baseUrl}/api/v1/storefront/pwa/config`, {
-      headers: channelCode ? { 'X-Sales-Channel': channelCode } : {},
+      headers: await activeChannelHeaders({ salesChannelCode: channelCode }),
       // Bounded propagation (FR-009) without hammering the backend per request.
       next: { revalidate: 60 },
     });

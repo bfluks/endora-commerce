@@ -99,4 +99,90 @@ describe('megamenu migration (T004 — 036_megamenu_init)', () => {
     );
     expect(rows.map((r) => r.indexname)).toContain('idx_megamenu_bindings_channel_lang');
   });
+
+  /**
+   * Feature 168 (issue #522): tabs with a presentation and an alignment, and an
+   * audience on every item. A tab carries both fields and nothing else does.
+   */
+  it('adds presentation, alignment and audience to megamenu_items (feature 168)', async () => {
+    const conn = db.orm.em.getConnection();
+    const rows = await conn.execute<
+      Array<{ column_name: string; data_type: string; is_nullable: string; column_default: string | null }>
+    >(
+      `select column_name, data_type, is_nullable, column_default
+       from information_schema.columns
+       where table_schema = 'public' and table_name = 'megamenu_items'
+         and column_name in ('presentation','alignment','audience')
+       order by column_name`,
+    );
+    expect(rows.map((r) => [r.column_name, r.data_type, r.is_nullable])).toEqual([
+      ['alignment', 'character varying', 'YES'],
+      ['audience', 'jsonb', 'NO'],
+      ['presentation', 'character varying', 'YES'],
+    ]);
+    expect(rows.find((r) => r.column_name === 'audience')?.column_default).toContain('"kind": "everyone"');
+
+    const checks = await conn.execute<Array<{ conname: string }>>(
+      `select c.conname from pg_constraint c join pg_class t on t.oid = c.conrelid
+       where t.relname = 'megamenu_items' and c.contype = 'c' order by c.conname`,
+    );
+    expect(checks.map((c) => c.conname)).toEqual(
+      expect.arrayContaining([
+        'megamenu_items_alignment_check',
+        'megamenu_items_presentation_check',
+        'megamenu_items_tab_fields_check',
+      ]),
+    );
+  });
+
+  it('refuses a tab without a presentation and a child with one (feature 168)', async () => {
+    const conn = db.orm.em.getConnection();
+    const menuId = '16600000-0000-4000-8000-000000000001';
+    const tabId = '16600000-0000-4000-8000-000000000002';
+    await conn.execute(
+      `insert into megamenus (id, name, created_at, updated_at) values (?, 'migration 168', now(), now())`,
+      [menuId],
+    );
+    try {
+      await expect(
+        conn.execute(
+          `insert into megamenu_items (id, megamenu_id, parent_id, position, kind, created_at, updated_at)
+           values (?, ?, null, 0, 'group', now(), now())`,
+          [tabId, menuId],
+        ),
+      ).rejects.toThrow(/megamenu_items_tab_fields_check/);
+      await conn.execute(
+        `insert into megamenu_items (id, megamenu_id, parent_id, position, kind, presentation, alignment, created_at, updated_at)
+         values (?, ?, null, 0, 'group', 'mega', 'start', now(), now())`,
+        [tabId, menuId],
+      );
+      await expect(
+        conn.execute(
+          `insert into megamenu_items (id, megamenu_id, parent_id, position, kind, presentation, alignment, created_at, updated_at)
+           values (gen_random_uuid(), ?, ?, 0, 'group', 'mega', 'start', now(), now())`,
+          [menuId, tabId],
+        ),
+      ).rejects.toThrow(/megamenu_items_tab_fields_check/);
+    } finally {
+      await conn.execute(`delete from megamenus where id = ?`, [menuId]);
+    }
+  });
+
+  /**
+   * Feature 168 review: a tab whose click follows its own link. Off by default,
+   * and a tab's alone.
+   */
+  it('adds click_navigates to megamenu_items, off by default and on tabs only (feature 168)', async () => {
+    const conn = db.orm.em.getConnection();
+    const rows = await conn.execute<Array<{ data_type: string; is_nullable: string; column_default: string | null }>>(
+      `select data_type, is_nullable, column_default from information_schema.columns
+       where table_schema = 'public' and table_name = 'megamenu_items' and column_name = 'click_navigates'`,
+    );
+    expect(rows).toEqual([{ data_type: 'boolean', is_nullable: 'NO', column_default: 'false' }]);
+    const checks = await conn.execute<Array<{ conname: string }>>(
+      `select c.conname from pg_constraint c join pg_class t on t.oid = c.conrelid
+       where t.relname = 'megamenu_items' and c.conname = 'megamenu_items_click_navigates_check'`,
+    );
+    expect(checks).toHaveLength(1);
+  });
 });

@@ -7,6 +7,7 @@ import {
   type CustomerAccountAdminSearchCriteria,
   type CustomerAccountAdminSearchPort,
   type CustomerAccountAdminSearchResult,
+  type CustomerAccountAnonymizedEventV1,
   type CustomerAccountLifecycleWritePort,
   type CustomerAccountRecord,
   type CustomerAccountStandaloneCreateInput,
@@ -16,7 +17,7 @@ import type { Command, CommandBus } from '@endora-commerce/platform/commands';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
-import { hashPassword } from '@endora-commerce/platform/kernel';
+import { currentSalesChannel, hashPassword } from '@endora-commerce/platform/kernel';
 // D-178 — the one co-transactional seam this module consumes, and the reason it
 // is imported from another module's directory rather than from
 // `@endora-commerce/contracts` is on the interface itself: its signature carries
@@ -103,6 +104,15 @@ export class CustomerAccountLifecycleWriteService implements CustomerAccountLife
      * and refuses without it.
      */
     private readonly commandBus?: CommandBus,
+    /**
+     * `customer_account.anonymized.v1` (`specs/170-forms-module/` research
+     * R-17) — announced by {@link anonymize} after its flush and its audit row,
+     * only on the transition. A callback rather than the bus: `index.ts` binds
+     * it to a bus scope it reads per call and awaits, so a subscriber's work
+     * (forms erasing the account's entries) runs within the sweep step. Absent,
+     * nothing is announced — the hand-built test services pass none.
+     */
+    private readonly emitAnonymized?: (payload: CustomerAccountAnonymizedEventV1) => Promise<void>,
   ) {}
 
   /**
@@ -149,6 +159,11 @@ export class CustomerAccountLifecycleWriteService implements CustomerAccountLife
         email,
         firstName: input.firstName,
         lastName: input.lastName,
+        // Feature 154 (owner decision D6) — the store the visitor registers on
+        // becomes the personal organisation's channel. The registration route
+        // is subject to the access step, so this is a store open to anonymous
+        // visitors; outside a request there is none and the default applies.
+        salesChannelId: currentSalesChannel()?.id ?? null,
       });
       const account = tem.create(CustomerAccount, {
         id: customerAccountId,
@@ -451,6 +466,13 @@ export class CustomerAccountLifecycleWriteService implements CustomerAccountLife
     // The sweep runs on a timer, so there is no operator to attribute it to.
     await this.#record('customer_account.anonymized', account.id, null, before, {
       anonymizedAt: account.anonymizedAt.toISOString(),
+    });
+    // Ids only — never the e-mail or a name the scrub just removed.
+    await this.emitAnonymized?.({
+      eventId: randomUUID(),
+      occurredAt: account.anonymizedAt.toISOString(),
+      customerAccountId: account.id,
+      organizationId: account.organizationId,
     });
     return toOneCustomerAccountRecord(this.twoFactorEnrolments, account);
   }

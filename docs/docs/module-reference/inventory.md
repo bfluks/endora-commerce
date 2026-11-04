@@ -53,7 +53,11 @@ An operator switches this module on and off on **/platform/modules**. The choice
 
 | Action | Opens | Permission |
 | --- | --- | --- |
+| `import-stock` | `/inventory/import` | `inventory:write` |
 | `open-inventory` | `/inventory` | `inventory:read` |
+| `open-low-stock` | `/inventory/low-stock` | `inventory:read` |
+| `open-stock-notifications` | `/inventory/notifications` | `inventory:read` |
+| `open-warehouses` | `/warehouses` | `inventory:read` |
 
 ## Settings
 

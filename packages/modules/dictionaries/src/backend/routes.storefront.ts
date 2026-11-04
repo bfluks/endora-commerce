@@ -24,7 +24,10 @@ export async function registerDictionaryStorefrontRoutes(
   app: FastifyInstance,
   deps: DictionaryStorefrontRoutesDeps,
 ): Promise<void> {
-  app.get('/api/v1/dictionary', async (request, reply) => {
+  // Feature 154 — reachable whatever the sales-channel access rule decides: the
+  // business registration form reads its country and other lists anonymously,
+  // also on a store closed to anonymous visitors.
+  app.get('/api/v1/dictionary', { config: { salesChannelAccess: 'open' } }, async (request, reply) => {
     const query = registryQuerySchema.parse(request.query);
     const payload = await deps.readService.getRegistry({
       ...(query.locale !== undefined ? { locale: query.locale } : {}),
@@ -34,7 +37,7 @@ export async function registerDictionaryStorefrontRoutes(
     return payload;
   });
 
-  app.get('/api/v1/dictionary/by-code', async (request, reply) => {
+  app.get('/api/v1/dictionary/by-code', { config: { salesChannelAccess: 'open' } }, async (request, reply) => {
     const query = byCodeQuerySchema.parse(request.query);
     const payload = await deps.readService.getByCode({
       entryType: query.type,

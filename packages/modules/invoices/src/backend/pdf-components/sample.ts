@@ -20,6 +20,7 @@ export function sampleInvoiceDetail(): InvoiceDetail {
     grossTotal: 2400,
     paidTotal: 0,
     amountDue: 2400,
+    overpayment: 0,
     total: 2400,
     originalInvoiceId: null,
     templateId: null,

@@ -16,8 +16,11 @@ identity-change path with `anonymousAccess` in before/after, bumps `version` (`I
 invalidates the channel cache through `invalidateAfterWrite(code)`.
 
 **UI** — `packages/modules/sales_channels/src/admin/components/ChannelIdentityForm.tsx`: a switch
-(admin-kit `Switch`) *Open to anonymous visitors* under *Active*, default on for a new channel.
-Keys: `channel.form.anonymousAccess.label` "Open to anonymous visitors" / "Otwarty dla
+*Open to anonymous visitors* under *Active*, default on for a new channel. *(As built, PR C: an
+admin-kit `Checkbox`, as *Active* beside it is — admin-kit has no `Switch` primitive — with the
+hint attached through `aria-describedby`; keys in the form's own `identity.*` family,
+`identity.anonymousAccess.label` / `identity.anonymousAccess.hint`, and the roster badge
+`list.badge.signInRequired`.)* Keys: `channel.form.anonymousAccess.label` "Open to anonymous visitors" / "Otwarty dla
 niezalogowanych odwiedzających"; `…hint` "When off, visitors must sign in, and only customers whose
 organization is assigned to this channel can use the store. Showing prices to anonymous visitors is a
 separate setting. With automatic moderation, anyone who registers a business here gets access." /
@@ -83,7 +86,20 @@ Runs Command `organization.create` (object `organization`, before `null`, after 
 the admin session) whose `run` creates the row (same normalisation and duplicate-tax-id refusal as
 registration) and calls `replaceChannelsForEntity('organization', id, ids, { em, actorAdminUserId })`
 on the Command's transaction. Exact field list follows `registerOrganizationRequestSchema`'s
-organization part; implementation reuses its Zod pieces rather than restating them.
+organization part; implementation reuses its Zod pieces rather than restating them. *(As built, PR C:
+there is no separate top-level `country` — the Organization has none; `registeredAddress.country` is
+the dictionary-validated one, refused with 409 and the Dictionary's code as in registration;
+`vatStatus` is optional as in registration. An unknown channel id is 422 `VALIDATION_FAILED` on
+`salesChannelIds.<i>`, as for the PUT.)*
+
+```
+GET /api/v1/admin/organizations/sales-channel-options
+  preHandler: requireAdmin('customers:manage')
+→ 200 { data: OrganizationSalesChannelOption[] }   // OrganizationSalesChannelOptionsResponseSchema
+```
+
+*(Added in PR C)* — the form's *Sales channels* options before an Organization exists, on the
+create's own code.
 
 **UI** — route `/organizations/new` (`requiredPermission: 'customers:manage'`) in
 `packages/modules/organizations/src/admin/index.ts`, page `pages/OrganizationCreate.tsx`; *New

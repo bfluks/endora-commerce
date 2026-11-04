@@ -189,6 +189,25 @@ the all-channels value, or that channel's own — and not the value the channel
 resolved to: a first write records `stored: false` rather than the manifest
 default. A `secret` setting is recorded as `[redacted]` on both sides.
 
+## Shop information
+
+The **Shop information** group (`shop`) holds the facts about the shop that the
+storefront publishes: `shop.name`, `shop.address`, `shop.contact_email`,
+`shop.support_email`, `shop.phone`, `shop.contact_form_recipient_emails`, and
+two settings for search engines:
+
+| Setting | Type | What it is |
+| --- | --- | --- |
+| `shop.logo_asset_id` | `string` | **Shop logo** — a public image from the Assets Library, chosen with the asset picker. Empty publishes no logo. |
+| `shop.social_profiles` | `string_list` | **Social profiles** — the full `https://` addresses of the organisation's profiles on social networks and other sites, one per entry. A write holding any other value is refused with `422 VALIDATION_FAILED` and nothing is stored. |
+
+The storefront reads them through `GET /api/v1/storefront/shop-info`, which
+returns `logoUrl` (the logo asset's public URL, or `null` when the setting is
+empty or the asset is gone or not public) and `socialProfiles` (only `https:`
+entries). It publishes both in its `Organization` structured data, as `logo`
+and `sameAs`, on the home page and on every CMS page. Resolving the logo is why
+this module depends on `assets_library`.
+
 ## For module consumers — reading values
 
 Other modules inject `SettingsService` from the composition root and read
@@ -240,17 +259,21 @@ shared entries for everyone, and every other process converges within the same
 ## CLI
 
 Settings rows are installed and removed by the module lifecycle commands, not
-by commands of their own:
+by commands of their own. Run them in the root of the instance:
 
 ```bash
 # Install a module: runs its migrations and reconciles its settings manifest.
-pnpm --filter backend run module:install <module-id> [--dry-run] [--json]
+pnpm run module:install <module-id> [--dry-run] [--json]
 
 # Soft uninstall (default): unregisters the module's settings and marks the
 # module uninstalled; its tables and data stay. --hard also reverts the
 # module's migrations and must be combined with --force.
-pnpm --filter backend run module:uninstall <module-id> [--hard --force] [--json]
+pnpm run module:uninstall <module-id> [--hard --force] [--json]
 ```
+
+In a checkout of the Endora Commerce repository the same two commands are
+`pnpm --filter backend run module:install` and
+`pnpm --filter backend run module:uninstall`, with the same arguments.
 
 `--remove-settings` and `--preserve-settings` are still accepted by
 `module:uninstall` for backward compatibility: the first means `--hard --force`,

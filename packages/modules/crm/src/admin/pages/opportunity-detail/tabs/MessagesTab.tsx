@@ -2,8 +2,9 @@ import { useCallback, useRef, type ReactNode } from 'react';
 import type { OpportunityComment } from '@endora-commerce/contracts';
 import { useAuth } from '@endora-commerce/admin-kit/lib';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { CommentThread } from '@endora-commerce/admin-kit/components';
 import { crmApi } from '../../../api.js';
-import { CommentThread } from '../../../components/CommentThread.js';
+import { useCrmReferences, useOpportunityComments, useOrderStatusLabel } from '../../../lib/references.js';
 import type { OpportunityTabProps } from '../tabs.js';
 
 /**
@@ -21,7 +22,7 @@ import type { OpportunityTabProps } from '../tabs.js';
  */
 export function MessagesTab(props: OpportunityTabProps): ReactNode {
   const t = useTranslation('crm');
-  const { me } = useAuth();
+  const { me, hasPermission } = useAuth();
   const myId = me?.adminUser.id ?? null;
   const opportunityId = props.opportunity.id;
   // The answer of a request arrives later: it meets the Opportunity then on screen.
@@ -52,11 +53,21 @@ export function MessagesTab(props: OpportunityTabProps): ReactNode {
     [opportunityId, myId],
   );
 
+  const { kinds, lookups } = useCrmReferences({
+    organizationId: props.opportunity.organization.id,
+    opportunityId: props.opportunity.id,
+  });
+  const api = useOpportunityComments(opportunityId, 'message');
+  const orderStatusLabel = useOrderStatusLabel(props.orderStatuses);
+
   return (
     <CommentThread
-      opportunityId={opportunityId}
-      organizationId={props.opportunity.organization.id}
       kind="message"
+      api={api}
+      canWrite={hasPermission('crm:write')}
+      referenceKinds={kinds}
+      lookups={lookups}
+      orderStatusLabel={orderStatusLabel}
       onEntries={onEntries}
       copy={{
         title: t('opportunity.tabs.messages'),
@@ -66,6 +77,8 @@ export function MessagesTab(props: OpportunityTabProps): ReactNode {
         composerPlaceholder: t('comments.messages.composer.placeholder'),
         composerSubmit: t('comments.messages.composer.submit'),
         added: t('comments.messages.added'),
+        // A message cannot be deleted; the question is never asked.
+        deleteBody: t('comments.delete.body'),
       }}
     />
   );

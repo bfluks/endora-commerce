@@ -27,6 +27,7 @@
 
 import type { ModuleContext } from '../../../../kernel/index.js';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import type { PriceSource } from '@endora-commerce/contracts';
 
 /**
  * The one method this deployment intercepts on the core pricing engine.
@@ -39,11 +40,26 @@ import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
  * honest description of what a decoration does.
  */
 interface PricedLine {
+  /** The price book that priced the line (feature 160 keeps the field name). */
   readonly priceListId: string;
+  /** Feature 160 — the tier that priced it; carried through untouched. */
+  readonly source?: PriceSource;
 }
 
 interface DecoratedPricing {
   resolveLinePrice(input: never): Promise<PricedLine | null>;
+  /**
+   * The batched sibling (D-287 P0). The cart read, the placement drift check
+   * and a quote's reference prices price their lines through it, so a
+   * deployment that adjusts a line price adjusts both — or the basket would be
+   * priced by core while a single-line path was priced by the overlay.
+   */
+  resolveLinePrices(input: never): Promise<Map<string, PricedLine | null>>;
+}
+
+/** The overlay's adjustment, applied identically on the single and the batched path. */
+function tagged(line: PricedLine | null): PricedLine | null {
+  return line === null ? null : { ...line, priceListId: `overlay:${line.priceListId}` };
 }
 
 /** A service of this module's own, so the ownership ledger has an overlay claimant. */
@@ -82,14 +98,18 @@ export function registerModule(ctx: ModuleContext): void {
   ctx.di.decorate<DecoratedPricing>('pricingService', (inner) =>
     new Proxy(inner, {
       get(target, property, receiver): unknown {
-        if (property !== 'resolveLinePrice') {
-          const value = Reflect.get(target, property, receiver) as unknown;
-          return typeof value === 'function' ? value.bind(target) : value;
+        if (property === 'resolveLinePrice') {
+          return async (input: never): Promise<PricedLine | null> =>
+            tagged(await target.resolveLinePrice(input));
         }
-        return async (input: never): Promise<PricedLine | null> => {
-          const line = await target.resolveLinePrice(input);
-          return line === null ? null : { ...line, priceListId: `overlay:${line.priceListId}` };
-        };
+        if (property === 'resolveLinePrices') {
+          return async (input: never): Promise<Map<string, PricedLine | null>> => {
+            const lines = await target.resolveLinePrices(input);
+            return new Map([...lines].map(([key, line]) => [key, tagged(line)]));
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
       },
     }),
   );

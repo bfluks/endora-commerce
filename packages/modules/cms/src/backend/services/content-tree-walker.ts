@@ -79,3 +79,42 @@ export function walkUnknownComponents(tree: unknown, knownNames: Set<string>, ac
   for (const v of Object.values(obj)) walkUnknownComponents(v, knownNames, acc);
   return acc;
 }
+
+/**
+ * A copy of a Page Builder tree whose links of kind `page` point at the public
+ * path their target is served under (`specs/163-page-builder-marketing-pages/`
+ * R19D, T283). A link stores the target's flat slug; `paths` maps a flat slug,
+ * lowercase and without a leading slash, to the path the request's channel
+ * serves it at, and holds only the slugs whose path differs. A link to a page
+ * that is not nested — every link stored before the option — is left as it is,
+ * and a tree with no link to move is returned as the very same object.
+ *
+ * Copy-on-write, never in place: the tree is the page's stored content.
+ */
+export function rewritePageLinkSlugs(tree: unknown, paths: ReadonlyMap<string, string>): unknown {
+  if (paths.size === 0 || tree === null || typeof tree !== 'object') return tree;
+  if (Array.isArray(tree)) {
+    let changed = false;
+    const out = tree.map((item: unknown) => {
+      const next = rewritePageLinkSlugs(item, paths);
+      if (next !== item) changed = true;
+      return next;
+    });
+    return changed ? out : tree;
+  }
+  const obj = tree as Record<string, unknown>;
+  const slug = obj['slug'];
+  if (obj['kind'] === 'page' && typeof slug === 'string') {
+    const path = paths.get(slug.trim().replace(/^\/+/, '').toLowerCase());
+    return path !== undefined && path !== slug ? { ...obj, slug: path } : tree;
+  }
+  let out: Record<string, unknown> | null = null;
+  for (const [key, val] of Object.entries(obj)) {
+    const next = rewritePageLinkSlugs(val, paths);
+    if (next !== val) {
+      out ??= { ...obj };
+      out[key] = next;
+    }
+  }
+  return out ?? tree;
+}

@@ -65,6 +65,8 @@ export const comparisonProductSummarySchema = z.object({
    */
   available: z.boolean(),
   addedAt: z.string().datetime(),
+  /** Feature 155 — the product's pieces minimum; `null` = none (simple / configurable only). */
+  minOrderQuantity: z.number().int().positive().nullable().optional(),
 });
 export type ComparisonProductSummary = z.infer<typeof comparisonProductSummarySchema>;
 

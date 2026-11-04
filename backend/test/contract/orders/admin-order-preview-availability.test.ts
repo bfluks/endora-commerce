@@ -12,19 +12,20 @@ import {
   SEED_PRODUCT_103_ID,
 } from '../../helpers/seed-catalog.js';
 import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+import { addOrganizationChannels } from '../../helpers/sales-channel-access.js';
 import {
   PriceDisplayModeOverride,
-  PriceList,
-  PriceListPriceBracket,
-  PriceListProduct,
   Product,
 } from '../../helpers/package-entities.js';
+import { hasBasePriceSql, removeBasePriceSql, seedBasePriceSql } from '../../helpers/price-book-sql.js';
 import {
-  DefaultPriceListMigrator,
-  DEFAULT_PRICE_LIST_ID,
-} from '../../../../packages/modules/price_lists/src/backend/services/default-price-list-migration.js';
+  createMinimumProduct,
+  minimumFixtureRun,
+  setProductMinimum,
+  type MinimumProductFixture,
+} from '../../helpers/order-minimum-fixture.js';
 
-const [NOT_FOUND, NOT_VISIBLE, NOT_IN_CHANNEL, QUOTE_ONLY] = ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE;
+const [NOT_FOUND, NOT_VISIBLE, NOT_IN_CHANNEL, QUOTE_ONLY, , BELOW_MINIMUM] = ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE;
 
 const ADMIN = { b2b_session: 'stub-admin-session' };
 const OTHER_ORG_ID = '00000000-0000-4000-8000-0000000a1450';
@@ -42,7 +43,7 @@ interface PreviewBody {
   data: {
     lines: Array<{ productId: string; unitPrice: string; lineTotal: number; unavailable?: boolean }>;
     summary: { subtotal: number; taxTotal: number; total: number };
-    messages: Array<{ productId: string; code: string }>;
+    messages: Array<{ productId: string; code: string; minimum?: number }>;
   };
 }
 
@@ -61,6 +62,11 @@ describe('Admin order preview — visibility and assortment codes (feature 145)'
   /** Created here with no products. */
   let channelB: string;
   let listedHere = false;
+  const RUN = minimumFixtureRun();
+  /** Feature 155 — a product with a pieces minimum of 10, visible and on channel A. */
+  let M: MinimumProductFixture;
+  /** Feature 155 — the same minimum, but restricted to another Organization. */
+  let MH: MinimumProductFixture;
 
   beforeAll(async () => {
     h = await setupBackendServer();
@@ -86,28 +92,15 @@ describe('Admin order preview — visibility and assortment codes (feature 145)'
     });
     expect(created.statusCode).toBe(201);
     channelB = (created.json() as { id: string }).id;
+    // Issue #515 — the preview judges only a channel the customer's
+    // Organization is assigned to; these cases are about B's assortment.
+    await addOrganizationChannels(h, TEST_ORGANIZATION_ID, ['preview-availability-b']);
 
     // Quote-only needs a resolved price whose mode is `none` — see
     // `test/integration/carts/cart-line-refusal-codes.test.ts`.
-    if (!(await em.findOne(PriceList, { id: DEFAULT_PRICE_LIST_ID }))) {
-      await new DefaultPriceListMigrator(h.em).seedDefault();
-    }
-    const listed = await em.findOne(PriceListProduct, {
-      priceListId: DEFAULT_PRICE_LIST_ID,
-      productId: QUOTE_ONLY_PRODUCT,
-    });
-    if (!listed) {
+    if (!(await hasBasePriceSql(em, QUOTE_ONLY_PRODUCT))) {
       listedHere = true;
-      em.create(PriceListProduct, { priceListId: DEFAULT_PRICE_LIST_ID, productId: QUOTE_ONLY_PRODUCT });
-      await em.flush();
-      em.create(PriceListPriceBracket, {
-        priceListId: DEFAULT_PRICE_LIST_ID,
-        productId: QUOTE_ONLY_PRODUCT,
-        currencyCode: 'PLN',
-        minQuantity: 1,
-        maxQuantity: null,
-        amount: '100.00',
-      });
+      await seedBasePriceSql(em, QUOTE_ONLY_PRODUCT, '100.00');
     }
     em.create(PriceDisplayModeOverride, {
       scope: 'product',
@@ -115,6 +108,22 @@ describe('Admin order preview — visibility and assortment codes (feature 145)'
       mode: 'none',
     });
     await em.flush();
+
+    M = await createMinimumProduct(em, {
+      sku: `APM-M-${RUN}`,
+      nameEn: `Minimum ${RUN}`,
+      namePl: `Minimum ${RUN}`,
+      minOrderQuantity: 10,
+      channelIds: [channelA],
+    });
+    MH = await createMinimumProduct(em, {
+      sku: `APM-H-${RUN}`,
+      nameEn: `Hidden minimum ${RUN}`,
+      namePl: `Ukryte minimum ${RUN}`,
+      minOrderQuantity: 10,
+      channelIds: [channelA],
+    });
+    await em.nativeUpdate(Product, { id: MH.id }, { allowedOrganizationIds: [OTHER_ORG_ID] });
   });
 
   afterAll(async () => {
@@ -122,11 +131,7 @@ describe('Admin order preview — visibility and assortment codes (feature 145)'
     await em.nativeUpdate(Product, { id: SUBJECT }, { allowedOrganizationIds: [] });
     await em.nativeUpdate(Product, { id: PRICED }, { deletedAt: null });
     await em.nativeDelete(PriceDisplayModeOverride, { scope: 'product', targetId: QUOTE_ONLY_PRODUCT });
-    if (listedHere) {
-      const own = { priceListId: DEFAULT_PRICE_LIST_ID, productId: QUOTE_ONLY_PRODUCT };
-      await em.nativeDelete(PriceListPriceBracket, own);
-      await em.nativeDelete(PriceListProduct, own);
-    }
+    if (listedHere) await removeBasePriceSql(em, QUOTE_ONLY_PRODUCT);
     await teardownBackendServer(h);
   });
 
@@ -148,6 +153,20 @@ describe('Admin order preview — visibility and assortment codes (feature 145)'
         items: productIds.map((productId) => ({ productId, quantity: 1 })),
       },
     });
+  }
+
+  async function previewItems(
+    salesChannelId: string,
+    items: Array<{ productId: string; quantity: number }>,
+  ): Promise<PreviewBody['data']> {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/orders/preview',
+      cookies: ADMIN,
+      payload: { customerAccountId: TEST_CUSTOMER_ID, salesChannelId, items },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    return (res.json() as PreviewBody).data;
   }
 
   async function previewOk(salesChannelId: string, productIds: string[]): Promise<PreviewBody['data']> {
@@ -241,15 +260,16 @@ describe('Admin order preview — visibility and assortment codes (feature 145)'
     expect(data.messages).toHaveLength(1);
   });
 
-  it('sc. 14 — a salesChannelId naming no channel is 404 NOT_FOUND, never priced on another channel', async () => {
+  it('sc. 14 — a salesChannelId naming no channel is 422 ORDER_SALES_CHANNEL_NOT_ALLOWED, never priced on another channel', async () => {
     // An active channel exists (A and B both are): the removed fallback would
-    // have found one.
+    // have found one. Since issue #515 the answer is the one every channel
+    // outside the Organization's active set gets, as creating the order would.
     const res = await preview(MISSING_CHANNEL_ID, [PRICED]);
-    expect(res.statusCode).toBe(404);
-    // The code, not the sentence: the error envelope answers NOT_FOUND in the
-    // caller's language rather than with the thrower's English text.
+    expect(res.statusCode).toBe(422);
+    // The code, not the sentence: the error envelope answers in the caller's
+    // language rather than with the thrower's English text.
     const body = res.json() as { error: { code: string }; data?: unknown };
-    expect(body.error.code).toBe(ERROR_CODES.NOT_FOUND);
+    expect(body.error.code).toBe(ERROR_CODES.ORDER_SALES_CHANNEL_NOT_ALLOWED);
     expect(body.data).toBeUndefined();
   });
 
@@ -262,5 +282,76 @@ describe('Admin order preview — visibility and assortment codes (feature 145)'
     } finally {
       await h.em().nativeUpdate(Product, { id: PRICED }, { deletedAt: null });
     }
+  });
+  describe('feature 155 — BELOW_MINIMUM_QUANTITY, last in the precedence (FR-009, FR-035)', () => {
+    function messageFor(data: PreviewBody['data'], productId: string) {
+      return data.messages.find((m) => m.productId === productId);
+    }
+
+    it('a line below its product\'s minimum is marked BELOW_MINIMUM_QUANTITY with the minimum; the other line priced', async () => {
+      const data = await previewItems(channelA, [
+        { productId: M.id, quantity: 5 },
+        { productId: PRICED, quantity: 1 },
+      ]);
+      expectUnavailable(data, M.id, BELOW_MINIMUM);
+      expect(messageFor(data, M.id)).toEqual({ productId: M.id, code: BELOW_MINIMUM, minimum: 10 });
+      expectPriced(data, PRICED);
+      const pricedLine = data.lines.find((l) => l.productId === PRICED)!;
+      expect(data.summary.subtotal).toBeCloseTo(pricedLine.lineTotal, 2);
+      expectOneMessagePerUnavailableLine(data);
+    });
+
+    it('D1 — two lines of the product totalling the minimum carry no message', async () => {
+      const data = await previewItems(channelA, [
+        { productId: M.id, quantity: 5 },
+        { productId: M.id, quantity: 5 },
+      ]);
+      expect(data.messages).toEqual([]);
+      for (const line of data.lines) expect(line.unavailable).toBeUndefined();
+    });
+
+    it('every line of a product below its minimum is marked, one message each', async () => {
+      const data = await previewItems(channelA, [
+        { productId: M.id, quantity: 3 },
+        { productId: M.id, quantity: 4 },
+      ]);
+      expect(data.messages).toEqual([
+        { productId: M.id, code: BELOW_MINIMUM, minimum: 10 },
+        { productId: M.id, code: BELOW_MINIMUM, minimum: 10 },
+      ]);
+      expect(data.summary.subtotal).toBe(0);
+    });
+
+    it('F1 — hidden and below the minimum: PRODUCT_NOT_VISIBLE_TO_CUSTOMER only, and no minimum', async () => {
+      const data = await previewItems(channelA, [{ productId: MH.id, quantity: 5 }]);
+      expectUnavailable(data, MH.id, NOT_VISIBLE);
+      expect(data.messages).toEqual([{ productId: MH.id, code: NOT_VISIBLE }]);
+    });
+
+    it('outside the channel and below the minimum: the assortment code only, and no minimum', async () => {
+      const data = await previewItems(channelB, [{ productId: M.id, quantity: 5 }]);
+      expect(data.messages).toEqual([{ productId: M.id, code: NOT_IN_CHANNEL }]);
+    });
+
+    it('quote-only and below the minimum: QUOTE_ONLY only, and no minimum', async () => {
+      const before = await h.em().fork().findOneOrFail(Product, { id: QUOTE_ONLY_PRODUCT }, { filters: false });
+      const previous = before.minOrderQuantity ?? null;
+      await setProductMinimum(h.em(), QUOTE_ONLY_PRODUCT, 10);
+      try {
+        const data = await previewItems(channelA, [{ productId: QUOTE_ONLY_PRODUCT, quantity: 5 }]);
+        expect(data.messages).toEqual([{ productId: QUOTE_ONLY_PRODUCT, code: QUOTE_ONLY }]);
+      } finally {
+        await setProductMinimum(h.em(), QUOTE_ONLY_PRODUCT, previous);
+      }
+    });
+
+    it('a hidden line beside a visible below-minimum one: each keeps its own code', async () => {
+      const data = await previewItems(channelA, [
+        { productId: MH.id, quantity: 10 },
+        { productId: M.id, quantity: 5 },
+      ]);
+      expect(messageFor(data, MH.id)?.code).toBe(NOT_VISIBLE);
+      expect(messageFor(data, M.id)).toEqual({ productId: M.id, code: BELOW_MINIMUM, minimum: 10 });
+    });
   });
 });

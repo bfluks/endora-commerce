@@ -12,6 +12,7 @@ import {
   detail,
   en,
   renderCrm,
+  returningHere,
 } from './crm-fixtures';
 
 /**
@@ -180,7 +181,7 @@ describe('the value of an Opportunity', () => {
     // The linked Order is named by its number and links to its own screen.
     expect(within(items[0] as HTMLElement).getByRole('link', { name: 'ORD-1001' })).toHaveAttribute(
       'href',
-      `/orders/${ORDER_ID}`,
+      returningHere(`/orders/${ORDER_ID}`),
     );
     expect(items[0]).toHaveTextContent(en('value.excluded.reason.currency_mismatch', { currency: 'PLN' }));
     // A reason this screen has no sentence for is still said, never shown as a code.

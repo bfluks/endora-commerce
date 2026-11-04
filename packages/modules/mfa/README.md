@@ -36,6 +36,14 @@ Self-service setup is gated on the per-scope "2FA enabled" setting (FR-001).
 
 - **TOTP**: reuses the existing `otpauth` dependency (no new dep). New
   dependency `openid-client` is for Google/Microsoft OIDC (research §R2).
+- **QR enrolment**: the setup answer carries `qrSvg`, a QR code of
+  `otpauthUri` drawn on the server with `uqr` (`specs/166-mfa-totp-hardening/`
+  research R1); the Admin UI shows it as an image beside the manual key.
+- **One code, one sign-in**: the TOTP replay guard (`last_accepted_step`) and
+  the recovery-code spend are each one conditional `UPDATE`, so a code sent on
+  several challenges at once admits exactly one (166 research R3). Wrong codes
+  are bounded per challenge (five) and per account by the owner's
+  authentication throttle (429).
 - **Secret at rest**: AES-256-GCM (`SecretCipher`), key from
   `MFA_SECRET_ENCRYPTION_KEY` (base64, 32 bytes). Recovery codes are stored as
   SHA-256 hashes only.

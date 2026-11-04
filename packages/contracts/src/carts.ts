@@ -89,7 +89,12 @@ export type UpdateCartItemRequest = z.infer<typeof updateCartItemRequestSchema>;
 //  Feature 027 — status & approval enums (shared across surfaces)
 // ────────────────────────────────────────────────────────────────────────
 
-export const cartStatusSchema = z.enum(['active', 'abandoned', 'completed', 'rejected']);
+/**
+ * `working` (issue #169): a basket an order is placed from on the customer's
+ * behalf, beside their active basket. Never listed and never the customer's
+ * basket; it ends `completed` against its order or is removed.
+ */
+export const cartStatusSchema = z.enum(['active', 'abandoned', 'completed', 'rejected', 'working']);
 export type CartStatus = z.infer<typeof cartStatusSchema>;
 
 export const cartApprovalStatusSchema = z.enum([
@@ -124,6 +129,8 @@ export const cartDroppedLineReasonSchema = z.enum([
   'out_of_stock',
   'no_price_in_customer_list',
   'removed_by_conversion',
+  /** Feature 155 — the line would leave its product below a minimum (R8). */
+  'below_minimum',
 ]);
 export type CartDroppedLineReason = z.infer<typeof cartDroppedLineReasonSchema>;
 
@@ -144,9 +151,28 @@ export const cartViewLineSchema = z.object({
   id: uuidSchema,
   productId: uuidSchema,
   variantId: uuidSchema.nullable(),
-  productName: z.string(),
-  productSlug: z.string().optional(),
-  productThumbnailUrl: z.string().nullable(),
+  /**
+   * The product's name in the response language, `null` when it is not known
+   * to the reply: the line-mutation replies (`POST`/`PATCH`/`DELETE
+   * /api/v1/cart/items…`) do not resolve product names and answer `null` on
+   * every line; `GET /api/v1/cart` resolves it (issue #128).
+   */
+  productName: z.string().nullable(),
+  /**
+   * Feature 163 (owner decision S1 = A) — `null` when the product is not
+   * available at the basket's (channel, language): the line keeps its name and
+   * SKU and reads `unavailable`, and links nowhere, because the product page
+   * answers 404 there.
+   */
+  productSlug: z.string().nullable().optional(),
+  /** The product's SKU, kept on an unavailable line too. */
+  productSku: z.string().nullable().optional(),
+  /**
+   * Declared since feature 027 and **not answered by any cart route today**
+   * (issue #128): a client must treat it as absent. Optional so the schema
+   * describes the wire rather than a field nobody sends.
+   */
+  productThumbnailUrl: z.string().nullable().optional(),
   quantity: z.number().int().positive(),
   unitPrice: moneySchema,
   lineTotal: moneySchema,
@@ -159,14 +185,32 @@ export const cartViewLineSchema = z.object({
   packagingUnitName: z.string().nullable().optional(),
   packagingUnitBaseQuantity: z.number().int().positive().nullable().optional(),
   displayName: z.string().nullable().optional(),
+  /** Feature 155 — the product's current pieces minimum (null = none); the storefront's input floor. */
+  minOrderQuantity: z.number().int().positive().nullable().optional(),
+  /** Feature 155 — set when this line is below a current minimum and not exempt (FR-013, FR-028). */
+  belowMinimum: z
+    .object({
+      kind: z.enum(['pieces', 'packaging_unit']),
+      minimum: z.number().int().positive(),
+      packagingUnitName: z.string().optional(),
+    })
+    .nullable()
+    .optional(),
 });
 export type CartViewLine = z.infer<typeof cartViewLineSchema>;
 
 export const cartMiniLineSchema = z.object({
   id: uuidSchema,
   productId: uuidSchema,
-  productName: z.string(),
-  productThumbnailUrl: z.string().nullable(),
+  /** Answered on every mini line (issue #128); `null` = the line is not a variant. */
+  variantId: uuidSchema.nullable().optional(),
+  /**
+   * Declared since feature 027 and **not answered by the mini view** (issue
+   * #128) — it skips the product lookup on purpose (FR-007). A client must
+   * treat both as absent.
+   */
+  productName: z.string().nullable().optional(),
+  productThumbnailUrl: z.string().nullable().optional(),
   quantity: z.number().int().positive(),
   unitPrice: moneySchema,
   lineTotal: moneySchema,
@@ -185,6 +229,8 @@ const cartDroppedLineSchema = z.object({
   productId: uuidSchema,
   productName: z.string(),
   reason: cartDroppedLineReasonSchema,
+  /** Feature 155 — the minimum a `below_minimum` line missed. */
+  minimum: z.number().int().positive().optional(),
 });
 
 /** Feature 045 — one applied promotion's contribution to the cart discount. */
@@ -202,6 +248,27 @@ const couponDroppedThisReadSchema = z
     reason: couponDropReasonSchema,
   })
   .nullable();
+
+/**
+ * Issue #650 — the rejection of the buyer's previous basket on this channel.
+ *
+ * A rejection closes the basket it rejects (`status = 'rejected'`), so the
+ * buyer's next cart read is a new active basket whose own `approvalStatus` is
+ * `not_required` and can never say `rejected_by_org_admin`. Without this the
+ * buyer was never told. It is answered while (a) the buyer has a rejected
+ * basket on the channel — the most recent one is answered — and
+ * (b) the current basket has not been sent for approval since. A basket
+ * ordered or converted to a quote request after the rejection ends it too.
+ * `null` otherwise, and always `null` for an anonymous basket.
+ */
+export const cartPreviousRejectionSchema = z.object({
+  /** The rejected basket. */
+  cartId: uuidSchema,
+  rejectedAt: isoDateTimeSchema,
+  /** The reason the administrator gave; `null` only for a row stored without one. */
+  reason: z.string().nullable(),
+});
+export type CartPreviousRejection = z.infer<typeof cartPreviousRejectionSchema>;
 
 export const cartFullPayloadSchema = z.object({
   id: uuidSchema.nullable(),
@@ -221,23 +288,50 @@ export const cartFullPayloadSchema = z.object({
   primaryCta: cartPrimaryCtaSchema,
   droppedLines: z.array(cartDroppedLineSchema),
   couponDroppedThisRead: couponDroppedThisReadSchema,
-  createdAt: isoDateTimeSchema,
-  updatedAt: isoDateTimeSchema,
-  lastActivityAt: isoDateTimeSchema,
+  /**
+   * `null` on the empty basket — the reply for a caller who has no basket yet,
+   * whose `id` is `null` too (issue #128). A basket that exists always carries
+   * all three.
+   */
+  createdAt: isoDateTimeSchema.nullable(),
+  updatedAt: isoDateTimeSchema.nullable(),
+  lastActivityAt: isoDateTimeSchema.nullable(),
+  /**
+   * Issue #650 — see {@link cartPreviousRejectionSchema}. Additive: a reply
+   * without the key parses as `null`.
+   */
+  previousRejection: cartPreviousRejectionSchema.nullable().default(null),
 });
 export type CartFullPayload = z.infer<typeof cartFullPayloadSchema>;
 
 export const cartFullResponseSchema = z.object({ data: cartFullPayloadSchema });
 export type CartFullResponse = z.infer<typeof cartFullResponseSchema>;
 
+/**
+ * `GET /api/v1/cart?view=mini` — the header's lightweight basket (feature 027,
+ * FR-007).
+ *
+ * What the route answers is `id`, `itemCount`, `items` and `subtotal`, on an
+ * empty basket too. `status`, `approvalStatus`, `grandTotal` and `primaryCta`
+ * were declared required here and have **never been answered** by the mini
+ * view, which skips the coupon and promotion work they need on purpose; they
+ * are optional so the schema describes the wire (issue #128). A client that
+ * needs them reads the full view.
+ */
 export const cartMiniPayloadSchema = z.object({
   id: uuidSchema.nullable(),
-  status: cartStatusSchema,
-  approvalStatus: cartApprovalStatusSchema,
+  status: cartStatusSchema.optional(),
+  approvalStatus: cartApprovalStatusSchema.optional(),
   items: z.array(cartMiniLineSchema),
   itemCount: z.number().int().nonnegative(),
-  grandTotal: moneySchema,
-  primaryCta: cartPrimaryCtaSchema,
+  /**
+   * The sum of the lines at their stored unit prices — no re-pricing, no
+   * discount. Answered on every mini reply; optional only so a value that
+   * parsed before it was declared still parses.
+   */
+  subtotal: moneySchema.optional(),
+  grandTotal: moneySchema.optional(),
+  primaryCta: cartPrimaryCtaSchema.optional(),
 });
 export type CartMiniPayload = z.infer<typeof cartMiniPayloadSchema>;
 
@@ -379,6 +473,44 @@ export type OrgCartDetailPayload = z.infer<typeof orgCartDetailPayloadSchema>;
 
 export const orgCartDetailResponseSchema = z.object({ data: orgCartDetailPayloadSchema });
 export type OrgCartDetailResponse = z.infer<typeof orgCartDetailResponseSchema>;
+
+/**
+ * Issue #650 — one line of {@link orgCartDetailViewSchema}: what the
+ * administrator is approving, at the price stored on the line.
+ */
+export const orgCartDetailLineSchema = z.object({
+  id: uuidSchema,
+  productId: uuidSchema,
+  variantId: uuidSchema.nullable(),
+  /** The product's name in the response language, the packaging unit appended; `null` when the product is gone. */
+  displayName: z.string().nullable(),
+  productSku: z.string().nullable(),
+  quantity: z.number().int().positive(),
+  unitPrice: moneySchema,
+  lineTotal: moneySchema,
+});
+export type OrgCartDetailLine = z.infer<typeof orgCartDetailLineSchema>;
+
+/**
+ * `GET /api/v1/organization/carts/:id` — the Organization administrator's view
+ * of one cart, as the route answers it (issue #650 added `items`).
+ *
+ * {@link orgCartDetailPayloadSchema} above is not this route's shape and never
+ * was: the route has answered the summary fields plus the approval timestamps
+ * since feature 027. It is left as published rather than changed under its
+ * consumers.
+ */
+export const orgCartDetailViewSchema = orgCartSummarySchema.extend({
+  ownerCustomerAccountId: uuidSchema.nullable(),
+  approvedAt: isoDateTimeSchema.nullable(),
+  rejectedAt: isoDateTimeSchema.nullable(),
+  rejectedReason: z.string().nullable(),
+  items: z.array(orgCartDetailLineSchema),
+});
+export type OrgCartDetailView = z.infer<typeof orgCartDetailViewSchema>;
+
+export const orgCartDetailViewResponseSchema = z.object({ data: orgCartDetailViewSchema });
+export type OrgCartDetailViewResponse = z.infer<typeof orgCartDetailViewResponseSchema>;
 
 export const setCartApprovalPolicySchema = z.object({
   requiresCartApproval: z.boolean(),
@@ -527,6 +659,14 @@ export interface CartCustomerContext {
    * valid; a no-org cart falls back to platform-default prices.
    */
   organizationId: string | null;
+  /**
+   * The sales channel whose basket is meant (`specs/154-sales-channel-access/`,
+   * FR-030). A customer holds one active basket per channel, created, priced
+   * and placed on that channel; every producer passes the channel of its own
+   * request — or, for an operator placing an order on a customer's behalf, the
+   * channel that order names.
+   */
+  salesChannelId: string;
 }
 
 /**
@@ -588,8 +728,48 @@ export interface CartItemRecord {
   packagingUnitId: string | null;
   packagingUnitName: string | null;
   packagingUnitBaseQuantity: number | null;
+  /**
+   * Feature 155 (FR-028) — the quantity this line was seeded with from an accepted
+   * quote request; `null` for every other line. Written only by
+   * `CartWritePort.replaceItemsForCustomer` with a `sourceQuoteRequestId` — it is
+   * the line's agreed quantity, the one its agreed price holds at.
+   */
+  quoteSeededQuantity: number | null;
+  /**
+   * Issue #167 — the accepted Quote Request this line's agreement was seeded from; `null` (or
+   * absent) on every line that carries none. Written with {@link quoteSeededQuantity}, and read
+   * at order placement, which refuses the line at its agreed price once that quote's validity
+   * has ended or it is no longer in force.
+   */
+  quoteRequestId?: string | null;
+  /**
+   * Feature 160 (FR-030) — which tier priced `unitPrice` (`base`, `catalogue`,
+   * `buyer`, `sale`), or `agreed`; `null` for a line priced before the feature.
+   * Order placement copies it onto the order line.
+   */
+  priceSource?: 'agreed' | 'base' | 'catalogue' | 'buyer' | 'sale' | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * Feature 155 (FR-028, owner ruling P2; data-model §2) — whether a basket line is
+ * exempt from the catalogue's order minimums: it was seeded from an accepted quote,
+ * the basket still carries that quote as its source, and the line's quantity equals
+ * the quote's. State-based, so 5 → 12 → 5 is exempt again.
+ *
+ * The per-line half only: `carts` applies it to the basket's mark at face value;
+ * `orders` first decides whether the quote source honours exemptions at all (R19).
+ */
+export function isQuoteSeededLineExempt(
+  cart: Pick<CartRecord, 'sourceQuoteRequestId'>,
+  item: Pick<CartItemRecord, 'quantity' | 'quoteSeededQuantity'>,
+): boolean {
+  return (
+    cart.sourceQuoteRequestId !== null &&
+    item.quoteSeededQuantity !== null &&
+    item.quantity === item.quoteSeededQuantity
+  );
 }
 
 /** A cart with its lines — the unit every consumer actually wants. */
@@ -611,6 +791,24 @@ export interface CartSeedLine {
 export interface CartSeedOptions {
   /** The accepted Quote Request these lines are the agreed lines of. */
   sourceQuoteRequestId?: string | null;
+  /**
+   * Issue #166 — leave out of the basket every seed line that has no price
+   * this customer may order it at now (no price list and no price of its own,
+   * or sold on request only), and name them in the answer's `unorderable`.
+   * A reorder sets it, so the buyer is told rather than handed a basket
+   * placement refuses. Ignored for an agreed seed (`sourceQuoteRequestId`),
+   * whose lines are priced by their agreement. Absent, such a line is kept at
+   * the price it was seeded with, as before.
+   */
+  dropUnorderable?: boolean;
+}
+
+/** A seed line `dropUnorderable` left out, and why (issue #166). */
+export interface CartSeedUnorderableLine {
+  productId: string;
+  variantId: string | null;
+  /** `unpriced`: nothing prices it for this customer; `quote_only`: sold on request only. */
+  reason: 'unpriced' | 'quote_only';
 }
 
 /**
@@ -677,6 +875,59 @@ export interface CartReadPort {
  * `activation` to say, not this line's: a module declaring
  * `nonDeactivatable` never enters one.
  */
+/**
+ * Feature 155 (research R8) — one line of a batch add (`CartWritePort.addItems`).
+ * The fields of `addItem`'s line.
+ */
+export interface CartBatchLineInput {
+  productId: string;
+  variantId?: string;
+  /** Pieces, or units when `packagingUnitId` is set — as `addItem`. */
+  quantity: number;
+  packagingUnitId?: string;
+  /** As `addItem`'s: set only by an operator surface that names the channel itself. */
+  salesChannelId?: string;
+}
+
+/**
+ * Feature 155 (research R8) — what became of one batch line, at its input `index`.
+ *
+ * A `failed` line carries the refusal it met and nothing about the product: a
+ * product the caller may not see fails with the unknown id's `404`, never with a
+ * name or a minimum (FR-035, threat F1).
+ */
+export type CartBatchLineOutcome =
+  | { index: number; status: 'added' }
+  | {
+      index: number;
+      status: 'below_minimum';
+      productId: string;
+      /** In `options.language`, the language the response is answered in. */
+      productName: string;
+      kind: 'pieces' | 'packaging_unit';
+      minimum: number;
+      packagingUnitName?: string;
+    }
+  | {
+      index: number;
+      status: 'failed';
+      /** The refusal as `addItem` threw it; `details` only when it carried any. */
+      error: { status: number; code: string; message: string; details?: unknown };
+    };
+
+/**
+ * The cart writes `carts` publishes to other modules.
+ *
+ * There is deliberately no operation that empties a buyer's basket and closes
+ * it without an order. `clearForCustomer` did exactly that — every line
+ * deleted, the basket marked `completed` with no `completed_order_id` — and was
+ * removed in issue #601: once #169 moved its callers off it, it was only the
+ * next module's way back to a finished basket that produced nothing. A module
+ * that places an order for a customer writes the lines into a working basket
+ * (`addItems` with `workingBasket`) and leaves the active one alone; one that
+ * means to re-seed the active basket calls `replaceItemsForCustomer`, which
+ * keeps it active.
+ */
 export interface CartWritePort {
   getOrCreateForCustomer(ctx: CartCustomerContext): Promise<CartRecord>;
   addItem(
@@ -694,8 +945,61 @@ export interface CartWritePort {
        */
       salesChannelId?: string;
     },
+    /** The language a minimum refusal names the product in (feature 155, D3/D4). */
+    options?: { language?: string },
   ): Promise<CartWithItems>;
-  clearForCustomer(ctx: CartCustomerContext): Promise<void>;
+  /**
+   * Feature 155 (R8) — add several lines. (1) Every line is resolved with exactly
+   * `addItem`'s preconditions (quantity, visibility, channel, packaging unit in
+   * product); a line that fails gets the unknown-id answer and takes no part in
+   * the evaluation. (2) The resolved lines are judged with the cart in two passes
+   * — unit minimums, then pieces minimums over the survivors; lines below a
+   * minimum are not added and are reported. Lines already in the cart are never
+   * rejected. (3) The accepted lines are added.
+   *
+   * `onLineError: 'throw'` — the first resolution failure is thrown before
+   * anything is written; a later add failure is thrown as `addItem` would (lines
+   * before it stay added). `'report'` — every failure is returned as `failed`.
+   *
+   * `onBelowMinimum: 'report'` (the default) — a line below a minimum is a
+   * `below_minimum` outcome. `'throw'` — any such line refuses the whole batch
+   * after step (2) and before anything is written: `422
+   * PRODUCT_BELOW_MINIMUM_QUANTITY` / `PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY`,
+   * every offending line in `details.lines` keyed by its `index`.
+   *
+   * `workingBasket` (a customer actor only; issue #169) — the batch is written
+   * into a fresh **working** basket of the customer's on the actor's channel,
+   * never into the active one, which stays exactly as it was: step (2) judges
+   * the batch alone, and the working basket is created only after steps (1) and
+   * (2) pass and removed again when step (3) refuses a line, so a refused
+   * request writes nothing. The returned cart is that working basket; its id is
+   * what `OrderPlacementPort.placeOrder`'s `workingBasketId` places from. It
+   * requires `onLineError: 'throw'`; with `'report'` the call is refused before
+   * anything is read or written.
+   *
+   * `keepRepeatedLines` (with `workingBasket` only) — every line stays a line
+   * of its own: a repeated `(product, variant, unit)` is not merged into the
+   * first, each line is priced at its own quantity, and the basket reads back in
+   * the batch's order. Minimums are still judged on a product's total. Feature
+   * 159 (research N-31): the admin order creation's one product on lines of
+   * several groups.
+   *
+   * `ModuleDisabledError` is always thrown. At most `CART_MAX_LINES` (200) lines.
+   *
+   * `language` names a refused product — the language the response is answered
+   * in (`request.responseLanguage()`); absent, the record's own fallback chain.
+   */
+  addItems(
+    actor: { customer?: CartCustomerContext; anonymousToken?: string },
+    lines: readonly CartBatchLineInput[],
+    options: {
+      onLineError: 'throw' | 'report';
+      onBelowMinimum?: 'report' | 'throw';
+      workingBasket?: boolean;
+      keepRepeatedLines?: boolean;
+      language?: string;
+    },
+  ): Promise<CartWithItems & { outcomes: CartBatchLineOutcome[] }>;
   /**
    * Clear the customer's active cart and seed it with these lines, creating
    * the cart when there is none. The single-active-cart model admin
@@ -712,7 +1016,7 @@ export interface CartWritePort {
     ctx: CartCustomerContext,
     lines: readonly CartSeedLine[],
     options?: CartSeedOptions,
-  ): Promise<CartWithItems>;
+  ): Promise<CartWithItems & { unorderable?: CartSeedUnorderableLine[] }>;
 }
 
 export interface CartItemView {

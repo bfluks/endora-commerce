@@ -37,6 +37,7 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 | `quote_requests` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `sales_channels` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `settings` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
+| `transactional_emails` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `promotions` | tylko bramkowanie | rozwiązuje `promotionCodePort`; pominięty w `dependencies`, bo kolejność instalacji nie może nieść tej krawędzi |
 | `promotions` | tylko bramkowanie | rozwiązuje `promotionService`; pominięty w `dependencies`, bo kolejność instalacji nie może nieść tej krawędzi |
 
@@ -50,7 +51,9 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 
 ## Paleta poleceń
 
-_Brak._
+| Akcja | Otwiera | Uprawnienie |
+| --- | --- | --- |
+| `open-carts` | `/carts` | `carts:read` |
 
 ## Ustawienia
 

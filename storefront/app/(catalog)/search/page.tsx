@@ -7,6 +7,7 @@ import { getServerContext } from '../../../lib/server-context';
 import { Hook } from '../../../components/Hook';
 import { seo } from './seo';
 import { backendBaseUrl } from '../../../lib/env.mjs';
+import { localizedAlternates } from '../../../lib/i18n/navigation';
 
 /**
  * Indexable (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010/FR-012). The
@@ -15,9 +16,13 @@ import { backendBaseUrl } from '../../../lib/env.mjs';
  * near-identical result pages is what a search route otherwise contributes to
  * an index.
  */
-export const metadata: Metadata = {
-  alternates: { canonical: seo.route },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const alternates = await localizedAlternates(seo.route);
+  return {
+    // Feature 167 — canonical under the language prefix, with hreflang alternates.
+    alternates: { ...alternates, canonical: alternates.canonical },
+  };
+}
 
 interface PageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -51,9 +56,7 @@ export default async function SearchPage(props: PageProps): Promise<ReactNode> {
         apiBaseUrl,
         phrase: q,
         resultCount: result.data.length,
-        ...(ctx.salesChannelCode !== undefined
-          ? { salesChannelCode: ctx.salesChannelCode }
-          : {}),
+        salesChannelCode: ctx.salesChannelCode,
       });
     } catch {
       // The catalog page itself will surface any backend error; we

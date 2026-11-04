@@ -7,12 +7,14 @@ import {
   type ReactNode,
 } from 'react';
 import {
+  channelUrlLanguages,
   type DictionaryCurrenciesPageResponse,
   type DictionaryCurrency,
   type DictionaryLanguage,
   type DictionaryLanguagesPageResponse,
   type SalesChannelDetail,
 } from '@endora-commerce/contracts';
+import { Link } from 'react-router-dom';
 import { apiClient } from '@endora-commerce/admin-kit/lib';
 import {
   Alert,
@@ -84,6 +86,17 @@ export interface ChannelIdentityFormValue {
   currencies: string[];
   defaultCurrency: string;
   active: boolean;
+  /**
+   * Feature 154 — whether visitors who are not signed in may use the store.
+   * Off makes the channel a members-only store: a visitor must sign in, and only
+   * customers whose Organization is assigned to the channel get in.
+   */
+  anonymousAccess: boolean;
+  /**
+   * Feature 167 — whether the default language carries its path prefix in
+   * storefront URLs, like every other channel language always does.
+   */
+  prefixDefaultLanguage: boolean;
 }
 
 export interface ChannelIdentityFormProps {
@@ -93,6 +106,11 @@ export interface ChannelIdentityFormProps {
   lockCode?: boolean;
   errorMessage?: string | null;
   saving?: boolean;
+  /**
+   * The operator may only read the channel (no `sales_channels:write`): the
+   * URL-prefix switch is shown, disabled (feature 167, US3 #3).
+   */
+  readOnly?: boolean;
   onSubmit: (value: ChannelIdentityFormValue) => void;
   onCancel?: () => void;
 }
@@ -108,6 +126,7 @@ export function ChannelIdentityForm({
   lockCode = false,
   errorMessage,
   saving = false,
+  readOnly = false,
   onSubmit,
   onCancel,
 }: ChannelIdentityFormProps): ReactNode {
@@ -124,6 +143,8 @@ export function ChannelIdentityForm({
     initial?.defaultCurrency ?? 'PLN',
   );
   const [active, setActive] = useState(initial?.active ?? true);
+  const [anonymousAccess, setAnonymousAccess] = useState(initial?.anonymousAccess ?? true);
+  const [prefixDefaultLanguage, setPrefixDefaultLanguage] = useState(initial?.prefixDefaultLanguage ?? true);
   const [dictionaryLanguages, setDictionaryLanguages] = useState<DictionaryLanguage[]>([]);
   const [dictionaryCurrencies, setDictionaryCurrencies] = useState<DictionaryCurrency[]>([]);
   const [dictionaryStatus, setDictionaryStatus] = useState<DictionaryStatus>('loading');
@@ -140,6 +161,8 @@ export function ChannelIdentityForm({
     setCurrencies(initial.currencies);
     setDefaultCurrency(initial.defaultCurrency);
     setActive(initial.active);
+    setAnonymousAccess(initial.anonymousAccess);
+    setPrefixDefaultLanguage(initial.prefixDefaultLanguage);
   }, [initial]);
 
   useEffect(() => {
@@ -217,6 +240,8 @@ export function ChannelIdentityForm({
         currencies,
         defaultCurrency: defaultCurrency.trim(),
         active,
+        anonymousAccess,
+        prefixDefaultLanguage,
       });
     },
     [
@@ -230,8 +255,22 @@ export function ChannelIdentityForm({
       currencies,
       defaultCurrency,
       active,
+      anonymousAccess,
+      prefixDefaultLanguage,
     ],
   );
+
+  // Feature 167 — the prefixes the storefront will use, derived exactly as the
+  // backend derives them, from what the form holds now. A language list the
+  // derivation refuses (a case-insensitive duplicate) lists nothing; the
+  // dictionary validation answers it on save.
+  const urlLanguages = useMemo(() => {
+    try {
+      return channelUrlLanguages({ languages, defaultLanguage, prefixDefaultLanguage });
+    } catch {
+      return [];
+    }
+  }, [languages, defaultLanguage, prefixDefaultLanguage]);
 
   const cannotSubmit = saving || invalid;
 
@@ -443,6 +482,85 @@ export function ChannelIdentityForm({
                 {t('identity.cannotDeactivateDefault')}
               </span>
             )}
+          </div>
+
+          {/*
+            Feature 154 — the second presence fact about a channel, placed under
+            *Active* because it answers the neighbouring question: who may use
+            this store. A checkbox rather than a switch because that is what
+            *Active* above is, and admin-kit carries no switch primitive; two
+            on/off facts of one channel reading differently would be the
+            inconsistency. Unlike *Active* it stays editable on the system
+            default, which may well be a members-only store.
+
+            The hint is the operator's only warning of the consequences, so it
+            is attached to the control rather than left beside it.
+
+            The second hint answers the question operators bring to this
+            control and it does not answer: whether anonymous visitors see
+            prices. That is the display-mode chain's
+            `pricing.unauthenticated_display_mode`, per channel — the channel's
+            own public flag that once said it is retired (issue #492) — so the
+            hint names it and links to where it is set.
+          */}
+          <div className="grid gap-1">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="sc-anonymous-access"
+                checked={anonymousAccess}
+                onChange={(e) => setAnonymousAccess(e.target.checked)}
+                aria-describedby="sc-anonymous-access-hint sc-anonymous-access-prices-hint"
+              />
+              <Label htmlFor="sc-anonymous-access" className="cursor-pointer">
+                {t('identity.anonymousAccess.label')}
+              </Label>
+            </div>
+            <p id="sc-anonymous-access-hint" className="text-xs text-muted-foreground">
+              {t('identity.anonymousAccess.hint')}
+            </p>
+            <p id="sc-anonymous-access-prices-hint" className="text-xs text-muted-foreground">
+              {t('identity.anonymousAccess.pricesHint')}{' '}
+              <Link to="/price-lists/display-modes" className="underline underline-offset-2">
+                {t('identity.anonymousAccess.pricesLink')}
+              </Link>
+            </p>
+          </div>
+
+          {/* Feature 167 (US3) — whether the default language carries its path
+              prefix in storefront URLs. The derived prefix of every channel
+              language is listed under it, recomputed as the languages change, with
+              the warning that both the list and the switch move the URLs. */}
+          <div className="grid gap-1">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="sc-prefix-default-language"
+                checked={prefixDefaultLanguage}
+                disabled={readOnly}
+                onChange={(e) => setPrefixDefaultLanguage(e.target.checked)}
+                aria-describedby="sc-prefix-default-language-hint sc-prefix-default-language-warning"
+              />
+              <Label htmlFor="sc-prefix-default-language" className="cursor-pointer">
+                {t('identity.prefixDefaultLanguage.label')}
+              </Label>
+            </div>
+            <p id="sc-prefix-default-language-hint" className="text-xs text-muted-foreground">
+              {t('identity.prefixDefaultLanguage.hint')}
+            </p>
+            {urlLanguages.length > 0 && (
+              <>
+                <p id="sc-prefix-default-language-prefixes" className="text-xs font-medium">
+                  {t('identity.prefixDefaultLanguage.prefixesHeading')}
+                </p>
+                <ul aria-labelledby="sc-prefix-default-language-prefixes" className="grid gap-0.5 text-xs font-mono">
+                  {urlLanguages.map((l) => (
+                    <li key={l.languageCode}>{`${l.languageCode} → /${l.prefixed ? l.prefix : ''}`}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+            <p id="sc-prefix-default-language-warning" className="text-xs text-muted-foreground">
+              {t('identity.prefixDefaultLanguage.urlChangeWarning')}
+            </p>
           </div>
 
           <div className="flex justify-end gap-2">

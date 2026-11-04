@@ -180,6 +180,25 @@ wszystkich kanałów albo własna wartość danego kanału — a nie wartość, 
 otrzymywał: pierwszy zapis odnotowuje `stored: false`, a nie wartość domyślną z manifestu.
 Ustawienie typu `secret` jest zapisywane jako `[redacted]` po obu stronach.
 
+## Informacje o sklepie
+
+Grupa **Shop information** (`shop`) zawiera dane o sklepie, które publikuje
+storefront: `shop.name`, `shop.address`, `shop.contact_email`,
+`shop.support_email`, `shop.phone`, `shop.contact_form_recipient_emails` oraz
+dwa ustawienia dla wyszukiwarek:
+
+| Ustawienie | Typ | Co to jest |
+| --- | --- | --- |
+| `shop.logo_asset_id` | `string` | **Shop logo** — publiczny obraz z biblioteki zasobów, wybierany w oknie wyboru zasobu. Puste oznacza brak logo. |
+| `shop.social_profiles` | `string_list` | **Social profiles** — pełne adresy `https://` profili organizacji w serwisach społecznościowych i innych witrynach, po jednym na wpis. Zapis zawierający inną wartość jest odrzucany z `422 VALIDATION_FAILED` i nic nie zostaje zapisane. |
+
+Storefront odczytuje je przez `GET /api/v1/storefront/shop-info`, które zwraca
+`logoUrl` (publiczny adres zasobu logo albo `null`, gdy ustawienie jest puste
+albo zasób zniknął lub nie jest publiczny) i `socialProfiles` (tylko wpisy
+`https:`). Publikuje oba w danych strukturalnych `Organization`, jako `logo` i
+`sameAs`, na stronie głównej i na każdej stronie CMS. Odczyt logo jest powodem,
+dla którego ten moduł zależy od `assets_library`.
+
 ## Dla modułów korzystających z ustawień — odczyt wartości
 
 Inne moduły wstrzykują `SettingsService` z kompozycji i odczytują wartości przez jedno API. Wynikiem
@@ -228,17 +247,22 @@ uzgadnia się w tym samym oknie 30 s.
 
 ## Wiersz poleceń
 
-Wiersze ustawień instalują i usuwają polecenia cyklu życia modułu, a nie osobne polecenia:
+Wiersze ustawień instalują i usuwają polecenia cyklu życia modułu, a nie osobne polecenia.
+Uruchamiaj je w katalogu głównym instancji:
 
 ```bash
 # Install a module: runs its migrations and reconciles its settings manifest.
-pnpm --filter backend run module:install <module-id> [--dry-run] [--json]
+pnpm run module:install <module-id> [--dry-run] [--json]
 
 # Soft uninstall (default): unregisters the module's settings and marks the
 # module uninstalled; its tables and data stay. --hard also reverts the
 # module's migrations and must be combined with --force.
-pnpm --filter backend run module:uninstall <module-id> [--hard --force] [--json]
+pnpm run module:uninstall <module-id> [--hard --force] [--json]
 ```
+
+W klonie repozytorium Endora Commerce te same dwa polecenia mają postać
+`pnpm --filter backend run module:install` i
+`pnpm --filter backend run module:uninstall`, z tymi samymi argumentami.
 
 `module:uninstall` nadal przyjmuje `--remove-settings` i `--preserve-settings` ze względu na zgodność
 wsteczną: pierwsza flaga oznacza `--hard --force`, druga nic nie robi. Gramatyka argumentów i kody

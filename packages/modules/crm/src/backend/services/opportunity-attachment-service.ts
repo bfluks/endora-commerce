@@ -108,6 +108,11 @@ export class OpportunityAttachmentService {
 
     const asset = await this.deps.assets.findById(assetId, { liveOnly: true });
     if (!asset) throw fileUnavailable();
+    // A file the library hides from the caller — held only by records of any
+    // module they may not see — is not there to attach, and gets the
+    // missing-file answer before the private-file and active-content refusals
+    // could tell it apart (`specs/166-asset-reference-visibility/` R-13, FR-006).
+    if (!(await this.deps.assets.visibleToCaller([assetId])).has(assetId)) throw fileUnavailable();
     await this.#refuseAFileHeldOutOfReach(em, assetId);
     if (asset.visibility !== 'private') {
       throw new HttpError(

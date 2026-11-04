@@ -124,10 +124,12 @@ describe('ProductsBulkEditDialog — interaction', () => {
   it('Apply is disabled until at least one field-group is touched (T013)', async () => {
     primeOnOpenGets();
     renderWithI18n(
+      <MemoryRouter>
       <ProductsBulkEditDialog
         productIds={['11111111-2222-4333-8444-555555555551']}
         onClose={vi.fn()}
-      />,
+      />
+      </MemoryRouter>,
       BUNDLE,
     );
 
@@ -151,11 +153,13 @@ describe('ProductsBulkEditDialog — interaction', () => {
 
     const onApplied = vi.fn();
     renderWithI18n(
+      <MemoryRouter>
       <ProductsBulkEditDialog
         productIds={['11111111-2222-4333-8444-555555555551']}
         onClose={vi.fn()}
         onApplied={onApplied}
-      />,
+      />
+      </MemoryRouter>,
       BUNDLE,
     );
 
@@ -300,7 +304,9 @@ describe('ProductsBulkEditDialog — interaction', () => {
     });
 
     renderWithI18n(
-      <ProductsBulkEditDialog productIds={['p1']} onClose={vi.fn()} />,
+      <MemoryRouter>
+      <ProductsBulkEditDialog productIds={['p1']} onClose={vi.fn()} />
+      </MemoryRouter>,
       BUNDLE,
     );
 
@@ -358,7 +364,9 @@ describe('ProductsBulkEditDialog — interaction', () => {
     });
 
     renderWithI18n(
-      <ProductsBulkEditDialog productIds={['p1']} onClose={vi.fn()} />,
+      <MemoryRouter>
+      <ProductsBulkEditDialog productIds={['p1']} onClose={vi.fn()} />
+      </MemoryRouter>,
       BUNDLE,
     );
 
@@ -401,7 +409,9 @@ describe('ProductsBulkEditDialog — interaction', () => {
     });
 
     renderWithI18n(
-      <ProductsBulkEditDialog productIds={['p1']} onClose={vi.fn()} />,
+      <MemoryRouter>
+      <ProductsBulkEditDialog productIds={['p1']} onClose={vi.fn()} />
+      </MemoryRouter>,
       BUNDLE,
     );
 

@@ -38,9 +38,12 @@ import type {
   AddressReadPort,
   AddressServicePort,
   AssetReadPort,
+  CustomFieldCarryPort,
+  CustomFieldListFilterPort,
   CustomFieldValuePort,
   CartReadPort,
   CartWritePort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
   DeliveryMethodReadPort,
@@ -50,6 +53,7 @@ import type {
   InvoicePdfPort,
   InvoiceReadPort,
   LinePricePort,
+  LinePricesPort,
   OrderStatusRegistry,
   OrderTransitionPort,
   OrganizationDetailsPort,
@@ -67,6 +71,7 @@ import type { PurchaseConversionService } from './services/purchase-conversion-s
 import type { OrderConfirmationRenderers } from './email-templates/order-confirmation.js';
 // Feature 035 — shipping-method adapter framework + shipment lifecycle.
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import type { OrdersTranslate } from './orders-prose.js';
 
 /**
  * Composition root for the commerce surface — carts + orders + invoice
@@ -90,6 +95,8 @@ export interface OrdersModuleOptions {
   auditLogService?: AuditPort;
   /** Feature 055 — validates + persists Order custom-field values on the admin edit path. */
   customFieldValues?: CustomFieldValuePort;
+  /** Feature 157 — the admin list's custom-field filters (offered fields and one condition). */
+  customFieldListFilter?: CustomFieldListFilterPort;
   /** Feature 034 — mailer for the order-confirmation e-mail (best-effort, post-commit). */
   mailer?: EmailMailerPort;
   /**
@@ -124,7 +131,7 @@ export interface OrdersModuleOptions {
    * catalogue's legacy `defaultPrice` attribute. Absence is now a `lazyPort`
    * gate that throws `MODULE_DISABLED`, which nothing can mistake for a price.
    */
-  pricingService: LinePricePort;
+  pricingService: LinePricePort & LinePricesPort;
   /**
    * Feature 038 (US3) — the org address book. The admin create-order flow and
    * the external intake persist (and clean up) addresses typed inline on the
@@ -171,6 +178,12 @@ export interface OrdersModuleOptions {
    * create path resolve from the modules that own the rows (feature 075).
    */
   catalogProductRead: CatalogProductReadPort;
+  /**
+   * Feature 163 — `catalog`'s availability answer: placement refuses a line
+   * whose product is no longer available at the order's (channel, language)
+   * to its Organization (FR-006), and the admin preview reports it.
+   */
+  catalogProductAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveOrderRules'>;
   customerAccountRead: CustomerAccountReadPort;
   organizationDetails: OrganizationDetailsPort;
   /**
@@ -224,6 +237,12 @@ export interface OrdersModuleOptions {
    * nothing.
    */
   quoteRequestRead: () => QuoteRequestReadPort | null;
+  /**
+   * `custom_fields`' carry port (`specs/162-custom-fields-value-carry/`): the
+   * vouched Quote Request's custom-field values the new Order receives. An
+   * accessor resolved per call; `custom_fields` is not deactivatable.
+   */
+  customFieldCarry: () => CustomFieldCarryPort;
   /**
    * The payment row placement opens (feature 080, T048; D-179). A value and not
    * an accessor, unlike the two `invoices` names above and unlike `inventory`:
@@ -343,6 +362,11 @@ export interface OrdersModuleOptions {
   transitionEffects: OrderTransitionEffectService;
   /** The module's logger; the transition engine warns through it. */
   log?: PlatformLogger;
+  /**
+   * This module's bundle, from which the in-code order confirmation takes its
+   * sentences in the channel's language (issue #95). Absent, English.
+   */
+  translate?: OrdersTranslate;
   /**
    * Feature 027 §R5 — Redis client used by the cart-pricing-recompute
    * cache. When provided alongside `pricingService`, every full-cart
@@ -491,12 +515,14 @@ export function commerceModule(options: OrdersModuleOptions) {
         resolveTaxRate: options.resolveTaxRate,
         transitionEffects: options.transitionEffects,
         ...(options.log ? { log: options.log } : {}),
+        ...(options.translate ? { translate: options.translate } : {}),
         neighbours: {
           organizationDetails: options.organizationDetails,
           organizationRestriction: options.organizationRestriction,
           customerAccountRead: options.customerAccountRead,
           addressRead: options.addressRead,
           catalogProductRead: options.catalogProductRead,
+          catalogProductAvailability: options.catalogProductAvailability,
           paymentMethodRead: options.paymentMethodRead,
           deliveryMethodRead: options.deliveryMethodRead,
           inventory: options.inventory,
@@ -504,6 +530,7 @@ export function commerceModule(options: OrdersModuleOptions) {
           cartRead: options.cartRead,
           invoicePlacementApply: options.invoicePlacementApply,
           quoteRequestRead: options.quoteRequestRead,
+          customFieldCarry: options.customFieldCarry,
           paymentPlacementApply: options.paymentPlacementApply,
         },
         ...(options.mailer ? { mailer: options.mailer } : {}),
@@ -563,6 +590,7 @@ export function commerceModule(options: OrdersModuleOptions) {
       orderStatusGraphService,
       options.organizationDetails,
       options.customerAccountRead,
+      options.customFieldListFilter ?? null,
     );
     if (options.exposeOrderListService) options.exposeOrderListService(orderListService);
     const orderListViewService = new OrderListViewService(options.emFactory, options.log);
@@ -586,6 +614,7 @@ export function commerceModule(options: OrdersModuleOptions) {
     const orderCloneToQuoteService = new OrderCloneToQuoteService(
       options.emFactory,
       () => options.getRfqService?.() ?? null,
+      options.customerAccountRead,
     );
     const orderCreationAdminService = new OrderCreationAdminService(
       options.emFactory,
@@ -593,6 +622,7 @@ export function commerceModule(options: OrdersModuleOptions) {
       orderService,
       options.addressService,
       options.customerAccountRead,
+      options.salesChannelMembership,
       options.mailer,
       options.getTransactionalEmailSender,
     );
@@ -620,6 +650,7 @@ export function commerceModule(options: OrdersModuleOptions) {
       pricingService: options.pricingService,
       resolveTaxRate: options.resolveTaxRate,
       catalogProductRead: options.catalogProductRead,
+      catalogProductAvailability: options.catalogProductAvailability,
       customerAccountRead: options.customerAccountRead,
       organizationDetails: options.organizationDetails,
       ...(options.salesChannelMembership
@@ -637,6 +668,7 @@ export function commerceModule(options: OrdersModuleOptions) {
         ? { resolveAdminOrdersScope: options.resolveAdminOrdersScope }
         : {}),
       ...(options.customFieldValues ? { customFieldValues: options.customFieldValues } : {}),
+      ...(options.customFieldListFilter ? { customFieldListFilter: options.customFieldListFilter } : {}),
       ...(options.commandBus ? { commandBus: options.commandBus } : {}),
     });
 
@@ -651,6 +683,7 @@ export function commerceModule(options: OrdersModuleOptions) {
         catalogProductRead: options.catalogProductRead,
         organizationDetails: options.organizationDetails,
         salesChannelMembership: options.salesChannelMembership,
+        catalogAvailability: options.catalogProductAvailability,
         pricingService: options.pricingService,
         redis: options.redis,
         auditLogService: options.auditLogService,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { SalesChannelDetail } from '@endora-commerce/contracts';
-import { ApiError } from '@endora-commerce/admin-kit/lib';
+import { ApiError, useAuth } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Badge, Button, PageHeader } from '@endora-commerce/admin-kit/ui';
 import { salesChannelsClient } from '../api/sales-channels-client.js';
 import {
@@ -32,6 +32,10 @@ export function SalesChannelEditPage(): ReactNode {
   const t = useTranslation('sales_channels');
   const { code: routeCode } = useParams<{ code: string }>();
   const navigate = useNavigate();
+  // Feature 167 (US3 #3) — an operator who may only read channels sees the
+  // URL-prefix switch, disabled.
+  const { hasPermission } = useAuth();
+  const canWrite = hasPermission('sales_channels:write');
   const isCreate = routeCode === 'new' || routeCode === undefined;
 
   const [channel, setChannel] = useState<SalesChannelDetail | null>(null);
@@ -78,6 +82,8 @@ export function SalesChannelEditPage(): ReactNode {
             currencies: value.currencies,
             defaultCurrency: value.defaultCurrency,
             active: value.active,
+            anonymousAccess: value.anonymousAccess,
+            prefixDefaultLanguage: value.prefixDefaultLanguage,
           });
           navigate(`/sales-channels/${encodeURIComponent(created.code)}`, { replace: true });
           return;
@@ -92,6 +98,8 @@ export function SalesChannelEditPage(): ReactNode {
           currencies: value.currencies,
           defaultCurrency: value.defaultCurrency,
           active: value.active,
+          anonymousAccess: value.anonymousAccess,
+          prefixDefaultLanguage: value.prefixDefaultLanguage,
         });
         setChannel(updated);
       } catch (err) {
@@ -242,6 +250,7 @@ export function SalesChannelEditPage(): ReactNode {
         lockCode={!isCreate}
         errorMessage={error}
         saving={saving}
+        readOnly={!canWrite}
         onSubmit={(v) => void handleSubmit(v)}
         onCancel={() => navigate('/sales-channels')}
       />

@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
+import { ORGANIZATION_CHANNEL_ID, organizationSalesChannelsAnswer } from '../../helpers/organization-sales-channels';
 
 /**
  * The create-quote-request screen opened from another screen (feature 143,
@@ -14,6 +15,8 @@ import { adminSession, modulePresence, withSession } from '../../helpers/render-
 
 const getSpy = vi.fn();
 const postSpy = vi.fn();
+/** The quote-request creations posted (the price explanation posts too, feature 160). */
+const creates = () => postSpy.mock.calls.filter(([path]) => path === '/api/v1/admin/quote-requests');
 const navigateSpy = vi.fn();
 
 vi.mock('@endora-commerce/admin-kit/lib', async () => {
@@ -67,15 +70,20 @@ beforeEach(() => {
   postSpy.mockReset();
   navigateSpy.mockReset();
   getSpy.mockImplementation((path: string) => {
+    const channels = organizationSalesChannelsAnswer(path);
+    if (channels) return channels;
     if (path === '/api/v1/admin/customers/cust-1') return Promise.resolve({ data: CUSTOMER });
     if (path.startsWith('/api/v1/admin/customers')) return Promise.resolve({ data: [CUSTOMER] });
     if (path.startsWith('/api/v1/admin/catalog/products')) return Promise.resolve({ data: [PRODUCT] });
-    if (path.includes('/resolved-price')) {
-      return Promise.resolve({ data: { resolvedPrice: { amount: '10.00' } } });
-    }
     return Promise.resolve({ data: [] });
   });
-  postSpy.mockResolvedValue({ data: { id: 'new-rfq-1' } });
+  postSpy.mockImplementation((path: string) =>
+    Promise.resolve(
+      path === '/api/v1/admin/price-books/resolve'
+        ? { data: [{ key: 'line', price: { amount: '10.00', currency: 'PLN', source: 'base' } }] }
+        : { data: { id: 'new-rfq-1' } },
+    ),
+  );
 });
 
 async function pick(comboLabel: string, optionLabel: string): Promise<void> {
@@ -128,6 +136,7 @@ describe('RfqCreatePage opened with an origin', () => {
     expect(postSpy).toHaveBeenCalledWith('/api/v1/admin/quote-requests', {
       organizationId: ORGANIZATION_ID,
       customerAccountId: 'cust-1',
+      salesChannelId: ORGANIZATION_CHANNEL_ID,
       items: [{ productId: 'prod-1', quantity: 1, agreedUnitPrice: 10 }],
       origin: { type: 'crm_opportunity', id: ORIGIN_ID },
     });
@@ -171,7 +180,7 @@ describe('RfqCreatePage opened with an origin', () => {
     renderPage({ originType: 'crm_opportunity', originId: 'nope', customerAccountId: 'cust-1' });
     await waitFor(() => expect(screen.getByLabelText('customerAccountId')).toHaveValue('Jan Kowalski'));
     await addLineAndSubmit();
-    const [, body] = postSpy.mock.calls[0] ?? [];
+    const [, body] = creates()[0] ?? [];
     expect(body).not.toHaveProperty('origin');
     await waitFor(() => expect(navigateSpy).toHaveBeenCalledWith('/quote-requests/new-rfq-1'));
   });
@@ -184,10 +193,11 @@ describe('RfqCreatePage opened on its own', () => {
     await pick('customerAccountId', 'Jan Kowalski');
     await addLineAndSubmit();
 
-    expect(postSpy).toHaveBeenCalledTimes(1);
+    expect(creates()).toHaveLength(1);
     expect(postSpy).toHaveBeenCalledWith('/api/v1/admin/quote-requests', {
       organizationId: ORGANIZATION_ID,
       customerAccountId: 'cust-1',
+      salesChannelId: ORGANIZATION_CHANNEL_ID,
       items: [{ productId: 'prod-1', quantity: 1, agreedUnitPrice: 10 }],
     });
     await waitFor(() => expect(navigateSpy).toHaveBeenCalledWith('/quote-requests/new-rfq-1'));

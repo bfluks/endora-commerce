@@ -27,7 +27,19 @@ whoever runs the business, and neither overwrites the other.
 
 ## CLI commands
 
-Every command is wired in `backend/package.json`:
+An instance — the tree `npx create-endora-commerce` writes — declares the five commands at its
+root. Run them there:
+
+```bash
+pnpm run module:install <id> [--dry-run] [--json]     # or: pnpm run module:install --all
+pnpm run module:uninstall <id> [--hard] [--force] [--json]
+pnpm run module:enable <id> [--json]
+pnpm run module:disable <id> [--cascade] [--json]
+pnpm run module:status [<id>] [--filter=<state>] [--json]
+```
+
+In a checkout of the Endora Commerce repository the same five are wired in
+`backend/package.json`, take the same arguments and return the same exit codes:
 
 ```bash
 pnpm --filter backend run module:install <id> [--dry-run] [--json]
@@ -37,18 +49,10 @@ pnpm --filter backend run module:disable <id> [--cascade] [--json]
 pnpm --filter backend run module:status [<id>] [--filter=<state>] [--json]
 ```
 
+The repository form does nothing in an instance: the backend member there has another name, so
+pnpm prints `No projects matched the filters` and exits `0` without running the command.
+
 ### In an instance
-
-An instance — the tree `npx create-endora-commerce` writes — declares the same five commands at
-its root, and they take the same arguments and return the same exit codes:
-
-```bash
-pnpm run module:install <id> [--dry-run] [--json]     # or: pnpm run module:install --all
-pnpm run module:uninstall <id> [--hard] [--force] [--json]
-pnpm run module:enable <id> [--json]
-pnpm run module:disable <id> [--cascade] [--json]
-pnpm run module:status [<id>] [--filter=<state>] [--json]
-```
 
 They cover the module packages the instance installed and its own overlay modules under
 `apps/<deployment>/modules/` alike. A running API or worker hears a change made by one of these
@@ -98,7 +102,7 @@ import { defineModuleManifest, defineModuleSettingsManifest } from '@endora-comm
 export const manifest = defineModuleManifest({
   id: 'pricing',
   name: 'Pricing',
-  description: 'Customer-group pricing with brackets and display modes.',
+  description: 'Price books and price display modes.',
   version: '1.0.0',
   dependencies: ['settings', 'sales_channels'],
   settings: defineModuleSettingsManifest({
@@ -271,7 +275,11 @@ pnpm --filter backend run composer:generate
 
 The module package's own `package.json` is generated too, by a second command, and its
 output changes what the workspace declares — so run an install in the same breath and
-commit `pnpm-lock.yaml` with it:
+commit `pnpm-lock.yaml` with it. The same command declares the new package in
+`backend/package.json` (and, when it ships `src/admin/`, in `admin/package.json`) — do not
+add those entries by hand. Build the package before running it a second time: once a
+package has a `package.json`, `manifests:generate` and `manifests:check` refuse it until
+its `dist` exists.
 
 ```bash
 pnpm --filter backend run manifests:generate

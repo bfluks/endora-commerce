@@ -1,13 +1,25 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, History } from 'lucide-react';
-import type {
-  OpportunityDetail,
-  OpportunityHistoryEntry,
-  OpportunityWorkflowStatus,
+import { ArrowRight } from 'lucide-react';
+import {
+  customFieldCarrySkipLabelSchema,
+  customFieldCarrySkipReasonSchema,
+  opportunityRichTextToPlain,
+  type CustomFieldCarrySkipLabel,
+  type OpportunityDetail,
+  type OpportunityHistoryEntry,
+  type OpportunityWorkflowStatus,
 } from '@endora-commerce/contracts';
-import { formatDateTime, useAuth } from '@endora-commerce/admin-kit/lib';
-import { Alert, AlertDescription, Button } from '@endora-commerce/admin-kit/ui';
+import { useAuth } from '@endora-commerce/admin-kit/lib';
+import {
+  clipReferenceText,
+  RecordHistory,
+  recordHistoryChanges,
+  ReferenceText,
+  resolveCustomFieldLabel,
+  useRecordHistory,
+  type RecordHistoryChange,
+} from '@endora-commerce/admin-kit/components';
 import { useAppLanguage, useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { crmApi, type OrderStatusOption } from '../api.js';
 import {
@@ -15,10 +27,8 @@ import {
   LABELLED_HISTORY_FIELDS,
   SILENT_HISTORY_FIELDS,
 } from '../lib/history-fields.js';
-import { clipReferenceText } from '../lib/mention-trigger.js';
 import {
   calendarDateLabel,
-  errorMessage,
   moneyLabel,
   NO_VALUE,
   orderStatusLabel,
@@ -30,7 +40,7 @@ import {
   useCanSeeCustomFields,
   useOpportunityFieldDefinitions,
 } from './OpportunityCustomFields.js';
-import { ReferenceText } from './ReferenceText.js';
+import { useReturnHere } from '../lib/return-here.js';
 
 const PAGE_SIZE = 50;
 /** A long text (a description, a note) is cut here; the whole of it is where it lives. */
@@ -38,20 +48,53 @@ const TEXT_LIMIT = 280;
 const ORDERS_READ = 'orders:read';
 const RETRY_ACTION = 'crm.opportunity.propagation_retry';
 const NOT_FOLLOWED_ACTION = 'crm.opportunity.propagation_skip';
+/** A field name shown to an operator is cut here. */
+const SHOWN_KEY_LIMIT = 64;
+const CARRY_SKIP_REASONS: ReadonlySet<string> = new Set(customFieldCarrySkipReasonSchema.options);
 
 type State = Record<string, unknown>;
 
 /** One field of an entry, as it was and as it is. `before` is absent for a state that only arrived. */
-export interface HistoryChange {
-  field: string;
-  before?: unknown;
-  after: unknown;
-}
+export type HistoryChange = RecordHistoryChange;
 
 function asState(value: unknown): State | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as State)
     : null;
+}
+
+interface CarrySkipLine {
+  key: string;
+  reason: string;
+  /** The source field's label as it read when the skip was recorded; absent on an older entry. */
+  label?: CustomFieldCarrySkipLabel;
+}
+
+/**
+ * The keys a `customFieldCarry` member says were not carried, each with its
+ * reason and stored label (feature 162, data-model §4.3; owner ruling V3) —
+ * `[]` for one that only carried. A label that does not parse is left out,
+ * so the line falls back to the key rather than to a guess.
+ */
+function carrySkips(raw: unknown): CarrySkipLine[] {
+  const skipped = asState(raw)?.skipped;
+  if (!Array.isArray(skipped)) return [];
+  return skipped.flatMap((item: unknown): CarrySkipLine[] => {
+    const skip = asState(item);
+    if (typeof skip?.key !== 'string' || typeof skip.reason !== 'string') return [];
+    const label = customFieldCarrySkipLabelSchema.safeParse(skip.label);
+    return [{ key: skip.key, reason: skip.reason, ...(label.success ? { label: label.data } : {}) }];
+  });
+}
+
+/**
+ * The name a skip line gives its field: the stored label in the reader's
+ * language, then its default label, then the key; cut at {@link SHOWN_KEY_LIMIT}.
+ */
+function skippedFieldName(skip: CarrySkipLine, language: string): string {
+  const name = skip.label ? resolveCustomFieldLabel(skip.label.labels, skip.label.labelDefault, language) : '';
+  const shown = name === '' ? skip.key : name;
+  return shown.length > SHOWN_KEY_LIMIT ? `${shown.slice(0, SHOWN_KEY_LIMIT)}…` : shown;
 }
 
 function same(a: unknown, b: unknown): boolean {
@@ -78,23 +121,11 @@ export function historyChanges(
 ): HistoryChange[] {
   const before = asState(entry.before);
   const after = asState(entry.after);
-  const shown = (field: string): boolean => !SILENT_HISTORY_FIELDS.has(field);
   if (before && after && entry.action === RETRY_ACTION) {
     const { outcome, ...rest } = before;
     return historyChanges({ before: null, after: { ...rest, retriedOutcome: outcome, ...after } });
   }
-  if (before && after) {
-    return [...new Set([...Object.keys(before), ...Object.keys(after)])]
-      .filter(shown)
-      .filter((field) => !same(before[field], after[field]))
-      .map((field) => ({ field, before: before[field] ?? null, after: after[field] ?? null }));
-  }
-  const only = after ?? before;
-  if (!only) return [];
-  return Object.keys(only)
-    .filter(shown)
-    .filter((field) => only[field] !== null && only[field] !== undefined && only[field] !== '')
-    .map((field) => ({ field, after: only[field] }));
+  return recordHistoryChanges(entry, SILENT_HISTORY_FIELDS);
 }
 
 export interface OpportunityHistoryProps {
@@ -132,54 +163,31 @@ export interface OpportunityHistoryProps {
  * place. Under the last page it says either that this is the whole history or
  * — when the history ended at its reach — that earlier changes exist and are
  * not shown; the two are never confused.
+ *
+ * Reading and drawing are the kit's `useRecordHistory` and `RecordHistory`
+ * (`specs/163-projects-and-tasks/` research R-17); everything above that names
+ * something is this file's.
  */
 export function OpportunityHistory(props: OpportunityHistoryProps): ReactNode {
+  const returnHere = useReturnHere();
   const { opportunity } = props;
   const t = useTranslation('crm');
   const tCore = useTranslation('core');
   const { language } = useAppLanguage();
   const canReadOrders = useAuth().hasPermission(ORDERS_READ);
   const canSeeCustomFields = useCanSeeCustomFields();
-  const [entries, setEntries] = useState<OpportunityHistoryEntry[] | null>(null);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
-  /** The history ended at its reach, with earlier changes behind it. */
-  const [truncated, setTruncated] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState('');
   const [statuses, setStatuses] = useState<OpportunityWorkflowStatus[]>([]);
   const [orderStatuses, setOrderStatuses] = useState<OrderStatusOption[]>([]);
-  const sequence = useRef(0);
 
-  const load = useCallback(
-    async (cursor: string | null): Promise<void> => {
-      const current = ++sequence.current;
-      setLoading(true);
-      setError(null);
-      try {
-        const page = await crmApi.getHistory(opportunity.id, {
-          limit: PAGE_SIZE,
-          ...(cursor ? { cursor } : {}),
-        });
-        if (current !== sequence.current) return;
-        setEntries((previous) => (cursor ? [...(previous ?? []), ...page.data] : page.data));
-        setNextCursor(page.pagination.hasMore ? page.pagination.cursor : null);
-        setTruncated(page.truncated);
-        if (cursor) setNotice(t('history.loadedMore', { count: page.data.length }));
-      } catch (failure) {
-        if (current === sequence.current) setError(errorMessage(failure, t('history.error.load')));
-      } finally {
-        if (current === sequence.current) setLoading(false);
-      }
-    },
-    [opportunity.id, t],
+  const loadPage = useCallback(
+    (cursor: string | null) =>
+      crmApi.getHistory(opportunity.id, { limit: PAGE_SIZE, ...(cursor ? { cursor } : {}) }),
+    [opportunity.id],
   );
-
   // The history is read again when the Opportunity on screen changes: a move
   // made on the Overview is the newest entry here.
-  useEffect(() => {
-    void load(null);
-  }, [load, opportunity.updatedAt, opportunity.version]);
+  const history = useRecordHistory(loadPage, `${opportunity.updatedAt}|${opportunity.version}`);
+  const { entries } = history;
 
   // Status names are the workflow's; without them the codes are shown.
   useEffect(() => {
@@ -253,7 +261,7 @@ export function OpportunityHistory(props: OpportunityHistoryProps): ReactNode {
     const link = opportunity.links.find(
       (item) => item.documentKind === documentKind && item.documentId === id,
     );
-    const to = documentKind === 'order' ? `/orders/${id}` : `/quote-requests/${id}`;
+    const to = returnHere(documentKind === 'order' ? `/orders/${id}` : `/quote-requests/${id}`);
     return (
       <Link to={to} className="text-primary underline-offset-4 hover:underline">
         {link?.available && link.number
@@ -319,9 +327,14 @@ export function OpportunityHistory(props: OpportunityHistoryProps): ReactNode {
       case 'kind':
         return raw === 'message' ? t('history.kind.message') : t('history.kind.note');
       case 'description':
-        // Cut before it is cut into chips, so a token is never shown in half.
+        // Its words without their formatting, cut before they are cut into
+        // chips, so neither a marker nor a token is ever shown in half.
         return typeof raw === 'string' ? (
-          <ReferenceText text={clipReferenceText(raw, TEXT_LIMIT)} references={entry.references} />
+          <ReferenceText
+            inline
+            text={clipReferenceText(opportunityRichTextToPlain(raw), TEXT_LIMIT)}
+            references={entry.references}
+          />
         ) : (
           plain(raw)
         );
@@ -396,12 +409,12 @@ export function OpportunityHistory(props: OpportunityHistoryProps): ReactNode {
               {': '}
               {edited ? (
                 <>
-                  <span className="sr-only">{t('history.status.from')}</span>
+                  <span className="sr-only">{tCore('history.status.from')}</span>
                   <span className="text-muted-foreground line-through decoration-muted-foreground/60">
                     {shownValue(before[key])}
                   </span>
                   <ArrowRight aria-hidden="true" className="mx-1.5 inline size-3.5 text-muted-foreground" />
-                  <span className="sr-only">{t('history.status.to')}</span>
+                  <span className="sr-only">{tCore('history.status.to')}</span>
                 </>
               ) : null}
               <span>{shownValue(after[key])}</span>
@@ -412,10 +425,50 @@ export function OpportunityHistory(props: OpportunityHistoryProps): ReactNode {
     );
   };
 
-  const actor = (entry: OpportunityHistoryEntry): string => {
-    if (entry.actor.kind !== 'admin') return t('history.actor.system');
-    return entry.actor.name ?? t('history.actor.deleted');
+  /**
+   * What a creation or a join could not carry in (feature 162): which kind of
+   * record the values came from, then a line per field with its reason, the
+   * field named by the label stored with the skip. Every reader of the
+   * Opportunity sees these lines — they name a field and a reason, never a
+   * value (owner ruling V3, 2026-10-21) — so they need no definition read and
+   * no `custom_fields:read`. What it did carry is silent here; the values show
+   * in the entry's custom fields row, under that row's own gate.
+   */
+  const carryNote = (raw: unknown): ReactNode => {
+    const source = asState(asState(raw)?.source);
+    const from = source?.entityType === 'order' ? 'order' : 'quote_request';
+    return (
+      <div className="space-y-0.5">
+        <p>{t(`history.customFieldCarry.from.${from}`)}</p>
+        <ul className="list-disc space-y-0.5 pl-5">
+          {carrySkips(raw).map((skip) => (
+            <li key={skip.key} className="break-words">
+              {t('history.customFieldCarry.line', {
+                field: skippedFieldName(skip, language),
+                // A reason this screen does not know yet reads as the generic
+                // sentence — never as its code, however humanised.
+                reason: CARRY_SKIP_REASONS.has(skip.reason)
+                  ? t(`history.carryReason.${skip.reason}`)
+                  : t('history.carryReasonUnknown'),
+              })}
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
   };
+
+  /**
+   * An edit that shows this reader nothing: its states differ only in the
+   * custom-field values they may not read (owner ruling P2), so the entry says
+   * that much rather than standing empty under its heading.
+   */
+  const valuesHidden = (entry: OpportunityHistoryEntry, changes: readonly HistoryChange[]): boolean =>
+    !canSeeCustomFields &&
+    entry.action === 'crm.opportunity.update' &&
+    changes.length === 0 &&
+    statusChange(entry) === null &&
+    cause(entry) === null;
 
   const heading = (entry: OpportunityHistoryEntry): string => {
     const key = `auditLog.${entry.action}`;
@@ -429,10 +482,10 @@ export function OpportunityHistory(props: OpportunityHistoryProps): ReactNode {
     if (!after || typeof after.status !== 'string' || before?.status === after.status) return null;
     return (
       <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-        <span className="sr-only">{t('history.status.from')}</span>
+        <span className="sr-only">{tCore('history.status.from')}</span>
         <span>{statusName(before?.status)}</span>
         <ArrowRight aria-hidden="true" className="size-4 text-muted-foreground" />
-        <span className="sr-only">{t('history.status.to')}</span>
+        <span className="sr-only">{tCore('history.status.to')}</span>
         <span className="font-medium">{statusName(after.status)}</span>
       </p>
     );
@@ -454,116 +507,50 @@ export function OpportunityHistory(props: OpportunityHistoryProps): ReactNode {
     return null;
   };
 
-  if (entries === null) {
-    return error ? (
-      <Alert variant="destructive">
-        <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
-          <span>{error}</span>
-          <Button className="min-h-11 sm:min-h-8" variant="outline" size="sm" onClick={(): void => void load(null)}>
-            {tCore('common.action.retry')}
-          </Button>
-        </AlertDescription>
-      </Alert>
-    ) : (
-      <p role="status" className="text-sm text-muted-foreground">
-        {tCore('common.state.loading')}
-      </p>
+  /**
+   * The rows an entry shows. An Order's status is `orders`' to show: no row
+   * without `orders:read`. Custom-field values are `custom_fields`' (owner
+   * ruling P2): the server strips them for a reader without
+   * `custom_fields:read`, and this screen drops any that arrive all the same.
+   */
+  const changesOf = (entry: OpportunityHistoryEntry): HistoryChange[] =>
+    historyChanges(entry).filter(
+      (change) =>
+        (canReadOrders || change.field !== 'orderStatusCode') &&
+        (canSeeCustomFields || change.field !== 'customFieldValues') &&
+        // A carry that skipped nothing has nothing to say.
+        (change.field !== 'customFieldCarry' || carrySkips(change.after).length > 0),
     );
-  }
 
   return (
-    <div className="space-y-4" aria-busy={loading}>
-      <p className="max-w-prose text-sm text-muted-foreground">{t('history.hint')}</p>
-
-      {error ? (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      ) : null}
-
-      {entries.length === 0 ? (
-        <div className="flex items-center gap-3 rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-          <History aria-hidden="true" className="size-5 shrink-0" />
-          <span>{t('history.empty')}</span>
-        </div>
-      ) : (
-        <ol aria-label={t('history.title')} className="space-y-3">
-          {entries.map((entry) => {
-            // An Order's status is `orders`' to show: no row without `orders:read`.
-            const changes = historyChanges(entry).filter(
-              (change) => canReadOrders || change.field !== 'orderStatusCode',
-            );
-            return (
-              <li key={entry.id} className="space-y-2 rounded-md border border-border p-3">
-                <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-                  <h3 className="text-sm font-medium">{heading(entry)}</h3>
-                  <p className="text-xs text-muted-foreground">
-                    <span>{actor(entry)}</span>
-                    {' · '}
-                    <time dateTime={entry.actedAt}>{formatDateTime(entry.actedAt)}</time>
-                  </p>
-                </div>
-                {statusChange(entry)}
-                {cause(entry)}
-                {changes.length > 0 ? (
-                  <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[minmax(8rem,auto)_1fr]">
-                    {changes.map((change) => (
-                      <div key={change.field} className="contents">
-                        <dt className="text-xs text-muted-foreground sm:pt-0.5">
-                          {fieldLabel(change.field)}
-                        </dt>
-                        <dd className="whitespace-pre-wrap break-words">
-                          {change.field === 'customFieldValues' ? (
-                            customFields(change)
-                          ) : 'before' in change ? (
-                            <>
-                              <span className="sr-only">{t('history.status.from')}</span>
-                              <span className="text-muted-foreground line-through decoration-muted-foreground/60">
-                                {value(change.field, change.before, entry)}
-                              </span>
-                              <ArrowRight
-                                aria-hidden="true"
-                                className="mx-1.5 inline size-3.5 text-muted-foreground"
-                              />
-                              <span className="sr-only">{t('history.status.to')}</span>
-                            </>
-                          ) : null}
-                          {change.field === 'customFieldValues' ? null : (
-                            <span>{value(change.field, change.after, entry)}</span>
-                          )}
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
-                ) : null}
-              </li>
-            );
-          })}
-        </ol>
+    <RecordHistory<OpportunityHistoryEntry>
+      history={history}
+      copy={{
+        hint: t('history.hint'),
+        empty: t('history.empty'),
+        end: t('history.end'),
+        truncated: t('history.truncated'),
+      }}
+      heading={heading}
+      changes={changesOf}
+      fieldLabel={fieldLabel}
+      renderValue={value}
+      renderChange={(change): ReactNode | undefined =>
+        change.field === 'customFieldValues'
+          ? customFields(change)
+          : change.field === 'customFieldCarry'
+            ? carryNote(change.after)
+            : undefined
+      }
+      renderLead={(entry, changes): ReactNode => (
+        <>
+          {statusChange(entry)}
+          {cause(entry)}
+          {valuesHidden(entry, changes) ? (
+            <p className="break-words text-sm text-muted-foreground">{t('history.customFieldValuesHidden')}</p>
+          ) : null}
+        </>
       )}
-
-      {nextCursor ? (
-        <div className="flex justify-center">
-          <Button
-            variant="outline"
-            className="min-h-11 sm:min-h-9"
-            disabled={loading}
-            aria-busy={loading}
-            onClick={(): void => void load(nextCursor)}
-          >
-            {t('history.more')}
-          </Button>
-        </div>
-      ) : entries.length > 0 ? (
-        <p className="text-center text-xs text-muted-foreground">
-          {truncated ? t('history.truncated') : t('history.end')}
-        </p>
-      ) : null}
-
-      {/* Mounted before it has text, so the announcement is reliable. */}
-      <p role="status" className="sr-only">
-        {notice}
-      </p>
-    </div>
+    />
   );
 }

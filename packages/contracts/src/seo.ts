@@ -30,23 +30,56 @@ export const seoMetaOverrideSchema = z.object({
   id: uuidSchema,
   entityType: seoEntityTypeSchema,
   entityId: uuidSchema,
-  locale: z.string().min(2).max(10),
+  /** `null` = a sales channel row (feature 163). */
+  locale: z.string().min(2).max(10).nullable(),
+  /** Feature 163 — `null` = a language row, for every channel. */
+  channelId: uuidSchema.nullable(),
   title: z.string().nullable(),
   description: z.string().nullable(),
   ogTitle: z.string().nullable(),
   ogDescription: z.string().nullable(),
-  ogImageUrl: z.string().url().nullable(),
+  /** As written: an http(s) URL or a site-relative path ({@link ogImageUrlSchema}). */
+  ogImageUrl: z.string().nullable(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
 });
 
+/**
+ * Where an override sits (feature 163, `contracts/seo-media-attachments.md` §1):
+ * `locale` only = the language row, `channelId` only = the sales channel row,
+ * both = the channel × language row. Naming **neither** keeps the meaning every
+ * caller before feature 163 relied on — the `en-US` language row. Only a
+ * `product` takes a `channelId`.
+ */
+export const seoMetaScopeQuerySchema = z.object({
+  locale: z.string().min(2).max(10).optional(),
+  channelId: uuidSchema.optional(),
+});
+export type SeoMetaScopeQuery = z.infer<typeof seoMetaScopeQuerySchema>;
+
+/**
+ * Feature 163 (checkpoint E security review, I5) — an Open Graph image URL: an
+ * absolute `http(s)` URL or a site-relative path (`/…`, never `//…` or `/\…`). It is
+ * written into every page's `og:image`, so no other scheme is accepted.
+ */
+export const ogImageUrlSchema = z
+  .string()
+  .max(2048)
+  .refine(
+    (value) => /^https?:\/\/[^\s/?#\\]+[^\s\\]*$/i.test(value) || /^\/(?![/\\])[^\s\\]*$/.test(value),
+    { message: 'an http(s) URL or a path starting with a single /' },
+  );
+
 export const upsertSeoMetaOverrideRequestSchema = z.object({
-  locale: z.string().min(2).max(10),
+  /** Optional since feature 163 — see {@link seoMetaScopeQuerySchema} for the addressing rule. */
+  locale: z.string().min(2).max(10).optional(),
+  /** Feature 163 — the sales channel scope of a product override. */
+  channelId: uuidSchema.optional(),
   title: z.string().min(1).max(160).nullable().optional(),
   description: z.string().min(1).max(400).nullable().optional(),
   ogTitle: z.string().min(1).max(160).nullable().optional(),
   ogDescription: z.string().min(1).max(400).nullable().optional(),
-  ogImageUrl: z.string().url().nullable().optional(),
+  ogImageUrl: ogImageUrlSchema.nullable().optional(),
 });
 export type UpsertSeoMetaOverrideRequest = z.infer<typeof upsertSeoMetaOverrideRequestSchema>;
 
@@ -184,6 +217,17 @@ export const storefrontCrawlerFilesSchema = storefrontRobotsPolicySchema.extend(
   }),
   /** The members above that could not be read. Absent means none. */
   unreadable: z.array(z.string()).optional(),
+  /**
+   * Whether the channel is open to anonymous visitors
+   * (`specs/154-sales-channel-access/`). `false` is a store with nothing
+   * public: its `robots.txt` disallows everything and names no sitemap, and
+   * its `llms.txt` names the store and lists nothing — whatever the texts and
+   * the policy above say. The texts are still answered as stored.
+   *
+   * Optional and additive: a backend older than it never sends it, and its
+   * channels are all open; a consumer reads its absence as `true`.
+   */
+  anonymousAccess: z.boolean().optional(),
 });
 export type StorefrontCrawlerFiles = z.infer<typeof storefrontCrawlerFilesSchema>;
 
@@ -394,7 +438,9 @@ export type AdminCrawlerFilePreviewResponse = z.infer<typeof adminCrawlerFilePre
  * Container name: `seoMetaWritePort`. Owner: `seo`.
  *
  * Narrow write surface for PIM importers (feature 089 / FR-029): upsert product
- * meta overrides by locale. Channel dimension does not exist on Endora SEO rows.
+ * meta overrides by locale — the language rows. Feature 163 added channel and
+ * channel × language rows; this port writes none of them, so an import never
+ * touches an operator's channel override (FR-091).
  *
  * **Owner off:** resolving this port throws `ModuleDisabledError` (503).
  */
@@ -405,4 +451,41 @@ export interface SeoMetaWritePort {
     title?: string | null;
     description?: string | null;
   }): Promise<void>;
+}
+
+/** The product-page metadata fields an SEO override can set (feature 163, FR-075). */
+export type SeoProductMetaField = 'title' | 'description' | 'ogTitle' | 'ogDescription' | 'ogImageUrl';
+
+/** Where an effective metadata value came from; `derived` = the product page's own fallback. */
+export type SeoProductMetaSource = 'channel_language' | 'channel' | 'language' | 'derived';
+
+export interface SeoProductMetaValues {
+  title: string;
+  description: string;
+  ogTitle: string;
+  ogDescription: string;
+  ogImageUrl: string | null;
+}
+
+/**
+ * Container name: `seoProductMetaPort`. Owner: `seo` (feature 163, R13).
+ *
+ * Product metadata per sales channel × language. Each field resolves channel ×
+ * language → channel → language → the caller's derived fallback (FR-075).
+ * `catalog` declares the edge as degrades-without and probes `seo`'s presence before
+ * resolving it.
+ *
+ * **Owner off:** resolving this port throws `ModuleDisabledError` (503).
+ */
+export interface SeoProductMetaPort {
+  resolveForProduct(input: {
+    productId: string;
+    channelId: string;
+    languageCode: string;
+    fallback: SeoProductMetaValues;
+  }): Promise<SeoProductMetaValues & { sources: Record<SeoProductMetaField, SeoProductMetaSource> }>;
+  /** Every scope holding an override for the product, for the scope overview. */
+  listScopesForProduct(
+    productId: string,
+  ): Promise<Array<{ channelId: string | null; locale: string | null; fields: SeoProductMetaField[] }>>;
 }

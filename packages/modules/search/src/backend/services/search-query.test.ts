@@ -77,7 +77,6 @@ describe('SearchQueryService — reserved-fallback contract', () => {
           resolvedChannel: {
             id: '00000000-0000-4000-8000-000000000000',
             code: 'test',
-            isPublic: true,
             defaultCurrency: 'PLN',
             defaultLanguage: 'en-US',
           },

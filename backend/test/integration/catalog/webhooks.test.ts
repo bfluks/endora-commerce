@@ -66,6 +66,9 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
     categoryIds: [],
     attributeValues: {},
     visibility: 'public',
+    // Feature 163 — a product starts `inactive` unless told otherwise; these cases
+    // switch it off and need it on first.
+    status: 'active',
   });
 
   const newSku = () => `WH-${randomUUID().slice(0, 12)}`;
@@ -97,6 +100,20 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
       last,
       (event) => event['productId'] === id,
       () => h.app.inject({ method: 'PATCH', url: `/api/v1/admin/catalog/products/${id}`, payload, cookies: ADMIN }),
+    );
+    expect(response.statusCode, response.body).toBe(200);
+  };
+
+  /**
+   * Archive the product (spec 163, FR-019 — archiving is its own action; a status
+   * write never archives) and wait until the bridge has handled `product.archived.v1`.
+   */
+  const archiveProduct = async (id: string) => {
+    const response = await whenEventDelivered(
+      h,
+      PRODUCT_ARCHIVED,
+      (event) => event['productId'] === id,
+      () => h.app.inject({ method: 'POST', url: `/api/v1/admin/catalog/products/${id}/archive`, cookies: ADMIN }),
     );
     expect(response.statusCode, response.body).toBe(200);
   };
@@ -224,33 +241,60 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
     expect(ProductUpdatedEventV1Schema.parse(delivered[0]?.payload).changedFields).toEqual(['variants']);
   });
 
-  it('moving a product to inactive enqueues product.updated.v1 and then product.archived.v1 — once, on the transition only', async () => {
+  it('archiving a product enqueues product.updated.v1 and then product.archived.v1 — once, on the transition only (spec 163, FR-019)', async () => {
     const product = await createProduct();
     const subscription = await storeWebhookSubscription(h, [PRODUCT_UPDATED, PRODUCT_ARCHIVED]);
     capture.clear();
 
-    await patchProduct(product.id, { status: 'inactive' }, PRODUCT_ARCHIVED);
+    const archive = (id: string, last: string = PRODUCT_ARCHIVED) =>
+      whenEventDelivered(
+        h,
+        last,
+        (event) => event['productId'] === id,
+        () => h.app.inject({ method: 'POST', url: `/api/v1/admin/catalog/products/${id}/archive`, cookies: ADMIN }),
+      );
+    const response = await archive(product.id);
+    expect(response.statusCode, response.body).toBe(200);
 
     const delivered = jobsFor(product.id).filter((job) => job.webhookId === subscription);
     expect(delivered.map((job) => job.eventType)).toEqual([PRODUCT_UPDATED, PRODUCT_ARCHIVED]);
-    expect(ProductUpdatedEventV1Schema.parse(delivered[0]?.payload).changedFields).toEqual(['status']);
+    expect(ProductUpdatedEventV1Schema.parse(delivered[0]?.payload).changedFields).toEqual(['archivedAt']);
     expect(ProductArchivedEventV1Schema.parse(delivered[1]?.payload)).toEqual({
       eventId: expect.any(String),
       occurredAt: expect.any(String),
       productId: product.id,
     });
 
-    // Already inactive: neither a further edit nor the same status again archives it a second time.
+    // Already archived: neither an edit nor a second Archive announces it again.
     capture.clear();
-    await patchProduct(product.id, { name: { 'en-US': 'Edited while inactive' } });
-    await patchProduct(product.id, { status: 'inactive' });
+    await patchProduct(product.id, { name: { 'en-US': 'Edited while archived' } });
+    const again = await h.app.inject({ method: 'POST', url: `/api/v1/admin/catalog/products/${product.id}/archive`, cookies: ADMIN });
+    expect(again.statusCode).toBe(200);
     expect(jobsFor(product.id, PRODUCT_ARCHIVED)).toEqual([]);
 
-    // Back to active and inactive again is a second transition, and a second event.
-    await patchProduct(product.id, { status: 'active' });
+    // Restore, then Archive again, is a second transition and a second event.
+    const restored = await whenEventDelivered(
+      h,
+      PRODUCT_UPDATED,
+      (event) => event['productId'] === product.id,
+      () => h.app.inject({ method: 'POST', url: `/api/v1/admin/catalog/products/${product.id}/restore`, cookies: ADMIN }),
+    );
+    expect(restored.statusCode).toBe(200);
     expect(jobsFor(product.id, PRODUCT_ARCHIVED)).toEqual([]);
-    await patchProduct(product.id, { status: 'inactive' }, PRODUCT_ARCHIVED);
+    await archive(product.id);
     expect(jobsFor(product.id, PRODUCT_ARCHIVED).filter((job) => job.webhookId === subscription)).toHaveLength(1);
+  });
+
+  it('switching a product to inactive enqueues product.updated.v1 only — inactive is plain off (spec 163, FR-010)', async () => {
+    const product = await createProduct();
+    const subscription = await storeWebhookSubscription(h, [PRODUCT_UPDATED, PRODUCT_ARCHIVED]);
+    capture.clear();
+
+    await patchProduct(product.id, { status: 'inactive' });
+
+    const delivered = jobsFor(product.id).filter((job) => job.webhookId === subscription);
+    expect(delivered.map((job) => job.eventType)).toEqual([PRODUCT_UPDATED]);
+    expect(ProductUpdatedEventV1Schema.parse(delivered[0]?.payload).changedFields).toEqual(['status']);
   });
 
   /**
@@ -274,27 +318,20 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
     return rows[0] ?? null;
   };
 
-  it('the unaudited update path archives too, in the same order: product.updated.v1, then product.archived.v1', async () => {
+  it('the unaudited update path never archives either: inactive announces product.updated.v1 only', async () => {
     const product = await createProduct();
     const subscription = await storeWebhookSubscription(h, [PRODUCT_UPDATED, PRODUCT_ARCHIVED]);
     capture.clear();
 
-    await updateUnaudited(product.id, { status: 'inactive' });
-    // Both are delivered by the time the write returns: nothing is left in flight.
-    const delivered = jobsFor(product.id).filter((job) => job.webhookId === subscription);
-    expect(delivered.map((job) => job.eventType)).toEqual([PRODUCT_UPDATED, PRODUCT_ARCHIVED]);
-    expect(ProductUpdatedEventV1Schema.parse(delivered[0]?.payload).changedFields).toEqual(['status']);
-    ProductArchivedEventV1Schema.parse(delivered[1]?.payload);
-
-    // Once per transition here as well.
-    capture.clear();
     await whenEventDelivered(h, PRODUCT_UPDATED, (payload) => payload['productId'] === product.id, () =>
       updateUnaudited(product.id, { status: 'inactive' }),
     );
-    expect(jobsFor(product.id, PRODUCT_ARCHIVED)).toEqual([]);
+    const delivered = jobsFor(product.id).filter((job) => job.webhookId === subscription);
+    expect(delivered.map((job) => job.eventType)).toEqual([PRODUCT_UPDATED]);
+    expect(ProductUpdatedEventV1Schema.parse(delivered[0]?.payload).changedFields).toEqual(['status']);
   });
 
-  it('the API-key upsert archives in that order too', async () => {
+  it('the API-key upsert with inactive does not archive either', async () => {
     const minted = await h.app.inject({
       method: 'POST',
       url: '/api/v1/admin/api-keys',
@@ -307,16 +344,18 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
     const subscription = await storeWebhookSubscription(h, [PRODUCT_UPDATED, PRODUCT_ARCHIVED]);
     capture.clear();
 
-    const response = await h.app.inject({
-      method: 'PUT',
-      url: `/api/v1/catalog/products/by-sku/${product.sku}`,
-      payload: { ...productRequest(product.sku), status: 'inactive' },
-      headers: { authorization: `Bearer ${token}` },
-    });
+    const response = await whenEventDelivered(h, PRODUCT_UPDATED, (payload) => payload['productId'] === product.id, () =>
+      h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/catalog/products/by-sku/${product.sku}`,
+        payload: { ...productRequest(product.sku), status: 'inactive' },
+        headers: { authorization: `Bearer ${token}` },
+      }),
+    );
     expect(response.statusCode, response.body).toBe(200);
 
     const delivered = jobsFor(product.id).filter((job) => job.webhookId === subscription);
-    expect(delivered.map((job) => job.eventType)).toEqual([PRODUCT_UPDATED, PRODUCT_ARCHIVED]);
+    expect(delivered.map((job) => job.eventType)).toEqual([PRODUCT_UPDATED]);
   });
 
   it('the unaudited update announces a product that is already saved', async () => {
@@ -338,10 +377,14 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
     const product = await createProduct();
     await storeWebhookSubscription(h, CATALOG_WEBHOOK_EVENT_TYPES);
     capture.clear();
-    const emitted: string[] = [];
+    // Every emission is recorded with its product, and only this product's are
+    // asserted on: a late emission from an earlier case's product (the one above
+    // delays its commit by a second) may land in the window below and is not this
+    // write's (ci-pg/163-final11 went red on exactly that). A red names the product.
+    const emitted: Array<{ eventType: string; productId: string | undefined }> = [];
     const offs = [PRODUCT_UPDATED, PRODUCT_ARCHIVED].map((eventType) =>
-      h.eventBus.on(eventType as never, () => {
-        emitted.push(eventType);
+      h.eventBus.on(eventType as never, (payload: unknown) => {
+        emitted.push({ eventType, productId: (payload as { productId?: string }).productId });
       }),
     );
     try {
@@ -352,8 +395,8 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
     } finally {
       offs.forEach((off) => off());
     }
-    expect(emitted).toEqual([]);
-    expect(capture.jobs).toEqual([]);
+    expect(emitted.filter((event) => event.productId === product.id)).toEqual([]);
+    expect(jobsFor(product.id)).toEqual([]);
     expect((await readProduct(product.id))?.status).not.toBe('inactive');
   });
 
@@ -362,7 +405,7 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
     const platformWide = await storeWebhookSubscription(h, CATALOG_WEBHOOK_EVENT_TYPES);
 
     const product = await createProduct();
-    await patchProduct(product.id, { status: 'inactive' }, PRODUCT_ARCHIVED);
+    await archiveProduct(product.id);
 
     const receivers = jobsFor(product.id).map((job) => job.webhookId);
     expect(receivers).not.toContain(bound);
@@ -410,7 +453,17 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
     expect(updated.result.statusCode, updated.result.body).toBeGreaterThanOrEqual(400);
     expect(updated.seen.filter((payload) => payload['productId'] === other.id)).toEqual([]);
 
-    expect(capture.jobs).toEqual([]);
+    // Scoped to the two refused writes, so a late job of an earlier case's product
+    // cannot land here. The refused create has no product of its own: it would be
+    // a product.created.v1 carrying the colliding SKU under an id other than the
+    // product that already holds it.
+    expect(jobsFor(other.id)).toEqual([]);
+    expect(
+      capture.jobs.filter((job) => {
+        const payload = job.payload as { productId?: string; sku?: string };
+        return job.eventType === PRODUCT_CREATED && payload.sku === existing.sku && payload.productId !== existing.id;
+      }),
+    ).toEqual([]);
   });
 
   it('every offered event the module emits parses under its strict schema', async () => {
@@ -423,7 +476,7 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
     try {
       const product = await createProduct();
       await patchProduct(product.id, { name: { 'en-US': 'Renamed' }, visibility: 'logged_in_only' });
-      await patchProduct(product.id, { status: 'inactive' }, PRODUCT_ARCHIVED);
+      await archiveProduct(product.id);
     } finally {
       offs.forEach((off) => off());
     }
@@ -449,7 +502,7 @@ describe('catalog outbound webhooks — product.created / updated / archived', (
       capture.clear();
       await withModuleOff('webhooks', axis, async () => {
         await patchProduct(product.id, { name: { 'en-US': 'While webhooks is off' } });
-        expect(capture.jobs).toEqual([]);
+        expect(jobsFor(product.id)).toEqual([]);
       });
       // Not delivered later either: what was emitted meanwhile is gone.
       expect(jobsFor(product.id)).toEqual([]);

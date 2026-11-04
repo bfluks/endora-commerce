@@ -490,4 +490,8 @@ export const NEWSLETTER_SETTING_CODES = {
   SENDER_FROM_EMAIL: 'newsletter.sender.from_email',
   SENDER_FROM_NAME: 'newsletter.sender.from_name',
   RATE_LIMIT_PER_SECOND: 'newsletter.rate_limit_per_second',
+  // Campaign engagement tracking: the open pixel and the click redirect, each
+  // switched independently. Read per campaign send, for its sales channel.
+  TRACKING_OPENS_ENABLED: 'newsletter.tracking.opens_enabled',
+  TRACKING_CLICKS_ENABLED: 'newsletter.tracking.clicks_enabled',
 } as const;

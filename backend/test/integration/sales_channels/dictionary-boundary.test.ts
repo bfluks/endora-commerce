@@ -1,6 +1,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { EventBus } from '@endora-commerce/platform/events';
+import { AuditLogService } from '@endora-commerce/platform/composition';
+import { transactionBoundCommandBus } from '../../helpers/sales-channels-service.js';
 import { setupTestDb, type TestDb } from '../../helpers/test-db.js';
 import { testChannelBridges } from '../../helpers/channel-bridges.js';
 
@@ -30,15 +32,19 @@ describe('Sales channels dictionary boundary', () => {
     validator = dictionaryValidatorFor(() => em);
     // An empty attribution registry: this suite is about the dictionary seam
     // and composes neither contributor, so nothing points at any channel here.
+    const eventBus = new EventBus();
     service = new SalesChannelsService(
       () => em,
-      new EventBus(),
+      eventBus,
       validator,
       new SalesChannelAttributionRegistry(),
       // Feature 120 (FR-015) — which table holds each entity type's
       // memberships. This suite composes no platform, so the descriptors are
       // the ones `setupTestDb` declared from their owning modules.
       testChannelBridges(),
+      // Issue #467 — identity writes are Commands; the bus runs inside this
+      // test's transaction so the seeded dictionary state is what it sees.
+      transactionBoundCommandBus(() => em, new AuditLogService(() => em), eventBus),
     );
   });
 

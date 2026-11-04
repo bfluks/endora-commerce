@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
-import { render, screen } from '@testing-library/react';
-import type { ReactElement, ReactNode } from 'react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { StrictMode, useState, type ReactElement, type ReactNode } from 'react';
+import { ADMIN_PREFERENCES_DEFAULTS } from '@endora-commerce/contracts';
 import {
+  apiClient,
   AuthProvider,
   ModulePresenceProvider,
   useAuth,
@@ -10,6 +12,7 @@ import {
   usePageSizePreference,
   useSurfaceVisibility,
   type AdminMe,
+  type PageSizeOption,
 } from '@endora-commerce/admin-kit/lib';
 import { adminSession, modulePresence } from '../helpers/render-with-session';
 
@@ -135,11 +138,9 @@ describe('useSurfaceVisibility — the conjunction, over the real providers', ()
 });
 
 /**
- * jsdom is configured here without a `localStorage`, so the hook's own
- * `try`/`catch` swallows the absence and every call returns the default. That is
- * correct behaviour for a browser that refuses storage, and it means the
- * persistence half has never been exercised by anything — so this file supplies
- * the API rather than asserting over its absence.
+ * A `localStorage` whose writes the page-size cases can read back. Feature 164
+ * moved the page size to the server, so the assertion it serves is now the
+ * opposite of what it was: **nothing** is written to browser storage (FR-010).
  */
 function withLocalStorage(): Storage {
   const store = new Map<string, string>();
@@ -161,41 +162,143 @@ function withLocalStorage(): Storage {
   return api;
 }
 
-describe('usePageSizePreference — keyed by the signed-in admin', () => {
-  it('reads a value the same admin stored, and not another admin’s', () => {
+const PREFS_URL = '/api/v1/admin/me/preferences';
+
+function sessionWithSizes(listPageSizes: Record<string, number> | undefined, id = 'admin-one'): AdminMe {
+  const me = adminSession({ permissions: [], id });
+  return listPageSizes === undefined
+    ? me
+    : { ...me, preferences: { ...ADMIN_PREFERENCES_DEFAULTS, listPageSizes } };
+}
+
+/**
+ * Feature 164, US3 — the page size is the signed-in admin's, kept on the
+ * server per list (`specs/164-admin-user-preferences/contracts/admin-preferences-client.md` §3).
+ * Read once at mount; written as that one list; never resizes an open list.
+ */
+describe('usePageSizePreference — the signed-in admin\'s, per list, on the server', () => {
+  let patchSpy: ReturnType<typeof vi.spyOn>;
+  let setSize: (next: PageSizeOption) => void = () => undefined;
+
+  function Probe({ scope, testId = 'size' }: { scope: string; testId?: string }): ReactElement {
+    const { pageSize, setPageSize } = usePageSizePreference(scope);
+    if (testId === 'size') setSize = setPageSize;
+    return <span data-testid={testId}>{String(pageSize)}</span>;
+  }
+
+  beforeEach(() => {
     withLocalStorage();
-    const scope = 'p3-session-scope';
-    const mine = adminSession({ permissions: [], id: 'admin-one' });
-    const theirs = adminSession({ permissions: [], id: 'admin-two' });
-    window.localStorage.setItem(`b2b-admin.page-size.${scope}.admin-one`, '50');
-    window.localStorage.setItem(`b2b-admin.page-size.${scope}.admin-two`, '100');
-
-    function Probe(): ReactElement {
-      const { pageSize } = usePageSizePreference(scope);
-      return <span data-testid="size">{String(pageSize)}</span>;
-    }
-
-    const { unmount } = render(<AuthProvider initial={mine}><Probe /></AuthProvider>);
-    expect(screen.getByTestId('size').textContent).toBe('50');
-    unmount();
-
-    render(<AuthProvider initial={theirs}><Probe /></AuthProvider>);
-    expect(screen.getByTestId('size').textContent).toBe('100');
+    patchSpy = vi.spyOn(apiClient, 'patch').mockImplementation(async (_path: string, body: unknown) => ({
+      data: { ...ADMIN_PREFERENCES_DEFAULTS, ...(body as object) },
+    }));
   });
 
-  it('falls back to the default for a stored value that is not an option', () => {
-    withLocalStorage();
-    const scope = 'p3-session-bad-value';
-    window.localStorage.setItem(`b2b-admin.page-size.${scope}.admin-one`, '7');
-    function Probe(): ReactElement {
-      const { pageSize } = usePageSizePreference(scope);
-      return <span data-testid="size">{String(pageSize)}</span>;
-    }
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it('reads the list\'s size from the session\'s preferences', () => {
     render(
-      <AuthProvider initial={adminSession({ permissions: [], id: 'admin-one' })}>
-        <Probe />
-      </AuthProvider>,
+      <StrictMode>
+        <AuthProvider initial={sessionWithSizes({ orders: 50 })}>
+          <Probe scope="orders" />
+        </AuthProvider>
+      </StrictMode>,
+    );
+    expect(screen.getByTestId('size').textContent).toBe('50');
+  });
+
+  it('a list with nothing stored is at 20, and so is every list of a new admin (US3 AS-8)', () => {
+    render(
+      <StrictMode>
+        <AuthProvider initial={sessionWithSizes({ orders: 50 })}>
+          <Probe scope="returns" />
+        </AuthProvider>
+      </StrictMode>,
     );
     expect(screen.getByTestId('size').textContent).toBe('20');
+    cleanup();
+    render(
+      <StrictMode>
+        <AuthProvider initial={sessionWithSizes(undefined, 'admin-new')}>
+          <Probe scope="orders" />
+        </AuthProvider>
+      </StrictMode>,
+    );
+    expect(screen.getByTestId('size').textContent).toBe('20');
+  });
+
+  it('a stored size that is not an option reads as 20 and is not rewritten (FR-015, US3 AS-7)', () => {
+    render(
+      <StrictMode>
+        <AuthProvider initial={sessionWithSizes({ orders: 7 })}>
+          <Probe scope="orders" />
+        </AuthProvider>
+      </StrictMode>,
+    );
+    expect(screen.getByTestId('size').textContent).toBe('20');
+    expect(patchSpy).not.toHaveBeenCalled();
+  });
+
+  it('two lists sharing a scope share one value (FR-014)', async () => {
+    render(
+      <StrictMode>
+        <AuthProvider initial={sessionWithSizes({ 'catalog-products': 100 })}>
+          <Probe scope="catalog-products" />
+          <Probe scope="catalog-products" testId="dialog" />
+        </AuthProvider>
+      </StrictMode>,
+    );
+    expect(screen.getByTestId('size').textContent).toBe('100');
+    expect(screen.getByTestId('dialog').textContent).toBe('100');
+  });
+
+  it('setPageSize writes only that list, and nothing to browser storage (FR-010)', async () => {
+    render(
+      <StrictMode>
+        <AuthProvider initial={sessionWithSizes({ returns: 50 })}>
+          <Probe scope="orders" />
+        </AuthProvider>
+      </StrictMode>,
+    );
+    await act(async () => setSize(100));
+    expect(screen.getByTestId('size').textContent).toBe('100');
+    await waitFor(() =>
+      expect((patchSpy.mock.calls as unknown[][]).map(([path, body]) => [path, body])).toEqual([
+        [PREFS_URL, { listPageSizes: { orders: 100 } }],
+      ]),
+    );
+    expect(window.localStorage.length).toBe(0);
+  });
+
+  it('a foreground refetch does not resize the open list; the next mount reads the new size', async () => {
+    vi.spyOn(apiClient, 'get').mockImplementation(async (path: string) => {
+      if (path === PREFS_URL) return { data: { ...ADMIN_PREFERENCES_DEFAULTS, listPageSizes: { orders: 500 } } };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    function Toggle(): ReactElement {
+      const [second, setSecond] = useState(false);
+      return (
+        <>
+          <Probe scope="orders" />
+          <button type="button" onClick={(): void => setSecond(true)}>mount</button>
+          {second ? <Probe scope="orders" testId="next" /> : null}
+        </>
+      );
+    }
+    render(
+      <StrictMode>
+        <AuthProvider initial={sessionWithSizes({ orders: 50 })}>
+          <Toggle />
+        </AuthProvider>
+      </StrictMode>,
+    );
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+    await waitFor(() => expect(vi.mocked(apiClient.get)).toHaveBeenCalledWith(PREFS_URL));
+    expect(screen.getByTestId('size').textContent).toBe('50');
+    await act(async () => screen.getByRole('button', { name: 'mount' }).click());
+    expect(screen.getByTestId('next').textContent).toBe('500');
   });
 });

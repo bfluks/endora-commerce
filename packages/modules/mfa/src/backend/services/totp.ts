@@ -1,4 +1,5 @@
 import { TOTP, Secret } from 'otpauth';
+import { renderSVG } from 'uqr';
 
 /**
  * TOTP helpers (feature 042) using the already-present `otpauth` dependency.
@@ -11,9 +12,17 @@ const PERIOD = 30;
 const DIGITS = 6;
 const ALGORITHM = 'SHA1' as const;
 
+/**
+ * A new secret, the `otpauth://` URI an authenticator app enrols from, and a QR
+ * code of that URI as an SVG document (`specs/166-mfa-totp-hardening/` FR-001,
+ * research R1). The SVG is drawn here so no client needs an encoder of its own;
+ * it is static markup — a rectangle and one path — with no script and no
+ * external reference, and the label only ever reaches it as encoded data.
+ */
 export function generateSecret(accountLabel: string): {
   secret: string;
   otpauthUri: string;
+  qrSvg: string;
 } {
   const secret = new Secret({ size: 20 });
   const totp = new TOTP({
@@ -24,7 +33,8 @@ export function generateSecret(accountLabel: string): {
     period: PERIOD,
     secret,
   });
-  return { secret: secret.base32, otpauthUri: totp.toString() };
+  const otpauthUri = totp.toString();
+  return { secret: secret.base32, otpauthUri, qrSvg: renderSVG(otpauthUri, { border: 2 }) };
 }
 
 /**

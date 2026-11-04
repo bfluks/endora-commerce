@@ -37,6 +37,8 @@ export const BLOG_SETTING_CODES = {
   ACTIVATION: 'blog.activation',
   ENABLED: 'blog.enabled',
   URL_PREFIX: 'blog.url_prefix',
+  /** Feature 171 (US5) — a prefix per language, overriding `URL_PREFIX` for that language. */
+  URL_PREFIX_BY_LANGUAGE: 'blog.url_prefix_by_language',
   LATEST_COUNT: 'blog.latest_count',
   POSTS_PER_PAGE: 'blog.posts_per_page',
 } as const;
@@ -86,6 +88,15 @@ const settings = defineModuleSettingsManifest({
       defaultValue: BLOG_DEFAULT_URL_PREFIX,
     },
     {
+      code: BLOG_SETTING_CODES.URL_PREFIX_BY_LANGUAGE,
+      name: 'Blog URL prefix per language',
+      description:
+        "The blog's URL segment per language, overriding the URL prefix for that language, as a JSON object of language code → prefix (e.g. {\"pl-PL\": \"aktualnosci\", \"en-US\": \"news\"}). A language not named uses the URL prefix.",
+      groupCode: 'blog',
+      valueType: 'json',
+      defaultValue: {},
+    },
+    {
       code: BLOG_SETTING_CODES.LATEST_COUNT,
       name: 'Latest posts on the blog index',
       description:
@@ -131,6 +142,9 @@ export const manifest = defineModuleManifest({
     // declaration therefore buys install and migration order rather than a
     // flip-time refusal.
     'admin_roles',
+    // Feature 171 (US7) — a post's author is an administrator, read through
+    // `adminUserReadPort`. `admin_users` is non-deactivatable.
+    'admin_users',
     'assets_library',
     // Feature 072 (T061) — blog resolves the `requireAdmin` port, which `auth`
     // owns. Every admin route in this module is gated by it, so `auth` being
@@ -228,10 +242,103 @@ export const manifest = defineModuleManifest({
     { code: 'BLOG_TAG_NOT_FOUND' },
     { code: 'BLOG_URL_PREFIX_INVALID' },
     { code: 'BLOG_URL_PREFIX_RESERVED' },
+    // Feature 171 — a prefix that is a language prefix or a CMS page's address; a former prefix to forget that is not one.
+    { code: 'BLOG_URL_PREFIX_CONFLICT' },
+    { code: 'BLOG_URL_PREFIX_NOT_FOUND' },
+    { code: 'BLOG_LANGUAGE_INCOMPLETE' },
+    { code: 'BLOG_URL_KEY_TAKEN' },
+    { code: 'BLOG_URL_KEY_REDIRECT_TAKEOVER_REQUIRED' },
+    { code: 'BLOG_URL_REDIRECT_NOT_FOUND' },
+    { code: 'BLOG_AUTHOR_NOT_FOUND' },
   ],
+  /**
+   * Feature 163 (US6, FR-026, research R-15) — the latest-posts block. Declared
+   * here, by the module whose data it shows, as `catalog` declares its blocks;
+   * its React code is `@endora-commerce/cms-components`' `LatestPosts`. While
+   * `blog` is off the block is filtered from every palette and render, and the
+   * storefront skips its read.
+   */
+  blocks: [
+    {
+      name: 'blog.LatestPosts',
+      translatable: [
+        { path: 'header.heading', format: 'tiptap' },
+        { path: 'header.lead' },
+        { path: 'header.button.label' },
+        { path: 'readMoreLabel' },
+      ],
+      labelKey: 'blocks.latestPosts.label',
+      descriptionKey: 'blocks.latestPosts.description',
+      category: 'content',
+      contexts: ['cms'],
+      fields: {},
+      responsiveFields: [
+        'headingSize', 'headingSizePx', 'headingMaxWidth', 'headingMaxWidthPx', 'columns', 'slidesPerView', 'gap', 'gapPx', 'controlsPlacement', 'controlsAlign',
+        // T189: the post card's look, the lead's size and the header button's place and width, per breakpoint.
+        'cardPadding', 'cardPaddingPx', 'cardTextPadding', 'cardTextPaddingPx', 'imageRatio', 'cardTitleSize', 'cardTitleSizePx', 'cardTitleWeight',
+        'leadSize', 'leadSizePx', 'headerButtonPlacement', 'headerButtonFullWidth',
+        'headingWeight',
+        // R22I.
+        'headingLineHeight',
+      ],
+      weight: 60,
+    },
+  ],
+  // The palette section the block sits in, declared beside it (as `catalog`
+  // declares `content` for its e-mail blocks); merged by key with `cms`'s.
+  blockCategories: [{ key: 'content', titleKey: 'blocks.category.content', contexts: ['cms'], weight: 20 }],
   i18n: { bundlesDir: 'i18n' },
   docs: { dir: 'docs' },
   actions: [
+    // Principle XVI (issue #510): the three screens the sidebar lists were
+    // reachable from the sidebar alone — the palette offered only the create
+    // form. Each is gated on `blog.read`, the code its route and its `GET`
+    // enforce; the create form stays on `blog.write`.
+    {
+      id: 'open-blog-posts',
+      labelKey: 'actions.openPosts.label',
+      descriptionKey: 'actions.openPosts.description',
+      icon: 'Newspaper',
+      targetRoute: '/blog/posts',
+      requiredPermission: 'blog.read',
+      keywords: ['blog', 'post', 'posts', 'article'],
+      keywordsKey: 'actions.openPosts.keywords',
+      weight: 130,
+    },
+    {
+      id: 'open-blog-categories',
+      labelKey: 'actions.openCategories.label',
+      descriptionKey: 'actions.openCategories.description',
+      icon: 'Newspaper',
+      targetRoute: '/blog/categories',
+      requiredPermission: 'blog.read',
+      keywords: ['blog', 'category', 'categories'],
+      keywordsKey: 'actions.openCategories.keywords',
+      weight: 150,
+    },
+    {
+      id: 'open-blog-tags',
+      labelKey: 'actions.openTags.label',
+      descriptionKey: 'actions.openTags.description',
+      icon: 'Newspaper',
+      targetRoute: '/blog/tags',
+      requiredPermission: 'blog.read',
+      keywords: ['blog', 'tag', 'tags'],
+      keywordsKey: 'actions.openTags.keywords',
+      weight: 160,
+    },
+    {
+      // Feature 171 — the addresses the blog is served at, per sales channel.
+      id: 'open-blog-addresses',
+      labelKey: 'actions.openAddresses.label',
+      descriptionKey: 'actions.openAddresses.description',
+      icon: 'Newspaper',
+      targetRoute: '/blog/addresses',
+      requiredPermission: 'blog.read',
+      keywords: ['blog', 'address', 'url', 'prefix', 'redirect'],
+      keywordsKey: 'actions.openAddresses.keywords',
+      weight: 165,
+    },
     {
       id: 'new-post',
       labelKey: 'actions.newPost.label',
@@ -239,7 +346,8 @@ export const manifest = defineModuleManifest({
       icon: 'BookOpen',
       targetRoute: '/blog/posts/new',
       requiredPermission: 'blog.write',
-      keywords: ['post', 'new', 'create', 'wpis', 'nowy'],
+      keywords: ['post', 'new', 'create'],
+      keywordsKey: 'actions.newPost.keywords',
       weight: 140,
     },
   ],

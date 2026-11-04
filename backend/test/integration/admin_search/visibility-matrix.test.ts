@@ -135,7 +135,9 @@ describe('admin global search — visibility matrix (spec 150, SC-003)', () => {
     expect(found['customers.customer']?.sort()).toEqual([ids['custA'], ids['custB']].sort());
     expect(found['catalog.product']).toEqual([ids['product']]);
     expect(found['catalog.category']).toEqual([ids['category']]);
-    expect(await capability(GS_COOKIES.admin)).toEqual(SEVEN);
+    // Offered besides the seven: the record types later features contribute
+    // (`specs/163-projects-and-tasks/`), which match nothing of this seed.
+    expect(await capability(GS_COOKIES.admin)).toEqual([...SEVEN, 'projects.project', 'tasks.task']);
   });
 
   it('confines a sales representative to their organization, except Organizations (owner Q2)', async () => {

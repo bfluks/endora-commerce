@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react';
-import { redirect } from 'next/navigation';
 import { getMyOrder } from '../../../../lib/api/orders';
 import { getSessionCookie } from '../../../../lib/session';
 import { getServerContext } from '../../../../lib/server-context';
@@ -12,6 +11,7 @@ import {
   paymentReturnUrl,
   postPaymentDestination,
 } from '../../../../lib/payments/post-payment-landing';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
 
 /**
  * Post-payment landing (issue #287) — the one page every gateway hands the
@@ -55,22 +55,22 @@ export default async function CheckoutReturnPage({
   const outcome = parseReturnOutcome(params.outcome);
   if (!session) {
     const next = id ? paymentReturnUrl(id, outcome) : '/account/orders';
-    redirect(`/login?next=${encodeURIComponent(next)}`);
+    return await localeRedirect(`/login?next=${encodeURIComponent(next)}`);
   }
-  if (!id) redirect('/account/orders');
+  if (!id) return await localeRedirect('/account/orders');
 
   let order;
   try {
     order = await getMyOrder(session, id);
   } catch (err) {
     if (err instanceof StorefrontApiError && err.status === 404) {
-      redirect('/account/orders');
+      return await localeRedirect('/account/orders');
     }
     throw err;
   }
 
   const destination = postPaymentDestination(order, outcome);
-  if (destination) redirect(destination);
+  if (destination) return await localeRedirect(destination);
 
   // The webhook race. The buyer is back before the gateway's notification, so
   // the order is neither paid nor failed and neither page would be true.

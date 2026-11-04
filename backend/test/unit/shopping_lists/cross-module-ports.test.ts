@@ -1,7 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { describe, expect, it } from 'vitest';
 import type {
-  CartWithItems,
   CartWritePort,
   CatalogProductReadPort,
   CatalogProductRecord,
@@ -58,6 +57,8 @@ function productRecord(
     lowStockThresholdMode: 'cumulative',
     fulfilmentStrategy: null,
     fulfilmentStrategyWarehouseOrder: null,
+    minOrderQuantity: null,
+    returnable: false,
     ...overrides,
   };
 }
@@ -180,16 +181,23 @@ describe('shopping_lists — conversion partitions by the port, and writes throu
       ids
         .filter((id) => id !== 'prod-gone')
         .map((id) =>
-          id === 'prod-archived' ? productRecord(id, { status: 'inactive' }) : productRecord(id),
+          // Spec 163 — archived is `archivedAt`, whatever the status says.
+          id === 'prod-archived' ? productRecord(id, { status: 'active', archivedAt: new Date() }) : productRecord(id),
         ),
   } as unknown as CatalogProductReadPort;
 
   it('adds only the live lines to the cart, over cartWritePort', async () => {
     const added: string[] = [];
+    const basketChannels: string[] = [];
     const carts = {
-      addItem: async (_actor: unknown, input: { productId: string }) => {
-        added.push(input.productId);
-        return {} as CartWithItems;
+      // Feature 155 (R8) — the batch list → cart goes through; every line admitted.
+      addItems: async (
+        actor: { customer?: { salesChannelId: string } },
+        lines: ReadonlyArray<{ productId: string }>,
+      ) => {
+        added.push(...lines.map((line) => line.productId));
+        basketChannels.push(actor.customer!.salesChannelId);
+        return { cart: {}, items: [], outcomes: lines.map((_line, index) => ({ index, status: 'added' })) };
       },
     } as unknown as CartWritePort;
 
@@ -201,14 +209,78 @@ describe('shopping_lists — conversion partitions by the port, and writes throu
       refusingChannelMembership,
     );
 
-    const result = await service.convertToCart(CTX, 'list-1', undefined);
+    const result = await service.convertToCart(CTX, 'list-1', undefined, 'channel-b');
 
     expect(added).toEqual(['prod-live']);
+    // The basket of the caller's channel (`specs/154-sales-channel-access/`).
+    expect(basketChannels).toEqual(['channel-b']);
     expect(result.added).toBe(1);
     expect(result.skipped).toEqual([
       { itemId: 'item-2', productId: 'prod-archived', reason: 'product_archived' },
       { itemId: 'item-3', productId: 'prod-gone', reason: 'product_not_found' },
     ]);
+  });
+
+  it('a product switched off but not archived is not product_archived (spec 163, FR-010)', async () => {
+    const offItems = [{ id: 'item-off', productId: 'prod-off', quantity: 1, variantId: null, note: null }];
+    const offCatalog = {
+      findByIds: async (ids: readonly string[]) =>
+        ids.map((id) => productRecord(id, { status: 'inactive', archivedAt: null })),
+    } as unknown as CatalogProductReadPort;
+    const added: string[] = [];
+    const carts = {
+      addItems: async (_actor: unknown, lines: ReadonlyArray<{ productId: string }>) => {
+        added.push(...lines.map((line) => line.productId));
+        return { cart: {}, items: [], outcomes: lines.map((_line, index) => ({ index, status: 'added' })) };
+      },
+    } as unknown as CartWritePort;
+    const service = new ShoppingListService(
+      fakeEm({ ShoppingList: LIST, ShoppingListItem: offItems }),
+      carts,
+      refusingRfq,
+      offCatalog,
+      refusingChannelMembership,
+    );
+
+    const result = await service.convertToCart(CTX, 'list-1', undefined, 'channel-b');
+
+    // Outside a request channel nothing here judges availability; the cart does.
+    expect(result.skipped.map((s) => s.reason)).not.toContain('product_archived');
+    expect(added).toEqual(['prod-off']);
+  });
+
+  it('re-raises a batch refusal other than the unknown-id answer with its code, message and details', async () => {
+    const carts = {
+      addItems: async () => ({
+        cart: {},
+        items: [],
+        outcomes: [
+          {
+            index: 0,
+            status: 'failed',
+            error: {
+              status: 400,
+              code: 'CART_PRODUCT_QUOTE_ONLY',
+              message: 'This product is sold on request only and cannot be added to the cart.',
+              details: { productId: 'prod-live' },
+            },
+          },
+        ],
+      }),
+    } as unknown as CartWritePort;
+    const service = new ShoppingListService(
+      fakeEm({ ShoppingList: LIST, ShoppingListItem: [items[0]] }),
+      carts,
+      refusingRfq,
+      catalogProducts,
+      refusingChannelMembership,
+    );
+    await expect(service.convertToCart(CTX, 'list-1', undefined, 'channel-b')).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'CART_PRODUCT_QUOTE_ONLY',
+      message: 'This product is sold on request only and cannot be added to the cart.',
+      details: { productId: 'prod-live' },
+    });
   });
 
   it('quotes only the live lines, over rfqCustomerPort', async () => {

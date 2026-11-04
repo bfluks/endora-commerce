@@ -2,6 +2,8 @@
 
 import type { ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
+import { useUrlLanguageState } from '../lib/i18n/localized-link';
+import { stripLocalePrefix } from '../lib/i18n/locale-path';
 
 /**
  * Picks the site header based on the *current* route.
@@ -26,7 +28,9 @@ export function HeaderSwitch({
   full: ReactNode;
   minimal: ReactNode;
 }): ReactNode {
+  // Feature 167 — `usePathname()` is the browser path, prefixed; compare the logical one.
+  const urlState = useUrlLanguageState();
   const pathname = usePathname();
-  const isCheckoutRoute = pathname?.startsWith('/checkout') ?? false;
+  const isCheckoutRoute = pathname ? stripLocalePrefix(pathname, urlState).startsWith('/checkout') : false;
   return <>{isCheckoutRoute ? minimal : full}</>;
 }

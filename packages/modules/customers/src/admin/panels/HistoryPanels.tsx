@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ApiError, apiClient, formatDateTime } from '@endora-commerce/admin-kit/lib';
+import { ApiError, apiClient, formatDateTime, formatMoney } from '@endora-commerce/admin-kit/lib';
 import { Card, CardContent, CardHeader, CardTitle } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 
@@ -174,9 +174,8 @@ export function CartsPanel({ customerId }: { customerId: string }): ReactNode {
           <li key={`${c.id}-${i}`} className="flex justify-between py-1">
             <span className="font-mono text-xs">{it.productId.slice(0, 8)}</span>
             <span>× {it.quantity}</span>
-            <span>
-              {it.unitPrice} {it.currency}
-            </span>
+            {/* A unit price: its significant places, up to four (owner ruling of 2026-10-25). */}
+            <span>{formatMoney(Number(it.unitPrice), it.currency, undefined, { unitPrice: true })}</span>
           </li>
         ))}
       </ul>
