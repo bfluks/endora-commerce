@@ -245,6 +245,27 @@ podmianą pokazuje nazwy obu plików i czas, przez jaki bieżący plik będzie m
 
 Każda podmiana to audytowana komenda `asset.replace`.
 
+### Dla programistów: podmiana z modułu {#for-developers-replacing-from-a-module}
+
+Moduł podmienia plik przez opublikowany port `assetsLibraryPort.replace` (`AssetReplaceInput` w
+`@endora-commerce/contracts`): `assetId`, `filename`, `declaredMime`, `stream` (dowolny asynchroniczny
+iterator bajtów, w tym `Readable` z Node), `declaredSize` (`0`, gdy rozmiar nie jest znany) oraz
+opcjonalne `expectedContentVersion`. Zwraca zaktualizowane szczegóły pliku i działa tak samo jak
+opisana wyżej ścieżka — te same zasady, te same odmowy jako `HttpError` (`ASSET_NOT_FOUND`,
+`ASSET_GONE`, `ASSET_LEGACY_CANNOT_REPLACE`, `ASSET_REPLACE_KIND_MISMATCH`,
+`ASSET_REPLACE_CONFLICT`), ta sama komenda i wpis audytu. Używaj go zamiast przesyłania nowego pliku i
+miękkiego usuwania starego, gdy moduł utrzymuje plik w zgodzie z zewnętrznym źródłem, na przykład
+systemem PIM: nowy plik ma nowy adres, stary odpowiada `410`, a poprzednia wersja przepada.
+
+- **Wywołujący jest zaufany.** Port nie sprawdza uprawnień ani widoczności konkretnego pliku, tak samo
+  jak `patchAsset` i `softDelete`; ścieżka panelu administracyjnego przed podmianą wymaga uprawnienia
+  `assets.write` i pliku widocznego dla administratora. Moduł, który udostępnia podmianę własnym
+  użytkownikom, sam sprawdza ich uprawnienia.
+- **Zachowywana jest jedna poprzednia wersja.** Druga podmiana odrzuca plik zachowany przy pierwszej,
+  więc synchronizacja, która podmienia plik dwa razy, zachowuje tylko ostatnią kopię.
+- **Wymaga kontekstu.** Wywołuj go w żądaniu wywołującego albo w `enterSystemScope` z procesu w tle
+  lub zaplanowanej synchronizacji, tak jak każdą komendę.
+
 ## Stałe linki {#permalinks}
 
 Stały link to wybrana przez operatora ścieżka, pod którą plik jest serwowany jako

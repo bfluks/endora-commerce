@@ -689,12 +689,61 @@ export interface AssetUploadInput {
 }
 
 /**
+ * Replace an existing asset's file in place — the replace of
+ * `specs/156-asset-stable-url/`, as a module calls it (issue #694).
+ *
+ * The asset keeps its id, folder, label, alternate text, visibility, references
+ * and storage key, so every URL already handed out keeps answering; the result
+ * carries a new `contentVersion`, and the replaced file is kept as the asset's
+ * previous version. The same upload policy applies as to
+ * {@link AssetsLibraryPort.upload}.
+ */
+export interface AssetReplaceInput {
+  assetId: string;
+  /** The new file's name. The asset takes it, with the new type and size. */
+  filename: string;
+  /** MIME the source declared (may be wrong; the content is sniffed). */
+  declaredMime: string;
+  /** Streaming source — must be consumed exactly once. */
+  stream: AssetUploadStream;
+  /** Best-effort byte count; `0` when unknown. */
+  declaredSize: number;
+  /**
+   * The content version the caller last read. When given, the replace is
+   * refused with `409 ASSET_REPLACE_CONFLICT` unless the asset still has it;
+   * absent, the asset's current version is assumed and only a concurrent
+   * replace conflicts.
+   */
+  expectedContentVersion?: string;
+}
+
+/**
  * Container name: `assetsLibraryPort`. Owner: `assets_library`.
  *
  * `pim_ergonode` ingests media during an import run: it uploads the file the
  * source supplied, patches the alternate text onto it, and soft-deletes the
- * asset an item stopped pointing at. Four methods, which is the whole of the
- * demand — the module's own admin surface is much larger and stays unpublished.
+ * asset an item stopped pointing at. The module's own admin surface is much
+ * larger and stays unpublished; what is here is what a consumer asked for.
+ *
+ * `replace` is the in-place replace of `specs/156-asset-stable-url/`, published
+ * for a module that keeps an asset in step with an external source — an instance
+ * module syncing files from a PIM is the first (issue #694). Uploading a new
+ * asset and soft-deleting the old one instead changes the public URL (the old
+ * one answers 410) and loses the previous version; `replace` keeps both. It
+ * runs Command `asset.replace` and refuses as the admin route does, with the
+ * same `HttpError` codes: `404 ASSET_NOT_FOUND`, `410 ASSET_GONE` (soft-deleted),
+ * `409 ASSET_LEGACY_CANNOT_REPLACE` (no storage key this platform wrote),
+ * `415 ASSET_REPLACE_KIND_MISMATCH` (another kind of file) and
+ * `409 ASSET_REPLACE_CONFLICT` (`expectedContentVersion` stale, or a concurrent
+ * replace won).
+ *
+ * **The caller is trusted.** Like `patchAsset` and `softDelete`, `replace`
+ * checks no permission and no per-asset visibility: the admin route does that
+ * before it calls the service (`requireAdmin('assets.write')` and the asset
+ * being visible to the admin), and a module calling the port answers for its
+ * own caller. **One previous version is kept**: a second replace discards the
+ * file the first one kept. Like every Command, the call needs an ambient
+ * context — inside a request, or in `enterSystemScope` for a worker or a sync.
  *
  * `cms` is the second consumer and takes `getAsset` alone, to turn an asset id a
  * page or block embeds into the detail the storefront response carries. It reached
@@ -713,6 +762,7 @@ export interface AssetsLibraryPort {
   getAsset(assetId: string): Promise<AssetDetail>;
   patchAsset(assetId: string, patch: AssetPatchInput): Promise<AssetDetail>;
   softDelete(assetId: string): Promise<{ deletedAt: Date; purgeAfterAt: Date }>;
+  replace(input: AssetReplaceInput): Promise<AssetDetail>;
 }
 
 /**

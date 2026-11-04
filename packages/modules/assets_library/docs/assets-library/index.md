@@ -266,6 +266,31 @@ stays restorable.
 
 Every replace is the audited Command `asset.replace`.
 
+### For developers: replacing from a module
+
+A module replaces a file through the published port, `assetsLibraryPort.replace`
+(`AssetReplaceInput` in `@endora-commerce/contracts`): `assetId`, `filename`,
+`declaredMime`, `stream` (any async iterable of bytes, a Node `Readable`
+included), `declaredSize` (`0` when unknown) and an optional
+`expectedContentVersion`. It answers the updated asset detail and behaves as the
+route above does — the same rules, the same `HttpError` refusals
+(`ASSET_NOT_FOUND`, `ASSET_GONE`, `ASSET_LEGACY_CANNOT_REPLACE`,
+`ASSET_REPLACE_KIND_MISMATCH`, `ASSET_REPLACE_CONFLICT`), the same Command and
+audit entry. Use it, rather than uploading a new asset and soft-deleting the old
+one, when a module keeps an asset in step with an external source such as a
+PIM: a new asset has a new URL, the old one answers `410`, and the previous
+version is lost.
+
+- **The caller is trusted.** The port checks no permission and no per-asset
+  visibility, as with `patchAsset` and `softDelete`; the admin route requires
+  `assets.write` and an asset the administrator may see before it replaces
+  anything. A module that exposes replacing to its own users checks their
+  rights itself.
+- **One previous version is kept.** A second replace discards the file the
+  first one kept, so a sync that replaces twice keeps only the latest backup.
+- **It needs a context.** Call it inside the caller's request, or in
+  `enterSystemScope` from a worker or a scheduled sync, as any Command runs.
+
 ## Permalinks
 
 A permalink is an operator-chosen path that serves the asset at
