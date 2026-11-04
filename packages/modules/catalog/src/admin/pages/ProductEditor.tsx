@@ -161,6 +161,16 @@ function errorOf(err: unknown): { status: number; code: string; message: string;
 }
 
 /** The tab a field lives on; a scope-map link without a field opens Details. */
+/**
+ * A translated lead, then the server's sentence as detail (final design review): the envelope's
+ * message is in the request language only when the backend has that code's translation, so it is
+ * never the whole of what the operator reads.
+ */
+function withServerDetail(lead: string, err: unknown): string {
+  const detail = errorOf(err)?.message;
+  return detail && detail !== lead ? `${lead} ${detail}` : lead;
+}
+
 function tabOfField(field: string | undefined): TabId {
   return field?.startsWith('attribute:') ? 'attributes' : 'details';
 }
@@ -617,6 +627,10 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
     );
   };
 
+  // The copy dialog's conflict reloads through the same path as Save's (a stable handle for the context).
+  const reloadDiscardingRef = useRef(reloadDiscarding);
+  reloadDiscardingRef.current = reloadDiscarding;
+
   const dropSeoChanges = (): void => {
     dispatch({ type: 'dropPaths', paths: [...stateRef.current.staged.keys()].filter((p) => p.startsWith('seo:')) });
     setFormError(null);
@@ -652,7 +666,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
       await apiClient.delete<void>(PRODUCT_PATH(productId));
       navigate('/catalog/products');
     } catch (err) {
-      setWholeProductError(errorOf(err)?.message ?? t('productEditor.error.delete'));
+      setWholeProductError(withServerDetail(t('productEditor.error.delete'), err));
     } finally {
       setDeleting(false);
     }
@@ -666,7 +680,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
       const res = await apiClient.post<{ data: { id: string } }>(`${PRODUCT_PATH(productId)}/duplicate`, {});
       navigate(`/catalog/products/${res.data.id}`);
     } catch (err) {
-      setWholeProductError(errorOf(err)?.message ?? t('productEditor.error.duplicate'));
+      setWholeProductError(withServerDetail(t('productEditor.error.duplicate'), err));
     } finally {
       setDuplicating(false);
     }
@@ -691,7 +705,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
       setArchiveDialog(null);
     } catch (err) {
       setArchiveError(
-        errorOf(err)?.message ?? t(archiveDialog === 'archive' ? 'productEditor.archive.failed' : 'productEditor.restore.failed'),
+        withServerDetail(t(archiveDialog === 'archive' ? 'productEditor.archive.failed' : 'productEditor.restore.failed'), err),
       );
     } finally {
       setArchiving(false);
@@ -857,6 +871,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
       refreshFamily,
       missingText,
       afterCopy,
+      reloadDiscarding: () => reloadDiscardingRef.current(),
     }),
     [productId, state, readOnly, scopeLabel, parentLabel, requestScope, refreshFamily, missingText, afterCopy],
   );
@@ -881,7 +896,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
         <div className="flex flex-wrap items-center gap-3">
           <span className="flex-1">{t('productEditor.globalOnlyTab.body', { scope: words(state.scope) })}</span>
           {!readOnly ? (
-            <Button type="button" variant="outline" size="sm" onClick={(): void => requestScope(GLOBAL)}>
+            <Button type="button" variant="outline" size="sm" className="max-lg:min-h-11" onClick={(): void => requestScope(GLOBAL)}>
               {t('productEditor.globalOnlyTab.editAtGlobal')}
             </Button>
           ) : null}
@@ -902,7 +917,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
           <p role="alert" className="m-0 text-sm text-destructive">
             {loadError}
           </p>
-          <Button type="button" variant="outline" size="sm" onClick={(): void => void load(state.scope)}>
+          <Button type="button" variant="outline" size="sm" className="max-lg:min-h-11" onClick={(): void => void load(state.scope)}>
             <RotateCw size={14} aria-hidden="true" /> {t('productEditor.error.retry')}
           </Button>
         </div>
@@ -1179,14 +1194,14 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
                 ) : formError.kind === 'conflict' ? (
                   <div className="flex flex-wrap items-center gap-3">
                     <span className="flex-1">{t('productEditor.save.error.conflict')}</span>
-                    <Button type="button" variant="outline" size="sm" onClick={reloadDiscarding}>
+                    <Button type="button" variant="outline" size="sm" className="max-lg:min-h-11" onClick={reloadDiscarding}>
                       {t('productEditor.save.reloadDiscarding')}
                     </Button>
                   </div>
                 ) : formError.kind === 'seo' ? (
                   <div className="flex flex-wrap items-center gap-3">
                     <span className="flex-1">{t('productEditor.save.error.seoOff')}</span>
-                    <Button type="button" variant="outline" size="sm" onClick={dropSeoChanges}>
+                    <Button type="button" variant="outline" size="sm" className="max-lg:min-h-11" onClick={dropSeoChanges}>
                       {t('productEditor.save.removeSeoChanges')}
                     </Button>
                   </div>
@@ -1222,6 +1237,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
                     type="button"
                     variant="outline"
                     size="sm"
+                    className="max-lg:min-h-11"
                     onClick={(): void => {
                       setArchiveError(null);
                       setArchiveDialog('restore');
@@ -1576,6 +1592,7 @@ function VariantsSection({ productId, readOnly = false }: { productId: string; r
                         type="button"
                         variant="destructive"
                         size="sm"
+                        className="max-lg:min-h-11"
                         onClick={() => void handleDelete(v.id, v.sku)}
                       >
                         {t('productEditor.variants.action.delete')}
@@ -1873,6 +1890,7 @@ function ProductLinksSection({ productId, readOnly = false }: { productId: strin
                                 <Button
                                   type="button"
                                   size="sm"
+                                  className="max-lg:min-h-11"
                                   variant="destructive"
                                   onClick={() => void handleDelete(link.id)}
                                 >
@@ -2076,6 +2094,7 @@ function GroupedItemsSection({ productId, readOnly = false }: { productId: strin
                       <Button
                         type="button"
                         size="sm"
+                        className="max-lg:min-h-11"
                         variant="destructive"
                         onClick={() => void handleDelete(item.id)}
                       >
@@ -2349,6 +2368,7 @@ function BundleSlotCard({
           <Button
             type="button"
             size="sm"
+            className="max-lg:min-h-11"
             variant="destructive"
             onClick={() => void onDeleteSlot(slot.id)}
           >
@@ -2380,6 +2400,7 @@ function BundleSlotCard({
                       <Button
                         type="button"
                         size="sm"
+                        className="max-lg:min-h-11"
                         variant="destructive"
                         onClick={() => void onRemoveOption(slot.id, opt.id)}
                       >
