@@ -55,6 +55,15 @@ a failing test (marked **RED**) in the same phase, and every FR is traced to a t
   write standard FR-110..115; MOQ `NULL` = no minimum, multiselect `NULL` = none selected). The connector
   exclusion list applies to the PIM port only. `contracts/import-profiles-and-csv.md` §2.1 gets these columns.
 - Builder `SendMessage` is not available in stream runs: mid-run notes go into the block report.
+- **2026-11-04, from the final review:**
+  - A Global save still refuses when a required attribute is empty, even if the operator did not stage that
+    attribute. Kept as is.
+  - A sticky Save on desktop is the follow-up endora-commerce/endora-commerce#717, not 170.
+  - Channel names in the import profile's channel targets are the follow-up endora-commerce/endora-commerce#718,
+    not 170. The targets keep the channel code and name the language.
+  - One vocabulary, en + pl, on every 170 surface: the scope overview is **Scope map** / **Mapa zakresów**; the
+    publication window is **Publication window** / **Okres publikacji**; the inherit action is
+    **Use value from {scope}** / **Użyj wartości z zakresu: {scope}**.
 
 ## Format
 
