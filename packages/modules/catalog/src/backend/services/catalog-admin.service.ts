@@ -73,7 +73,7 @@ export type CatalogWarehouseThresholdCopy = (input: {
 }) => Promise<{ copied: number } | 'not-present'>;
 
 /**
- * Feature 170 (FR-119, T151) — `seo`'s product metadata copied at every scope a duplicate's
+ * Feature 172 (FR-119, T151) — `seo`'s product metadata copied at every scope a duplicate's
  * source holds, through `seo`'s write port **on the duplicate Command's em** (no audit of its
  * own: the duplicate's entry covers it). Presence is decided by the wiring in front of the port;
  * with `seo` off the copy is skipped and the answer is `'not-present'` — a duplicate nobody asked
@@ -266,7 +266,7 @@ export class CatalogAdminService {
      * closed ({@link CatalogAdminService.#requireAssets}).
      */
     private readonly assets?: LinkableAssetReader,
-    /** Feature 170 (FR-119) — `seo`'s metadata copy for a duplicate, presence-decided by the wiring. */
+    /** Feature 172 (FR-119) — `seo`'s metadata copy for a duplicate, presence-decided by the wiring. */
     private readonly copySeoProductMeta?: CatalogSeoProductMetaCopy,
   ) {}
 
@@ -636,7 +636,7 @@ export class CatalogAdminService {
     }
     // Feature 155 (FR-001, D5) — refused before anything on the row changes.
     assertOrderMinimumAllowed(product.type, req.minOrderQuantity);
-    // Feature 170 (C2/C3 code review 1) — the existence rules the scoped save holds for the same
+    // Feature 172 (C2/C3 code review 1) — the existence rules the scoped save holds for the same
     // Global-only fields (`product-global-field-rules.ts`), checked before anything is written:
     // an unknown attribute set or an unknown or deleted category used to reach the foreign key
     // (a 500), and a deleted category was linked silently.
@@ -653,7 +653,7 @@ export class CatalogAdminService {
         throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, `unknown_category_ids: ${missing.join(', ')}`);
       }
     }
-    // Feature 170 (R7, contract §6) — a product-row write is Save-overwritable: it moves the
+    // Feature 172 (R7, contract §6) — a product-row write is Save-overwritable: it moves the
     // editor's version, and a `version` the caller sends is compared first (stale → 409).
     await bumpScopeVersion(em, id, req.version);
     const stateBefore: Record<string, unknown> = {
@@ -885,7 +885,7 @@ export class CatalogAdminService {
    * Duplicate an existing Product: copies the core row plus bridge tables
    * (categories, sales-channel memberships, gallery items + labels,
    * attachments, packaging units, related/up-sell/cross-sell links, grouped
-   * children, bundle slots + options, variants) and, since feature 170
+   * children, bundle slots + options, variants) and, since feature 172
    * (FR-119), every scoped value at Global, Channel and Channel × language.
    *
    * The duplicated row gets a fresh UUID; the SKU is derived from the
@@ -931,7 +931,7 @@ export class CatalogAdminService {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
     }
 
-    // Feature 170 (FR-119, T151) — the copy is ONE Command: the product row, every catalog-owned
+    // Feature 172 (FR-119, T151) — the copy is ONE Command: the product row, every catalog-owned
     // bridge and every scoped value at Global, Channel and Channel × language, empty overrides and
     // inherit states included, commit or roll back together with the one audit entry. What other
     // modules own runs through their own audited Commands after it (the channel memberships, the
@@ -980,7 +980,7 @@ export class CatalogAdminService {
               ],
             }
           : {}),
-        // Feature 170 (FR-119) — the Global order rules and publication window.
+        // Feature 172 (FR-119) — the Global order rules and publication window.
         minOrderQuantity: source.minOrderQuantity ?? null,
         returnable: source.returnable,
         publishFrom: source.publishFrom ?? null,
@@ -1037,7 +1037,7 @@ export class CatalogAdminService {
   }
 
   /**
-   * Feature 170 (FR-119, T151) — every catalog-owned row of `source` copied onto `targetId`, on the
+   * Feature 172 (FR-119, T151) — every catalog-owned row of `source` copied onto `targetId`, on the
    * Command's em: the bridges (categories, gallery with its Global roles, attachments, packaging
    * units, links, grouped children, bundle slots, variants) and every scoped value at Channel and
    * Channel × language — value overrides (texts and attributes), channel scope rows, gallery item,
@@ -1314,7 +1314,7 @@ export class CatalogAdminService {
   private async allocateUniqueSlug(em: EntityManager, source: string): Promise<string> {
     const root = this.slugify(source);
     const candidates = Array.from({ length: 1000 }, (_, i) => (i === 0 ? root : this.slugify(`${root}-${i + 1}`)));
-    // Feature 170 (T039) — the URL-key service's allocation: probe, lock in sorted order, re-check.
+    // Feature 172 (T039) — the URL-key service's allocation: probe, lock in sorted order, re-check.
     const slug = await allocateFreeSlug(em, candidates, SLUG_CANDIDATE_LOCKS);
     if (slug !== null) return slug;
     throw new HttpError(
@@ -1325,7 +1325,7 @@ export class CatalogAdminService {
   }
 
   /**
-   * Feature 170 — the copy's Global name with a "(copy)" suffix, so the duplicate is obviously a
+   * Feature 172 — the copy's Global name with a "(copy)" suffix, so the duplicate is obviously a
    * clone in lists. Its Channel and Channel × language names are copied verbatim (FR-119).
    */
   private suffixCopyName(name: string): string {

@@ -17,7 +17,7 @@ import {
 } from './products-csv-grammar.js';
 
 /**
- * Feature 170 (`specs/170-product-editor-scope-switcher/` T087; `contracts/import-profiles-and-csv.md`
+ * Feature 172 (`specs/172-product-editor-scope-switcher/` T087; `contracts/import-profiles-and-csv.md`
  * §2–§3, `write-encoding.md` §3, §3a; FR-040…FR-043, FR-110…FR-118) — the products file over fake
  * ports: the header grammar, the write encoding of every cell, the profile mapping, the report,
  * one port call per product and the dry run. The `[PG]` halves are

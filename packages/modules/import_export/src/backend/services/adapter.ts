@@ -36,15 +36,15 @@ export interface ImportExportPorts {
   readonly orders: OrderReadPort;
   readonly customerAccounts: CustomerAccountReadPort;
   readonly organizations: OrganizationDetailsPort;
-  /** Feature 170 — the attribute definitions a products header names (their value type and scope set). */
+  /** Feature 172 — the attribute definitions a products header names (their value type and scope set). */
   readonly catalogAttributes: CatalogAttributeReadPort;
-  /** Feature 170 (FR-042) — which channels each imported product belongs to, for the profile's targets. */
+  /** Feature 172 (FR-042) — which channels each imported product belongs to, for the profile's targets. */
   readonly catalogAvailability: CatalogProductAvailabilityPort;
-  /** Feature 170 — the channel codes and languages a products header names (a kernel registration). */
+  /** Feature 172 — the channel codes and languages a products header names (a kernel registration). */
   readonly salesChannels: SalesChannelResolutionPort;
 }
 
-/** Feature 170 — what a run hands an adapter besides its records. */
+/** Feature 172 — what a run hands an adapter besides its records. */
 /**
  * What an adapter's import answers: the owner's report, plus — when the report would list more
  * refusals than it may — how many there were (`truncated`; products only, C2/C3 security review).
@@ -99,7 +99,7 @@ export interface ImportExportAdapter {
    */
   exportTable?(): Promise<{ header: string[]; rows: string[][] }>;
   /**
-   * Feature 170 (FR-048) — an import of this entity needs an import profile
+   * Feature 172 (FR-048) — an import of this entity needs an import profile
    * (`422 IMPORT_PROFILE_REQUIRED` without one).
    */
   requiresProfile?: boolean;

@@ -8,7 +8,7 @@ import { EditorField, useProductEditor } from './editor/editor-context.js';
 import { BooleanControl, NumberControl, SelectControl, TextControl, type SelectOption } from './editor/scoped-controls.js';
 
 /**
- * The product's Attributes tab at the editor scope (feature 170, T027 / T100;
+ * The product's Attributes tab at the editor scope (feature 172, T027 / T100;
  * `contracts/editor-ui.md` §4).
  *
  * Every attribute of the product's set is one `attribute:<key>` field of the read, with its

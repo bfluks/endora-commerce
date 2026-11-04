@@ -4,7 +4,7 @@ import { createCatalogProductScopeWritePort } from './catalog-write-ports.js';
 import { assertIntegrationCall, firstDuplicateCell } from './scoped-values-import.js';
 
 /**
- * Feature 170 (T083; `contracts/pim-locale-mapping.md` §4, R13a, R21) — the pieces of the connector
+ * Feature 172 (T083; `contracts/pim-locale-mapping.md` §4, R13a, R21) — the pieces of the connector
  * port v2 that need no database: the allowlist, the call-level refusals (source, cap, duplicates)
  * raised before any Command runs. The writes themselves are `[PG]`:
  * `backend/test/contract/catalog/scope-write-port-v2.test.ts`.

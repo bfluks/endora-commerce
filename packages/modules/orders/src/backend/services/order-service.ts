@@ -1887,7 +1887,7 @@ export class OrderService {
         }),
       );
       const productById = new Map(catalogue.products.map((p) => [p.id, p]));
-      // Feature 170 (FR-030, FR-032) — the names the order's lines snapshot, at the order's
+      // Feature 172 (FR-030, FR-032) — the names the order's lines snapshot, at the order's
       // (channel, language): C×L → C → Global. Read once, never re-resolved afterwards.
       const namesAtOrder = await this.#namesAt(
         catalogue.products.map((p) => p.id),
@@ -2120,7 +2120,7 @@ export class OrderService {
               fulfilmentStrategy: p.fulfilmentStrategy ?? null,
               fulfilmentStrategyWarehouseOrder: p.fulfilmentStrategyWarehouseOrder ?? null,
               sku: p.sku,
-              // Feature 170 (FR-030) — a stock refusal names the product as the order does.
+              // Feature 172 (FR-030) — a stock refusal names the product as the order does.
               name: namesAtOrder.get(p.id) || p.name,
             },
           ]),
@@ -3017,7 +3017,7 @@ export class OrderService {
 
   /**
    * The name a minimum refusal gives a product: its effective name at the basket's (channel,
-   * language) (feature 170, FR-030), else its Global name; the id when the record is gone.
+   * language) (feature 172, FR-030), else its Global name; the id when the record is gone.
    */
   #productName(
     productById: ReadonlyMap<string, { name: string }>,
@@ -3029,7 +3029,7 @@ export class OrderService {
   }
 
   /**
-   * Feature 170 (FR-030) — product id → its effective name at (`channelId`, `languageCode`), as
+   * Feature 172 (FR-030) — product id → its effective name at (`channelId`, `languageCode`), as
    * `catalog` answers it. No channel: no entry (the caller keeps the Global name, FR-031).
    */
   async #namesAt(

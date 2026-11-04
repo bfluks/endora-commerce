@@ -30,7 +30,7 @@ import { registerImportExportRoutes } from './routes.js';
  *
  * Nothing about it is unusual, which is worth one sentence rather than none:
  * the module took two arguments, both roots passed both, and neither consumed its
- * handle. Feature 170 gave it its first entity and migration (import profiles,
+ * handle. Feature 172 gave it its first entity and migration (import profiles,
  * `import_profiles`), so it now leaves that table behind when removed.
  *
  * The one thing to preserve is the `text/csv` body parser. It is registered
@@ -76,7 +76,7 @@ export function registerModule(ctx: ModuleContext): void {
             orders: lazyPort<OrderReadPort>(ctx, 'orderReadPort'),
             customerAccounts: lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
             organizations: lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
-            // Feature 170 — the products file's attributes, channel memberships and channels.
+            // Feature 172 — the products file's attributes, channel memberships and channels.
             catalogAttributes: lazyPort<CatalogAttributeReadPort>(ctx, 'catalogAttributeReadPort'),
             catalogAvailability: lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
             // A kernel registration: no module edge, nothing to switch off.
@@ -85,7 +85,7 @@ export function registerModule(ctx: ModuleContext): void {
       )
       .singleton(),
 
-    /** Feature 170 (FR-048) — import profiles; every write a Command (Constitution XIII). */
+    /** Feature 172 (FR-048) — import profiles; every write a Command (Constitution XIII). */
     importProfileService: ctx
       .asFunction(
         ({ emFactory, commandBus }: ImportExportCradle) => new ImportProfileService({ emFactory, commandBus }),
@@ -114,7 +114,7 @@ export function registerModule(ctx: ModuleContext): void {
 
 
 /**
- * The module's persisted entity classes (D-168). Feature 170 added the first, the import
+ * The module's persisted entity classes (D-168). Feature 172 added the first, the import
  * profile, together with the module's first migration (`./migrations`).
  */
 export const entities = [ImportProfile];
