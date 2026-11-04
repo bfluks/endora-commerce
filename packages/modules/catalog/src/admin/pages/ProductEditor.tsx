@@ -685,10 +685,20 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
       setDuplicating(false);
     }
   };
+  // The dialog a Product menu item asked for, opened once the menu has handed focus back to its
+  // trigger (`onCloseAutoFocus`), so the dialog's focus trap starts from the trigger and returns
+  // there. A bare `setTimeout` raced the menu's own focus return on a slow machine.
+  const pendingWholeProductDialog = useRef<'duplicate' | 'delete' | 'archive' | null>(null);
   const openWholeProductDialog = (kind: 'duplicate' | 'delete' | 'archive'): void => {
     setWholeProductError(null);
     setArchiveError(null);
-    // After the menu has closed and handed focus back to its trigger.
+    pendingWholeProductDialog.current = kind;
+  };
+  const afterProductMenuClosed = (): void => {
+    const kind = pendingWholeProductDialog.current;
+    pendingWholeProductDialog.current = null;
+    if (kind === null) return;
+    // The menu focuses its trigger right after this handler returns.
     setTimeout(() => {
       if (kind === 'archive') setArchiveDialog('archive');
       else setWholeProductDialog(kind);
@@ -1121,7 +1131,7 @@ function ScopedProductEditor({ productId }: { productId: string }): ReactNode {
                     {t('productEditor.wholeProduct.menu')} <ChevronDown size={14} aria-hidden="true" />
                   </button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" aria-labelledby="product-whole-caption">
+                <DropdownMenuContent align="end" aria-labelledby="product-whole-caption" onCloseAutoFocus={afterProductMenuClosed}>
                   <p aria-hidden="true" className="m-0 px-2 py-1.5 text-xs text-muted-foreground">
                     {t('productEditor.wholeProduct.caption')}
                   </p>
