@@ -220,10 +220,11 @@ export interface CatalogModuleOptions {
    */
   copySeoProductMeta?: CatalogSeoProductMetaCopy;
   /**
-   * Feature 022 — language admin service used by the product scope
-   * editor's scope-context endpoint (for the primary admin language)
-   * and the resolver service (for the same). Optional: when omitted,
-   * the new admin endpoints are NOT registered.
+   * Feature 022 / 163 / 170 — the platform's languages: read by the value
+   * resolver, the scope overview (the active languages of a product in no
+   * channel) and the scoped-values read (each channel language's name).
+   * Optional: when omitted the resolver and the scope overview are not
+   * registered, and the scoped-values read names a language by its code.
    */
   languageService?: LanguageReadPort;
   /**
