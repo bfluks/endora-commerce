@@ -25,6 +25,12 @@ import {
   documentTemplateChoicesSchema,
   isReservedFieldPath,
   itemsTablePropsSchema,
+  itemsTableGroupingSchema,
+  itemsTableGroupingMode,
+  documentItemSectionSchema,
+  isValidSectionPartition,
+  documentSectionTexts,
+  type DocumentItemSection,
 } from './document-templates.js';
 import { ERROR_CODES } from './errors.js';
 
@@ -415,5 +421,156 @@ describe('collections on the type detail and the selection list (153 §4, §5)',
   it('the Line items table is the facility’s one collection block', () => {
     expect(COLLECTION_BLOCK_NAMES).toEqual(['document_templates.ItemsTable']);
     expect(CORE_BLOCK_NAMES as readonly string[]).not.toContain('document_templates.ItemsTable');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Feature 159 — a collection's sections and the table's grouping mode
+// (`specs/159-quote-request-item-groups/contracts/document-sections.md` §1, §2)
+// ---------------------------------------------------------------------------
+
+describe('itemsTableGroupingSchema (159 FR-041, FR-045)', () => {
+  const legacyField = { field: 'attributes.brand', emptyLabel: 'Other', subtotalField: 'lineNet', subtotalLabel: 'Group total' };
+
+  it('accepts null and absent on the table (both mean the document’s groups)', () => {
+    const base = { columns: [{ id: 'a', field: 'row.number' }] };
+    expect(itemsTablePropsSchema.safeParse({ ...base, grouping: null }).success).toBe(true);
+    expect(itemsTablePropsSchema.safeParse(base).success).toBe(true);
+    expect(itemsTableGroupingMode(null)).toBe('sections');
+    expect(itemsTableGroupingMode(undefined)).toBe('sections');
+  });
+
+  it('sections: defaults the heading and the item count', () => {
+    expect(itemsTableGroupingSchema.parse({ by: 'sections' })).toEqual({ by: 'sections', otherItemsLabel: '', showItemCount: true });
+    expect(itemsTableGroupingSchema.parse({ by: 'sections', otherItemsLabel: 'Rest', showItemCount: 'false' })).toEqual({
+      by: 'sections',
+      otherItemsLabel: 'Rest',
+      showItemCount: false,
+    });
+    expect(itemsTableGroupingMode({ by: 'sections' })).toBe('sections');
+  });
+
+  it('none', () => {
+    expect(itemsTableGroupingSchema.parse({ by: 'none' })).toEqual({ by: 'none' });
+    expect(itemsTableGroupingMode({ by: 'none' })).toBe('none');
+  });
+
+  it('the 153 field shape, with and without by: field, unchanged', () => {
+    expect(itemsTableGroupingSchema.parse(legacyField)).toEqual(legacyField);
+    expect(itemsTableGroupingSchema.parse({ by: 'field', ...legacyField })).toEqual({ by: 'field', ...legacyField });
+    expect(itemsTableGroupingSchema.parse({ field: 'attributes.brand' })).toEqual({
+      field: 'attributes.brand',
+      emptyLabel: '',
+      subtotalField: null,
+      subtotalLabel: '',
+    });
+    expect(itemsTableGroupingMode(legacyField)).toBe('field');
+    expect(itemsTableGroupingMode({ by: 'field', field: 'sku' })).toBe('field');
+  });
+
+  it('refuses an unknown mode, a long heading, and keeps the 153 field path on a bad field', () => {
+    const base = { columns: [{ id: 'a', field: 'row.number' }] };
+    expect(itemsTablePropsSchema.safeParse({ ...base, grouping: { by: 'brand' } }).success).toBe(false);
+    const long = itemsTablePropsSchema.safeParse({ ...base, grouping: { by: 'sections', otherItemsLabel: 'x'.repeat(101) } });
+    expect(long.success).toBe(false);
+    expect(long.error!.issues[0]!.path.join('.')).toBe('grouping.otherItemsLabel');
+    const field = itemsTablePropsSchema.safeParse({ ...base, grouping: { ...legacyField, field: 'x.y.z' } });
+    expect(field.error!.issues[0]!.path.join('.')).toBe('grouping.field');
+  });
+
+  it('reads hostile stored values tolerantly: anything unreadable is the default mode', () => {
+    expect(itemsTableGroupingMode('nope')).toBe('sections');
+    expect(itemsTableGroupingMode({ by: 'whatever' })).toBe('sections');
+    expect(itemsTableGroupingMode({})).toBe('field');
+  });
+});
+
+describe('documentItemSectionSchema and isValidSectionPartition (159 §1)', () => {
+  const section = (key: string, itemIndexes: number[], kind: 'group' | 'ungrouped' = 'group'): DocumentItemSection => ({
+    key,
+    kind,
+    label: kind === 'group' ? `Group ${key}` : null,
+    itemIndexes,
+    summary: {},
+  });
+
+  it('the wire shape', () => {
+    expect(documentItemSectionSchema.safeParse(section('g1', [0, 1])).success).toBe(true);
+    expect(
+      documentItemSectionSchema.safeParse({ ...section('g1', [0]), summary: { netTotal: { kind: 'money', amount: 1, currency: 'PLN' } } }).success,
+    ).toBe(true);
+    expect(documentItemSectionSchema.safeParse({ ...section('', [0]) }).success).toBe(false);
+    expect(documentItemSectionSchema.safeParse({ ...section('g', [-1]) }).success).toBe(false);
+    expect(documentItemSectionSchema.safeParse({ ...section('g', [0]), kind: 'other' }).success).toBe(false);
+  });
+
+  it('accepts a partition covering every index once, ascending and contiguous, ungrouped last', () => {
+    expect(isValidSectionPartition([section('a', [0, 1]), section('b', [2]), section('ungrouped', [3, 4], 'ungrouped')], 5)).toBe(true);
+    expect(isValidSectionPartition([section('a', [0])], 1)).toBe(true);
+    expect(isValidSectionPartition([], 0)).toBe(true);
+  });
+
+  it.each<[string, DocumentItemSection[], number]>([
+    ['an index missing', [section('a', [0, 1])], 3],
+    ['an index twice', [section('a', [0, 1]), section('b', [1, 2])], 3],
+    ['out of range', [section('a', [0, 1, 2])], 2],
+    ['not ascending', [section('a', [1, 0])], 2],
+    ['not contiguous across sections', [section('a', [0, 2]), section('b', [1])], 3],
+    ['an empty section', [section('a', [0]), section('b', [])], 1],
+    ['a duplicate key', [section('a', [0]), section('a', [1])], 2],
+    ['ungrouped before a group', [section('ungrouped', [0], 'ungrouped'), section('a', [1])], 2],
+    ['no sections for lines', [], 2],
+  ])('refuses %s', (_label, sections, count) => {
+    expect(isValidSectionPartition(sections, count)).toBe(false);
+  });
+});
+
+describe('documentSectionTexts — the facility’s own PDF and canvas texts (159 §3)', () => {
+  it('English: Other items, one and other', () => {
+    const t = documentSectionTexts('en-US');
+    expect(t.otherItems).toBe('Other items');
+    expect(t.itemCount(1)).toBe('1 item');
+    expect(t.itemCount(3)).toBe('3 items');
+  });
+
+  it('Polish: Pozostałe pozycje and the three plural forms', () => {
+    const t = documentSectionTexts('pl-PL');
+    expect(t.otherItems).toBe('Pozostałe pozycje');
+    expect([1, 3, 5, 22, 25].map((n) => t.itemCount(n))).toEqual(['1 pozycja', '3 pozycje', '5 pozycji', '22 pozycje', '25 pozycji']);
+  });
+
+  it('any other language reads English', () => {
+    expect(documentSectionTexts('de-DE').otherItems).toBe('Other items');
+  });
+});
+
+describe('route 2 — sampleSections (159 §4)', () => {
+  it('defaults to [] and carries the host’s sample sections', () => {
+    const collection = {
+      key: 'lines',
+      labelKey: 'x',
+      ownerModule: 'quote_requests',
+      fields: [],
+      summaryFields: [],
+      sampleItems: [],
+      sampleSummary: {},
+    };
+    const base = {
+      code: 'quote_requests.quote_request',
+      moduleId: 'quote_requests',
+      labelKey: 'x',
+      selection: 'per_document',
+      templateCount: 0,
+      languages: null,
+      variables: [],
+      sample: {},
+      builtInContent: envelope({ 'en-US': tree() }),
+      pageDefaults: {},
+    };
+    expect(documentTypeDetailSchema.parse({ ...base, collections: [collection] }).collections[0]!.sampleSections).toEqual([]);
+    const sections = [{ key: 'g1', kind: 'group', label: 'Hall A', itemIndexes: [0], summary: {} }];
+    expect(
+      documentTypeDetailSchema.parse({ ...base, collections: [{ ...collection, sampleSections: sections }] }).collections[0]!.sampleSections,
+    ).toEqual(sections);
   });
 });

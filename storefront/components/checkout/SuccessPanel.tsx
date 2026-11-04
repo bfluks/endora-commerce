@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
 import { tForLocale } from '../../lib/i18n/messages';
+import { LocalizedLink } from '../../lib/i18n/localized-link';
 
 /**
  * Checkout Success Page panel (feature 036, US1). Presentational + pure so it
@@ -40,11 +40,11 @@ export function SuccessPanel({
       ) : null}
 
       <p className="b2b-auth__hint">
-        <Link href={`/orders/${orderId}`}>{t('checkout.success.viewOrder')}</Link>
+        <LocalizedLink href={`/orders/${orderId}`}>{t('checkout.success.viewOrder')}</LocalizedLink>
         {' · '}
-        <Link href="/account/orders">{t('checkout.success.allOrders')}</Link>
+        <LocalizedLink href="/account/orders">{t('checkout.success.allOrders')}</LocalizedLink>
         {' · '}
-        <Link href="/catalog">{t('checkout.success.continueShopping')}</Link>
+        <LocalizedLink href="/catalog">{t('checkout.success.continueShopping')}</LocalizedLink>
       </p>
     </div>
   );

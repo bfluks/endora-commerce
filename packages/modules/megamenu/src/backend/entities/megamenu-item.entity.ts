@@ -1,14 +1,14 @@
 import { Entity, Index, OptionalProps, PrimaryKey, Property } from '@mikro-orm/core';
 import { GlobalEntity } from '@endora-commerce/platform/tenancy';
 import { randomUUID } from 'crypto';
+import type {
+  MegamenuAlignment,
+  MegamenuAudience,
+  MegamenuItemKind,
+  MegamenuPresentation,
+} from '@endora-commerce/contracts';
 
-export type MegamenuItemKind =
-  | 'category-link'
-  | 'cms-page-link'
-  | 'external-link'
-  | 'button'
-  | 'asset'
-  | 'cms-block-embed';
+export type { MegamenuItemKind };
 
 /**
  * MegamenuItem — adjacency-list tree node. The `target` property is
@@ -33,7 +33,11 @@ export class MegamenuItem {
     | 'position'
     | 'labels'
     | 'descriptions'
-    | 'target';
+    | 'target'
+    | 'presentation'
+    | 'alignment'
+    | 'audience'
+    | 'clickNavigates';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -58,6 +62,22 @@ export class MegamenuItem {
 
   @Property({ type: 'json' })
   target: Record<string, unknown> = {};
+
+  /** Feature 168 — how a tab opens. Set exactly on top-level rows (a check constraint holds it). */
+  @Property({ type: 'string', length: 16, nullable: true })
+  presentation?: MegamenuPresentation | null;
+
+  /** Feature 168 — which end of the bar a tab sits at. Set exactly on top-level rows. */
+  @Property({ type: 'string', length: 8, nullable: true })
+  alignment?: MegamenuAlignment | null;
+
+  /** Feature 168 — a tab whose click follows its own link; the panel opens on hover or its toggle. */
+  @Property({ type: 'boolean', fieldName: 'click_navigates' })
+  clickNavigates: boolean = false;
+
+  /** Feature 168 — who may see the item and its subtree. */
+  @Property({ type: 'json' })
+  audience: MegamenuAudience = { kind: 'everyone' };
 
   @Property({ type: 'datetime', onCreate: () => new Date() })
   createdAt: Date = new Date();

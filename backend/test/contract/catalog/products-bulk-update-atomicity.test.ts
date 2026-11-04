@@ -66,9 +66,9 @@ describe('Feature 022 — POST /products/bulk-update (per-product atomicity)', (
     const missing = '00000000-0000-4000-8000-9999999b00b1';
     const b = await createProduct('BULK-ATOMIC-002');
 
-    // Pre-flight: confirm products start in draft so the active write is observable.
-    expect(await readProductStatus(a)).toBe('draft');
-    expect(await readProductStatus(b)).toBe('draft');
+    // Pre-flight: confirm products start inactive (spec 163, Q1-d) so the active write is observable.
+    expect(await readProductStatus(a)).toBe('inactive');
+    expect(await readProductStatus(b)).toBe('inactive');
 
     const res = await h.app.inject({
       method: 'POST',

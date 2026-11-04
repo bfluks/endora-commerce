@@ -6,7 +6,7 @@ import type {
 } from '@endora-commerce/contracts';
 import { OPEN_QUOTE_REQUEST_STATUSES } from '@endora-commerce/contracts';
 import { QuoteRequest } from '../entities/quote-request.entity.js';
-import { QuoteRequestItem } from '../entities/quote-request-item.entity.js';
+import { loadArrangedQuoteLines, toLineGroup } from './line-order.js';
 
 /**
  * The row-level read model `quote_requests` publishes (feature 075, Phase P).
@@ -61,14 +61,15 @@ export class QuoteRequestReadService implements QuoteRequestReadPort {
    * the cart price in `desiredUnitPrice` (FR-008) — it is the line's reference
    * now, so a reader that used to find it there reads `referenceUnitPrice`.
    * Both are `null` when the line stores no reference.
+   *
+   * Feature 159 (FR-011, FR-087) — the lines in display order, each with its
+   * `position` and its `group` (`null` when ungrouped); an ungrouped quote
+   * keeps its insertion order.
    */
   async listItems(quoteRequestId: string): Promise<QuoteRequestLineRecord[]> {
-    const items = await this.emFactory().find(
-      QuoteRequestItem,
-      { quoteRequestId },
-      { orderBy: { createdAt: 'asc' } },
-    );
-    return items.map((item) => ({
+    const arranged = await loadArrangedQuoteLines(this.emFactory(), quoteRequestId);
+    const groupById = new Map(arranged.groups.map((group) => [group.id, toLineGroup(group)]));
+    return arranged.lines.map((item) => ({
       id: item.id,
       quoteRequestId: item.quoteRequestId,
       productId: item.productId,
@@ -77,11 +78,14 @@ export class QuoteRequestReadService implements QuoteRequestReadPort {
       quantity: item.quantity,
       packagingUnitName: item.packagingUnitName ?? null,
       packagingUnitBaseQuantity: item.packagingUnitBaseQuantity ?? null,
+      packagingUnitId: item.packagingUnitId ?? null,
       lineCurrency: item.lineCurrency,
       agreedUnitPrice: item.agreedUnitPrice ?? null,
       desiredUnitPrice: item.desiredUnitPrice ?? null,
       referenceUnitPrice: item.referenceUnitPrice ?? null,
       referenceCurrency: item.referenceCurrency ?? null,
+      position: item.position,
+      group: (item.groupId ? groupById.get(item.groupId) : undefined) ?? null,
     }));
   }
 }

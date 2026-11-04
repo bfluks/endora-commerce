@@ -13,6 +13,11 @@ export function buildComparisonDocumentData(input: {
   readonly organizationName: string | null;
   /** The channel's storefront base URL; empty or absent → no share link. */
   readonly storefrontUrl: string | null;
+  /**
+   * Puts the document language's storefront prefix on the share page path (feature
+   * 167, FR-034). Absent: the logical path.
+   */
+  readonly pagePath?: (path: string) => string;
   readonly hideEmptyRows: boolean;
   readonly now: Date;
 }): ComparisonDocumentData {
@@ -20,7 +25,8 @@ export function buildComparisonDocumentData(input: {
   let shareUrl: string | null = null;
   if (/^https?:\/\//i.test(base)) {
     try {
-      shareUrl = new URL(`${base}/compare/share/${encodeURIComponent(input.view.shareToken)}`).toString();
+      const path = `/compare/share/${encodeURIComponent(input.view.shareToken)}`;
+      shareUrl = new URL(`${base}${input.pagePath ? input.pagePath(path) : path}`).toString();
     } catch {
       shareUrl = null;
     }

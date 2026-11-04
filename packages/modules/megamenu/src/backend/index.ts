@@ -13,9 +13,13 @@ import type {
   CmsBlockReadPort,
   CmsExternalReferenceScanner,
   CmsPageReadPort,
+  CustomerAccountReadPort,
+  CustomerGroupReadPort,
   DictionaryValidator,
   DictionaryReferenceRegistryPort,
+  OrganizationDetailsPort,
 } from '@endora-commerce/contracts';
+import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import { lazyPort } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
@@ -89,10 +93,14 @@ interface MegamenuServices {
   readonly cache: MegamenuCache | undefined;
   /** What the write services hold: the Redis drop, then the storefront notice. */
   readonly invalidator: MegamenuInvalidator;
+  /** Feature 168 — the storefront route reads the viewer's customer group through these. */
+  readonly ports: MegamenuCrossModulePorts;
 }
 
 export interface MegamenuCradle {
   readonly emFactory: () => EntityManager;
+  /** Every menu write runs on it (Constitution XIII, feature 168 R-7). */
+  readonly commandBus: CommandBus;
   readonly redis: Redis | undefined;
   readonly requireAdmin: RequireAdminFactory;
   readonly dictionaryValidator: DictionaryValidator;
@@ -138,7 +146,7 @@ export function registerModule(ctx: ModuleContext): void {
 
     megamenuServices: ctx
       .asFunction(
-        ({ emFactory, redis, megamenuCacheOptions }: MegamenuCradle): MegamenuServices => {
+        ({ emFactory, commandBus, redis, megamenuCacheOptions }: MegamenuCradle): MegamenuServices => {
           const cache = redis ? new MegamenuCache(redis, megamenuCacheOptions) : undefined;
           // The revalidator is read per notice rather than captured, and the
           // request is not awaited: the write has its answer already.
@@ -149,6 +157,7 @@ export function registerModule(ctx: ModuleContext): void {
           });
           const menuService = new MegamenuService(
             emFactory,
+            commandBus,
             invalidator,
             lazyPort<DictionaryValidator>(ctx, 'dictionaryValidator'),
           );
@@ -170,12 +179,16 @@ export function registerModule(ctx: ModuleContext): void {
             blocks: lazyPort<CmsBlockReadPort>(ctx, 'cmsBlockReadPort'),
             assets: lazyPort<AssetReadPort>(ctx, 'assetReadPort'),
             assetLibrary: lazyPort<AssetsLibraryPort>(ctx, 'assetsLibraryPort'),
+            customerGroups: lazyPort<CustomerGroupReadPort>(ctx, 'customerGroupReadPort'),
+            customerAccounts: lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
+            organizations: lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
           };
           return {
             menuService,
             cache,
             invalidator,
-            itemService: new MegamenuItemService(emFactory, menuService, ports, invalidator),
+            ports,
+            itemService: new MegamenuItemService(emFactory, commandBus, menuService, ports, invalidator),
             storefrontResolver: new StorefrontResolver(emFactory, ports, cache),
           };
         },
@@ -259,6 +272,7 @@ export function registerModule(ctx: ModuleContext): void {
     });
     await registerMegamenuStorefrontRoutes(app, {
       storefrontResolver: megamenuServices.storefrontResolver,
+      ports: megamenuServices.ports,
     });
   });
 

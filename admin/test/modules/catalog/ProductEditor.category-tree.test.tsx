@@ -113,7 +113,7 @@ const MOCK_PRODUCT = {
   sku: 'TREE-SKU',
   slug: 'tree-sku',
   type: 'simple' as const,
-  status: 'draft' as const,
+  status: 'inactive' as const,
   name: { 'en-US': 'Tree product' },
   description: { 'en-US': '' },
   visibility: 'public' as const,

@@ -245,7 +245,7 @@ function scopeRootsAbove(start: string, scope: string): readonly string[] {
  * version and dependencies are unknown, and crediting it with none would put a
  * silently short module set into a manifest the client then installs.
  */
-function readPackage(dir: string): ResolvedPackage | null {
+export function readPackage(dir: string): ResolvedPackage | null {
   const manifestPath = join(dir, 'package.json');
   if (!existsSync(manifestPath)) return null;
   let manifest: Record<string, unknown>;

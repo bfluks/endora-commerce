@@ -1,5 +1,9 @@
-import type { PublicSalesChannel, PublicSalesChannelResponse } from '@endora-commerce/contracts';
-import { apiGet, type RequestContext } from './client';
+import type {
+  PublicSalesChannel,
+  PublicSalesChannelResponse,
+  SalesChannelAccessResponse,
+} from '@endora-commerce/contracts';
+import { apiGet, apiGetForViewer, type RequestContext } from './client';
 
 /**
  * The resolved sales channel for this request — `GET
@@ -39,6 +43,34 @@ export async function getPublicSalesChannel(
         revalidate: 300,
         tags: [SALES_CHANNEL_TAG, `channel:${ctx.salesChannelCode ?? 'default'}`],
       },
+    );
+    return res.data;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What the viewer of this request may do on this store —
+ * `GET /api/v1/storefront/sales-channel/access`
+ * (`specs/154-sales-channel-access/contracts/storefront-api.md` §2).
+ *
+ * Read for the no-access screen: a signed-in buyer whose Organization may not
+ * use this store is shown the stores it may use. The answer is the viewer's
+ * own, so it is asked with their session and never cached
+ * (`apiGetForViewer`), and the backend answers it on any store without
+ * refusing.
+ *
+ * `null` when it cannot be read. Never throws: the screen it serves is already
+ * the answer to a refusal, and it still has a way out without the list.
+ */
+export async function getSalesChannelAccess(
+  ctx: RequestContext,
+): Promise<SalesChannelAccessResponse['data'] | null> {
+  try {
+    const res = await apiGetForViewer<SalesChannelAccessResponse>(
+      '/api/v1/storefront/sales-channel/access',
+      ctx,
     );
     return res.data;
   } catch {

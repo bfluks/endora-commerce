@@ -76,7 +76,12 @@ const SUBJECTS: readonly Subject[] = [
       'new-newsletter-campaign',
       'open-newsletter',
       'open-newsletter-automations',
+      // The three below arrived with issue #516: the sidebar's remaining
+      // screens (Principle XVI).
+      'open-newsletter-blocks',
       'open-newsletter-campaigns',
+      'open-newsletter-provider',
+      'open-newsletter-tags',
     ],
     axis: 'deactivated',
     admin: newsletterAdmin,

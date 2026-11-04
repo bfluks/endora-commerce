@@ -34,6 +34,7 @@ type FetchSpy = ReturnType<typeof vi.fn>;
 function build(env: { storefront?: string; secret?: string } = {}): {
   emit: (change: CmsContentChange) => void;
   fetchSpy: FetchSpy;
+  bus: EventBus;
 } {
   if (env.storefront === undefined) delete process.env['STOREFRONT_BASE_URL'];
   else process.env['STOREFRONT_BASE_URL'] = env.storefront;
@@ -61,6 +62,7 @@ function build(env: { storefront?: string; secret?: string } = {}): {
         ...change,
       } as never),
     fetchSpy,
+    bus,
   };
 }
 
@@ -119,6 +121,35 @@ describe('cms storefront revalidation', () => {
 
     expect(fetchSpy).toHaveBeenCalledOnce();
     expect(postedTags(fetchSpy)).toEqual(tags);
+  });
+
+  // R19C (T271): the handler hands its request back to the bus, so a write that
+  // dispatches its change in a scope (`publishContentChange`) answers only once
+  // the storefront has dropped the tags — the next request then reads the new content.
+  it('lets a scoped dispatch wait until the storefront has answered', async () => {
+    registryCache.__setEnabledForTesting([MODULE_ID]);
+    const { emit, fetchSpy, bus } = build({ storefront: 'http://storefront:3010', secret: 'sekret' });
+    let answer!: () => void;
+    fetchSpy.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = () => resolve(new Response(null, { status: 200 }));
+        }),
+    );
+    let done = false;
+    const dispatched = bus
+      .run(async () => {
+        emit({ kind: 'page', slugs: ['about'] });
+      })
+      .then(() => {
+        done = true;
+      });
+    await settle();
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(done).toBe(false);
+    answer();
+    await dispatched;
+    expect(done).toBe(true);
   });
 
   it('stays a no-op when the storefront revalidate endpoint is not configured', async () => {

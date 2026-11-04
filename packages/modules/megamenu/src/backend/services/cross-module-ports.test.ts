@@ -1,22 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type {
-  AssetDetail,
-  AssetRecord,
-  AssetStoredKind,
-  CatalogCategoryRecord,
-  CmsPageRecord,
-} from '@endora-commerce/contracts';
+import type { AssetDetail, AssetRecord, AssetStoredKind } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { ModuleDisabledError } from '@endora-commerce/platform/kernel';
-import {
-  resolveCategoryUrl,
-  resolveCmsPageUrl,
-  resolveMenuAsset,
-  resolveMenuBlock,
-} from './cross-module-ports.js';
+import { resolveMenuAsset, resolveMenuBlock } from './cross-module-ports.js';
 
 /**
- * The four judgements that used to sit inside `megamenuStorefrontDeps`, a
+ * The judgements that used to sit inside `megamenuStorefrontDeps`, a
  * composition root's contribution written twice and not identically
  * (`specs/110-instance-repository/` T118c).
  *
@@ -27,6 +16,11 @@ import {
  * and that silence is a registered blind spot rather than a permission. Each
  * function is a function of its ports, so a stub is the whole harness.
  *
+ * The category and page URL judgements left this file with feature 168: a
+ * menu's category links read one catalogue index (`category-tree.test.ts`) and
+ * its page links the page's address in the served language (`cms`'
+ * `pageStorefrontLinks`, `page-paths.test.ts`).
+ *
  * **What this file cannot see** is that `backend/index.ts` resolves the five
  * ports at all, or that a menu payload carries what these return. That is
  * `backend/test/integration/megamenu/cross-module-targets.test.ts`, over the
@@ -34,71 +28,13 @@ import {
  * divergences this drain found.
  */
 
-const category = (over: Partial<CatalogCategoryRecord> = {}): CatalogCategoryRecord =>
-  ({ id: 'c1', slug: 'pumps', isActive: true, deletedAt: null, ...over }) as CatalogCategoryRecord;
-
-const page = (over: Partial<CmsPageRecord> = {}): CmsPageRecord =>
-  ({ id: 'p1', slug: 'about-us', ...over }) as CmsPageRecord;
-
 const asset = (kind: AssetStoredKind, label: string | null = 'Hero'): AssetRecord =>
   ({ id: 'a1', kind, label }) as AssetRecord;
 
 const detail = (url: string): AssetDetail => ({ url }) as AssetDetail;
 
-describe('resolveCategoryUrl (T118c)', () => {
-  it('builds the storefront category route, which is `/c/<slug>`', async () => {
-    // `storefront/app/(catalog)/c/[slug]`. The harness root built
-    // `/catalog/<slug>`, which no route serves, and no test read the value —
-    // this assertion is what makes the disagreement impossible to have again.
-    const url = await resolveCategoryUrl({ findById: async () => category() }, 'c1');
-    expect(url).toBe('/c/pumps');
-  });
-
-  it('asks for live rows only, and drops a deactivated category', async () => {
-    // Two narrowings, one per storage state, and the production root had both:
-    // `is_active = true and deleted_at is null`. `liveOnly` is the port's word
-    // for the second; the first is this caller's judgement because the record
-    // carries the flag.
-    const asked: Array<{ liveOnly?: boolean } | undefined> = [];
-    const url = await resolveCategoryUrl(
-      {
-        findById: async (_id, options) => {
-          asked.push(options);
-          return category({ isActive: false });
-        },
-      },
-      'c1',
-    );
-
-    expect(url).toBeNull();
-    expect(asked[0]).toEqual({ liveOnly: true });
-  });
-
-  it('answers null for a category that is not there', async () => {
-    expect(await resolveCategoryUrl({ findById: async () => null }, 'gone')).toBeNull();
-  });
-});
-
-describe('resolveCmsPageUrl (T118c)', () => {
-  it('builds a page URL from the slug at the root of the site', async () => {
-    expect(await resolveCmsPageUrl({ findById: async () => page() }, 'p1')).toBe('/about-us');
-  });
-
-  it('does not narrow on status or `active`, which is what both roots did', async () => {
-    // The asymmetry with the category case is deliberate and pre-existing: a
-    // draft or deactivated page keeps its menu item and answers for itself when
-    // the shopper follows the link. Changing it is a product decision.
-    const url = await resolveCmsPageUrl(
-      { findById: async () => page({ status: 'draft', active: false }) },
-      'p1',
-    );
-    expect(url).toBe('/about-us');
-  });
-
-  it('answers null for a page that is not there', async () => {
-    expect(await resolveCmsPageUrl({ findById: async () => null }, 'gone')).toBeNull();
-  });
-});
+/** The menu reads one asset by id; visibility of a list is not what these cases test. */
+const everyAssetVisible = async (ids: readonly string[]): Promise<ReadonlySet<string>> => new Set(ids);
 
 describe('resolveMenuAsset (T118c)', () => {
   it('takes the kind and label from the record and the URL from the library', async () => {
@@ -106,7 +42,7 @@ describe('resolveMenuAsset (T118c)', () => {
     // kind and no resolved URL, `AssetDetail` carries the URL and no kind.
     const resolved = await resolveMenuAsset(
       {
-        assets: { findById: async () => asset('image', 'Hero image') },
+        assets: { findById: async () => asset('image', 'Hero image'), visibleToCaller: everyAssetVisible },
         assetLibrary: { getAsset: async () => detail('https://cdn.example.com/hero.png') },
       },
       'a1',
@@ -125,7 +61,7 @@ describe('resolveMenuAsset (T118c)', () => {
     let urlAsked = 0;
     const resolved = await resolveMenuAsset(
       {
-        assets: { findById: async () => asset('pdf') },
+        assets: { findById: async () => asset('pdf'), visibleToCaller: everyAssetVisible },
         assetLibrary: {
           getAsset: async () => {
             urlAsked += 1;
@@ -144,7 +80,7 @@ describe('resolveMenuAsset (T118c)', () => {
     let urlAsked = 0;
     const resolved = await resolveMenuAsset(
       {
-        assets: { findById: async () => null },
+        assets: { findById: async () => null, visibleToCaller: everyAssetVisible },
         assetLibrary: {
           getAsset: async () => {
             urlAsked += 1;
@@ -167,7 +103,7 @@ describe('resolveMenuAsset (T118c)', () => {
     await expect(
       resolveMenuAsset(
         {
-          assets: { findById: async () => asset('image') },
+          assets: { findById: async () => asset('image'), visibleToCaller: everyAssetVisible },
           assetLibrary: {
             getAsset: async () => {
               throw new ModuleDisabledError('assets_library');

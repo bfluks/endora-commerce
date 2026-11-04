@@ -7,7 +7,10 @@ import {
   type ProductAudience,
   type ProductVisibility,
 } from '@endora-commerce/contracts';
+import { EventBus } from '@endora-commerce/platform/events';
 import { setupTestDb, type TestDb } from '../../helpers/test-db.js';
+import { testChannelBridges } from '../../helpers/channel-bridges.js';
+import { SalesChannelMembershipService } from '../../../src/kernel/sales-channels/sales-channel-membership.service.js';
 import { CatalogQuickSearchService } from '../../../../packages/modules/catalog/dist/backend/services/catalog-quick-search.service.js';
 import { Product } from '../../helpers/package-entities.js';
 
@@ -101,7 +104,19 @@ describe('catalogQuickSearchPort — the buyer audience, against the shared pred
 
   beforeEach(async () => {
     em = await db.beginTx();
-    port = new CatalogQuickSearchService(() => em, attributeReadStub);
+    // Feature 163 — availability is `availabilityCondition`: the kernel's
+    // membership subquery and the channel record its languages come from.
+    const membership = new SalesChannelMembershipService(() => em, new EventBus(), undefined, testChannelBridges());
+    const channels = {
+      getById: async (id: string) => {
+        const [row] = await em.execute<Array<{ id: string; languages: string[]; default_language: string }>>(
+          `select id::text as id, languages, default_language from sales_channels where id = ?`,
+          [id],
+        );
+        return row ? { id: row.id, languages: row.languages, defaultLanguage: row.default_language } : null;
+      },
+    };
+    port = new CatalogQuickSearchService(() => em, attributeReadStub, membership, channels as never);
   });
 
   afterEach(async () => {

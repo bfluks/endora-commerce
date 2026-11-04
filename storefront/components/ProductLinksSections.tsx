@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { formatMoney } from '../lib/i18n/money';
 import { toAbsoluteAssetUrl } from '../lib/asset-url';
+import { LocalizedAnchor } from '../lib/i18n/localized-link';
 
 /**
  * Feature 002 US4 — Related + Up-sell sections rendered after the
@@ -38,7 +39,7 @@ export interface ProductLinksLabels {
 function LinkCard({ link, locale }: { link: ProductLinkSummary; locale?: string | undefined }): ReactNode {
   return (
     <li className="overflow-hidden rounded-md border border-line bg-surface transition hover:border-[var(--ink-700)] hover:shadow-sm">
-      <a
+      <LocalizedAnchor
         href={`/p/${link.product.slug}`}
         className="flex flex-col gap-1.5 p-[10px] text-inherit"
       >
@@ -57,10 +58,10 @@ function LinkCard({ link, locale }: { link: ProductLinkSummary; locale?: string 
         </span>
         {link.product.price ? (
           <span className="font-mono text-[12px] font-medium text-accent">
-            {formatMoney(link.product.price.amount, link.product.price.currency, locale)}
+            {formatMoney(link.product.price.amount, link.product.price.currency, locale, { unitPrice: true })}
           </span>
         ) : null}
-      </a>
+      </LocalizedAnchor>
     </li>
   );
 }

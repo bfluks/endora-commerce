@@ -3,8 +3,9 @@
 **Open this before running or changing anything in `backend/test/`, and whenever a suite result
 needs to mean something.** It carries which test command to run and why, the
 unit files that talk to a live service, the five-shard serialisation and the host
-measurement behind it, per-invocation database and Redis isolation, and the
-workspace-resolution guard that refuses a run reading another checkout. One of the bodies
+measurement behind it, per-invocation database and Redis isolation, the local parallel run — its
+workers, its test Postgres and the files that stay serial — the two seams a slow file uses to
+stop waiting on itself, and the workspace-resolution guard that refuses a run reading another checkout. One of the bodies
 `AGENTS.md` routes to; it is the single home for these rules, so never restate them in
 `AGENTS.md` or in a tool-specific pointer file.
 
@@ -65,6 +66,114 @@ nothing. See `backend/test/README.md` § *One database per invocation*.
 comment on that statement in `backend/test/helpers/test-server.ts`: a leaked setting can make a
 later file *skip* work and pass.
 
+## Running the complete suite locally: workers, the test Postgres and the serial project
+
+**The operation.**
+
+```bash
+pnpm run dev:infra:test                  # a Postgres for tests only: port 5441, fsync off, tmpfs
+TEST_DATABASE_URL=postgresql://b2b:b2b@localhost:5441/b2b_test \
+  pnpm --filter backend run test         # 6 workers locally, 1 under CI
+```
+
+Measured on a 16-thread / 62 GB developer machine: the complete suite took **3.7–4.7 h** serially
+against the dev Postgres, and **51–54 min** at six workers against the test Postgres (two runs on an
+otherwise idle machine, 2026-10-20: 3210 s and 3039 s; a third, beside a video call, took 3943 s).
+That is the number `AGENTS.md`'s *Commands* block cites; re-measure rather than scale it.
+
+**The test Postgres** is the `postgres-test` service in `docker-compose.yml`, behind the `test`
+profile so `pnpm run dev:infra` never starts it (`pnpm run dev:infra:test:down` removes it). It runs
+with `fsync`, `synchronous_commit` and `full_page_writes` off and its data directory on a tmpfs,
+which is right for databases the suite creates, truncates and drops thousands of times and wrong for
+anything else: its data does not survive the container, and nothing but `TEST_DATABASE_URL` should
+point at it. Measured (2026-10-19): truncating the 93 seeded tables went from 1.25 s to 0.28 s, and
+over `test/contract/carts` plus `test/integration/orders` (71 files) a serial run went from 1064 s
+to 648 s. **It is optional.** Without `TEST_DATABASE_URL` the suite uses `b2b_test` on the dev
+Postgres exactly as before — slower, and with six workers it opens up to ~60 more connections
+against that server's default `max_connections` of 100, so run `BACKEND_TEST_WORKERS=2` there if
+`pnpm run dev` is holding connections too. The port is `POSTGRES_TEST_PORT` in the root `.env`. CI
+is unchanged: its Postgres is a service container.
+
+**Workers.** `BACKEND_TEST_WORKERS` sets the count; unset, it is **6** locally and **1** when `CI`
+is set, because the CI runner's memory budget is measured for one fork per job (above). Over the
+same 71 files on the test Postgres, 6 workers took 170 s and 12 took 162 s (2026-10-19) — six is
+where the curve flattens on a 16-thread machine, so it is the default rather than the thread count.
+Each worker gets a database and a Redis logical database of its own: `test/global-setup.ts` keeps
+the run's own lease (above) for worker 1 and, per further worker, clones the **same** migrated
+template and leases one more Redis index — five clones and five leases in ~0.5 s, against ~11 s to
+migrate a template from empty on the same server, which is why a worker's database is a clone and
+never a migration. `test/worker-services-setup.ts`, the first setup file, points `DATABASE_URL` and
+`REDIS_URL` at the entry for `VITEST_POOL_ID`, and a CLI a test spawns inherits them. Clones carry
+the run-database name shape, so the crashed-run sweep already collects them. Choose the count with
+`BACKEND_TEST_WORKERS`, **never `--maxWorkers`**: a worker the global setup did not provision
+refuses to start rather than borrowing worker 1's database. A Redis server has 16 logical databases
+by default, 15 of them leasable, so two six-worker runs fit side by side and a third fails in its
+global setup, naming the worker count that would have fitted. A run that shares one database on
+purpose — `BACKEND_TEST_ISOLATION=shared`, `ALLOW_NON_TEST_DATABASE_URL` — is one worker, and asking
+for more there is refused. `backend/test/test-workers.ts` carries the rules;
+`test/unit/harness/test-workers.test.ts` holds them.
+
+**The serial project.** A worker can own its database and its Redis index; it cannot own what the
+machine has one of — the Meilisearch instance, the CPU a timing budget or a cold child-process start
+is measured against. (Redis pub/sub is shared across logical databases too, but every subscriber
+answers an announcement by re-reading its own database, so a foreign one costs a refresh and changes
+no answer; the header of the list says so where the next reader looks.) The files that lean on those
+are named, each with a reason, in `backend/test/serial-test-files.ts`, and `vitest.config.ts` runs
+them as a second project, `backend-serial`, one at a time in a scheduling group of their own, so
+nothing else is running while they do. The list is declared and the rule is checked:
+`test/unit/harness/serial-test-files.test.ts` fails on an entry that matches nothing and on a
+contract, integration or perf file that queries Meilisearch or spawns a lifecycle CLI without being
+covered. **Putting a file on that list is not a remedy for a leak.** A file that fails beside
+another because it reads rows it did not write is fixed in the file — see below — and the list is
+for a resource no worker can be given a copy of.
+
+**What parallelism changes about a leak.** Files on one worker still run one after another against
+one database, but in an order that depends on how files were dealt to workers, and worker 1's
+database has also served a sixth of the suite by the time the serial project runs on it. So a leak
+that never surfaced serially can surface here. The repair is the one `check:shared-table-wipes`
+already requires: scope the assertion to the rows the test wrote, never empty the table first. Three
+files were repaired that way when parallelism landed, each proved as an ordered pair:
+`test/integration/newsletter/campaign-service.test.ts` and `campaign-dispatch.test.ts` sent a
+campaign to `all` and counted recipients `tenancy/scoped-empty-explains-itself.test.ts` had left
+behind, and `test/integration/demo/demo-reset-after-use.test.ts` counted every row of
+`promotion_usage_counters`, which `setupBackendServer` does not truncate. **A case budget sized for
+an idle machine is the other thing that surfaces.**
+`test/unit/packages/module-package-manifest.test.ts` rendered the whole tree six times at ~7.5 s
+each inside 30 s cases and timed out at 32 s beside five busy workers; it now renders once, as a
+fixture with a budget sized for the work. A raised timeout over repeated work would have been the
+wrong repair.
+
+## Inside a slow file: spawn side by side, clone rather than migrate
+
+Two harness seams exist for the files whose wall-clock is dominated by work the file waits on
+rather than work it asserts. Neither changes what a case asserts — only when its input is produced.
+
+**Independent child processes run through a bounded pool.** `test/helpers/bounded-pool.ts`'s
+`mapBounded` runs at most *n* calls at once and returns results in input order;
+`spawnConcurrency()` is *n*: half the machine's threads locally, **one under CI** for the reason
+the worker count is one there, and `BACKEND_TEST_SPAWN_CONCURRENCY` overrides both.
+`test/unit/scripts/moved-module-tree.test.ts` spawns every check over its four fixture trees in
+its hooks — the moved-tree fixture's `prefetch`, through `prefetchChecks` so the four trees share
+one pool — and each case then reads the result of the spawn it used to make itself, identical
+script, arguments and tree; a request two cases shared is spawned once. Measured on a 16-thread
+machine (2026-10-20): **410 s → 101 s**. The hook budget is the per-spawn budget the cases
+carried, once per round of the pool, so a CI run at one gets what it had. The rule for a caller:
+only spawns that read a tree nothing writes to may be prefetched, and `run` reuses **only**
+prefetched results — a test that changes the tree between two runs still gets two spawns.
+
+**A file that needs a freshly migrated database clones one.** `test/helpers/migrated-database.ts`'s
+`migratedDatabase()` clones the template this invocation was cloned from
+(`cloneTemplateForCaller`, the seam `provisionWorkers` uses) and withdraws what
+`test/template-seed.ts` added beyond the migrations (`withdrawPlatformInvariants`, beside
+`establishPlatformInvariants` so a second invariant is withdrawn in the same edit). The three
+`test/integration/demo/` files that drive a platform's first boot through the CLI use it; each
+used to spawn `migration:up` into an empty database — 12.5 s per file on the test Postgres against
+0.2 s for the clone (2026-10-20). **`test/integration/demo/migrated-clone-parity.test.ts` is the
+one file that still migrates from empty, and that is its job**: it compares the two databases —
+schema, migration ledger and every table's rows, minus the `uuid` and timestamp columns a
+migration lets the database choose — so the substitution cannot drift silently. Under
+`BACKEND_TEST_ISOLATION=shared` there is no template, and the seam migrates from empty and says so.
+
 ## Proving a cross-file leak: the ordered pair, and the three ways it lies to you
 
 **The instrument.** A file that fails only because an earlier file left state behind passes when
@@ -81,6 +190,9 @@ a count come out.
   `BACKEND_TEST_ISOLATION=shared`, then **two invocations**: leaker first, victim second. Shared
   is what this switch is for. Point it at your own base rather than `b2b_test` so a concurrent
   run in another worktree cannot contaminate the verdict.
+- **Ordering needs one worker.** With more than one, two files of one invocation can land on two
+  workers and two databases, and the pair then proves nothing. Shared isolation is one worker by
+  construction; for an in-process pair set `BACKEND_TEST_WORKERS=1`.
 - **In-process state** (`process.env`, a module-level singleton) — must be **one** invocation,
   because two invocations are two processes. Order therefore comes from vitest's sequencer, see
   below.

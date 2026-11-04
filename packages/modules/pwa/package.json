@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/mod-pwa",
-  "version": "0.106.0",
+  "version": "0.109.0",
   "type": "module",
   "sideEffects": false,
   "description": "Installability, static-asset caching, controlled service-worker updates, and provider-agnostic push notifications for the storefront and admin.",
@@ -47,7 +47,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.ui.json",
+    "build": "node ../../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json && tsc -p tsconfig.ui.build.json",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.ui.json --noEmit",
     "lint": "eslint src",
     "test": "vitest run"
@@ -92,13 +92,13 @@
     "@types/react": "^19.2.14",
     "@types/web-push": "^3.6.4",
     "bullmq": "^5.76.1",
-    "fastify": "^5.12.5",
+    "fastify": "^5.12.8",
     "ioredis": "^5.10.1",
     "lucide-react": "^1.11.0",
     "react": "^19.2.5",
     "sharp": "^0.35.2",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11",
+    "vitest": "^4.1.12",
     "web-push": "^3.6.7",
     "zod": "^4.2.0"
   }

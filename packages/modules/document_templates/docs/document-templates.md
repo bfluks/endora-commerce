@@ -121,17 +121,46 @@ that declares lines — the quote request in this release.
 - **Totals** — up to 10 of the document's totals, each with a label, a rule
   (*Only if it has a value* by default) and *Emphasise*, printed right-aligned
   under the table.
-- **Grouping** — optionally by one field: lines are grouped in the order the
-  values first appear, each group under a heading (lines without a value under
-  the name you give), optionally followed by a subtotal of one numeric or
-  amount field.
+- **Grouping** — one of three modes (see *Grouping* below): **Document's
+  groups** (the default), **By field** or **No grouping**.
 - Style: header background, border and stripe colours, striped rows, font size,
   space below, and the text printed instead of the table when there are no
   lines.
 
 The table repeats its header row on every page and never splits a line's row
-across pages. The canvas draws it over the sample with the same formatting as
-the PDF; a column hidden by its rule on the sample is drawn faded.
+across pages. A row is kept whole, but not with its neighbour: a line's detail
+row, or a group's heading row, can be printed at the foot of a page with the
+next row at the top of the following one. The canvas draws the table over the
+sample with the same formatting as the PDF; a column hidden by its rule on the
+sample is drawn faded.
+
+### Grouping
+
+- **Document's groups** — prints the groups an operator arranged on the
+  document itself (for a quote request: the line groups of its *Modify* tab).
+  Each group that holds a line gets a **heading row** with its name and, with
+  *Show item count* on (the default), its number of lines (*3 items* /
+  *3 pozycje*); then its lines; then **one subtotal row for each of the table's
+  totals**, with the same label and rule, computed over the group's lines and
+  printed right-aligned without emphasis (none when the table has no totals).
+  The lines without a group follow under the **Other items heading** — empty
+  prints *Other items* / *Pozostałe pozycje* in the layout's language; it may
+  hold merge fields. Positions run 1…n across the groups, and the document's
+  totals follow as usual. A document with no group — or a document type that
+  has none, for which the editor says *This document type has no groups.* —
+  prints the table flat, exactly as before.
+- **By field** — lines are grouped in the order the values of one field first
+  appear, each group under a heading (lines without a value under the name you
+  give), optionally followed by a subtotal of one numeric or amount field.
+- **No grouping** — the table is always flat.
+
+**Document's groups is what an unconfigured table means.** A table saved
+before this setting existed — its grouping stored empty — is read as
+*Document's groups*, so the built-in layout and existing templates print a
+grouped quote's groups without being edited; set *No grouping* to keep a
+template flat. A table grouped by a field keeps doing so. The canvas shows the
+sample's groups (the quote request sample holds two groups and one line
+without a group).
 
 Placeholders of the form `{{item.…}}` are reserved for a future block that
 repeats blocks once per line; until then they print as typed.
@@ -175,7 +204,8 @@ table holds 1 to 16 columns, 8 detail entries and 10 totals.
 create or duplicate, rename, save one language, set and clear the default,
 delete) and `POST /preview`. A document type's detail lists its line
 collections — their fields in the asked language, sample lines and totals —
-for the editor. Error codes: `DOCUMENT_TEMPLATE_NOT_FOUND`,
+for the editor, and `sampleSections` — the sample's groups, empty for a type
+that declares none. Error codes: `DOCUMENT_TEMPLATE_NOT_FOUND`,
 `DOCUMENT_TYPE_NOT_AVAILABLE`, `DOCUMENT_TEMPLATE_INVALID`,
 `DOCUMENT_TEMPLATE_IS_DEFAULT`, `DOCUMENT_TEMPLATE_NOT_SELECTABLE`,
 `DOCUMENT_RENDER_FAILED`.
@@ -186,6 +216,10 @@ languages, page defaults, whether one template may be chosen per document and
 its **line collections** — into the `documentTypeRegistry`, and produces
 documents through the `documentRenderPort` with its own data. A type that
 declares a line collection (its fields, its lines' values and its totals) gets
-the Line items table without writing a renderer or an editor; a type with
+the Line items table without writing a renderer or an editor; a collection
+that also declares its **sections** — each group's name, its lines and its
+totals, plus the lines without a group — gets *Document's groups* (a section
+list the table cannot use is logged once and the table prints flat, never
+failing the document); a type with
 per-document selection asks the port's `listChoices` for the templates a
 person may pick for one document.

@@ -106,9 +106,11 @@ export function FieldSourceCombobox(props: FieldSourceComboboxProps): ReactNode 
               ? t('fieldSource.hint.constant')
               : source.sourceKind === 'provider_category'
                 ? t('fieldSource.hint.providerCategory')
-                : (source.sourceKey ? sampleValues[source.sourceKey] : undefined) ??
-                  source.description ??
-                  undefined;
+                : source.sourceKind.startsWith('pack_')
+                  ? t('fieldSource.hint.pack')
+                  : (source.sourceKey ? sampleValues[source.sourceKey] : undefined) ??
+                    source.description ??
+                    undefined;
 
         // Filtering is ours (`manualFilter`) so the group headings can be drawn
         // against the visible list rather than the whole catalogue.

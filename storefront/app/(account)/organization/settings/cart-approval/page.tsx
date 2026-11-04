@@ -1,9 +1,12 @@
 import type { ReactNode } from 'react';
-import { redirect } from 'next/navigation';
 import { setCartApprovalPolicy } from '../../../../../lib/api/cart';
 import { getSessionCookie, getAnonCartCookie } from '../../../../../lib/session';
 import { getMe } from '../../../../../lib/api/account';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../../lib/i18n/navigation';
+import { getServerContext } from '../../../../../lib/server-context';
+import { tForLocale } from '../../../../../lib/i18n/messages';
+import { format } from '../../../../../lib/i18n/format';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -32,34 +35,30 @@ export default async function CartApprovalPolicyPage({
 }): Promise<ReactNode> {
   const params = await searchParams;
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const me = await getMe(session);
-  if (!me.organization) redirect('/account');
+  if (!me.organization) return await localeRedirect('/account');
+  const { locale } = await getServerContext();
+  const t = tForLocale(locale);
   if (me.customerAccount.role !== 'organization_admin') {
     return (
       <>
-        <h2>Cart approval policy</h2>
-        <p className="b2b-auth__error">
-          Only Organization Administrators can change this policy.
-        </p>
+        <h2>{t('account.cartApproval.heading')}</h2>
+        <p className="b2b-auth__error">{t('account.cartApproval.adminOnly')}</p>
       </>
     );
   }
 
   return (
     <>
-      <h2>Cart approval policy</h2>
+      <h2>{t('account.cartApproval.heading')}</h2>
       <p className="b2b-auth__hint">
-        When this policy is on, ordinary members of {me.organization.name}{' '}
-        must submit their cart for an Organization Administrator's
-        approval before checkout. Turning it off immediately returns
-        every pending or approved cart in the Organization to
-        not-required.
+        {format(t('account.cartApproval.intro'), { organization: me.organization.name })}
       </p>
 
       {params.ok ? (
         <p className="b2b-auth__hint" style={{ color: '#3a7' }}>
-          {params.ok === 'on' ? 'Policy turned on.' : 'Policy turned off.'}
+          {params.ok === 'on' ? t('account.cartApproval.turnedOn') : t('account.cartApproval.turnedOff')}
         </p>
       ) : null}
       {params.error ? (
@@ -68,10 +67,10 @@ export default async function CartApprovalPolicyPage({
 
       <div className="b2b-auth__actions" style={{ gap: '1rem', marginTop: '1rem' }}>
         <form action={turnOnAction}>
-          <button type="submit">Require cart approval</button>
+          <button type="submit">{t('account.cartApproval.require')}</button>
         </form>
         <form action={turnOffAction}>
-          <button type="submit">No approval required</button>
+          <button type="submit">{t('account.cartApproval.notRequired')}</button>
         </form>
       </div>
     </>
@@ -92,7 +91,7 @@ async function applyPolicy(requiresCartApproval: boolean): Promise<void> {
   'use server';
   const session = await getSessionCookie();
   const anon = await getAnonCartCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   try {
     await setCartApprovalPolicy(
       {
@@ -103,8 +102,10 @@ async function applyPolicy(requiresCartApproval: boolean): Promise<void> {
     );
   } catch (err) {
     const message =
-      err instanceof Error ? err.message : 'Could not update the policy.';
-    redirect(`/organization/settings/cart-approval?error=${encodeURIComponent(message)}`);
+      err instanceof Error
+        ? err.message
+        : tForLocale((await getServerContext()).locale)('account.cartApproval.failed');
+    return await localeRedirect(`/organization/settings/cart-approval?error=${encodeURIComponent(message)}`);
   }
-  redirect(`/organization/settings/cart-approval?ok=${requiresCartApproval ? 'on' : 'off'}`);
+  return await localeRedirect(`/organization/settings/cart-approval?ok=${requiresCartApproval ? 'on' : 'off'}`);
 }

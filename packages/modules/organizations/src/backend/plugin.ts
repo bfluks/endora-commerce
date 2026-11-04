@@ -23,7 +23,7 @@ import {
 import { EmailVerificationService } from './services/email-verification-service.js';
 import { InvitationService } from './services/invitation-service.js';
 import { noopOrgTemplateEmail, type OrgTemplateEmail } from './services/org-template-email.js';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { AuditPort, SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { registerOrganizationsPublicRoutes } from './routes.public.js';
 import { registerOrganizationsCustomerRoutes } from './routes.customer.js';
 import { registerOrganizationsStorefrontRoutes } from './routes.storefront.js';
@@ -35,6 +35,7 @@ import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { RequireAdminAnyFactory } from '@endora-commerce/platform/kernel';
 import type { DictionaryValidator } from '@endora-commerce/contracts';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import type { OrganizationsTranslate } from './services/organizations-prose.js';
 
 /**
  * Composition root for the organizations + customer_accounts + addresses
@@ -148,6 +149,22 @@ export interface OrganizationsModuleOptions {
    * `requireAdmin`, the hierarchy admin endpoints are mounted (Principle XIII).
    */
   commandBus?: CommandBus;
+  /**
+   * Feature 154 — the kernel's channel-membership writer, which binds a
+   * registered Organization to the channel of the store it registered on (the
+   * system default without one), and backs the admin *Sales channels*
+   * endpoints and the admin create.
+   */
+  /**
+   * This module's bundle (`_i18n`'s `adminI18nService`), for the customer-safe
+   * moderation sentences the storefront endpoints answer in the request's
+   * language (issue #95). Absent, they are answered in English.
+   */
+  translate?: OrganizationsTranslate;
+  salesChannelMembership?: Pick<
+    SalesChannelMembershipPort,
+    'bindToDefaultIfEmpty' | 'replaceChannelsForEntity' | 'listChannelsForEntity'
+  >;
 }
 
 export function organizationsModule(options: OrganizationsModuleOptions) {
@@ -170,6 +187,7 @@ export function organizationsModule(options: OrganizationsModuleOptions) {
       accountPorts,
       options.dictionaryValidator,
       options.auditLogService,
+      options.salesChannelMembership,
     );
     const verificationService = new EmailVerificationService(
       options.emFactory,
@@ -212,6 +230,7 @@ export function organizationsModule(options: OrganizationsModuleOptions) {
       resolveCustomerContext: options.resolveCustomerContext,
       resolveCustomerActorOptionalOrg: resolveOptionalOrgContext,
       emFactory: options.emFactory,
+      ...(options.translate ? { translate: options.translate } : {}),
     });
     if (options.restrictionService) {
       await registerOrganizationsStorefrontRoutes(app, {
@@ -224,6 +243,7 @@ export function organizationsModule(options: OrganizationsModuleOptions) {
         // no-org callers — that behavior is correct for order placement and
         // RFQ submission but wrong here.
         resolveCustomerContext: resolveOptionalOrgContext,
+        ...(options.translate ? { translate: options.translate } : {}),
       });
     }
     await registerMembersRoutes(app, {
@@ -262,6 +282,12 @@ export function organizationsModule(options: OrganizationsModuleOptions) {
           ? { taxIdValidationService: options.taxIdValidationService }
           : {}),
         ...(options.customFieldValues ? { customFieldValues: options.customFieldValues } : {}),
+        // Feature 154 — the Organization's *Sales channels* endpoints and the
+        // admin create.
+        ...(options.salesChannelMembership
+          ? { salesChannelMembership: options.salesChannelMembership }
+          : {}),
+        ...(options.dictionaryValidator ? { dictionaryValidator: options.dictionaryValidator } : {}),
         ...(options.commandBus
           ? {
               commandBus: options.commandBus,

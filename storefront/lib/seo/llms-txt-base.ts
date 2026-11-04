@@ -90,6 +90,11 @@ export interface LlmsTxtBaseInput {
    * ignored, so this can remove a line and can never add one.
    */
   readonly unservedPaths: readonly string[];
+  /**
+   * Feature 171 — a listed page served under another address than its route: the
+   * blog under the operator's prefix. Linked there, under the page's own title.
+   */
+  readonly servedAt?: Readonly<Record<string, string>> | undefined;
 }
 
 /**
@@ -119,7 +124,7 @@ function headingText(shopName: string): string {
 }
 
 /** The generated part, ending in exactly one line break. */
-export function renderLlmsTxtBase({ shopName, unservedPaths }: LlmsTxtBaseInput): string {
+export function renderLlmsTxtBase({ shopName, unservedPaths, servedAt }: LlmsTxtBaseInput): string {
   const pages = SITEMAP_STATIC_ROUTES.filter(
     (path) => !(Object.hasOwn(LLMS_TXT_CONDITIONAL_PAGES, path) && unservedPaths.includes(path)),
   );
@@ -128,11 +133,28 @@ export function renderLlmsTxtBase({ shopName, unservedPaths }: LlmsTxtBaseInput)
     '',
     '## Pages',
     '',
-    ...pages.map((path) => `- [${LLMS_TXT_PAGE_TITLES[path] ?? path}](${absoluteUrl(path)})`),
+    ...pages.map((path) => `- [${LLMS_TXT_PAGE_TITLES[path] ?? path}](${absoluteUrl(servedAt?.[path] ?? path)})`),
     '',
     '## Sitemap',
     '',
     `- [Sitemap](${absoluteUrl('/sitemap.xml')})`,
+    '',
+  ].join('\n');
+}
+
+/**
+ * What a store closed to anonymous visitors says to AI assistants
+ * (`specs/154-sales-channel-access/`): its name, as the generated part names
+ * it, and that its content is for signed-in customers — the summary
+ * <https://llmstxt.org> puts under the heading. No page and no sitemap: every
+ * page answers an anonymous reader with the sign-in page, and the sitemap of
+ * a closed store is empty.
+ */
+export function renderClosedStoreLlmsTxt(shopName: string): string {
+  return [
+    `# ${headingText(shopName)}`,
+    '',
+    '> The content of this store is available to signed-in customers only.',
     '',
   ].join('\n');
 }

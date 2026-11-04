@@ -357,8 +357,8 @@ export function StatusTransitionGraph({
         <div className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/40 px-3 py-2">
           <span className="text-sm">
             {t('orderStatusConfig.graph.selected')}:{' '}
-            <span className="font-mono text-xs">
-              {selected.fromStatusCode} → {selected.toStatusCode}
+            <span className="font-medium">
+              {labelOf(selected.fromStatusCode)} → {labelOf(selected.toStatusCode)}
             </span>
           </span>
           <div className="ml-auto flex items-center gap-1">
@@ -389,7 +389,7 @@ export function StatusTransitionGraph({
             <option value="">—</option>
             {statuses.map((s) => (
               <option key={s.code} value={s.code}>
-                {s.code}
+                {labelOf(s.code)}
               </option>
             ))}
           </Select>
@@ -400,7 +400,7 @@ export function StatusTransitionGraph({
             <option value="">—</option>
             {statuses.map((s) => (
               <option key={s.code} value={s.code}>
-                {s.code}
+                {labelOf(s.code)}
               </option>
             ))}
           </Select>

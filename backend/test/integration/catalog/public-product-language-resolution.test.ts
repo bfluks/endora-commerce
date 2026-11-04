@@ -79,6 +79,12 @@ describe('US1 — public product language resolution', () => {
        on conflict do nothing`,
       [channelId, productIds[0], channelId, productIds[1]],
     );
+    // Feature 163 — a switched-off product is not reachable by its URL, and
+    // products are created `inactive` (Q1-d); switch both on.
+    await conn.execute(`update products set status = 'active' where id in (?, ?)`, [
+      productIds[0],
+      productIds[1],
+    ]);
   });
 
   afterAll(async () => {

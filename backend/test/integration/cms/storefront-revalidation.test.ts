@@ -365,6 +365,8 @@ describe('CMS writes revalidate the storefront', () => {
         {
           id: parentId,
           parentId: null,
+          // A tab of the navigation bar carries how it opens (feature 168).
+          presentation: 'mega',
           position: 0,
           kind: 'external-link',
           labels: { 'en-US': 'Specials' },

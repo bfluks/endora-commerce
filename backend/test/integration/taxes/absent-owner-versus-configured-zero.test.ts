@@ -139,9 +139,16 @@ describe('taxes — a configured zero prices, an absent owner refuses [integrati
       },
     });
     expect(res.statusCode).toBe(200);
-    const summary = (res.json() as { data: { summary: { subtotal: number; taxTotal: number } } })
-      .data.summary;
+    const data = (
+      res.json() as {
+        data: { summary: { subtotal: number; taxTotal: number }; lines: Array<{ taxRate?: number }> };
+      }
+    ).data;
+    const summary = data.summary;
     expect(summary.taxTotal).toBeCloseTo(Math.round(summary.subtotal * 0.08 * 100) / 100, 2);
+    // Feature 159 (FR-060) — each line names the rate it was taxed at, so the
+    // create screen can sum a group's VAT from the same authority.
+    expect(data.lines.map((line) => line.taxRate)).toEqual([0.08]);
   });
 
   it('refuses the admin order preview while `taxes` is absent', async () => {

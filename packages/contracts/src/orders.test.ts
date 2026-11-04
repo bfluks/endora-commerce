@@ -4,7 +4,13 @@ import {
   adminOrderDetailSchema,
   adminOrderPreviewMessageCodeSchema,
   adminOrderPreviewResponseSchema,
+  adminOrdersListQuerySchema,
+  adminCreateOrderRequestSchema,
+  adminOrderPreviewRequestSchema,
   createOrderSavedViewRequestSchema,
+  orderItemSchema,
+  orderCommentSchema,
+  orderCommentSystemNoteSchema,
   orderSavedViewSchema,
   orderSchema,
   updateOrderSavedViewRequestSchema,
@@ -112,9 +118,13 @@ describe('admin order preview message codes', () => {
     'PRODUCT_NOT_VISIBLE_TO_CUSTOMER',
     'PRODUCT_NOT_IN_SALES_CHANNEL',
     'QUOTE_ONLY',
+    // Feature 160 — a line no price book prices (no `defaultPrice` fallback).
+    'UNPRICED',
+    // Feature 155 — appended last: a line with an earlier code keeps that code.
+    'BELOW_MINIMUM_QUANTITY',
   ];
 
-  it('orders the four codes by precedence, first match wins', () => {
+  it('orders the six codes by precedence, first match wins', () => {
     expect([...ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE]).toEqual(PRECEDENCE);
   });
 
@@ -139,6 +149,31 @@ describe('admin order preview message codes', () => {
     expect(adminOrderPreviewResponseSchema.parse(response).messages[0]?.code).toBe(
       'SOME_FUTURE_CODE',
     );
+  });
+
+  it('feature 159 — a priced line carries its tax rate; a line without one still parses', () => {
+    const line = {
+      productId: '00000000-0000-4000-8000-000000000007',
+      quantity: 2,
+      unitPrice: '10.00',
+      currency: 'PLN',
+      lineTotal: 20,
+    };
+    const summary = {
+      subtotal: 20,
+      taxTotal: 4.6,
+      deliveryTotal: 0,
+      paymentSurcharge: 0,
+      discountTotal: 0,
+      total: 24.6,
+      currency: 'PLN',
+    };
+    const parsed = adminOrderPreviewResponseSchema.parse({
+      lines: [{ ...line, taxRate: 0.23 }, line],
+      summary,
+      messages: [],
+    });
+    expect(parsed.lines.map((l) => l.taxRate)).toEqual([0.23, undefined]);
   });
 });
 
@@ -244,4 +279,199 @@ describe('order saved views (FR-003, R-8, S-05, S-06)', () => {
       });
     });
   }
+});
+
+describe('adminOrdersListQuerySchema customFieldFilters (specs/157-custom-fields-list-filters/)', () => {
+  it('parses the JSON parameter to the filter record', () => {
+    const parsed = adminOrdersListQuerySchema.parse({
+      customFieldFilters: '{"src":{"in":["a","b"]}}',
+    });
+    expect(parsed.customFieldFilters).toEqual({ src: { in: ['a', 'b'] } });
+  });
+
+  it('leaves it undefined when absent', () => {
+    expect(adminOrdersListQuerySchema.parse({}).customFieldFilters).toBeUndefined();
+  });
+
+  it('locates a malformed bound under the parameter, the key and the operator', () => {
+    const result = adminOrdersListQuerySchema.safeParse({
+      customFieldFilters: JSON.stringify({ src: { min: 'ten' } }),
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => issue.path)).toEqual([
+      ['customFieldFilters', 'src', 'min'],
+    ]);
+  });
+
+  it('survives the second parse the handlers perform after the route validator', () => {
+    const query = {
+      customFieldFilters: JSON.stringify({ src: { in: ['a'] }, amount: { min: '-12.5' } }),
+      status: ['pending', 'shipped'],
+      pageSize: '50',
+    };
+    const once = adminOrdersListQuerySchema.parse(query);
+    expect(adminOrdersListQuerySchema.parse(once)).toEqual(once);
+  });
+});
+
+// Feature 159 — line groups on orders (`specs/159-quote-request-item-groups/`).
+describe('order line groups (T007)', () => {
+  const ID = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const CREATE = {
+    customerAccountId: ID(3),
+    salesChannelId: ID(4),
+    deliveryMethodId: ID(5),
+    paymentMethodId: ID(6),
+    deliveryAddressId: ID(7),
+    billingAddressId: ID(7),
+  };
+  const ITEM = {
+    id: ID(20),
+    productId: ID(21),
+    productSnapshot: { sku: 'B-1', name: 'Bolt', primaryAssetUrl: null },
+    variantId: null,
+    variantSnapshot: null,
+    quantity: 2,
+    unitPrice: 10,
+    taxRate: 0.23,
+    lineTotal: 24.6,
+  };
+  const paths = (result: { error?: { issues: { path: PropertyKey[] }[] } }) =>
+    (result.error?.issues ?? []).map((issue) => issue.path.join('.'));
+
+  it('admin create accepts groups and per-line group keys', () => {
+    const parsed = adminCreateOrderRequestSchema.parse({
+      ...CREATE,
+      groups: [{ key: 'g1', name: ' Hall A ' }],
+      items: [
+        { productId: ID(30), quantity: 1, groupKey: 'g1' },
+        { productId: ID(31), quantity: 1 },
+      ],
+    });
+    expect(parsed.groups).toEqual([{ key: 'g1', name: 'Hall A' }]);
+    expect(parsed.items[0]?.groupKey).toBe('g1');
+  });
+
+  it('admin create refuses an id on a group, an unknown key, duplicate keys and 51 groups', () => {
+    expect(
+      adminCreateOrderRequestSchema.safeParse({
+        ...CREATE,
+        groups: [{ key: 'g1', id: ID(9), name: 'A' }],
+        items: [{ productId: ID(30), quantity: 1, groupKey: 'g1' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      paths(
+        adminCreateOrderRequestSchema.safeParse({
+          ...CREATE,
+          items: [{ productId: ID(30), quantity: 1, groupKey: 'nope' }],
+        }),
+      ),
+    ).toEqual(['items.0.groupKey']);
+    expect(
+      paths(
+        adminCreateOrderRequestSchema.safeParse({
+          ...CREATE,
+          groups: [
+            { key: 'a', name: 'A' },
+            { key: 'a', name: 'B' },
+          ],
+          items: [{ productId: ID(30), quantity: 1 }],
+        }),
+      ),
+    ).toEqual(['groups.1.key']);
+    const many = Array.from({ length: 51 }, (_, i) => ({ key: `k${i}`, name: `G${i}` }));
+    expect(
+      paths(
+        adminCreateOrderRequestSchema.safeParse({
+          ...CREATE,
+          groups: many,
+          items: [{ productId: ID(30), quantity: 1 }],
+        }),
+      ),
+    ).toContain('groups');
+  });
+
+  it('admin create still applies its address rule', () => {
+    const { deliveryAddressId: _omit, ...withoutDelivery } = CREATE;
+    expect(
+      paths(
+        adminCreateOrderRequestSchema.safeParse({
+          ...withoutDelivery,
+          items: [{ productId: ID(30), quantity: 1 }],
+        }),
+      ),
+    ).toEqual(['deliveryAddressId']);
+  });
+
+  it('the admin preview is unchanged: a groupKey is stripped, not refused', () => {
+    const parsed = adminOrderPreviewRequestSchema.parse({
+      customerAccountId: ID(3),
+      salesChannelId: ID(4),
+      items: [{ productId: ID(30), quantity: 1, groupKey: 'g1' }],
+    });
+    expect(parsed.items[0]).not.toHaveProperty('groupKey');
+  });
+
+  it('an order item defaults groupId and position; an order defaults itemGroups', () => {
+    const item = orderItemSchema.parse(ITEM);
+    expect(item.groupId).toBeNull();
+    expect(item.position).toBe(0);
+    expect(orderItemSchema.parse({ ...ITEM, groupId: ID(40), position: 2 })).toMatchObject({
+      groupId: ID(40),
+      position: 2,
+    });
+    expect(orderSchema.parse(ORDER).itemGroups).toEqual([]);
+    const groups = [{ id: ID(40), name: 'Hall A', position: 0 }];
+    expect(orderSchema.parse({ ...ORDER, itemGroups: groups }).itemGroups).toEqual(groups);
+  });
+});
+
+describe('feature 162 — the order comment system note', () => {
+  const NOTE = {
+    kind: 'custom_field_carry_skipped',
+    source: {
+      entityType: 'quote_request',
+      recordId: '0b8f5f0e-2a0e-4f55-8a53-0f3f7cbe0a02',
+      reference: 'QR-1042',
+    },
+    skipped: [{ key: 'order_source', reason: 'value_invalid' }],
+  };
+  const COMMENT = {
+    id: '0b8f5f0e-2a0e-4f55-8a53-0f3f7cbe0a03',
+    orderId: '0b8f5f0e-2a0e-4f55-8a53-0f3f7cbe0a04',
+    authorAdminUserId: null,
+    authorCustomerAccountId: null,
+    body: 'Custom field values were not carried.',
+    isCustomerVisible: false,
+    notifyCustomer: false,
+    createdAt: '2026-10-20T10:00:00.000Z',
+  };
+
+  it("parses the contract's example", () => {
+    expect(orderCommentSystemNoteSchema.parse(NOTE)).toEqual(NOTE);
+  });
+
+  it('refuses a note that skipped nothing', () => {
+    expect(orderCommentSystemNoteSchema.safeParse({ ...NOTE, skipped: [] }).success).toBe(false);
+  });
+
+  it('refuses an unknown reason', () => {
+    expect(
+      orderCommentSystemNoteSchema.safeParse({ ...NOTE, skipped: [{ key: 'order_source', reason: 'other' }] })
+        .success,
+    ).toBe(false);
+  });
+
+  it('refuses a source of another entity type', () => {
+    expect(
+      orderCommentSystemNoteSchema.safeParse({ ...NOTE, source: { ...NOTE.source, entityType: 'order' } }).success,
+    ).toBe(false);
+  });
+
+  it('a comment carries a note, no note, or no key at all', () => {
+    expect(orderCommentSchema.parse({ ...COMMENT, systemNote: NOTE }).systemNote).toEqual(NOTE);
+    expect(orderCommentSchema.parse({ ...COMMENT, systemNote: null }).systemNote).toBeNull();
+    expect(Object.hasOwn(orderCommentSchema.parse(COMMENT), 'systemNote')).toBe(false);
+  });
 });

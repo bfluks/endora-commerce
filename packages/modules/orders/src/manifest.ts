@@ -121,6 +121,11 @@ export const manifest = defineModuleManifest({
   // non-deactivatable, so the declaration buys install and migration order
   // rather than a flip-time refusal.
   dependencies: [
+    // `_i18n` owns `adminI18nService`, from which the in-code order
+    // confirmation takes its sentences in the channel's language (issue #95).
+    // It declares `activation.nonDeactivatable`, so the edge costs no operator
+    // an activation control.
+    '_i18n',
     'addresses',
     // `specs/117-instance-bring-up/` Phase 6 — `ordersAdminScopeResolver` is
     // this module's own since FR-033, and it reads the acting admin's role
@@ -305,8 +310,8 @@ export const manifest = defineModuleManifest({
       name: 'quoteRequestReadPort',
       kind: 'degrades-without',
       whenAbsent:
-        'an order placed from a basket that an accepted quote filled no longer records that ' +
-        'quote, so the quote is not completed by it; the order itself is placed exactly as before',
+        'a basket still priced at a quote`s agreed prices is refused, since nothing can confirm ' +
+        'the quote is still valid; any other basket is placed as before and names no quote',
       reason:
         'Placement copies the accepted quote a basket was seeded from onto the order ' +
         '(`orders.source_quote_request_id`) and reads that quote back first: the basket ' +
@@ -314,8 +319,9 @@ export const manifest = defineModuleManifest({
         'own Organization that is still approved and still has an agreed line on the basket ' +
         '(`specs/143-crm-sales-opportunities/`, FR-100 to FR-103). A read on a ' +
         '`di.providePort` name behind `effectiveState.isPresent`: with the owner absent ' +
-        'nothing can vouch for the claim, so the order is placed without a source rather ' +
-        'than refused. Not `dependencies`, for the reason given on `rfqService` above.',
+        'nothing can vouch for the claim, so the order names no source. Issue #167: placement ' +
+        're-checks every quote a line is priced at; absent, that fails closed (`410 ' +
+        'QUOTE_VALIDITY_ENDED`, `unavailable`). Not `dependencies` (see `rfqService`).',
     },
     {
       moduleId: 'inventory',
@@ -656,7 +662,29 @@ export const manifest = defineModuleManifest({
     { code: 'IDEMPOTENCY_KEY_REUSED' },
     { code: 'ORDER_NOT_CANCELLABLE' },
     { code: 'ORDER_NOT_FOUND' },
+    // Feature 154 — placement refuses a basket of another sales channel.
+    { code: 'ORDER_SALES_CHANNEL_MISMATCH' },
+    // Issue #648 — placement refuses a basket that awaits its Organization's
+    // approval, with a token per approval state.
+    {
+      code: 'ORDER_CART_APPROVAL_REQUIRED',
+      tokens: ['cart_approval_not_submitted', 'cart_approval_pending', 'cart_approval_rejected'],
+    },
     { code: 'ORDER_SAVED_VIEW_NAME_TAKEN' },
+    // Issue #86 — order-path refusals that were `VALIDATION_FAILED` with an
+    // English sentence. The method pair keeps the `details.code` tokens its
+    // two gates already published, and each token has its own sentence.
+    {
+      code: 'ORDER_DELIVERY_METHOD_UNAVAILABLE',
+      tokens: ['delivery_method_not_allowed_for_organization', 'delivery_method_not_in_sales_channel'],
+    },
+    {
+      code: 'ORDER_PAYMENT_METHOD_UNAVAILABLE',
+      tokens: ['payment_method_not_allowed_for_organization', 'payment_method_not_in_sales_channel'],
+    },
+    { code: 'ORDER_BELOW_MINIMUM_VALUE' },
+    { code: 'ORDER_COMMENTS_CLOSED' },
+    { code: 'ORDER_CLONE_NO_LINES' },
   ],
   settings,
   // Feature 074 (Constitution XVII), test C2 — functional base. This module had
@@ -689,7 +717,12 @@ export const manifest = defineModuleManifest({
           sampleValue:
             '  Subtotal: 99.99 PLN\n  Tax: 23.00 PLN\n  Delivery: 15.00 PLN\n  Total: 137.99 PLN',
         },
-        { key: 'order.shippingAddressText', label: 'Shipping address', sampleValue: '  Anna Nowak\n  ul. Główna 1' },
+        {
+          key: 'order.shippingAddressText',
+          label: 'Shipping address',
+          sampleValue: '  Anna Nowak\n  1 Main Street',
+          sampleValueKey: 'emails.orderConfirmation.sample.shippingAddressText',
+        },
         { key: 'order.billingAddressText', label: 'Billing address', sampleValue: '  Acme Sp. z o.o.' },
         { key: 'order.items', label: 'Order line items (list)', sampleValue: '[{"name":"Widget A","sku":"W-A","quantity":2,"price":"120,00 PLN"},{"name":"Widget B","sku":"W-B","quantity":1,"price":"990,00 PLN"}]' },
       ],
@@ -729,8 +762,23 @@ export const manifest = defineModuleManifest({
       icon: 'ShoppingCart',
       targetRoute: '/orders',
       requiredPermission: 'orders:read',
-      keywords: ['orders', 'sales', 'zamówienia', 'sprzedaż'],
+      keywords: ['orders', 'sales'],
+      keywordsKey: 'actions.openOrders.keywords',
       weight: 220,
+    },
+    // Issue #516 (Principle XVI): the create form is a sidebar entry of its
+    // own, so the palette offers it too. `orders:write`, the code its route
+    // and the create `POST` enforce.
+    {
+      id: 'new-order',
+      labelKey: 'actions.newOrder.label',
+      descriptionKey: 'actions.newOrder.description',
+      icon: 'Plus',
+      targetRoute: '/orders/new',
+      requiredPermission: 'orders:write',
+      keywords: ['order', 'new', 'create', 'on behalf'],
+      keywordsKey: 'actions.newOrder.keywords',
+      weight: 221,
     },
     {
       id: 'order-statuses',
@@ -745,7 +793,8 @@ export const manifest = defineModuleManifest({
       // instead (issue #232). If the editor reading is the right one, it is the
       // route that has to change, and that is a behaviour change of its own.
       requiredPermission: 'orders:read',
-      keywords: ['order status', 'lifecycle', 'statusy', 'cykl życia'],
+      keywords: ['order status', 'lifecycle'],
+      keywordsKey: 'actions.orderStatusConfig.keywords',
       weight: 225,
     },
   ],

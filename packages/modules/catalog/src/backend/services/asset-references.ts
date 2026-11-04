@@ -9,8 +9,8 @@
 
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
-  AssetReference,
   AssetReferenceDescriptor,
+  AssetReferenceHit,
   AssetReferenceRegistryPort,
 } from '@endora-commerce/contracts';
 
@@ -33,7 +33,7 @@ function productGalleryDescriptor(
 ): AssetReferenceDescriptor {
   return {
     ownerModuleId: 'catalog',
-    async findReferences(assetIds: string[]): Promise<AssetReference[]> {
+    async findReferences(assetIds: string[]): Promise<AssetReferenceHit[]> {
       if (assetIds.length === 0) return [];
       const em = emFactory();
       const rows = (await em.execute(
@@ -54,6 +54,7 @@ function productGalleryDescriptor(
         product_name: Record<string, string> | string;
       }>;
       return rows.map((r) => ({
+        assetId: r.asset_id,
         kind: 'product_gallery',
         entityId: r.product_id,
         label: `Product "${pickName(r.product_name)}" — gallery position ${r.position}`,
@@ -67,7 +68,7 @@ function productAttachmentDescriptor(
 ): AssetReferenceDescriptor {
   return {
     ownerModuleId: 'catalog',
-    async findReferences(assetIds: string[]): Promise<AssetReference[]> {
+    async findReferences(assetIds: string[]): Promise<AssetReferenceHit[]> {
       if (assetIds.length === 0) return [];
       const em = emFactory();
       const rows = (await em.execute(
@@ -86,6 +87,7 @@ function productAttachmentDescriptor(
         product_name: Record<string, string> | string;
       }>;
       return rows.map((r) => ({
+        assetId: r.asset_id,
         kind: 'product_attachment',
         entityId: r.product_id,
         label: `Product "${pickName(r.product_name)}" — attachment "${r.attachment_name}"`,
@@ -99,16 +101,17 @@ function productVirtualDownloadDescriptor(
 ): AssetReferenceDescriptor {
   return {
     ownerModuleId: 'catalog',
-    async findReferences(assetIds: string[]): Promise<AssetReference[]> {
+    async findReferences(assetIds: string[]): Promise<AssetReferenceHit[]> {
       if (assetIds.length === 0) return [];
       const em = emFactory();
       const rows = (await em.execute(
-        `select p.id::text as product_id, p.name as product_name
+        `select p.download_asset_id::text as asset_id, p.id::text as product_id, p.name as product_name
          from products p
          where p.download_asset_id in (${assetIds.map(() => '?').join(',')})`,
         assetIds,
-      )) as Array<{ product_id: string; product_name: Record<string, string> | string }>;
+      )) as Array<{ asset_id: string; product_id: string; product_name: Record<string, string> | string }>;
       return rows.map((r) => ({
+        assetId: r.asset_id,
         kind: 'product_virtual_download',
         entityId: r.product_id,
         label: `Product "${pickName(r.product_name)}" — virtual download`,
@@ -122,16 +125,17 @@ function categoryMainImageDescriptor(
 ): AssetReferenceDescriptor {
   return {
     ownerModuleId: 'catalog',
-    async findReferences(assetIds: string[]): Promise<AssetReference[]> {
+    async findReferences(assetIds: string[]): Promise<AssetReferenceHit[]> {
       if (assetIds.length === 0) return [];
       const em = emFactory();
       const rows = (await em.execute(
-        `select c.id::text as category_id, c.name as category_name
+        `select c.main_image_asset_id::text as asset_id, c.id::text as category_id, c.name as category_name
          from categories c
          where c.main_image_asset_id in (${assetIds.map(() => '?').join(',')})`,
         assetIds,
-      )) as Array<{ category_id: string; category_name: Record<string, string> | string }>;
+      )) as Array<{ asset_id: string; category_id: string; category_name: Record<string, string> | string }>;
       return rows.map((r) => ({
+        assetId: r.asset_id,
         kind: 'category_main_image',
         entityId: r.category_id,
         label: `Category "${pickName(r.category_name)}" — main image`,
@@ -145,44 +149,56 @@ function categoryMainImageDescriptor(
  * hero background, a slide.
  *
  * The Page Builder stores the asset's id as a string somewhere in the block's
- * props, at a depth that depends on the block, so the lookup is a recursive
- * jsonpath over the whole envelope rather than a column comparison: the idiom
- * the CMS and the blog use for their own Page Builder columns. Soft-deleted
- * categories are skipped, as they are there — a deleted category's page is not
- * served, so its content holds nothing in use.
+ * props, at a depth that depends on the block, so the lookup walks the whole
+ * envelope rather than comparing a column: the idiom the CMS and the blog use
+ * for their own Page Builder columns. Soft-deleted categories are skipped, as
+ * they are there — a deleted category's page is not served, so its content
+ * holds nothing in use.
+ *
+ * **One statement for the whole batch** (`specs/166-asset-reference-visibility/`
+ * research R-6): every string value of each document (`strict $.**` visits
+ * every level, array elements included) is matched against the asked ids, so
+ * a document is walked once however many ids are asked, and the matched value
+ * is the asset id the hit is tagged with. It used to be one recursive jsonpath
+ * query per asked id.
  */
 function categoryContentDescriptor(
   emFactory: () => EntityManager,
 ): AssetReferenceDescriptor {
   return {
     ownerModuleId: 'catalog',
-    async findReferences(assetIds: string[]): Promise<AssetReference[]> {
-      if (assetIds.length === 0) return [];
-      const em = emFactory();
-      const out: AssetReference[] = [];
-      for (const raw of assetIds) {
-        // An asset id is a UUID; stripping everything else is what keeps the
-        // literal-injected jsonpath safe (a jsonpath cannot take a bind).
-        const assetId = raw.replace(/[^0-9a-fA-F-]/g, '');
-        if (assetId === '') continue;
-        const rows = (await em.execute(
-          `select c.id::text as category_id, c.name as category_name
-             from categories c
-            where c.deleted_at is null
-              and c.content is not null
-              and jsonb_path_exists(c.content, '$.** ? (@ == "${assetId}")'::jsonpath)`,
-        )) as Array<{ category_id: string; category_name: Record<string, string> | string }>;
-        for (const r of rows) {
-          out.push({
-            kind: 'category_content',
-            entityId: r.category_id,
-            label: `Category "${pickName(r.category_name)}" — page content`,
-          });
-        }
-      }
-      return out;
+    async findReferences(assetIds: string[]): Promise<AssetReferenceHit[]> {
+      const asked = textArrayLiteral(assetIds);
+      if (asked === null) return [];
+      const rows = (await emFactory().execute(
+        `select distinct c.id::text as category_id, c.name as category_name, v.value #>> '{}' as asset_id
+           from categories c
+           cross join lateral jsonb_path_query(c.content, 'strict $.**') as v(value)
+          where c.deleted_at is null
+            and c.content is not null
+            and jsonb_typeof(v.value) = 'string'
+            and v.value #>> '{}' = any(?::text[])`,
+        [asked],
+      )) as Array<{ category_id: string; category_name: Record<string, string> | string; asset_id: string }>;
+      return rows.map((r) => ({
+        assetId: r.asset_id,
+        kind: 'category_content',
+        entityId: r.category_id,
+        label: `Category "${pickName(r.category_name)}" — page content`,
+      }));
     },
   };
+}
+
+/**
+ * The asked ids as one Postgres `text[]` literal, or `null` when none is left.
+ * An asset id is a UUID; everything else is stripped, which is what keeps the
+ * literal well-formed (`em.execute` formats a JavaScript array as a list, not
+ * as one array value).
+ */
+function textArrayLiteral(assetIds: readonly string[]): string | null {
+  const ids = [...new Set(assetIds.map((raw) => raw.replace(/[^0-9a-fA-F-]/g, '')).filter((id) => id !== ''))];
+  return ids.length === 0 ? null : `{${ids.map((id) => `"${id}"`).join(',')}}`;
 }
 
 function pickName(blob: Record<string, string> | string): string {

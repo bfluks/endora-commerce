@@ -6,7 +6,8 @@ import {
   SettingNotRegistered,
   SettingOutOfScopeForChannel,
 } from '@endora-commerce/platform/kernel';
-import type { InvoiceDetail } from '@endora-commerce/contracts';
+import { ERROR_CODES, type InvoiceDetail } from '@endora-commerce/contracts';
+import { HttpError } from '@endora-commerce/platform/http';
 import type { InvoiceService } from './invoice-service.js';
 import type { InvoiceEmailDispatcher, InvoiceEmailLog } from './invoice-email-dispatch.js';
 import type { SettingsReader } from './seller-settings.js';
@@ -108,6 +109,15 @@ export function createAutoIssueReactor(deps: AutoIssueReactorDeps): {
         // not take the subscriber down. A switched-off module is not that — it
         // is a presence answer about the whole operation and is re-thrown.
         rethrowIfModuleDisabled(error);
+        // An order refunded in full before it was invoiced is not invoiced at
+        // all (owner ruling of 2026-10-24): skipped, and the log says why.
+        if (error instanceof HttpError && error.code === ERROR_CODES.INVOICE_ORDER_REFUNDED) {
+          log('[invoices] the order was not auto-invoiced: its payments were refunded in full', {
+            orderId: p.orderId,
+            reason: ERROR_CODES.INVOICE_ORDER_REFUNDED,
+          });
+          return;
+        }
         log('[invoices] the order was not auto-invoiced', {
           orderId: p.orderId,
           error: error instanceof Error ? error.message : error,

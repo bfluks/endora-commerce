@@ -1,3 +1,6 @@
+import type { ChannelUrlFacts } from '@endora-commerce/contracts';
+import { storefrontPagePathFor } from '@endora-commerce/contracts';
+import { NewsletterSubscriber } from './entities/newsletter-subscriber.entity.js';
 import { z } from 'zod';
 import type { Worker } from 'bullmq';
 import type { EntityManager } from '@mikro-orm/postgresql';
@@ -26,6 +29,7 @@ import { NewsletterTagService } from './services/tag.service.js';
 import { NewsletterCustomFieldService } from './services/custom-field.service.js';
 import { NewsletterAutomationService } from './services/automation.service.js';
 import { NewsletterTrackingService } from './services/tracking.service.js';
+import { newsletterTrackingLinks, resolveEngagementTracking } from './services/engagement-tracking.js';
 import { NewsletterStatsService } from './services/stats.service.js';
 import { NewsletterEmailBlockService } from './services/email-block.service.js';
 import { NewsletterProviderAdminService, type SettingsWriter } from './services/provider-admin.service.js';
@@ -78,6 +82,8 @@ export interface NewsletterModuleOptions {
   resolveChannelIdByCode: (code: string) => Promise<string | null>;
   publicBaseUrl: string;
   storefrontBaseUrl: string;
+  /** Feature 167 — a channel's URL-language facts, for the prefixed storefront redirects. */
+  resolveChannelUrlFacts?: (salesChannelId: string) => Promise<ChannelUrlFacts | null>;
   requireAdmin: (permission?: string) => (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
   /** Settings admin write surface (provider config + secret). */
   settingsWrite: SettingsWriter;
@@ -207,6 +213,11 @@ export function newsletterModule(options: NewsletterModuleOptions): ModuleAttach
       ? { resolveEmailBranding: options.resolveEmailBranding }
       : {}),
     resolveDefaultChannelId: options.resolveDefaultChannelId,
+    tracking: {
+      tokens,
+      links: newsletterTrackingLinks(options.publicBaseUrl),
+      resolveSwitches: (salesChannelId) => resolveEngagementTracking(options.settings, salesChannelId),
+    },
   });
 
   // Producer-side queues (needed by the API to enqueue, regardless of worker role).
@@ -314,6 +325,14 @@ export function newsletterModule(options: NewsletterModuleOptions): ModuleAttach
         resolveChannelIdByCode: options.resolveChannelIdByCode,
         resolveDefaultChannelId: options.resolveDefaultChannelId,
         storefrontBaseUrl: options.storefrontBaseUrl,
+        // Feature 167 (FR-034) — under the subscriber's channel language prefix.
+        subscriberPagePath: async (subscriberId, path) => {
+          if (subscriberId === null || !options.resolveChannelUrlFacts) return path;
+          const subscriber = await options.emFactory().findOne(NewsletterSubscriber, { id: subscriberId });
+          const channelId = subscriber?.salesChannelId ?? (await options.resolveDefaultChannelId());
+          const channel = channelId ? await options.resolveChannelUrlFacts(channelId) : null;
+          return storefrontPagePathFor({ path, channel });
+        },
       });
       await registerNewsletterAdminRoutes(scoped, {
         campaigns,

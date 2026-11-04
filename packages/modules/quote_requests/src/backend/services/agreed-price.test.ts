@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasUnpricedLine, quoteIncompleteError } from './agreed-price.js';
+import { hasUnpricedLine, quoteIncompleteError, unitPriceText } from './agreed-price.js';
 
 describe('hasUnpricedLine', () => {
   it('is true when a line has no agreed unit price', () => {
@@ -26,5 +26,14 @@ describe('quoteIncompleteError', () => {
     const err = quoteIncompleteError();
     expect(err.statusCode).toBe(409);
     expect(err.code).toBe('QUOTE_INCOMPLETE');
+  });
+});
+
+describe('unitPriceText (§10.18)', () => {
+  it('stores a typed unit price at its four places, unrounded (owner ruling of 2026-10-25)', () => {
+    expect(unitPriceText(1.005)).toBe('1.0050');
+    expect(unitPriceText(0.0125)).toBe('0.0125');
+    expect(unitPriceText(2.675)).toBe('2.6750');
+    expect(unitPriceText(0)).toBe('0.0000');
   });
 });

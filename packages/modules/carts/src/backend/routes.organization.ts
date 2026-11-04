@@ -7,7 +7,9 @@ import {
   ERROR_CODES,
   type CartStatus,
   type CartApprovalStatus,
+  type CatalogProductReadPort,
   type CustomerAccountReadPort,
+  type OrgCartDetailView,
 } from '@endora-commerce/contracts';
 import { z } from 'zod';
 import type { EntityManager } from '@mikro-orm/postgresql';
@@ -15,7 +17,9 @@ import type { CartService } from './services/cart-service.js';
 import type { CartApprovalService } from './services/cart-approval-service.js';
 import type { CartOrganizationVisibilityService } from './services/cart-organization-visibility-service.js';
 import { HttpError } from '@endora-commerce/platform/http';
-import type { RequireCustomerGuard } from '@endora-commerce/platform/kernel';
+import { getResolvedChannel, type RequireCustomerGuard } from '@endora-commerce/platform/kernel';
+import { cartLineAmount, cartSubtotal } from './services/cart-money.js';
+import { productMetaOf } from './services/cart-line-meta.js';
 
 /**
  * Storefront routes scoped to an Organization Admin (feature 027 US4).
@@ -63,6 +67,8 @@ export interface CartsOrganizationRoutesDeps {
    */
   customerAccounts: CustomerAccountReadPort;
   cartApprovalService: CartApprovalService;
+  /** Issue #650 — the names and SKUs of a cart's lines on the detail. */
+  catalogProducts: Pick<CatalogProductReadPort, 'findByIds'>;
   visibilityService: CartOrganizationVisibilityService;
   emFactory: () => EntityManager;
   /** Declared on the routes that validate a body, so it runs before validation. */
@@ -82,6 +88,7 @@ export async function registerCartsOrganizationRoutes(
     cartApprovalService,
     visibilityService,
     customerAccounts,
+    catalogProducts,
     requireCustomer,
     resolveCartActor,
   } = deps;
@@ -129,27 +136,47 @@ export async function registerCartsOrganizationRoutes(
         orgAdmin.organizationId,
       );
       const items = await cartService.getItems(cart.id);
-      const total = items.reduce((acc, it) => acc + Number(it.unitPrice) * it.quantity, 0);
+      const total = Number(cartSubtotal(items));
       const currency = items[0]?.currency ?? 'PLN';
       const owner = cart.customerAccountId
         ? await customerAccounts.findById(cart.customerAccountId)
         : null;
-      return {
-        data: {
-          id: cart.id,
-          ownerCustomerAccountId: cart.customerAccountId,
-          ownerDisplayName: owner?.email ?? cart.customerAccountId,
-          status: cart.status,
-          approvalStatus: cart.approvalStatus,
-          itemCount: items.length,
-          total: { amount: total, currency },
-          lastActivityAt: cart.lastActivityAt.toISOString(),
-          submittedForApprovalAt: cart.submittedForApprovalAt?.toISOString() ?? null,
-          approvedAt: cart.approvedAt?.toISOString() ?? null,
-          rejectedAt: cart.rejectedAt?.toISOString() ?? null,
-          rejectedReason: cart.rejectedReason ?? null,
-        },
+      // Issue #650 — the lines, so the administrator sees what they approve:
+      // named in the response language, at the price stored on the line.
+      const products =
+        items.length > 0
+          ? await catalogProducts.findByIds(Array.from(new Set(items.map((it) => it.productId))))
+          : [];
+      const meta = productMetaOf(products, await request.responseLanguage(), new Set());
+      const data: OrgCartDetailView = {
+        id: cart.id,
+        ownerCustomerAccountId: cart.customerAccountId ?? null,
+        ownerDisplayName: owner?.email ?? cart.customerAccountId ?? '',
+        status: cart.status,
+        approvalStatus: cart.approvalStatus,
+        itemCount: items.length,
+        total: { amount: total, currency },
+        lastActivityAt: cart.lastActivityAt.toISOString(),
+        submittedForApprovalAt: cart.submittedForApprovalAt?.toISOString() ?? null,
+        approvedAt: cart.approvedAt?.toISOString() ?? null,
+        rejectedAt: cart.rejectedAt?.toISOString() ?? null,
+        rejectedReason: cart.rejectedReason ?? null,
+        items: items.map((it) => {
+          const name = meta.get(it.productId)?.name ?? null;
+          return {
+            id: it.id,
+            productId: it.productId,
+            variantId: it.variantId ?? null,
+            displayName:
+              name !== null && it.packagingUnitName ? `${name} (${it.packagingUnitName})` : name,
+            productSku: meta.get(it.productId)?.sku ?? null,
+            quantity: it.quantity,
+            unitPrice: { amount: Number(it.unitPrice), currency: it.currency },
+            lineTotal: { amount: cartLineAmount(it.unitPrice, it.quantity), currency: it.currency },
+          };
+        }),
       };
+      return { data };
     },
   );
 
@@ -191,12 +218,23 @@ export async function registerCartsOrganizationRoutes(
         'Invariant violated: a customer account has no Organization (Principle XI).',
       );
     }
-    const cart = await cartService.getOrCreateForCustomer(actor.customer);
-    await cartApprovalService.submitForApproval(cart, {
-      customerAccountId: actor.customer.customerAccountId,
-      organizationId: actor.customer.organizationId,
+    // The basket of the storefront the buyer is on (`specs/154-sales-channel-access/`).
+    const cart = await cartService.getOrCreateForCustomer({
+      ...actor.customer,
+      salesChannelId: getResolvedChannel(request).id,
     });
-    return { data: { ok: true, approvalStatus: cart.approvalStatus } };
+    const language = await request.responseLanguage();
+    // The stored cart, not the one read above: the reply states what was
+    // written (issue #619 — it used to echo an object nothing had persisted).
+    const submitted = await cartApprovalService.submitForApproval(
+      cart,
+      {
+        customerAccountId: actor.customer.customerAccountId,
+        organizationId: actor.customer.organizationId,
+      },
+      { language },
+    );
+    return { data: { ok: true, approvalStatus: submitted.approvalStatus } };
   });
 
   app.post<{ Params: { id: string } }>(

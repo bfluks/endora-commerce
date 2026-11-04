@@ -37,7 +37,11 @@ describe('Import/Export — products', () => {
     expect(res.headers['content-disposition']).toMatch(/products-\d{4}-\d{2}-\d{2}\.csv/);
     const body = res.body;
     const firstLine = body.split('\n')[0];
-    expect(firstLine).toBe('id,sku,slug,type,status,visibility,name_en,description_en');
+    // Feature 163 (FR-092) — the fixed columns, then one `status@<channel code>[/<language>]`
+    // column per sales channel scope (`integration/catalog/bulk-import-scoped-status.test.ts`).
+    const columns = firstLine!.split(',');
+    expect(columns.slice(0, 8)).toEqual(['id', 'sku', 'slug', 'type', 'status', 'visibility', 'name_en', 'description_en']);
+    for (const column of columns.slice(8)) expect(column).toMatch(/^status@[^/]+(\/.+)?$/);
     expect(body).toContain('EXAMPLE-SIMPLE-001');
   });
 

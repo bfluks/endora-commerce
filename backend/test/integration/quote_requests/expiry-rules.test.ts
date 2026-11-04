@@ -288,7 +288,6 @@ describe('quote_requests expiry sweep — which requests are due, and who wins a
       const channel = em.create(SalesChannel, {
         code: `qr-expiry-${Date.now()}`,
         name: { 'en-US': 'QR expiry probe' },
-        isPublic: true,
         defaultLanguage: 'en-US',
         defaultCurrency: 'PLN',
         languages: ['en-US'],

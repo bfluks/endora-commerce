@@ -20,6 +20,27 @@
 import { z } from 'zod';
 import { isoDateTimeSchema, uuidSchema } from './common.js';
 
+// --- the anonymisation event ---------------------------------------------------
+//
+// `specs/170-forms-module/` research R-17, contracts/events-and-webhook.md §3.
+// `CustomerAccountLifecycleWritePort.anonymize` announces the irreversible step
+// once, after its write and its audit row, so a module holding data attributed
+// to the account can erase it within the same sweep step. Ids only: the account
+// has just been scrubbed, and the event says which one, never what it held. Not
+// offered to outbound webhooks.
+
+export const CUSTOMER_ACCOUNT_ANONYMIZED_EVENT = 'customer_account.anonymized.v1';
+
+export const CustomerAccountAnonymizedEventV1Schema = z
+  .object({
+    eventId: z.string().min(1),
+    occurredAt: isoDateTimeSchema,
+    customerAccountId: z.string().uuid(),
+    organizationId: z.string().uuid(),
+  })
+  .strict();
+export type CustomerAccountAnonymizedEventV1 = z.infer<typeof CustomerAccountAnonymizedEventV1Schema>;
+
 // --- customer groups ---------------------------------------------------------
 //
 // Feature 076, D-79 — the segmentation bucket a customer belongs to. It used to
@@ -917,4 +938,39 @@ export interface CustomerAccountLifecycleWritePort {
    * `CUSTOMER_NOT_FOUND` for an id nothing matches.
    */
   anonymize(customerAccountId: string): Promise<CustomerAccountRecord>;
+}
+
+// --- effective customer group ------------------------------------------------
+
+/**
+ * D-287 P0 — the one customer-group rule every pricing path applies, and the
+ * one the megamenu's customer-group audience reads (feature 168, plan R-5):
+ *
+ *     effective group = explicit ?? customer.customerGroupId ?? organization.customerGroupId ?? null
+ *
+ * `explicit` is a group a caller already resolved for the customer (the quote
+ * reference price and the admin order preview pass one); otherwise the signed-in
+ * customer's own group overrides the organisation's (feature 040 R6). Before
+ * this, listings, the product page and the cart passed the organisation alone
+ * and priced on its group while quotes and the admin preview honoured the
+ * customer's — the same buyer met different winning lists
+ * (`specs/pricing/read-paths-and-performance.md` §2.2).
+ *
+ * The customer's group counts only when the account belongs to the
+ * organisation the resolution is for. An account named beside another tenant's
+ * organisation is ignored rather than allowed to price that tenant's lists on
+ * its group (the same mismatch `BuyerLinePriceService` refuses outright).
+ */
+export function effectiveCustomerGroupId(input: {
+  explicit?: string | null;
+  customer?: { organizationId?: string | null; customerGroupId?: string | null } | null;
+  organization?: { id: string; customerGroupId?: string | null } | null;
+}): string | null {
+  if (input.explicit) return input.explicit;
+  const organization = input.organization ?? null;
+  const customer = input.customer ?? null;
+  if (customer && (customer.organizationId ?? null) === (organization?.id ?? null)) {
+    if (customer.customerGroupId) return customer.customerGroupId;
+  }
+  return organization?.customerGroupId ?? null;
 }

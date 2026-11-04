@@ -31,7 +31,7 @@ runs as a Fastify `onRequest` hook on every `/api/v1/*` request (bypassing
 2. `?salesChannel=<code>` query — storefront only; ignored on `/api/v1/admin/*`
 3. `SALES_CHANNEL_HOST_MAP` host mapping
 4. the **system-default** channel (`systemDefault = true`) — the single
-   empty-channel fallback (the legacy `isPublic` fallback is retired)
+   empty-channel fallback (the legacy public-channel fallback is retired)
 
 It validates existence + active state (unknown → `UNKNOWN_SALES_CHANNEL`,
 inactive → `INACTIVE_SALES_CHANNEL`), attaches the result to
@@ -43,9 +43,12 @@ echoes `X-Sales-Channel: <resolvedCode>` on the response.
 Storefront-facing modules **MUST** read `request.salesChannel` (via
 `getResolvedChannel(request)`) and **MUST NOT** re-parse the header/query/host or
 re-query `SalesChannel` to derive the request channel. Routes hand services the
-resolved channel object; services never re-resolve. Reading `channel.isPublic`
-(price visibility) off the already-resolved channel is fine — it is a display
-flag, not resolution.
+resolved channel object; services never re-resolve. Reading a display property
+(`channel.defaultCurrency`, `channel.anonymousAccess`) off the already-resolved
+channel is fine — it is not resolution. A channel carries no price-visibility
+flag (issue #492): who sees a price is the pricing display-mode chain's
+decision, `pricing.unauthenticated_display_mode` per channel for anonymous
+visitors.
 
 This invariant is enforced by `backend/scripts/check-channel-resolution.ts`
 (CI `--enforce`). Bridge membership is read only through

@@ -36,6 +36,16 @@ import type {
 } from '@endora-commerce/contracts';
 
 /**
+ * What {@link CustomFieldDefinitionApplyApi.applyCreate} takes: the create
+ * request with `carryTo` optional (feature 162). A host-managed type's registry
+ * entry offers no carry target, so a host never names one; an absent `carryTo`
+ * is stored as none.
+ */
+export type CustomFieldDefinitionApplyCreateInput = Omit<CreateCustomFieldDefinitionRequest, 'carryTo'> & {
+  carryTo?: SupportedEntityType[];
+};
+
+/**
  * Container name: `customFieldDefinitionService`. Owner: `custom_fields`.
  *
  * Transactional apply seam for host modules (feature 061,
@@ -90,7 +100,7 @@ import type {
 export interface CustomFieldDefinitionApplyApi {
   applyCreate(
     em: EntityManager,
-    input: CreateCustomFieldDefinitionRequest,
+    input: CustomFieldDefinitionApplyCreateInput,
   ): Promise<CustomFieldDefinitionRecord>;
   applyUpdate(
     em: EntityManager,

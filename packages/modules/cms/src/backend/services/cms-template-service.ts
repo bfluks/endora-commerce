@@ -10,6 +10,7 @@ import {
 import { HttpError } from '@endora-commerce/platform/http';
 import type { AuditState, CommandBus } from '@endora-commerce/platform/commands';
 import { walkUnknownComponents } from './content-tree-walker.js';
+import { assertAnchors } from './anchor-guard.js';
 import type { CmsReferenceRegistry } from './cms-reference-registry.js';
 import type { CmsContentInvalidator } from './cms-content-invalidator.js';
 
@@ -223,6 +224,8 @@ export class CmsTemplateService {
         const row = await this.findRow(id, tx);
         if (!row) throw new HttpError(404, ERROR_CODES.CMS_TEMPLATE_NOT_FOUND, 'CMS Template not found.');
         this.assertVersion(row, version);
+        // One anchor names one place in this language's tree (feature 163, R-8).
+        assertAnchors({ [language]: data });
 
         const unknown = walkUnknownComponents(data, new Set(this.knownComponentNames()));
         if (unknown.size > 0) {

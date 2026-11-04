@@ -63,7 +63,6 @@ describe('external order intake — idempotency (062 / T021)', () => {
       currencies: ['PLN'],
       defaultCurrency: 'PLN',
       active: true,
-      isPublic: true,
     });
     await em.persistAndFlush(channel);
     await h.salesChannels.cache.invalidate('ext-idem');

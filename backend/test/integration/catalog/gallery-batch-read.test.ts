@@ -86,7 +86,7 @@ describe('catalog — the batch gallery read over the real schema', () => {
     await attach(second, assetC, []);
 
     const gone = randomUUID();
-    const items = await gallery.listForProducts([first, second, gone]);
+    const items = await gallery.listForProducts([first, second, gone], null);
 
     expect(items.filter((i) => i.productId === first).map((i) => i.assetId)).toEqual([
       assetA,
@@ -107,7 +107,7 @@ describe('catalog — the batch gallery read over the real schema', () => {
     await attach(withThumbOnly, thumbAsset, ['thumbnail']);
 
     const gone = randomUUID();
-    const urls = await gallery.baseImageUrls([withBase, withThumbOnly, withoutGallery, gone]);
+    const urls = await gallery.baseImageUrls([withBase, withThumbOnly, withoutGallery, gone], null);
 
     // One entry per requested id, so a caller may index without re-checking.
     expect([...urls.keys()].sort()).toEqual(
@@ -118,5 +118,53 @@ describe('catalog — the batch gallery read over the real schema', () => {
     expect(urls.get(withThumbOnly)).toBeNull();
     expect(urls.get(withoutGallery)).toBeNull();
     expect(urls.get(gone)).toBeNull();
+  });
+
+  /**
+   * Feature 163 (FR-076, owner decision MED-1 = A) — in a channel, an image hidden there
+   * reaches neither a feed (`listForProducts`) nor a comparison (`baseImageUrls`), and the
+   * channel's own holder of the base image wins over the global one.
+   */
+  it('in a channel: hidden items are left out and the channel holder of the base image wins', async () => {
+    const product = await createProduct('CHANNEL');
+    const globalBase = await seedAsset('https://cdn.test/batch-channel-global.jpg');
+    const channelBase = await seedAsset('https://cdn.test/batch-channel-own.jpg');
+    await attach(product, globalBase, ['base_image']);
+    await attach(product, channelBase, []);
+    const conn = h.orm.em.getConnection();
+    const [channel] = (await conn.execute(`select id::text as id from sales_channels order by created_at limit 1`)) as Array<{
+      id: string;
+    }>;
+    const items = (await conn.execute(
+      `select id::text as id, asset_id::text as asset_id from gallery_items where product_id = ? order by position`,
+      [product],
+    )) as Array<{ id: string; asset_id: string }>;
+    const globalItem = items.find((i) => i.asset_id === globalBase)!.id;
+    const channelItem = items.find((i) => i.asset_id === channelBase)!.id;
+
+    // The channel's own base image: the second item.
+    await conn.execute(
+      `insert into gallery_item_channel_labels (product_id, sales_channel_id, label, gallery_item_id) values (?, ?, 'base_image', ?)`,
+      [product, channel!.id, channelItem],
+    );
+    expect((await gallery.baseImageUrls([product], channel!.id)).get(product)).toBe(
+      'https://cdn.test/batch-channel-own.jpg',
+    );
+    expect((await gallery.baseImageUrls([product], null)).get(product)).toBe(
+      'https://cdn.test/batch-channel-global.jpg',
+    );
+
+    // Hide the channel holder there: no base image in that channel, the feed loses it.
+    await conn.execute(
+      `insert into gallery_item_channel_hidden (gallery_item_id, sales_channel_id, product_id) values (?, ?, ?)`,
+      [channelItem, channel!.id, product],
+    );
+    expect((await gallery.baseImageUrls([product], channel!.id)).get(product)).toBeNull();
+    expect((await gallery.listForProducts([product], channel!.id)).map((i) => i.assetId)).toEqual([globalBase]);
+    expect((await gallery.listForProducts([product], null)).map((i) => i.assetId)).toEqual([
+      globalBase,
+      channelBase,
+    ]);
+    expect(globalItem).toBeDefined();
   });
 });

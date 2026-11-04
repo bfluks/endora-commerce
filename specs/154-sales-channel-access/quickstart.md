@@ -24,9 +24,11 @@ curl -s -H 'X-Sales-Channel: trade' localhost:3000/api/v1/storefront/sales-chann
 # false   (open route)
 ```
 
-Run a second storefront with a proxy stamping `X-Sales-Channel: trade` (or set
-`SALES_CHANNEL_HOST_MAP=localhost:3002=trade` and open `:3002`): every page redirects to the sign-in
-page with the "signed-in business customers" notice.
+Put a reverse proxy in front of the storefront that stamps `X-Sales-Channel: trade` on every request
+and open the storefront through it: every page redirects to the sign-in page with the "signed-in
+business customers" notice. (`SALES_CHANNEL_HOST_MAP` is not a substitute here: the backend reads
+the `Host` of the call it receives, which for the storefront's server-side calls is the backend's own
+address, not the address the buyer opened.)
 
 ## 3. Customer assignment
 
@@ -48,7 +50,7 @@ stores → two baskets with different prices; place on `trade` → the order car
 
 ## 6. Upgrade path
 
-On a database restored from before the feature: `pnpm --filter backend run db:migrate`, then
+On a database restored from before the feature: `pnpm --filter backend run migration:up`, then
 
 ```sql
 select o.id, array_agg(sc.code order by sc.code)

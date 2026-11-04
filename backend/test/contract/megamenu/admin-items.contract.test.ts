@@ -63,6 +63,7 @@ describe('admin Megamenu items contract (T022)', () => {
           {
             id: rootAId,
             parentId: null,
+            presentation: 'mega',
             position: 0,
             kind: 'category-link',
             labels: { 'en-US': 'Catalog' },
@@ -120,6 +121,7 @@ describe('admin Megamenu items contract (T022)', () => {
         items: [
           {
             parentId: null,
+            presentation: 'mega',
             position: 0,
             kind: 'external-link',
             labels: { 'en-US': 'XSS' },

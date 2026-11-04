@@ -4,7 +4,8 @@ import { Input, Label, Select } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import type { OpportunityFilterParams } from '../api.js';
 import { AssigneeLookup, OrganizationLookup, SalesChannelLookup } from './LookupPickers.js';
-import { TagMultiSelect } from './TagPicker.js';
+import { TagMultiSelect } from '@endora-commerce/admin-kit/components';
+import { crmApi } from '../api.js';
 
 /**
  * The filters the list and the board share, as the two screens hold them:
@@ -165,6 +166,7 @@ export function OpportunityFilterFields(props: OpportunityFilterFieldsProps): Re
         <span className="text-sm font-medium leading-none">{t('tags.filter.label')}</span>
         <TagMultiSelect
           ariaLabel={t('tags.filter.label')}
+          loadTags={crmApi.listTags}
           selected={filters.tagIds}
           onChange={(tagIds): void => onChange({ tagIds })}
           className="w-full"

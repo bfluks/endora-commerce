@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/mod-megamenu",
-  "version": "0.106.0",
+  "version": "0.109.0",
   "type": "module",
   "sideEffects": false,
   "description": "Multi-column dropdown navigation builder.",
@@ -47,7 +47,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.ui.json",
+    "build": "node ../../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json && tsc -p tsconfig.ui.build.json",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.ui.json --noEmit",
     "lint": "eslint src",
     "test": "vitest run"
@@ -88,12 +88,12 @@
     "@mikro-orm/postgresql": "^6.6.13",
     "@types/node": "^22.9.0",
     "@types/react": "^19.2.14",
-    "fastify": "^5.12.5",
+    "fastify": "^5.12.8",
     "ioredis": "^5.10.1",
     "lucide-react": "^1.11.0",
     "react": "^19.2.5",
     "react-router-dom": "^7.18.2",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

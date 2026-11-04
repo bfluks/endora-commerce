@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { ApiError } from '../../../../packages/admin-shell/src/lib/api-client';
+import { ApiError } from '@endora-commerce/admin-kit/lib';
 import { passthroughBundle } from '../../helpers/render-with-i18n';
 import {
   adminSession,
@@ -88,7 +88,7 @@ const MOCK_PRODUCT = {
   sku: 'EDIT-SKU-OLD',
   slug: 'edit-sku-old',
   type: 'simple' as const,
-  status: 'draft' as const,
+  status: 'inactive' as const,
   name: { 'en-US': 'Test product', 'pl-PL': '' },
   description: { 'en-US': 'Desc', 'pl-PL': '' },
   visibility: 'public' as const,

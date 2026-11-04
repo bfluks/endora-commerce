@@ -1,6 +1,11 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { Redis } from 'ioredis';
-import type { CustomFieldDefinitionReadPort, CustomFieldValuePort } from '@endora-commerce/contracts';
+import type {
+  CustomFieldCarryPort,
+  CustomFieldDefinitionReadPort,
+  CustomFieldListFilterPort,
+  CustomFieldValuePort,
+} from '@endora-commerce/contracts';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
@@ -8,6 +13,8 @@ import { CustomFieldDefinitionsCache } from './services/custom-field-definitions
 import { CustomFieldDefinitionService } from './services/custom-field-definition.service.js';
 import { CustomFieldValueService } from './services/custom-field-value.service.js';
 import { CustomFieldDefinitionReadService } from './services/custom-field-read-port.js';
+import { CustomFieldListFilterService } from './services/custom-field-list-filter.service.js';
+import { CustomFieldCarryService } from './services/custom-field-carry.service.js';
 import { registerCustomFieldsAdminRoutes } from './routes.admin.js';
 import { CustomFieldDefinition } from './entities/custom-field-definition.entity.js';
 import { CustomFieldOption } from './entities/custom-field-option.entity.js';
@@ -147,6 +154,41 @@ export function registerModule(ctx: ModuleContext): void {
       .asFunction(
         ({ customFieldServices }: CustomFieldsCradle) =>
           new CustomFieldDefinitionReadService(customFieldServices.definitionService),
+      )
+      .singleton(),
+  );
+
+  /**
+   * Feature 157 — the admin lists' custom-field filters: which fields a list
+   * offers, and a request's filters as one bound condition over the entity's
+   * host table (`specs/157-custom-fields-list-filters/contracts/list-filter-api.md`
+   * §1.4). Reads through the same per-entity cache as every definition read.
+   */
+  ctx.di.providePort<CustomFieldListFilterPort>(
+    'customFieldListFilterPort',
+    ctx
+      .asFunction(
+        ({ customFieldServices }: CustomFieldsCradle) =>
+          new CustomFieldListFilterService(customFieldServices.definitionService),
+      )
+      .singleton(),
+  );
+
+  /**
+   * Feature 162 — which custom-field values carry from one record into another
+   * of a type the definition names in `carryTo`
+   * (`specs/162-custom-fields-value-carry/contracts/carry-api.md` §4.1). It
+   * computes and never writes: the module owning the target record persists
+   * the answer in its own write. Reads through the same per-entity cache, so a
+   * committed definition change reaches the next plan without waiting for the
+   * TTL.
+   */
+  ctx.di.providePort<CustomFieldCarryPort>(
+    'customFieldCarryPort',
+    ctx
+      .asFunction(
+        ({ customFieldServices }: CustomFieldsCradle) =>
+          new CustomFieldCarryService(customFieldServices.definitionService),
       )
       .singleton(),
   );

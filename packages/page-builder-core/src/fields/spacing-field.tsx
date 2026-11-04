@@ -10,6 +10,7 @@ import {
 import { PB_RESPONSIVE_METADATA, hasResponsiveOverride, settingsScopeToTier, type ResponsiveProp } from '../types/responsive.js';
 import {
   ScopedFieldHint,
+  ScopedInheritedNote,
   ScopedResetLink,
   readScopedValue,
   responsiveBaseSeed,
@@ -19,8 +20,10 @@ import { getStoredScope } from '../editor/settings-scope-store.js';
 import { useComponentScope } from '../editor/use-component-scope.js';
 import { usePageBuilderPuck } from '../editor/use-page-builder-puck.js';
 import { PuckFieldLabel } from './puck-field-label.js';
+import { PB_FIELD_INPUT_CLASS, PB_FIELD_LABEL_CLASS } from './field-classes.js';
+import { useFieldText } from './field-text.js';
 
-const inputClassName = '_Input-input_bsxfo_26';
+const inputClassName = PB_FIELD_INPUT_CLASS;
 
 function SpacingEditor({
   value,
@@ -31,6 +34,7 @@ function SpacingEditor({
   onChange: (next: SpacingValue) => void;
   readOnly?: boolean;
 }): ReactElement {
+  const text = useFieldText();
   const spacing = normalizeSpacing(value);
   const mode = spacing.mode;
 
@@ -56,7 +60,7 @@ function SpacingEditor({
             disabled={readOnly}
             onChange={(): void => onChange({ mode: 'uniform', value: spacing.mode === 'uniform' ? spacing.value : 0 })}
           />
-          All sides
+          {text('spacing.uniform')}
         </label>
         <label className="flex items-center gap-1">
           <input
@@ -68,7 +72,7 @@ function SpacingEditor({
               onChange({ mode: 'sides', top: v, right: v, bottom: v, left: v });
             }}
           />
-          Each side
+          {text('spacing.sides')}
         </label>
       </div>
       {mode === 'uniform' ? (
@@ -79,6 +83,7 @@ function SpacingEditor({
           min={0}
           max={200}
           step={4}
+          aria-label={text('spacing.uniformValue')}
           readOnly={readOnly}
           value={spacing.value}
           onChange={(e): void => {
@@ -89,8 +94,8 @@ function SpacingEditor({
       ) : (
         <div className="grid grid-cols-2 gap-2">
           {(['top', 'right', 'bottom', 'left'] as const).map((side) => (
-            <label key={side} className="space-y-1 text-xs capitalize">
-              {side}
+            <label key={side} className="flex min-w-0 flex-col gap-1">
+              <span className={PB_FIELD_LABEL_CLASS}>{text('side.valuePx', { side: text(`side.${side}`) })}</span>
               <input
                 type="number"
                 className={inputClassName}
@@ -168,7 +173,7 @@ const ResponsiveSpacingControl = memo(function ResponsiveSpacingControl({
         {...(readOnly === true ? { readOnly: true } : {})}
       />
       {inherited ? (
-        <p className="text-xs opacity-60">Inherited value shown — change to override for this scope.</p>
+        <ScopedInheritedNote />
       ) : null}
     </div>
   );
@@ -182,7 +187,7 @@ export function createSpacingField(options: {
     label: options.label,
     metadata: PB_RESPONSIVE_METADATA,
     render: ({ value, onChange, readOnly, field }): ReactElement => (
-      <PuckFieldLabel label={field.label ?? options.label} {...(readOnly === true ? { readOnly: true } : {})}>
+      <PuckFieldLabel label={field.label ?? options.label} el="div" {...(readOnly === true ? { readOnly: true } : {})}>
         <ResponsiveSpacingControl
           value={value ?? DEFAULT_SPACING}
           onChange={(next) => onChange(next as SpacingValue | ResponsiveProp<SpacingValue>)}

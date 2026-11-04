@@ -106,7 +106,7 @@ async function seedRows(em: EntityManager): Promise<{ productId: string; categor
     type: 'simple',
     sku: `INVCOL-${Date.now()}`,
     slug: `invcol-${Date.now()}`,
-    status: 'draft',
+    status: 'inactive',
     visibility: 'public',
     name: { 'en-US': 'Inventory columns' },
     description: {},

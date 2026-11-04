@@ -10,6 +10,8 @@ import {
 import { ApiError, apiClient, formatDateTime } from '@endora-commerce/admin-kit/lib';
 import { Alert, AlertDescription, Badge, Card, CardContent, CardHeader, CardTitle, PageHeader, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { lookupProductLabels, type ProductLabel } from '../lib/product-labels.js';
+import { bulkOperationLogText } from '../lib/bulk-operation-log-text.js';
 
 /**
  * Bulk operation detail view — feature: bulk-operations detail.
@@ -57,15 +59,7 @@ const KNOWN_OPERATION_TYPES = new Set<string>([
 ]);
 
 /** Resolved product info for the per-element Product column. */
-interface ProductInfo {
-  name: string;
-  sku: string;
-}
-
-/** Pick a display name from the multilingual product `name` record. */
-function resolveProductName(name: Record<string, string>): string {
-  return name['en-US'] ?? name['en'] ?? Object.values(name)[0] ?? '';
-}
+type ProductInfo = ProductLabel;
 
 export function BulkOperationDetailPage(): ReactNode {
   const t = useTranslation('catalog');
@@ -132,21 +126,7 @@ export function BulkOperationDetailPage(): ReactNode {
     }
     let cancelled = false;
     void (async (): Promise<void> => {
-      const map: Record<string, ProductInfo> = {};
-      const CHUNK = 500;
-      for (let i = 0; i < ids.length; i += CHUNK) {
-        const chunk = ids.slice(i, i + CHUNK);
-        try {
-          const res = await apiClient.post<{
-            data: Array<{ id: string; sku: string; name: Record<string, string> }>;
-          }>('/api/v1/admin/catalog/products/batch-by-id', { ids: chunk, pageSize: CHUNK });
-          for (const p of res.data) {
-            map[p.id] = { name: resolveProductName(p.name), sku: p.sku };
-          }
-        } catch {
-          /* fall back to the raw id for this chunk */
-        }
-      }
+      const map = await lookupProductLabels(ids);
       if (!cancelled) setProductInfo(map);
     })();
     return (): void => {
@@ -313,7 +293,7 @@ export function BulkOperationDetailPage(): ReactNode {
                 <li key={idx} className="flex flex-wrap gap-2">
                   <span className="text-muted-foreground">{formatDateTime(entry.ts)}</span>
                   <span className={`uppercase ${LOG_LEVEL_CLASS[entry.level]}`}>{entry.level}</span>
-                  <span className={LOG_LEVEL_CLASS[entry.level]}>{entry.message}</span>
+                  <span className={LOG_LEVEL_CLASS[entry.level]}>{bulkOperationLogText(t, entry)}</span>
                 </li>
               ))}
             </ul>

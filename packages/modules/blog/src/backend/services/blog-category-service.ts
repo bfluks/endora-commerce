@@ -12,6 +12,9 @@ import {
   type PutBlogCategoryDescriptionRequest,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
+import { assertCategoryLanguagesComplete } from './blog-language-completeness.js';
+import { forgetEntityUrls, redirectFormerSlug } from './blog-url-keys.js';
+import { assertLinkableAsset, type LinkableAssetReader } from './linkable-asset.js';
 import { assertSlugAvailable } from './blog-slug-collision.js';
 import type { BlogCacheService } from './blog-cache.js';
 
@@ -58,6 +61,8 @@ export class BlogCategoryService {
     private readonly emFactory: () => EntityManager,
     private readonly cache?: BlogCacheService,
     private readonly dictionaryValidator?: DictionaryValidator,
+    /** Feature 166 (FR-006) — `assets_library`'s read port, asked before a main image is linked. */
+    private readonly assets?: LinkableAssetReader,
   ) {}
 
   // ────────────────────────────────────────────────────────────────────
@@ -113,6 +118,8 @@ export class BlogCategoryService {
     const em = this.emFactory();
     const id = randomUUID();
     const now = new Date();
+    // Feature 166 (FR-006) — a main image the caller may not see answers as a missing one.
+    if (input.mainImageAssetId) await assertLinkableAsset(this.assets, input.mainImageAssetId);
 
     const created = await em.transactional(async (tx) => {
       // Slug-collision guard runs first so we don't pollute the row.
@@ -175,6 +182,8 @@ export class BlogCategoryService {
         );
       }
 
+      // Feature 171 — a category is named in every language it is in.
+      await assertCategoryLanguagesComplete(tx, id);
       return this.getByIdInTx(tx, id);
     });
     // A first-level category is in the storefront index from the moment it
@@ -200,6 +209,8 @@ export class BlogCategoryService {
         );
       }
       this.assertVersion(existing.version, input.version);
+      // Feature 166 (FR-006) — a main image the caller may not see answers as a missing one.
+      if (input.mainImageAssetId) await assertLinkableAsset(this.assets, input.mainImageAssetId);
 
       // Slug-collision guard whenever slug or channel scope changes.
       const slugChange = input.slug !== undefined && input.slug !== existing.slug;
@@ -271,6 +282,8 @@ export class BlogCategoryService {
           `update blog_category_sales_channels set slug = ? where blog_category_id = ?`,
           [input.slug, id],
         );
+        // Feature 171 (OR-8) — the former slug keeps answering, as a redirect.
+        await redirectFormerSlug(tx, { kind: 'category', id }, existing.slug);
       }
       if (channelChange) {
         await this.replaceChannels(tx, id, input.salesChannelIds!, input.slug ?? existing.slug);
@@ -281,6 +294,7 @@ export class BlogCategoryService {
         await this.replaceLanguages(tx, id, input.languages);
       }
 
+      await assertCategoryLanguagesComplete(tx, id);
       const detail = await this.getByIdInTx(tx, id);
       await this.invalidateCache(existing.slug, detail.slug);
       return detail;
@@ -411,6 +425,8 @@ export class BlogCategoryService {
         `update blog_categories set deleted_at = now(), updated_at = now() where id = ?`,
         [id],
       );
+      // Feature 171 — the category's keys and redirects go with it.
+      await forgetEntityUrls(tx, { kind: 'category', id });
       await tx.execute(
         `update blog_category_sales_channels set deleted_at = now() where blog_category_id = ?`,
         [id],

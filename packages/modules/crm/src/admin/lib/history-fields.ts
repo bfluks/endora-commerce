@@ -47,6 +47,9 @@ export const LABELLED_HISTORY_FIELDS: ReadonlySet<string> = new Set([
   'source',
   'tags',
   'customFieldValues',
+  // Feature 162 — the values a creation or a join could not carry in; what it
+  // did carry shows through `customFieldValues`.
+  'customFieldCarry',
   'documentKind',
   'documentId',
   'linkedDocument',

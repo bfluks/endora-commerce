@@ -89,6 +89,14 @@ function totpCode(secretBase32: string, offsetMs = 0): string {
   }).generate({ timestamp: Date.now() + offsetMs });
 }
 
+/**
+ * Feature 167 — the storefront page a federated sign-in returns to carries the
+ * started-on channel's language prefix (the mfa unit tests pin which one); these
+ * cases are about the rest of the address.
+ */
+const withoutLanguagePrefix = (location: string | undefined): string =>
+  (location ?? '').replace(/^(https?:\/\/[^/]+)\/[a-z]{2,3}(?:-[a-z0-9]+)?(?=\/login)/, '$1');
+
 describe('MFA US4 — customer social login', () => {
   let h: BackendServerHandle;
 
@@ -225,7 +233,7 @@ describe('MFA US4 — customer social login', () => {
       const started = await startAndGetState(h);
       const res = await callback(h, EXISTING_EMAIL, started);
       expect(res.statusCode).toBe(302);
-      expect(res.headers['location']).toBe(
+      expect(withoutLanguagePrefix(res.headers['location'])).toBe(
         `http://localhost:3000/login?error=${encodeURIComponent(sentence)}`,
       );
       expect(res.cookies.find((c) => c.name === 'b2b_session' && c.value)).toBeUndefined();
@@ -263,7 +271,7 @@ describe('MFA US4 — customer social login', () => {
     // The next federated sign-in stops at the second factor.
     const res = await callback(h, email, await startAndGetState(h));
     expect(res.statusCode).toBe(302);
-    expect(res.headers['location']).toBe(
+    expect(withoutLanguagePrefix(res.headers['location'])).toBe(
       `http://localhost:3000/login/mfa?next=${encodeURIComponent('/account')}`,
     );
     expect(res.cookies.find((c) => c.name === 'b2b_session' && c.value)).toBeUndefined();

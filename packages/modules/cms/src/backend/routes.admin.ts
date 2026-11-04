@@ -1,5 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { z } from 'zod';
 import {
+  assessBrandContrast,
   createCmsBlockRequestSchema,
   createCmsHookRequestSchema,
   createCmsPageRequestSchema,
@@ -11,7 +13,9 @@ import {
   patchCmsPageRequestSchema,
   patchCmsTemplateRequestSchema,
   putCmsColorPaletteRequestSchema,
+  putCmsBrandTokensRequestSchema,
   putCmsPageContentRequestSchema,
+  type CmsBrandTokensAdminRead,
 } from '@endora-commerce/contracts';
 import type { ColorPaletteAuditContext, ColorPaletteWriter } from './plugin.js';
 import type { CmsPageService } from './services/cms-page-service.js';
@@ -21,9 +25,13 @@ import type { CmsHookService } from './services/cms-hook-service.js';
 import type { CmsTemplateService } from './services/cms-template-service.js';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import type { PageBuilderTranslationService } from './services/translation/page-builder-translation.service.js';
+import type { CmsBrandTokensService } from './services/brand-tokens-service.js';
 
 /** Feature 151 — a canvas at the 200 000-character ceiling, with styling, stays below this. */
 const TRANSLATE_BODY_LIMIT = 5 * 1024 * 1024;
+
+/** `?salesChannelId=` on the brand-token and page-builder reads; absent means the global set. */
+const salesChannelQuerySchema = z.object({ salesChannelId: z.string().uuid().optional() });
 
 export async function registerCmsAdminRoutes(
   app: FastifyInstance,
@@ -37,6 +45,7 @@ export async function registerCmsAdminRoutes(
     resolveAdminAuditContext?: (req: FastifyRequest) => ColorPaletteAuditContext;
     requireAdmin: RequireAdminFactory;
     translation: PageBuilderTranslationService;
+    brandTokensService: CmsBrandTokensService;
   },
 ): Promise<void> {
   const requireRead = deps.requireAdmin('cms.read');
@@ -75,9 +84,48 @@ export async function registerCmsAdminRoutes(
     async () => ({ data: { segments: await deps.pageService.reservedSegments() } }),
   );
 
-  app.get('/api/v1/admin/cms/page-builder/config', { preHandler: requireRead }, async () => ({
-    data: await deps.pageBuilderRegistry.describe(),
-  }));
+  // Feature 163 (research R-4): `?salesChannelId=` selects whose brand tokens
+  // the descriptor carries, so the canvas previews the channel being edited.
+  app.get('/api/v1/admin/cms/page-builder/config', { preHandler: requireRead }, async (request) => {
+    const query = salesChannelQuerySchema.parse(request.query ?? {});
+    return {
+      data: await deps.pageBuilderRegistry.describe({ salesChannelId: query.salesChannelId ?? null }),
+    };
+  });
+
+  /**
+   * Feature 163 — brand tokens (`contracts/storefront-and-admin-api.md` §1).
+   *
+   * Read under `cms.read`, so an editor sees the brand the canvas is styled
+   * with; written under its own code, `cms.brand`, because the brand is every
+   * page at once and not one page's content. The write is the Command
+   * `cms.brand_tokens.update` inside the service; the contrast findings are
+   * warnings and never refuse a save (FR-006b).
+   */
+  app.get('/api/v1/admin/cms/brand-tokens', { preHandler: requireRead }, async (request) => {
+    const query = salesChannelQuerySchema.parse(request.query ?? {});
+    const read = await deps.brandTokensService.read(query.salesChannelId ?? null);
+    const data: CmsBrandTokensAdminRead = {
+      global: read.global,
+      ...(read.channel ? { channel: read.channel } : {}),
+      effective: read.effective,
+      warnings: assessBrandContrast(read.effective),
+    };
+    return { data };
+  });
+
+  const requireBrand = deps.requireAdmin('cms.brand');
+
+  app.put(
+    '/api/v1/admin/cms/brand-tokens',
+    { preHandler: requireBrand },
+    async (request) => {
+      const body = putCmsBrandTokensRequestSchema.parse(request.body);
+      return {
+        data: await deps.brandTokensService.update(body.scope, body.tokens, body.expectedVersion),
+      };
+    },
+  );
 
   /**
    * Feature 151 — the Page Builder translation

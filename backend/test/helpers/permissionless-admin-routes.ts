@@ -109,6 +109,22 @@ export const PERMISSIONLESS_ADMIN_ROUTES: Readonly<Record<string, Permissionless
     guard: 'session',
     reason: "The caller's own Admin UI language, written to the caller's own row.",
   },
+  'GET /api/v1/admin/me/preferences': {
+    guard: 'session',
+    reason: "The caller's own Admin UI preferences, read from the caller's own rows.",
+  },
+  'PATCH /api/v1/admin/me/preferences': {
+    guard: 'session',
+    reason:
+      "The caller's own Admin UI preferences — pins, folded groups, rail mode, page sizes. The " +
+      "subject is the session's admin; no request names another.",
+  },
+  'POST /api/v1/admin/me/preferences/legacy-import': {
+    guard: 'session',
+    reason:
+      "The caller's own page sizes carried over once from the browser; it never overwrites a " +
+      'stored value.',
+  },
   'GET /api/v1/admin/account/mfa/status': {
     guard: 'session',
     reason:
@@ -175,6 +191,27 @@ export const PERMISSIONLESS_ADMIN_ROUTES: Readonly<Record<string, Permissionless
       'The command palette list, which the service filters by the permissions the caller ' +
       'holds: each administrator is answered with what they may open and nothing more.',
   },
+  // Issue #518 (owner ruling, option A) — the notification bell. Personal
+  // notifications are recorded for any administrator a Task or a CRM record
+  // names, whatever their role, so reading them cannot take a code.
+  'GET /api/v1/admin/notifications': {
+    guard: 'session',
+    reason:
+      "The caller's own notification feed: rows addressed to the session's admin, plus the " +
+      '`all_admins` broadcasts only when the caller holds `admin:read`, which the handler checks.',
+  },
+  'POST /api/v1/admin/notifications/:id/read': {
+    guard: 'session',
+    reason:
+      "Acknowledging one entry of the caller's own feed. Another admin's entry, and a broadcast " +
+      'for a caller without `admin:read`, answer 404 — the same as an id that names nothing.',
+  },
+  'POST /api/v1/admin/notifications/mark-all-read': {
+    guard: 'session',
+    reason:
+      "Acknowledging the caller's own feed: their own rows, and the broadcasts only when the " +
+      'caller holds `admin:read`, which the handler checks.',
+  },
   // `specs/150-admin-global-search/` research R-4, R-20 — the command palette's
   // record search. A single code would grant a lookup into every record type
   // regardless of the role's read permissions; instead each record type is
@@ -192,6 +229,15 @@ export const PERMISSIONLESS_ADMIN_ROUTES: Readonly<Record<string, Permissionless
       'What the command palette needs once per open to offer record search: the minimum length, ' +
       'the per-type count and the record types the caller may search, already filtered by the ' +
       "caller's permissions. It discloses no record.",
+  },
+  // Issue #379 — the "Send feedback" dialog in the admin shell.
+  'POST /api/v1/admin/feedback': {
+    guard: 'session',
+    reason:
+      'Feedback to the makers of Endora Commerce, in the words the caller typed. It reads no ' +
+      "record and changes nothing on the instance: it forwards the message, the caller's own " +
+      'name and the release to the configured relay. Whoever is signed in may report a problem, ' +
+      'whatever their role; a per-administrator rate limit bounds it.',
   },
   'POST /api/v1/admin/impersonation/end': {
     guard: 'none',

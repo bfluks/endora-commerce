@@ -86,6 +86,8 @@ describe('audit reference registry — contributions on a composed platform', ()
       'customer_accounts',
       'inventory',
       'price_lists',
+      'projects',
+      'tasks',
     ]);
   });
 

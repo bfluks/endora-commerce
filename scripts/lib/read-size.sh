@@ -43,6 +43,8 @@
 # Containment is matched with POSIX awk's `index()`, which is literal — a
 # `grep -E` pattern built from a path would need the caller's separators
 # escaped, and the one that got away would match more than it was asked to.
+# The directories go in through `ENVIRON` rather than `-v`, which BSD awk
+# refuses for a value holding a newline (issue #315).
 read_size_module_coverage() {
   local directories="$1"
   local expected covered
@@ -50,8 +52,8 @@ read_size_module_coverage() {
   expected=$(printf '%s\n' "$directories" | grep -c '[^[:space:]]' || true)
   [ "$expected" -gt 0 ] || return 1
   covered=$(
-    awk -v dirs="$directories" '
-      BEGIN { total = split(dirs, dir, "\n") }
+    READ_SIZE_AWK_DIRS="$directories" awk '
+      BEGIN { total = split(ENVIRON["READ_SIZE_AWK_DIRS"], dir, "\n") }
       {
         for (i = 1; i <= total; i++) {
           if (length(dir[i]) > 0 && index($0, dir[i] "/") == 1) { seen[dir[i]] = 1; break }

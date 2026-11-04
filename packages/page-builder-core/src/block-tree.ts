@@ -1,19 +1,26 @@
 // The structural block-name walk — feature 096, T403, moved out of
 // `src/migration/` by T602.
 //
-// **One implementation, used by the five rename migrations, by the operator's
-// pre-flight report, and by the admin editor's degradation merge**
-// (`contracts/block-name-migration.md` §3). The three differ in what they do
-// with a name and agree on how a name is found; two walks would be two answers
-// waiting to disagree about the one thing that must not disagree — which nodes
-// exist.
+// **One implementation, used by the five rename migrations and by the
+// operator's pre-flight report** (`contracts/block-name-migration.md` §3). The
+// two differ in what they do with a name and agree on how a name is found; two
+// walks would be two answers waiting to disagree about the one thing that must
+// not disagree — which nodes exist.
 //
-// The third reader is why the file sits here rather than under `src/migration/`.
+// The editors' degradation merge used it too until feature 163 (T197), and that
+// is where the two questions parted: a rich-text prop holds a TipTap document
+// whose nodes carry a `type` and no `props`, which this walk rightly offers to a
+// rename (it must not skip a hand-written node) and which an editor must not
+// degrade to a "(missing renderer)" block. The editors read
+// `countComponentNames` at the end of this file — a node there is a Puck
+// component position, `type` beside a `props` object.
+//
+// The editors are why the file sits here rather than under `src/migration/`.
 // That subpath is not a runtime path, because the frozen rename map is in it and
 // a resolver that could reach the map would make this feature the permanent
 // alias map the owner rejected. The **walk** carries no such hazard: it knows
 // nothing about any correspondence and only says which node `type` values a
-// document holds, which is what FR-019's placeholder merge has to ask.
+// document holds, and its sibling below answers FR-019's placeholder merge.
 //
 // ## It is structural, never textual
 //
@@ -143,5 +150,39 @@ export function countBlockNames(doc: unknown): Map<string, number> {
     counts.set(type, (counts.get(type) ?? 0) + 1);
     return undefined;
   });
+  return counts;
+}
+
+/**
+ * Count the Puck components a document places, writing nothing — the editors'
+ * question (feature 163, T197), narrower than {@link countBlockNames}'.
+ *
+ * A component position is an object whose `type` is a string **and** which
+ * carries a `props` object: Puck's `{ type, props }`. The migration walk above
+ * offers every `type` on purpose (a hand-written node may lack `props`), and
+ * so it also offers the nodes and marks of every TipTap document a rich-text
+ * prop holds — `doc`, `paragraph`, `text`, `image`, `bold`, … — none of which
+ * has `props`. An editor that degraded each of those to a "(missing renderer)"
+ * block filled its palette with them; the editors' degradation merge reads
+ * this walk instead, and the migration and its report keep theirs.
+ */
+export function countComponentNames(doc: unknown): Map<string, number> {
+  const counts = new Map<string, number>();
+  const descend = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) descend(item);
+      return;
+    }
+    if (node === null || typeof node !== 'object') return;
+    const source = node as Record<string, unknown>;
+    const props = source['props'];
+    if (typeof source['type'] === 'string' && props !== null && typeof props === 'object' && !Array.isArray(props)) {
+      counts.set(source['type'], (counts.get(source['type']) ?? 0) + 1);
+    }
+    for (const [key, value] of Object.entries(source)) {
+      if (key !== 'type') descend(value);
+    }
+  };
+  descend(doc);
   return counts;
 }

@@ -70,8 +70,8 @@ describe('sanitizeRichHtml', () => {
 });
 
 describe('htmlFromTiptap', () => {
-  it('returns empty string when DOM serialization is unavailable', () => {
-    // generateHTML needs a DOM (document/window); Vitest node env has none.
+  // T119 (B1): DOM-free — it used to return '' here, where `generateHTML` had no `document`.
+  it('serializes without a DOM', () => {
     const html = htmlFromTiptap({
       type: 'doc',
       content: [
@@ -81,6 +81,10 @@ describe('htmlFromTiptap', () => {
         },
       ],
     });
-    expect(typeof html).toBe('string');
+    expect(html).toBe('<p>Hi</p>');
+  });
+
+  it('renders nothing for a node type the schema does not know', () => {
+    expect(htmlFromTiptap({ type: 'doc', content: [{ type: 'notANode' }] })).toBe('');
   });
 });

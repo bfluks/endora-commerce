@@ -1,11 +1,17 @@
 /**
- * `carts`' admin surface — two routes, one zone contribution and no sidebar
- * entry, declared by the module that owns them (feature 091, Phase 4, batch
- * four, and P7b;
+ * `carts`' admin surface — two routes, one sidebar entry and one zone
+ * contribution, declared by the module that owns them (feature 091, Phase 4,
+ * batch four, and P7b;
  * `specs/091-module-owned-admin-surfaces/contracts/admin-contribution.md`).
  *
- * **The locked-and-nav-less shape.** Batch two rejected this module twice over
- * — once for declaring `activation.nonDeactivatable`, once for contributing no
+ * **The sidebar entry arrived with issue #510.** Until then the list was
+ * reachable from neither the sidebar nor the palette — an operator had to know
+ * the address — which Principle XVI forbids. Nothing recorded that as a
+ * decision: batch four moved the module as it found it. The entry and the
+ * manifest's `open-carts` action both carry `carts:read`, the route's own gate.
+ *
+ * **The locked shape, nav-less when it moved.** Batch two rejected this module
+ * twice over — once for declaring `activation.nonDeactivatable`, once for contributing no
  * sidebar entry — and `plan.md`'s two rulings retire both grounds. What a
  * locked module still has is the **permission** axis, which
  * `useSurfaceVisibility` gates identically to presence, and what a nav-less
@@ -52,6 +58,18 @@ export const contributions: AdminContributions = {
     {
       path: `${ROUTE_PATH}/:id`,
       component: () => import('./pages/CartDetail.js'),
+      requiredPermission: 'carts:read',
+    },
+  ],
+  nav: [
+    {
+      to: ROUTE_PATH,
+      labelKey: 'nav.carts.label',
+      icon: 'ShoppingCart',
+      section: 'sales',
+      // After `orders`' three rows (100–300), before `quote_requests` and
+      // `returns` (400): a cart is the step before an order.
+      weight: 350,
       requiredPermission: 'carts:read',
     },
   ],

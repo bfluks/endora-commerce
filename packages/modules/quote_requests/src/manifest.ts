@@ -306,7 +306,16 @@ export const manifest = defineModuleManifest({
    * `PRODUCT_NOT_FOUND`, which is `catalog`'s and is declared there. None is
    * declared here and every one of those sentences stays where it is.
    *
-   * **No `tokens`, and it is derived rather than assumed.** The envelope's
+   * **One code carries `tokens`, and it is raised by another module.**
+   * `QUOTE_VALIDITY_ENDED` is also `orders`' refusal at placement of a basket
+   * still priced at a quote that no longer binds (issue #167): it puts the
+   * reason in `details.code`, and the three members below are
+   * `quoteCommitmentRefusalSchema`'s in `packages/contracts/src/orders.ts`, in
+   * its order — the enum is the authority, as for `carts`' coupon reasons.
+   * The code stays this module's: the sentence is about this module's quote,
+   * and ownership follows the code, not the raise site.
+   *
+   * **No other `tokens`, and it is derived rather than assumed.** The envelope's
    * `refusalToken` (`packages/platform/src/http/error-envelope.ts`) reads
    * exactly one member of `details` — `code`, and only when `details` is an
    * object — as the tail of `errors.<CODE>.<token>`. Every raise of these
@@ -318,7 +327,7 @@ export const manifest = defineModuleManifest({
    */
   errorCodes: [
     { code: 'QUOTE_INCOMPLETE' },
-    { code: 'QUOTE_VALIDITY_ENDED' },
+    { code: 'QUOTE_VALIDITY_ENDED', tokens: ['lapsed', 'withdrawn', 'unavailable'] },
     { code: 'RFQ_ALREADY_CLAIMED' },
     { code: 'RFQ_EMPTY' },
     { code: 'RFQ_EXPIRED' },
@@ -328,6 +337,11 @@ export const manifest = defineModuleManifest({
     { code: 'RFQ_NOT_QUOTED' },
     { code: 'RFQ_PRICE_PROPOSAL_NOT_ALLOWED' },
     { code: 'RFQ_SAVED_VIEW_NAME_TAKEN' },
+    // Feature 163 (security review M1) — an operator's on-behalf request on a channel,
+    // named or resolved (owner decision 2026-10-29 "A"), that is not one of the
+    // Organization's active channels. Minted by this feature;
+    // owner and reason in `MINTED_ERROR_CODES`.
+    { code: 'RFQ_SALES_CHANNEL_NOT_ALLOWED' },
     // Feature 153 (owner answer Q4) — sending the quote PDF by e-mail. Minted
     // by this feature; owner and reason in `MINTED_ERROR_CODES`.
     { code: 'QUOTE_REQUEST_PDF_TOO_LARGE' },
@@ -341,7 +355,8 @@ export const manifest = defineModuleManifest({
    * (D-175, feature 080 T057).
    *
    * `RfqCreatePage` prefills an agreed price from
-   * `GET /api/v1/admin/products/:id/resolved-price`, which `price_lists` gates
+   * `POST /api/v1/admin/price-books/resolve` (feature 160; it was the per-product
+   * resolved-price probe), which `price_lists` gates
    * with `price_lists:read`. D-173 made that gate deliberately: the route used
    * to enforce `rfqs:handle`, a code its own switchable owner could take off
    * `/admin-roles` while `price_lists` — `nonDeactivatable` — went on demanding
@@ -522,7 +537,8 @@ export const manifest = defineModuleManifest({
       icon: 'Inbox',
       targetRoute: '/quote-requests',
       requiredPermission: 'rfqs:handle',
-      keywords: ['rfq', 'quote', 'inbox', 'zapytanie', 'oferta'],
+      keywords: ['rfq', 'quote', 'inbox'],
+      keywordsKey: 'actions.openInbox.keywords',
       weight: 310,
     },
   ],

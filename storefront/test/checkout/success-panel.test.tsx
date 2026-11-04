@@ -36,8 +36,9 @@ describe('SuccessPanel', () => {
         locale="pl-PL"
       />,
     );
-    expect(html).toContain('Dziekujemy');
-    expect(html).toContain('Numer Twojego zamowienia');
+    // R19C (T269, deliberately changed): the Polish copy carries its diacritics.
+    expect(html).toContain('Dziękujemy');
+    expect(html).toContain('Numer Twojego zamówienia');
     expect(html).toContain('Prosimy o przelew');
     expect(html).not.toContain('Thank you');
   });

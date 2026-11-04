@@ -32,6 +32,7 @@ import { Migration20260718T200340OrganizationsOrganizationCustomFieldValues } fr
 import { Migration20260720T044254OrganizationsOrgHierarchy } from './20260720T044254_organizations_org_hierarchy.js';
 import { Migration20260912T094646OrganizationsSalesChannelOrganizations } from './20260912T094646_organizations_sales_channel_organizations.js';
 import { Migration20261003T184802OrganizationsRepairEmptyPaths } from './20261003T184802_organizations_repair_empty_paths.js';
+import { Migration20261018T104644OrganizationsChannelAccessBackfill } from './20261018T104644_organizations_channel_access_backfill.js';
 
 export const migrations = [
   Migration20260424T205317OrganizationsInit,
@@ -44,6 +45,7 @@ export const migrations = [
   Migration20260720T044254OrganizationsOrgHierarchy,
   Migration20260912T094646OrganizationsSalesChannelOrganizations,
   Migration20261003T184802OrganizationsRepairEmptyPaths,
+  Migration20261018T104644OrganizationsChannelAccessBackfill,
 ];
 
 export {
@@ -57,4 +59,5 @@ export {
   Migration20260720T044254OrganizationsOrgHierarchy,
   Migration20260912T094646OrganizationsSalesChannelOrganizations,
   Migration20261003T184802OrganizationsRepairEmptyPaths,
+  Migration20261018T104644OrganizationsChannelAccessBackfill,
 };

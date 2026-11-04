@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/mod-payments",
-  "version": "0.106.0",
+  "version": "0.109.0",
   "type": "module",
   "sideEffects": false,
   "description": "The platform payment capability: the built-in payment adapters (bank transfer, in-person pickup, credit limit, gateway), the payment record every order carries, and the settlement lifecycle that PSP integrations plug into. Switched off, checkout offers no payment method and the shop takes no orders.",
@@ -47,7 +47,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.ui.json",
+    "build": "node ../../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json && tsc -p tsconfig.ui.build.json",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.ui.json --noEmit",
     "lint": "eslint src",
     "test": "vitest run"
@@ -87,10 +87,10 @@
     "@mikro-orm/postgresql": "^6.6.13",
     "@types/node": "^22.9.0",
     "@types/react": "^19.2.14",
-    "fastify": "^5.12.5",
+    "fastify": "^5.12.8",
     "lucide-react": "^1.11.0",
     "react": "^19.2.5",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

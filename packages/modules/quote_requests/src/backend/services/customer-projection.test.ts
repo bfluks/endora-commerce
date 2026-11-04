@@ -8,3 +8,11 @@ describe('customerEventsOf', () => {
     expect(customerEventsOf(events).map((e) => e.eventType)).toEqual(['submitted', 'approved']);
   });
 });
+
+/** Feature 162 (owner answer Q5) — a carry skip names keys of possibly internal fields: administrators only. */
+describe('customerEventsOf — custom-field carry skips', () => {
+  it('leaves the custom-field-carry-skipped events out of a customer reply', () => {
+    const events = [{ eventType: 'submitted' }, { eventType: 'custom-field-carry-skipped' }] as const;
+    expect(customerEventsOf(events).map((e) => e.eventType)).toEqual(['submitted']);
+  });
+});

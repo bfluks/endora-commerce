@@ -11,6 +11,7 @@ import {
 } from '../../../../packages/modules/catalog/dist/backend/services/catalog-admin.service.js';
 import { CatalogBulkUpdateService } from '../../../../packages/modules/catalog/dist/backend/services/catalog-bulk-update.service.js';
 import { BulkOperationService } from '../../../../packages/modules/catalog/dist/backend/services/bulk-operation.service.js';
+import { withSystemScope } from '@endora-commerce/platform/tenancy';
 import { Product } from '../../helpers/package-entities.js';
 import { SEED_PRODUCT_101_ID, SEED_PRODUCT_102_ID } from '../../helpers/seed-catalog.js';
 import {
@@ -31,6 +32,7 @@ describe('bulk-edit undo (feature 054, US2) [real DB]', () => {
   let h: BackendServerHandle;
   let orm: MikroORM;
   let bulkOps: BulkOperationService;
+  let events: EventBus;
   const admin = randomUUID();
 
   const status = async (id: string): Promise<string> => {
@@ -49,12 +51,12 @@ describe('bulk-edit undo (feature 054, US2) [real DB]', () => {
     h = await setupBackendServer();
     orm = h.orm;
     const em = (): EntityManager => orm.em.fork();
-    const events = new EventBus();
+    events = new EventBus();
     const audit = new AuditLogService(em);
     const commandBus = new CommandBus(orm, audit, events);
     const catalogAdmin = new CatalogAdminService(em, events as CatalogEventBus, audit);
     const bulkUpdate = new CatalogBulkUpdateService(em, catalogAdmin, undefined, audit);
-    bulkOps = new BulkOperationService(em, bulkUpdate, {}, commandBus);
+    bulkOps = new BulkOperationService(em, bulkUpdate, { events: events as CatalogEventBus }, commandBus);
   });
 
   afterAll(async () => {
@@ -72,9 +74,21 @@ describe('bulk-edit undo (feature 054, US2) [real DB]', () => {
     expect(op?.reversible).toBe(true);
     expect(op?.revertState).toHaveLength(2);
     expect(await status(SEED_PRODUCT_101_ID)).toBe('inactive');
+    // Spec 163 (FR-010) — a status edit captures the status alone; archivedAt is no
+    // part of it any more.
+    for (const record of op?.revertState ?? []) expect(Object.keys(record.before)).toEqual(['status']);
 
-    const res = await bulkOps.undo(opId);
+    // Spec 163 (R30.3) — the undo announces every product it reverted.
+    const announced: Array<{ productId: string; changedFields: string[] }> = [];
+    const off = events.on('product.updated.v1' as never, ((p: { productId: string; changedFields: string[] }) => {
+      announced.push({ productId: p.productId, changedFields: p.changedFields });
+    }) as never);
+    const res = await withSystemScope('bulk undo test', () => bulkOps.undo(opId));
+    off();
     expect(res.ok).toBe(true);
+    expect(announced.sort((a, b) => a.productId.localeCompare(b.productId))).toEqual(
+      [SEED_PRODUCT_101_ID, SEED_PRODUCT_102_ID].sort().map((productId) => ({ productId, changedFields: ['status'] })),
+    );
     if (res.ok) {
       expect(res.reverted.sort()).toEqual([SEED_PRODUCT_101_ID, SEED_PRODUCT_102_ID].sort());
       expect(res.conflicts).toEqual([]);
@@ -90,24 +104,37 @@ describe('bulk-edit undo (feature 054, US2) [real DB]', () => {
   });
 
   it('refuses records changed since the operation (SC-002) — partial undo with a conflict report', async () => {
-    const opId = await runBulk([SEED_PRODUCT_101_ID, SEED_PRODUCT_102_ID], { status: 'inactive' });
-    expect(await status(SEED_PRODUCT_101_ID)).toBe('inactive');
+    // A three-valued column: a later edit has to land on a value that is neither the
+    // operation's before-state nor its after-state — a product put back to its
+    // before-state counts as already reverted. Spec 163 left the status two values.
+    const visibility = async (id: string): Promise<string> =>
+      (await orm.em.fork().findOneOrFail(Product, { id })).visibility;
+    const original101 = await visibility(SEED_PRODUCT_101_ID);
+    const original102 = await visibility(SEED_PRODUCT_102_ID);
+    expect(original101).not.toBe('logged_in_only');
+    const opId = await runBulk([SEED_PRODUCT_101_ID, SEED_PRODUCT_102_ID], { visibility: 'logged_in_only' });
+    expect(await visibility(SEED_PRODUCT_101_ID)).toBe('logged_in_only');
 
     // Simulate a later edit to 101 that no longer matches the operation's
-    // after-state (status flipped back but archivedAt left as the op set it).
-    await orm.em.fork().nativeUpdate(Product, { id: SEED_PRODUCT_101_ID }, { status: 'active' });
+    // after-state, nor its before-state.
+    await orm.em.fork().nativeUpdate(Product, { id: SEED_PRODUCT_101_ID }, { visibility: 'organization_restricted' });
 
-    const res = await bulkOps.undo(opId);
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.reverted).toEqual([SEED_PRODUCT_102_ID]);
-      expect(res.conflicts).toEqual([
-        { recordId: SEED_PRODUCT_101_ID, reason: 'changed_since_operation' },
-      ]);
-      expect(res.undoStatus).toBe('partially_reverted');
+    try {
+      const res = await bulkOps.undo(opId);
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.reverted).toEqual([SEED_PRODUCT_102_ID]);
+        expect(res.conflicts).toEqual([
+          { recordId: SEED_PRODUCT_101_ID, reason: 'changed_since_operation' },
+        ]);
+        expect(res.undoStatus).toBe('partially_reverted');
+      }
+      // 102 restored; 101 left exactly as the later edit set it (never clobbered).
+      expect(await visibility(SEED_PRODUCT_102_ID)).toBe(original102);
+      expect(await visibility(SEED_PRODUCT_101_ID)).toBe('organization_restricted');
+    } finally {
+      await orm.em.fork().nativeUpdate(Product, { id: SEED_PRODUCT_101_ID }, { visibility: original101 as never });
     }
-    // 102 restored; 101 left exactly as the later edit set it (never clobbered).
-    expect(await status(SEED_PRODUCT_102_ID)).toBe('active');
   });
 
   it('does not offer undo for a non-reversible edit (category bridge touched)', async () => {

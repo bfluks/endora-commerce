@@ -50,6 +50,8 @@ function definitionRecord(id: string): CustomFieldDefinitionWithOptions {
       audience: 'customer',
       sortOrder: 0,
       config: {},
+      listFilter: false,
+      carryTo: [],
       createdAt: NOW,
       updatedAt: NOW,
     },

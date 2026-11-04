@@ -1,9 +1,15 @@
 /**
- * `mfa`' admin surface — one route and no sidebar entry, declared by the module
- * that owns it (feature 091, Phase 4, batch four;
+ * `mfa`' admin surface — one route and one sidebar entry, declared by the
+ * module that owns it (feature 091, Phase 4, batch four;
  * `specs/091-module-owned-admin-surfaces/contracts/admin-contribution.md`).
  *
- * **The nav-less shape, and it is the reason this module is in the batch.**
+ * **The sidebar entry arrived with issue #510.** Until then `/security` was
+ * reachable from neither the sidebar nor the palette, so an admin could not
+ * find where to switch two-factor authentication on — Principle XVI forbids
+ * that. The entry and the manifest's `open-security` action carry no
+ * `requiredPermission`, for the reason the route carries none (below).
+ *
+ * **The nav-less shape, and it is the reason this module was in the batch.**
  * Batch two rejected `mfa` on the ground that it contributes no sidebar entry,
  * so *"half the ratchet would not move and half the evidence would be
  * missing"*. `plan.md`'s Ruling 1 measured that as sound pilot-evidence
@@ -43,6 +49,16 @@ export const contributions: AdminContributions = {
       path: ROUTE_PATH,
       component: () => import('./pages/AdminSecuritySettings.js'),
       index: true,
+    },
+  ],
+  nav: [
+    {
+      to: ROUTE_PATH,
+      labelKey: 'nav.security.label',
+      icon: 'ShieldCheck',
+      section: 'system',
+      // Beside `admin_users` (200) and `admin_roles` (300): account identity.
+      weight: 250,
     },
   ],
 };

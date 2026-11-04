@@ -1,6 +1,8 @@
+import { unitPriceHalfUp } from '@endora-commerce/contracts';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
   CartCustomerContext,
+  CartRecord,
   CartWithItems,
   CatalogProductReadPort,
 } from '@endora-commerce/contracts';
@@ -9,6 +11,8 @@ import { CartItem } from '../entities/cart-item.entity.js';
 import type { CartLinePriceDrift, CartPlacementApplyPort } from '../../ports/index.js';
 import { toCartItemRecord, toCartRecord } from './cart-read-port.js';
 import { agreementOf, storedPriceDiffers, type CartLinePricing } from './cart-line-pricing.js';
+import { discardWorkingBasketOn } from './working-basket.js';
+import { basketAwaitsApproval, type CartApprovalPolicyReads } from './cart-approval-policy.js';
 
 /**
  * `cartPlacementApplyPort` — the basket half of order placement, run on the
@@ -43,7 +47,16 @@ export class CartPlacementApplyService implements CartPlacementApplyPort {
     /** The same pricing chain `CartService` stores a line's price from. */
     private readonly linePricing: CartLinePricing,
     private readonly catalogProducts: CatalogProductReadPort,
+    /** Issue #648 — the reads the cart-approval policy is judged from. */
+    private readonly approvalPolicy: CartApprovalPolicyReads,
   ) {}
+
+  awaitsApproval(input: {
+    cart: Pick<CartRecord, 'customerAccountId' | 'approvalStatus'>;
+    organizationId: string;
+  }): Promise<boolean> {
+    return basketAwaitsApproval(this.approvalPolicy, input);
+  }
 
   async readActiveForPlacement(
     em: EntityManager,
@@ -54,14 +67,46 @@ export class CartPlacementApplyService implements CartPlacementApplyPort {
     // that has none, so a caller with no organisation must not be narrowed out
     // of its own basket. `Cart` is `@CustomerScoped`, so the tenant guard is on
     // the customer either way.
+    //
+    // The basket is the one of the channel the order is placed on
+    // (`specs/154-sales-channel-access/`, contracts/basket-attribution.md §4):
+    // a customer holds one per channel, and another store's basket is not this
+    // order's.
     const cart = await em.findOne(Cart, {
       customerAccountId: ctx.customerAccountId,
       ...(ctx.organizationId === null ? {} : { organizationId: ctx.organizationId }),
+      salesChannelId: ctx.salesChannelId,
       status: 'active',
     });
     if (!cart) return null;
-    const items = await em.find(CartItem, { cartId: cart.id });
+    // In the basket's own order — `CartReadService`'s. The order's lines are
+    // numbered in it, and a quote's or an administrator's grouping is laid over
+    // it (feature 159, research N-31); unordered, it was the heap's order.
+    const items = await em.find(CartItem, { cartId: cart.id }, { orderBy: { createdAt: 'asc', id: 'asc' } });
     return { cart: toCartRecord(cart), items: items.map(toCartItemRecord) };
+  }
+
+  async readWorkingForPlacement(
+    em: EntityManager,
+    ctx: CartCustomerContext & { cartId: string },
+  ): Promise<CartWithItems | null> {
+    // Issue #169 — the working basket the caller created for this order: the
+    // customer's, on the order's channel, and still `working`. Anything else —
+    // the active basket's id among them — is no basket to place from.
+    const cart = await em.findOne(Cart, {
+      id: ctx.cartId,
+      customerAccountId: ctx.customerAccountId,
+      ...(ctx.organizationId === null ? {} : { organizationId: ctx.organizationId }),
+      salesChannelId: ctx.salesChannelId,
+      status: 'working',
+    });
+    if (!cart) return null;
+    const items = await em.find(CartItem, { cartId: cart.id }, { orderBy: { createdAt: 'asc', id: 'asc' } });
+    return { cart: toCartRecord(cart), items: items.map(toCartItemRecord) };
+  }
+
+  async discardWorkingBasket(input: { cartId: string; customerAccountId: string }): Promise<void> {
+    await discardWorkingBasketOn(this.emFactory(), input);
   }
 
   async completeForOrder(
@@ -109,6 +154,7 @@ export class CartPlacementApplyService implements CartPlacementApplyPort {
       if (!differs || drift.currentUnitPrice === null || drift.currentCurrency === null) continue;
       item.unitPrice = drift.currentUnitPrice;
       item.currency = drift.currentCurrency;
+      item.priceSource = drift.currentPriceSource ?? null;
       changed = true;
     }
     if (changed) await em.flush();
@@ -120,26 +166,54 @@ export class CartPlacementApplyService implements CartPlacementApplyPort {
   ): Promise<Array<{ item: CartItem; differs: boolean; drift: CartLinePriceDrift }>> {
     const items = await em.find(CartItem, { cartId: input.cartId });
     if (items.length === 0) return [];
+    // Priced on the basket's own channel, the one it was priced on when its
+    // lines were added — never the system default (contracts/basket-attribution.md
+    // §2). The basket is read on this `em`, so the answer describes the row
+    // placement holds.
+    const cart = await em.findOneOrFail(
+      Cart,
+      { id: input.cartId },
+      { fields: ['id', 'salesChannelId', 'customerAccountId'] },
+    );
+    if (!cart.salesChannelId) {
+      throw new Error(`[carts] cart ${input.cartId} records no sales channel to price it on.`);
+    }
     // Placement is a signed-in buyer's, whoever places it.
+    // D-287 P0 — the basket's customer, whose own group the lines were added
+    // at; the drift check must price on it too or it would report drift on
+    // every line of a customer with their own group.
     const ctx = await this.linePricing.contextFor(em, {
       organizationId: input.organizationId,
       signedIn: true,
+      salesChannelId: cart.salesChannelId,
+      customerAccountId: cart.customerAccountId ?? null,
     });
     const products = await this.catalogProducts.findByIds([
       ...new Set(items.map((it) => it.productId)),
     ]);
     const productById = new Map(products.map((p) => [p.id, p]));
+    // D-287 P0 — every line in one batched resolution; it was one per line,
+    // inside the placement transaction.
+    const answers = await this.linePricing.orderablePrices(
+      ctx,
+      items.flatMap((item) => {
+        const product = productById.get(item.productId);
+        return product
+          ? [
+              {
+                key: item.id,
+                product,
+                variantId: item.variantId ?? null,
+                quantity: item.quantity,
+                agreed: agreementOf(item),
+              },
+            ]
+          : [];
+      }),
+    );
     const out: Array<{ item: CartItem; differs: boolean; drift: CartLinePriceDrift }> = [];
     for (const item of items) {
-      const product = productById.get(item.productId);
-      const answer = product
-        ? await this.linePricing.orderablePrice(ctx, {
-            product,
-            variantId: item.variantId ?? null,
-            quantity: item.quantity,
-            agreed: agreementOf(item),
-          })
-        : null;
+      const answer = answers.get(item.id) ?? null;
       const current = answer?.ok ? { unitPrice: answer.unitPrice, currency: answer.currency } : null;
       out.push({
         item,
@@ -149,10 +223,11 @@ export class CartPlacementApplyService implements CartPlacementApplyPort {
           productId: item.productId,
           variantId: item.variantId ?? null,
           quantity: item.quantity,
-          storedUnitPrice: Number(item.unitPrice).toFixed(2),
+          storedUnitPrice: unitPriceHalfUp(item.unitPrice),
           storedCurrency: item.currency,
           currentUnitPrice: current?.unitPrice ?? null,
           currentCurrency: current?.currency ?? null,
+          currentPriceSource: answer?.ok ? answer.priceSource : null,
         },
       });
     }

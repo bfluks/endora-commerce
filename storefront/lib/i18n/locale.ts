@@ -1,39 +1,26 @@
 import type { I18nConfigResponse } from '@endora-commerce/contracts';
 
 /**
- * Resolve the storefront locale for a server-rendered request.
+ * The language a page renders in (feature 167, `specs/167-storefront-locale-path/`):
+ * the path's, as the middleware forwarded it, when it is one of the **channel's**
+ * languages (FR-005 — the platform-wide active list is not consulted); else the
+ * channel's default language; else, when the channel could not be read, the
+ * configured default from `i18n/config`; else `en-US`.
  *
- * Priority:
- *   1. explicit `?lang=` query parameter (a language switcher writes this).
- *   2. `Accept-Language` header — q-weighted; first active match wins.
- *   3. configured default from `i18n/config`.
- *   4. hard-coded `en-US` if the API call failed.
+ * The `lang` cookie and `Accept-Language` take no part (OR-4): the path decides.
  */
-export function resolveLocale(input: {
-  acceptLanguage?: string | null;
-  langQuery?: string | null;
+export function resolvePageLocale(input: {
+  pathLanguage: string | null | undefined;
+  channelLanguages: readonly string[];
+  channelDefault: string | null | undefined;
   config: I18nConfigResponse;
 }): string {
-  const active = input.config.languages.filter((l) => l.isActive).map((l) => l.code);
-  const def = input.config.defaultLanguageCode ?? 'en-US';
-
-  if (input.langQuery) {
-    const exact = active.find((l) => l.toLowerCase() === input.langQuery!.toLowerCase());
-    if (exact) return exact;
+  if (input.pathLanguage) {
+    const wanted = input.pathLanguage.toLowerCase();
+    const hit = input.channelLanguages.find((l) => l.toLowerCase() === wanted);
+    if (hit) return hit;
   }
-
-  if (input.acceptLanguage) {
-    const candidates = parseAcceptLanguage(input.acceptLanguage);
-    for (const cand of candidates) {
-      const exact = active.find((l) => l.toLowerCase() === cand.toLowerCase());
-      if (exact) return exact;
-      const langOnly = cand.split('-')[0]!.toLowerCase();
-      const broad = active.find((l) => l.split('-')[0]!.toLowerCase() === langOnly);
-      if (broad) return broad;
-    }
-  }
-
-  return def;
+  return input.channelDefault || input.config.defaultLanguageCode || 'en-US';
 }
 
 /**
