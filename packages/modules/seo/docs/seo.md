@@ -14,15 +14,16 @@ a sales channel's storefront as a whole.
 | --- | --- | --- |
 | `GET /api/v1/catalog/sitemap.xml` | crawlers | Cached XML sitemap; falls through to inline regenerate when stale |
 | `GET /api/v1/storefront/seo/robots-policy` | storefront | The request's sales channel's default robots policy, as `{ index, follow }` |
-| `GET /api/v1/storefront/seo/crawler-files` | storefront | What the request's sales channel's `robots.txt` and `llms.txt` are built from: its custom instructions and additional content, with the policy and the shop name |
+| `GET /api/v1/storefront/seo/crawler-files` | storefront | What the request's sales channel's `robots.txt` and `llms.txt` are built from: its custom instructions and additional content, with the policy, the shop name and whether the store is open to anonymous visitors. Answered on a store closed to them as well |
 | `GET /api/v1/admin/seo/crawler-files/preview` | admin (`settings:read`) | The preview of a sales channel's `robots.txt` or `llms.txt` — the system default channel when none is named: the part its storefront generates, asked of that storefront, beside the saved text |
 | `GET /api/v1/admin/seo/sitemap` | admin (`catalog:write`) | One row per sales channel: storefront address, last-generated timestamp, size, URL count |
 | `POST /api/v1/admin/seo/sitemap/:channelCode/regenerate` | admin (`catalog:write`) | Force a fresh build for that channel |
 | `GET /api/v1/admin/seo/sitemap/:channelCode/status` | admin (`catalog:write`) | Last-generated timestamp + size + URL count for that channel |
 | `GET /api/v1/admin/seo/sitemap/:channelCode/xml` | admin (`catalog:write`) | That channel's cached XML, inline or as a download (`?download=1`) |
-| `GET /api/v1/admin/seo/meta/:entityType/:entityId` | admin (`catalog:write`) | Resolved meta + override row for a (entity, locale) |
-| `PUT /api/v1/admin/seo/meta/:entityType/:entityId` | admin (`catalog:write`) | Upsert override (per locale) |
-| `DELETE /api/v1/admin/seo/meta/:entityType/:entityId` | admin (`catalog:write`) | Drop the override (resolver returns to rule output) |
+| `GET /api/v1/admin/seo/meta/product/:id` | admin (`catalog:read`) | A product's metadata at a scope (`?channelId=`, `?languageCode=`): each field's own or inherited value, the resolved metadata and where each value came from |
+| `GET /api/v1/admin/seo/meta/:entityType/:entityId` | admin (`catalog:write`) | A category's or CMS page's resolved meta at a language (`?locale=`) + the override row there |
+| `PUT /api/v1/admin/seo/meta/:entityType/:entityId` | admin (`catalog:write`) | Create or update a category's or CMS page's override at a language (`locale` in the body); a product answers `422 VALIDATION_FAILED` |
+| `DELETE /api/v1/admin/seo/meta/:entityType/:entityId` | admin (`catalog:write`) | Remove a category's or CMS page's override at a language (`?locale=`); a product answers `422 VALIDATION_FAILED` |
 
 ## Search engine robots
 
@@ -336,14 +337,19 @@ answers, not failures.
     "follow": true,
     "robotsTxtCustom": "User-agent: GPTBot\nDisallow: /\n",
     "llmsTxtAdditional": "## About\n\nWe sell bolts.\n",
-    "shop": { "name": "Endora Demo" }
+    "shop": { "name": "Endora Demo" },
+    "anonymousAccess": true
   }
 }
 ```
 
 `robotsTxtCustom` and `llmsTxtAdditional` are the texts resolved for the channel, exactly as
 stored — the backend changes no character of them, line breaks included. `index` and `follow`
-repeat the channel's policy, and `shop.name` is its configured shop name or an empty string. The
+repeat the channel's policy, and `shop.name` is its configured shop name or an empty string.
+`anonymousAccess` is `false` on a store closed to anonymous visitors — see
+[on a store closed to anonymous visitors](#on-a-store-closed-to-anonymous-visitors); a backend
+from before that setting does not send it, and its absence means `true`. Unlike every other
+anonymous read of such a store, this one is answered. The
 schema is `storefrontCrawlerFilesResponseSchema` in `@endora-commerce/contracts`, which also
 exports `composeCrawlerFile(base, extra)` — the function the reference storefront joins what it
 generates and the text with — and `CRAWLER_TEXT_MAX_BYTES`.
@@ -486,17 +492,113 @@ file while the backend cannot be reached. One that has not answers `/llms.txt` w
 `Retry-After: 120` until its first successful read — never a file without your text, and never a
 file on a channel that may have been set to `NOINDEX`.
 
+## On a store closed to anonymous visitors
+
+A sales channel whose *open to anonymous visitors* switch is off answers every anonymous visitor
+with the sign-in page — a crawler is one. There is nothing on it to fetch, list or read, and its
+sitemap is empty. Its `robots.txt` and `llms.txt` are still served, and say exactly that:
+
+- **`robots.txt`** closes the whole store to every crawler, and names no sitemap:
+
+  ```text
+  User-Agent: *
+  Disallow: /
+  ```
+
+- **`llms.txt`** names the store, as the generated part does, and says that its content is for
+  signed-in customers. It lists no page and no sitemap:
+
+  ```text
+  # Endora Trade
+
+  > The content of this store is available to signed-in customers only.
+  ```
+
+**The closed store wins over the settings.** Neither the custom `robots.txt` instructions nor the
+additional `llms.txt` content is served on a closed store: a group written for one crawler would
+replace `Disallow: /` for that crawler and open the store to it, and the additional content
+would point at pages nobody can read anonymously. Both texts are kept, and are served again as
+soon as the store is opened to anonymous visitors. For the same reason *Default robots* has no
+say in either file here: a `NOINDEX` closed store still has its `llms.txt`, because that file
+invites nobody anywhere.
+
+The switch reaches the files on the same terms as any other change — within about two minutes.
+A store that is open to anonymous visitors serves both files exactly as described above. While
+the `seo` module is switched off the storefront cannot tell a closed store from an open one, and
+serves the generated `robots.txt` and no `llms.txt`, as it does on every store.
+
+The previews on the Settings screen do not take a closed store into account yet: they show your
+text joined to the generated part, while a closed store serves the file above without it.
+
 ## Meta-tag resolution
 
-`MetaTagResolverService.resolve({ entityType, entityId, locale })` returns
-`{ title, description, openGraph, source, locale }`. The resolution order is:
+### Products: Global, Channel, Channel × language
 
-1. Look up the per-(entity, locale) override row.
-2. If a field is set on the override, use it verbatim.
-3. Otherwise fall back to the rule derived from the entity (Product name +
-   description, Category name + auto-summary).
-4. Per-field locale fallback: when a Product has no `pl-PL` text, the rule
-   uses `en-US`, then any available locale.
+A product's metadata — title, description, Open Graph title, description and image — follows the
+product scopes:
+
+| Scope | Addressed by | Applies to |
+| --- | --- | --- |
+| Global | neither | every sales channel and language |
+| Sales channel | `channelId` | every language of that channel |
+| Sales channel × language | `channelId` and `languageCode` | that language in that channel |
+
+There is no language-only product scope; the upgrade removes the product overrides that were
+stored per language only (see *Upgrading* below). Each field is resolved on its own, from the
+narrowest scope that holds it: Channel × language, then Channel, then Global, then the value
+derived from the product — its effective name and description at that channel and language. A
+field stored deliberately empty at a scope stops the chain there, and the page then uses the
+derived value.
+
+**Edited in the product editor.** The product editor's SEO section shows each field at the
+editor's scope, with "Use value from *parent scope*", and saves it with the rest of the product
+in one Command (`product.scoped_values.save`) — one audit entry whose cells are named
+`seo:<field>@<scope>`. The title and the Open Graph title take at most 160 characters, the
+descriptions 400 and the image URL 2 048; an image URL is an `http(s)` URL without user
+information. A refused field refuses the whole save. The generic `PUT` and
+`DELETE /api/v1/admin/seo/meta/product/:id` answer `422 VALIDATION_FAILED`
+(`reason: product_seo_saved_with_product`); the SEO screen's editor links to the product editor
+for a product. While `seo` is switched off, a product save that names SEO fields is refused with
+`503 MODULE_DISABLED`; one that does not is unaffected. Duplicating a product copies its metadata
+at every scope.
+
+**Reading it.** `GET /api/v1/admin/seo/meta/product/:id` (`catalog:read`) answers, at the
+scope named by `channelId` and `languageCode`, each field's own value or its inheritance, the
+resolved metadata and the source of each value. A language without a channel is refused with
+`422 VALIDATION_FAILED`; a channel the product is not in, or a language the channel does not
+offer, with `422 SCOPE_INVALID`.
+
+**For other modules.** `seoProductMetaWritePort` reads and writes a product's metadata at any
+scope on the caller's transaction, without an audit entry of its own; `catalog`'s save and
+duplicate are its callers, and they check the scope first.
+
+**The product page serves them.** The storefront's product page takes its title, description and
+Open Graph tags from this resolution at the request's sales channel and language. While `seo` is
+switched off the page shows the derived metadata, and every override comes back when the module
+is switched on.
+
+### Categories and CMS pages
+
+A category's or CMS page's override sits at a language (`locale`) and applies in every sales
+channel; a request naming no language is the `en-US` override. A `channelId` on a category or a
+CMS page is refused with `422 VALIDATION_FAILED`. Each field is resolved from the language's
+override, then from the value derived from the entity (Category name + auto-summary). An override
+never answers for another language.
+
+**In the admin.** The SEO screen's meta-tag editor loads a category's or a page's language as soon
+as it is chosen (**Load** reads it again). Leaving a language with unsaved changes asks first, and
+**Use inherited** asks before it removes the override shown.
+
+**Every change is audited.** Saving an override is one `seo_meta_override.upsert` entry in the
+audit log, removing one a `seo_meta_override.delete` entry, each with the whole override before
+and after. To put back an earlier version, save the values from the entry's *before* state.
+Removing an override that does not exist changes nothing and writes no entry.
+
+### Upgrading
+
+The upgrade deletes every product override stored for a language without a sales channel — there
+is no such scope any more. Category and CMS page overrides are unchanged. Re-enter at a channel
+and language, or at Global, any product metadata that only a language override held.
 
 Title and description are truncated at 60 / 160 characters with an ellipsis.
 The truncation lives in one helper so changes to the SEO budget happen in
@@ -504,32 +606,41 @@ one place.
 
 ## Sitemap
 
-`SitemapGeneratorService.regenerate()` walks active, public-visibility,
-non-archived products and non-deleted categories, stamps absolute URLs
-against `STOREFRONT_BASE_URL`, and writes the XML payload to a singleton
-`sitemap_cache` row.
+`SitemapGeneratorService.regenerate()` walks the channel's products, categories and CMS pages,
+stamps absolute URLs against the channel's storefront address, and writes the XML payload to the
+channel's `sitemap_cache` row. A product is listed once for every language it is live in on the
+channel, each URL on the product's effective URL key there — its Channel × language key, else its
+Channel key, else its Global key — under the language's path prefix.
 
 The public route (`GET /catalog/sitemap.xml`) returns the cached payload;
 when the row is older than `staleAfterMs` (default 6 h) it regenerates
-inline. A `Cache-Control: public, max-age=3600` header is set on the
+inline. A product change that alters what a sitemap lists — its status (global, in a channel or
+in a channel and language), its archiving, its publication window (including the moment a window opens or
+closes), its audience (global or per channel) or its URL keys — marks every channel's cached
+sitemap stale, so the next request rebuilds it. A
+`Cache-Control: public, max-age=3600` header is set on the
 response so well-behaved CDNs hold the payload for an hour.
 
 ## Anonymous-only filtering
 
-The sitemap excludes:
-- products with `status != 'active'`
-- products with `visibility != 'public'`
-- archived (`archivedAt`) and soft-deleted (`deletedAt`) rows
-- soft-deleted categories
+A product is listed in a channel's sitemap only where it is available there to an anonymous
+visitor at generation time: a member of the channel, not archived or deleted, on in that channel
+language, inside its publication window, and admitted by its effective audience rule (the
+channel's, else the global one). A product off globally but on in the channel is listed; one
+switched off in the channel is not. Soft-deleted categories are excluded too.
 
 The contract is simple: only what an anonymous Customer can see is
 ever exposed to crawlers.
 
 ## Entities
 
-`SeoMetaOverride` (entityType, entityId, locale, title?, description?,
-ogTitle?, ogDescription?, ogImageUrl?), `SitemapCache` (singleton key,
+`SeoMetaOverride` (entityType, entityId, salesChannelId?, locale?, title?, description?,
+ogTitle?, ogDescription?, ogImageUrl?). A product row has neither `salesChannelId` nor `locale`
+(Global), a `salesChannelId` (Channel) or both (Channel × language); a category or CMS page row has
+a `locale`. On a product row a `null` field inherits and `''` is deliberately empty. `SitemapCache` (singleton key,
 payload, urlCount, byteSize, generatedAt).
+An override's `ogImageUrl` is an `http(s)` URL or a path starting with a single `/`; any other
+value is refused with `400 VALIDATION_FAILED`.
 
 ## Extension points
 

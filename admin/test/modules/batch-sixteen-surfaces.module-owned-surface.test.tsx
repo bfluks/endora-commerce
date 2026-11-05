@@ -191,20 +191,25 @@ const SUBJECTS: readonly Subject[] = [
       ['/cms/templates/new', 'cms.write'],
       ['/cms/templates/:id', 'cms.read'],
       ['/cms/hooks', 'cms.read'],
+      // Feature 163 — the brand screen, opened with the read code; its save
+      // needs `cms.brand`, which the screen and the API enforce.
+      ['/cms/brand', 'cms.read'],
     ],
-    navTargets: ['/cms/pages', '/cms/blocks', '/cms/templates', '/cms/hooks'],
+    navTargets: ['/cms/pages', '/cms/blocks', '/cms/templates', '/cms/hooks', '/cms/brand'],
     retiredSharedKeys: [
       'appShell.nav.cmsPages',
       'appShell.nav.cmsBlocks',
       'appShell.nav.cmsTemplates',
       'appShell.nav.cmsHooks',
     ],
-    // One, added after this batch: the Page Builder canvas on `catalog`'s
-    // category content screen. `catalog` is `nonDeactivatable` and `cms` is
-    // not, so it cannot take `./admin-ui`'s published component the way `blog`
-    // does; the direction is inverted and `cms` contributes
-    // (`admin/test/modules/cms/category-content-zone.test.tsx`).
-    zones: ['category.content.editor'],
+    // Two, added after this batch: the Page Builder canvas on `catalog`'s
+    // category content screen and on its product content screen (feature
+    // 172). `catalog` is `nonDeactivatable` and `cms` is not, so it cannot take
+    // `./admin-ui`'s published component the way `blog` does; the direction is
+    // inverted and `cms` contributes
+    // (`admin/test/modules/cms/category-content-zone.test.tsx`,
+    // `admin/test/modules/cms/product-content-zone.test.tsx`).
+    zones: ['category.content.editor', 'product.content.editor'],
     surfaceDirectories: ['cms'],
     locked: false,
   },
@@ -224,8 +229,10 @@ const SUBJECTS: readonly Subject[] = [
       ['/blog/categories/new', 'blog.write'],
       ['/blog/categories/:id', 'blog.read'],
       ['/blog/tags', 'blog.read'],
+      // Feature 171 — the blog's addresses per sales channel.
+      ['/blog/addresses', 'blog.read'],
     ],
-    navTargets: ['/blog/posts', '/blog/categories', '/blog/tags'],
+    navTargets: ['/blog/posts', '/blog/categories', '/blog/tags', '/blog/addresses'],
     retiredSharedKeys: [
       'appShell.nav.blogPosts',
       'appShell.nav.blogCategories',
@@ -790,7 +797,6 @@ const MOVED = [
   'cms/src/admin/components/AdminCatalogPreviewProvider.tsx',
   'cms/src/admin/components/AdminCmsAssetProvider.tsx',
   'cms/src/admin/components/BackgroundFields.tsx',
-  'cms/src/admin/components/ButtonLinkFields.tsx',
   'cms/src/admin/components/CarouselPreviewNav.tsx',
   'cms/src/admin/components/ComponentDragHandle.tsx',
   'cms/src/admin/components/ContentSliderActionBarExtras.tsx',

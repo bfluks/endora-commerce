@@ -10,15 +10,29 @@ import { FoldersService } from './services/folders.service.js';
 import { AssetReferenceRegistry } from './services/reference-registry.js';
 import { HmacSigner } from './services/hmac.js';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { CommandBus } from '@endora-commerce/platform/commands';
+import type { AdminUserReadPort, PermissionReadPort } from '@endora-commerce/contracts';
+import { getTenantContext } from '@endora-commerce/platform/tenancy';
+import { AssetVisibility } from './services/asset-visibility.js';
+import type { PlatformLogger } from '@endora-commerce/platform/kernel';
+import {
+  createAssetRetentionSweeper,
+  type AssetRetentionSweeper,
+} from './jobs/retention-sweeper.js';
 import { createSettingsView } from './services/storage/settings-view.js';
-import { Setting } from '@endora-commerce/platform/kernel';
-import { SettingValue } from '@endora-commerce/platform/kernel';
 import { registerAssetsLibraryAdminRoutes } from './routes.admin.js';
 import { registerAssetsLibraryPublicRoutes } from './routes.public.js';
-import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import type { RequireAdminFactory, SettingsReadPort } from '@endora-commerce/platform/kernel';
 
 export interface AssetsLibraryModuleOptions {
   emFactory: () => EntityManager;
+  /**
+   * The platform's settings read. Every `assets.*` setting is read through it,
+   * platform-wide (issue #333). Required, for the reason `requireAdmin` is: a
+   * module that falls back to reading the `settings` table itself answers with
+   * the manifest default while the operator's saved value sits beside it.
+   */
+  settings: Pick<SettingsReadPort, 'getMany'>;
   /** HMAC signer for local-FS private URLs. Uses ASSETS_LIBRARY_HMAC_KEY by default. */
   signer?: HmacSigner;
   /**
@@ -43,36 +57,43 @@ export interface AssetsLibraryModuleOptions {
   publicApiBaseUrl: string;
   /** Feature 054 — audits asset/folder writes co-transactionally when provided. */
   auditLog?: AuditPort;
+  /**
+   * Runs the Commands of feature 156 (`asset.replace`). Optional: a
+   * composition without it serves everything except a replace.
+   */
+  commandBus?: CommandBus;
+  /** Where a failed replace compensation is reported. */
+  logError?: (message: string, context: Record<string, unknown>) => void;
+  /** Names who replaced an asset's previous version; `replacedBy: null` without it. */
+  adminUserReadPort?: Pick<AdminUserReadPort, 'findById'>;
+  /** Where the retention sweep writes its one line per tick. */
+  log?: Pick<PlatformLogger, 'info'>;
+  /**
+   * Whether a module is effectively present — `effectiveState.isPresent`, read
+   * per evaluation. Required: an asset whose only references belong to a
+   * switched-off owner is hidden, and the owner is never asked
+   * (`specs/166-asset-reference-visibility/` research R-4).
+   */
+  isModulePresent: (moduleId: string) => boolean;
+  /**
+   * `admin_roles`' permission read, resolved per call. Required: it is how a
+   * holder of the platform wildcard is told from a reader whose files follow
+   * the records that use them (research R-3).
+   */
+  permissions: () => Pick<PermissionReadPort, 'listPermissions'>;
 }
 
 export interface AssetsLibraryModuleHandle {
   service: AssetsLibraryService;
+  /** Which assets the ambient caller may see (feature 166) — the one evaluator. */
+  visibility: AssetVisibility;
   folders: FoldersService;
   referenceRegistry: AssetReferenceRegistry;
   adapters: AdapterRegistry;
-}
-
-
-async function loadUploadPolicy(emFactory: () => EntityManager): Promise<{
-  allowedTypes: string[];
-  maxFileSizeMb: number;
-}> {
-  const em = emFactory();
-  const allowed = await em.findOne(Setting, { code: 'assets.allowed_file_types' });
-  const allowedOverride = allowed
-    ? await em.findOne(SettingValue, { setting: allowed })
-    : null;
-  const allowedRaw = allowedOverride
-    ? allowedOverride.value
-    : allowed?.defaultValue ?? ['*'];
-  const allowedTypes = Array.isArray(allowedRaw) ? allowedRaw.map(String) : ['*'];
-
-  const max = await em.findOne(Setting, { code: 'assets.max_file_size_mb' });
-  const maxOverride = max ? await em.findOne(SettingValue, { setting: max }) : null;
-  const maxRaw = maxOverride ? maxOverride.value : max?.defaultValue ?? 0;
-  const maxFileSizeMb = typeof maxRaw === 'number' ? maxRaw : Number(maxRaw) || 0;
-
-  return { allowedTypes, maxFileSizeMb };
+  /** `assets.soft_delete_retention_days` as read now (at least one day). */
+  loadRetentionDays(): Promise<number>;
+  /** The retention sweep (specs/156-asset-stable-url/), as the module's clock runs it. */
+  sweeper: AssetRetentionSweeper;
 }
 
 export function assetsLibraryModule(options: AssetsLibraryModuleOptions): {
@@ -80,7 +101,7 @@ export function assetsLibraryModule(options: AssetsLibraryModuleOptions): {
   handle: AssetsLibraryModuleHandle;
 } {
   let cachedSigner: HmacSigner | undefined = options.signer;
-  const settings = createSettingsView(options.emFactory);
+  const settings = createSettingsView(options.settings);
   const loadRetentionDays = () => settings.softDeleteRetentionDays();
   const adapters = new AdapterRegistry({
     settings,
@@ -91,16 +112,26 @@ export function assetsLibraryModule(options: AssetsLibraryModuleOptions): {
     },
   });
   const referenceRegistry = new AssetReferenceRegistry();
+  const visibility = new AssetVisibility({
+    registry: referenceRegistry,
+    isPresent: options.isModulePresent,
+    permissions: options.permissions,
+    tenantContext: getTenantContext,
+  });
   const service = new AssetsLibraryService({
     emFactory: options.emFactory,
     adapters,
     referenceRegistry,
-    loadUploadPolicy: () => loadUploadPolicy(options.emFactory),
+    visibility,
+    loadUploadPolicy: () => settings.uploadPolicy(),
     loadRetentionDays,
     ...(options.auditLog ? { auditLog: options.auditLog } : {}),
+    ...(options.commandBus ? { commandBus: options.commandBus } : {}),
+    ...(options.logError ? { logError: options.logError } : {}),
+    ...(options.adminUserReadPort ? { adminUsers: options.adminUserReadPort } : {}),
   });
   const folders = new FoldersService(
-    options.emFactory, referenceRegistry, options.auditLog, loadRetentionDays,
+    options.emFactory, referenceRegistry, visibility, options.auditLog, loadRetentionDays,
   );
 
   const requireAdmin = options.requireAdmin;
@@ -118,7 +149,7 @@ export function assetsLibraryModule(options: AssetsLibraryModuleOptions): {
     // a restart. Loosening it (or switching from a finite cap to "no cap")
     // requires a backend restart for the multipart parser to pick up the
     // new `fileSize` value.
-    const initialPolicy = await loadUploadPolicy(options.emFactory);
+    const initialPolicy = await settings.uploadPolicy();
     const FALLBACK_HARD_CEILING_BYTES = 5 * 1024 * 1024 * 1024; // 5 GiB
     const multipartFileSize =
       initialPolicy.maxFileSizeMb > 0
@@ -138,6 +169,7 @@ export function assetsLibraryModule(options: AssetsLibraryModuleOptions): {
         adapters,
         emFactory: options.emFactory,
         requireAdmin,
+        visibility,
       });
     });
     await registerAssetsLibraryPublicRoutes(app, {
@@ -151,5 +183,24 @@ export function assetsLibraryModule(options: AssetsLibraryModuleOptions): {
     });
   };
 
-  return { plugin, handle: { service, folders, referenceRegistry, adapters } };
+  const sweeper = createAssetRetentionSweeper({
+    emFactory: options.emFactory,
+    adapters,
+    referenceRegistry,
+    loadRetentionDays,
+    ...(options.log ? { log: options.log } : {}),
+  });
+
+  return {
+    plugin,
+    handle: {
+      service,
+      visibility,
+      folders,
+      referenceRegistry,
+      adapters,
+      loadRetentionDays,
+      sweeper,
+    },
+  };
 }

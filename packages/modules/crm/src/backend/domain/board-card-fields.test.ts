@@ -4,6 +4,7 @@ import {
   boardFieldFilterConditions,
   builtinBoardCardFields,
   customBoardCardField,
+  isBoardCardFieldDefinition,
   namesCustomBoardField,
   resolveBoardCardFields,
   salesChannelName,
@@ -20,8 +21,11 @@ const definition = (key: string, valueType: 'text' | 'select', options: string[]
       labelDefault: 'Label',
       valueType,
       required: false,
+      audience: 'internal',
       sortOrder: 0,
       config: {},
+      listFilter: false,
+      carryTo: [],
       createdAt: new Date(0),
       updatedAt: new Date(0),
     },
@@ -108,7 +112,7 @@ describe('board card fields (User Story 19)', () => {
     // text 1, number 2, boolean 1, date 2, select 1, multiselect 1.
     expect(conditions).toHaveLength(8);
     for (const condition of conditions) {
-      const fragment = (condition as { id: { $in: { sql: string; params: unknown[] } } }).id.$in;
+      const fragment = (condition as unknown as { id: { $in: { sql: string; params: unknown[] } } }).id.$in;
       expect(fragment.sql).not.toContain(hostile);
       expect(fragment.params).toContain(hostile);
       // As many placeholders as bound values: nothing rides in the text.
@@ -127,5 +131,32 @@ describe('board card fields (User Story 19)', () => {
     expect(salesChannelName({ code: 'b2b', name: { 'pl-PL': '', 'cs-CZ': 'Velkoobchod' } }, 'fr')).toBe('Velkoobchod');
     expect(salesChannelName({ code: 'b2b', name: {} }, 'en')).toBe('b2b');
     expect(salesChannelName({ code: 'b2b', name: null }, 'en')).toBe('b2b');
+  });
+});
+
+describe('feature 172 — a Page Builder definition is never a card field', () => {
+  const entry = (valueType: 'text' | 'page_builder') => ({
+    definition: {
+      id: 'id-guide',
+      entityType: 'opportunity' as const,
+      key: 'guide',
+      label: {},
+      labelDefault: 'Guide',
+      valueType,
+      required: false,
+      audience: 'internal' as const,
+      sortOrder: 0,
+      config: {},
+      listFilter: false,
+      carryTo: [],
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    },
+    options: [],
+  });
+
+  it('admits every field value type and refuses page_builder', () => {
+    expect(isBoardCardFieldDefinition(entry('text'))).toBe(true);
+    expect(isBoardCardFieldDefinition(entry('page_builder'))).toBe(false);
   });
 });

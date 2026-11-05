@@ -5,7 +5,7 @@ import { useAppLanguage, useTranslation } from '@endora-commerce/admin-kit/i18n'
 import { boardFieldLabel, boardFieldOptionLabel } from '../lib/board-fields.js';
 import { calendarDateLabel, moneyLabel } from '../lib/labels.js';
 import { AssigneeName } from './AssigneeName.js';
-import { TagChips } from './TagPicker.js';
+import { TagChips } from '@endora-commerce/admin-kit/components';
 
 type Translate = (key: string, params?: Record<string, string | number>) => string;
 

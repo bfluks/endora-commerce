@@ -64,8 +64,13 @@ function addressServiceFailingCleanupWith(error: unknown): AddressServicePort {
 }
 
 const cartService = {
-  clearForCustomer: async () => undefined,
   addItem: async () => undefined,
+  // Feature 155 (R8) — the batch admin create builds its basket with; every line admitted.
+  addItems: async (_actor: unknown, lines: readonly unknown[]) => ({
+    cart: {},
+    items: [],
+    outcomes: lines.map((_line, index) => ({ index, status: 'added' })),
+  }),
 } as unknown as CartWritePort;
 
 const placedOrder = { id: ORDER_ID, businessId: 'ORD-1' };
@@ -102,6 +107,8 @@ describe('OrderCreationAdminService — inline-address cleanup', () => {
       orderService,
       addressServiceFailingCleanupWith(cleanupError),
       customerAccountRead,
+      // Issue #515 — the order's channel is one of the Organization's active channels.
+      { listChannelsForEntity: async () => [{ id: CHANNEL_ID, active: true }] },
     );
 
   const input = {
@@ -163,8 +170,13 @@ describe('OrderApiIntakeService — inline-address cleanup', () => {
       salesChannelMembership: {
         listChannelsForEntity: async () => [{ id: CHANNEL_ID }],
       } as never,
+      catalogAvailability: {
+        filterAvailable: async (ids: readonly string[]) => new Set(ids),
+      },
+      // Feature 160 — the intake prices its lines in one batched resolution.
       pricingService: {
-        resolveLinePrice: async () => ({ unitPrice: '10.00' }),
+        resolveLinePrices: async (input: { lines: Array<{ key: string }> }) =>
+          new Map(input.lines.map((line) => [line.key, { amount: '10.0000', currency: 'PLN' }])),
       } as never,
     });
 

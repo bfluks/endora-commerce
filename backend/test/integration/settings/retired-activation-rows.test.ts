@@ -112,8 +112,8 @@ async function seedChannel(run: ReturnType<typeof sqlIn>): Promise<string> {
   const id = randomUUID();
   await run(
     `insert into sales_channels
-       (id, code, name, is_public, default_language, default_currency, created_at, updated_at)
-     values (?, ?, '{"en":"Fixture"}'::jsonb, false, 'en', 'PLN', now(), now())`,
+       (id, code, name, default_language, default_currency, created_at, updated_at)
+     values (?, ?, '{"en":"Fixture"}'::jsonb, 'en', 'PLN', now(), now())`,
     [id, `fx74${id.slice(0, 8)}`],
   );
   return id;

@@ -11,6 +11,7 @@ import {
 import { seedCartForStubCustomer, SEED_PAYMENT_METHOD_ID } from '../../helpers/seed-commerce.js';
 
 import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+import { systemDefaultSalesChannelId } from '../../helpers/sales-channel-fixtures.js';
 
 import { EventBus } from '@endora-commerce/platform/events';
 
@@ -116,6 +117,9 @@ describe('placeOrder — the T048 apply ports, against a live transaction', () =
         readActiveForPlacement: (em, ctx) => real.cartPlacementApply.readActiveForPlacement(em, ctx),
         findPriceDrift: (em, input) => real.cartPlacementApply.findPriceDrift(em, input),
         refreshLinePrices: (input) => real.cartPlacementApply.refreshLinePrices(input),
+        readWorkingForPlacement: (em, ctx) => real.cartPlacementApply.readWorkingForPlacement(em, ctx),
+        discardWorkingBasket: (input) => real.cartPlacementApply.discardWorkingBasket(input),
+        awaitsApproval: (input) => real.cartPlacementApply.awaitsApproval(input),
         completeForOrder: async (em, input) => {
           // Let the real completion write first: the point is that a *committed*
           // statement would survive, so the failure has to land after one.
@@ -197,6 +201,15 @@ describe('placeOrder — the T048 apply ports, against a live transaction', () =
         refreshLinePrices: async () => {
           throw new Error('unreachable: the read refuses first');
         },
+        readWorkingForPlacement: async () => {
+          throw new Error('unreachable: no working basket is named');
+        },
+        discardWorkingBasket: async () => {
+          throw new Error('unreachable: no working basket is named');
+        },
+        awaitsApproval: async () => {
+          throw new Error('unreachable: the read refuses first');
+        },
         completeForOrder: async () => {
           throw new Error('unreachable: the read refuses first');
         },
@@ -230,7 +243,11 @@ describe('placeOrder — the T048 apply ports, against a live transaction', () =
 
     const read = await orderServiceNeighbours(h.em).cartPlacementApply.readActiveForPlacement(
       em as EntityManager,
-      { customerAccountId: TEST_CUSTOMER_ID, organizationId: TEST_ORGANIZATION_ID },
+      {
+        customerAccountId: TEST_CUSTOMER_ID,
+        organizationId: TEST_ORGANIZATION_ID,
+        salesChannelId: await systemDefaultSalesChannelId(em),
+      },
     );
 
     expect(read?.cart.id).toBe(managed!.id);

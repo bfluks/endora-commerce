@@ -20,6 +20,27 @@
 import { z } from 'zod';
 import { isoDateTimeSchema, uuidSchema } from './common.js';
 
+// --- the anonymisation event ---------------------------------------------------
+//
+// `specs/170-forms-module/` research R-17, contracts/events-and-webhook.md §3.
+// `CustomerAccountLifecycleWritePort.anonymize` announces the irreversible step
+// once, after its write and its audit row, so a module holding data attributed
+// to the account can erase it within the same sweep step. Ids only: the account
+// has just been scrubbed, and the event says which one, never what it held. Not
+// offered to outbound webhooks.
+
+export const CUSTOMER_ACCOUNT_ANONYMIZED_EVENT = 'customer_account.anonymized.v1';
+
+export const CustomerAccountAnonymizedEventV1Schema = z
+  .object({
+    eventId: z.string().min(1),
+    occurredAt: isoDateTimeSchema,
+    customerAccountId: z.string().uuid(),
+    organizationId: z.string().uuid(),
+  })
+  .strict();
+export type CustomerAccountAnonymizedEventV1 = z.infer<typeof CustomerAccountAnonymizedEventV1Schema>;
+
 // --- customer groups ---------------------------------------------------------
 //
 // Feature 076, D-79 — the segmentation bucket a customer belongs to. It used to
@@ -77,8 +98,6 @@ export interface CustomerGroupReadPort {
 
 // --- records -----------------------------------------------------------------
 
-export type CustomerAccountRole = 'organization_admin' | 'regular_user';
-
 export type CustomerAccountBlockSource = 'staff' | 'org_owner';
 
 /**
@@ -101,7 +120,12 @@ export interface CustomerAccountRecord {
   email: string;
   firstName: string;
   lastName: string;
-  role: CustomerAccountRole;
+  /**
+   * The organization role the account holds — a role of {@link organizationId}
+   * (`specs/170-organization-roles/` data-model §2; a composite foreign key in
+   * the database). Never `null`: every account holds exactly one.
+   */
+  organizationRoleId: string;
   emailVerifiedAt: Date | null;
   /** Whether a confirmed TOTP enrolment exists. The secret itself never travels. */
   twoFactorEnabled: boolean;
@@ -178,21 +202,25 @@ export interface CustomerAccountReadPort {
     options?: CustomerAccountLookupOptions,
   ): Promise<CustomerAccountRecord | null>;
 
-  /** Members of an organisation, ordered by role then creation date. */
+  /** Members of an organisation: its *Administrator* holders first, then by creation date. */
   listByOrganization(
     organizationId: string,
     options?: CustomerAccountLookupOptions,
   ): Promise<CustomerAccountRecord[]>;
 
   /**
-   * How many accounts in the organisation hold the role, optionally ignoring
-   * one id and optionally counting only unblocked accounts. This is the shape
-   * the "an organisation may not lose its last admin" rule is spelled with, in
-   * three modules, three slightly different ways.
+   * How many accounts of the organisation hold its *Administrator* role — the
+   * predicate the "an organisation keeps at least one administrator" rule is
+   * spelled with since `specs/170-organization-roles/`
+   * (`contracts/commands-audit-events.md` §3): optionally ignoring one id, and
+   * optionally counting only active or only unblocked accounts.
+   *
+   * A count, not a guard: it takes no lock. The member Commands that must not
+   * race (`customer_account.change_role`, `customer_account.remove_member`)
+   * lock the holders themselves before counting.
    */
-  countByOrganizationRole(
+  countAdministrators(
     organizationId: string,
-    role: CustomerAccountRole,
     options?: {
       excludeCustomerAccountId?: string;
       activeOnly?: boolean;
@@ -248,7 +276,12 @@ export interface CustomerAccountCreateInput {
   password: string;
   firstName: string;
   lastName: string;
-  role: CustomerAccountRole;
+  /**
+   * The organization role the account will hold, a role of
+   * {@link organizationId}. Required: no production path relies on the
+   * database's default (research R-28).
+   */
+  organizationRoleId: string;
   /**
    * Whether the address is already confirmed. Accepting an invitation implies
    * it — the invitation was delivered to that address; self-registration and
@@ -292,7 +325,7 @@ export interface CustomerAccountProfilePatch {
  * organisation panel" rather than "this account's e-mail changed" — and both
  * are kept, which is what the role endpoint has always recorded.
  *
- * `changeRole` is **not** here: {@link CustomerRolePort} already owns it, with
+ * A role change is **not** here: {@link CustomerAccountRoleCommandPort} owns it, with
  * the "an organisation keeps at least one admin" guard.
  * {@link CustomerAccountMemberWritePort.promoteToOrganizationAdmin} is a
  * different question — the break-glass path an operator reaches *because* an
@@ -340,10 +373,15 @@ export interface CustomerAccountMemberWritePort {
    * Feature 051 — binds an org-less account to the organisation just
    * provisioned for it. Throws HTTP 404 `NOT_FOUND` when no account has that
    * id.
+   *
+   * `organizationRoleId` is a role **of `organizationId`**, written in the same
+   * statement: the composite foreign key refuses the previous Organization's
+   * role (`specs/170-organization-roles/` data-model §2, research R-34).
    */
   attachToOrganization(
     customerAccountId: string,
     organizationId: string,
+    organizationRoleId: string,
   ): Promise<CustomerAccountRecord>;
 }
 
@@ -639,12 +677,93 @@ export interface CustomerRollupScopePort {
  */
 export interface CustomerRolePort {
   listMembers(organizationId: string): Promise<CustomerAccountRecord[]>;
-  changeRole(
-    organizationId: string,
-    targetCustomerAccountId: string,
-    newRole: CustomerAccountRole,
-  ): Promise<CustomerAccountRecord>;
   removeMember(organizationId: string, targetCustomerAccountId: string): Promise<void>;
+}
+
+// --- organization role assignment (`specs/170-organization-roles/`) -----------
+
+/**
+ * Announced on commit whenever an account's organization role changes —
+ * `customer_account.change_role` (also as a child of `organization_role.delete`)
+ * and `customer_account.promote_organization_admin` (data-model §7). `carts`
+ * resets the approval state of a member who gained
+ * `carts.order_without_approval` from it (FR-034).
+ */
+export const CUSTOMER_ACCOUNT_ORGANIZATION_ROLE_CHANGED_EVENT =
+  'customer_account.organization_role_changed.v1' as const;
+
+export interface CustomerAccountOrganizationRoleChangedEventV1 {
+  readonly eventId: string;
+  readonly occurredAt: string;
+  readonly organizationId: string;
+  readonly customerAccountId: string;
+  readonly fromRoleId: string;
+  readonly toRoleId: string;
+}
+
+/** `customer_account.change_role`'s input: the member and the role of its own Organization it moves to. */
+export interface CustomerAccountRoleChangeInput {
+  readonly organizationId: string;
+  readonly customerAccountId: string;
+  readonly roleId: string;
+  /**
+   * Also move a **removed** (soft-deleted) member. Only the reassignment of a
+   * deleted role's holders asks for it: the foreign key counts removed accounts
+   * as holders, so they must move too. Every other caller leaves it unset, and a
+   * removed member answers `404` as an unknown one does.
+   */
+  readonly includeRemoved?: boolean;
+}
+
+/** What `customer_account.change_role` answers. `fromRoleId === toRoleId` when nothing changed. */
+export interface CustomerAccountRoleChangeResult {
+  readonly organizationId: string;
+  readonly customerAccountId: string;
+  readonly fromRoleId: string;
+  readonly toRoleId: string;
+}
+
+/**
+ * A Command as the platform's Command Bus runs it, named structurally because
+ * this package depends on no platform code and may name no `EntityManager`.
+ * The platform's `Command<TResult>` is assignable to it and it to that, so a
+ * caller hands it to `commandBus.run` or, as a child, to `ctx.run` unchanged.
+ * Its `run` belongs to the bus; a caller never invokes it.
+ */
+export interface CustomerAccountRoleChangeCommand {
+  readonly action: string;
+  readonly objectType: string;
+  readonly objectId: string;
+  run(ctx: never): Promise<{ readonly result: CustomerAccountRoleChangeResult }>;
+}
+
+/**
+ * Container name: `customerAccountRoleCommandPort`. Owner: `customer_accounts`.
+ *
+ * The role assignment as a **Command factory** (`specs/170-organization-roles/`
+ * `contracts/commands-audit-events.md` §2; research R-22): `organizations`
+ * deletes a held role by running one `changeRole` Command per holder as a
+ * **child** of `organization_role.delete`, through `ctx.run` — on the parent's
+ * transaction, each with its own audit entry, all committing or none. No
+ * `EntityManager` crosses: the child runs on the one the bus hands it.
+ *
+ * `changeRole` refuses `404 NOT_FOUND` for an account that is not a live member
+ * of the Organization or a role the Organization does not have, and `409
+ * CANNOT_DEMOTE_LAST_ADMIN` when it would leave the Organization without an
+ * active administrator — counted under a `for update` lock on the holders
+ * (research R-29).
+ *
+ * `holdersOf` lists every account holding the role — blocked and soft-deleted
+ * ones included, because the foreign key does not distinguish them.
+ *
+ * **Owner off:** the seam fails closed — resolving this port throws
+ * `ModuleDisabledError` and the call answers 503 `MODULE_DISABLED`. Whether
+ * `customer_accounts` has an off state at all is its manifest's `activation` to
+ * say, not this line's: a module declaring `nonDeactivatable` never enters one.
+ */
+export interface CustomerAccountRoleCommandPort {
+  changeRole(input: CustomerAccountRoleChangeInput): CustomerAccountRoleChangeCommand;
+  holdersOf(organizationId: string, roleId: string): Promise<string[]>;
 }
 
 // --- the lifecycle surface `customers` runs ----------------------------------
@@ -684,6 +803,22 @@ export interface CustomerAccountWriteRequestMeta {
   ipAddress?: string | null;
   userAgent?: string | null;
   requestId?: string | null;
+}
+
+/**
+ * Who moves an account between Organizations, and the role it holds there
+ * (`specs/170-organization-roles/` research R-34).
+ *
+ * `organizationRoleId` is a role of the **destination** Organization and is
+ * written in the same statement as the Organization: the composite foreign key
+ * refuses the previous Organization's role. The caller resolves it — the
+ * destination's *Administrator* for a personal Organization (from the
+ * provisioning answer), else the destination's predefined role of the kind the
+ * account held (owner ruling PR-11).
+ */
+export interface CustomerAccountOrganizationMoveInput {
+  actorAdminUserId: string;
+  organizationRoleId: string;
 }
 
 /** Which lifecycle bucket the admin customer list is asking for. */
@@ -775,7 +910,7 @@ export interface CustomerAccountAdminSearchPort {
  * staff member may act on this customer, and whether blocking them would
  * strand an organisation without an administrator, are `customers`' questions
  * and stay there — the counting half of the second one is
- * {@link CustomerAccountReadPort.countByOrganizationRole}, which already
+ * {@link CustomerAccountReadPort.countAdministrators}, which already
  * exists. What moves is the write and the one audit row that describes it, so
  * that a row on this table is never written by a module that does not own it
  * and never written without being recorded. Unlike
@@ -856,7 +991,7 @@ export interface CustomerAccountLifecycleWritePort {
   setOrganization(
     customerAccountId: string,
     organizationId: string,
-    input: { actorAdminUserId: string },
+    input: CustomerAccountOrganizationMoveInput,
   ): Promise<CustomerAccountRecord>;
 
   /**
@@ -875,7 +1010,7 @@ export interface CustomerAccountLifecycleWritePort {
   detachToPersonalOrganization(
     customerAccountId: string,
     personalOrganizationId: string,
-    input: { actorAdminUserId: string },
+    input: CustomerAccountOrganizationMoveInput,
   ): Promise<CustomerAccountRecord>;
 
   /** `null` clears the direct group; the organisation's own group still applies. */
@@ -917,4 +1052,39 @@ export interface CustomerAccountLifecycleWritePort {
    * `CUSTOMER_NOT_FOUND` for an id nothing matches.
    */
   anonymize(customerAccountId: string): Promise<CustomerAccountRecord>;
+}
+
+// --- effective customer group ------------------------------------------------
+
+/**
+ * D-287 P0 — the one customer-group rule every pricing path applies, and the
+ * one the megamenu's customer-group audience reads (feature 168, plan R-5):
+ *
+ *     effective group = explicit ?? customer.customerGroupId ?? organization.customerGroupId ?? null
+ *
+ * `explicit` is a group a caller already resolved for the customer (the quote
+ * reference price and the admin order preview pass one); otherwise the signed-in
+ * customer's own group overrides the organisation's (feature 040 R6). Before
+ * this, listings, the product page and the cart passed the organisation alone
+ * and priced on its group while quotes and the admin preview honoured the
+ * customer's — the same buyer met different winning lists
+ * (`specs/pricing/read-paths-and-performance.md` §2.2).
+ *
+ * The customer's group counts only when the account belongs to the
+ * organisation the resolution is for. An account named beside another tenant's
+ * organisation is ignored rather than allowed to price that tenant's lists on
+ * its group (the same mismatch `BuyerLinePriceService` refuses outright).
+ */
+export function effectiveCustomerGroupId(input: {
+  explicit?: string | null;
+  customer?: { organizationId?: string | null; customerGroupId?: string | null } | null;
+  organization?: { id: string; customerGroupId?: string | null } | null;
+}): string | null {
+  if (input.explicit) return input.explicit;
+  const organization = input.organization ?? null;
+  const customer = input.customer ?? null;
+  if (customer && (customer.organizationId ?? null) === (organization?.id ?? null)) {
+    if (customer.customerGroupId) return customer.customerGroupId;
+  }
+  return organization?.customerGroupId ?? null;
 }

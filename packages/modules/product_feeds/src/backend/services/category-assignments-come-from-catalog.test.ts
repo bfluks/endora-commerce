@@ -82,9 +82,10 @@ describe('product_feeds — category assignments come from the catalog port', ()
         ],
       },
       catalogGallery: { listForProducts: async () => [] },
+      catalogUrlKeys: { effectiveKeys: async () => new Map() },
       resolvePublicImageUrls: async () => new Map<string, string>(),
       resolveAvailability: async () => new Map(),
-      resolveAnonymousPrice: async () => null,
+      resolveAnonymousPrice: async () => new Map(),
     } as unknown as FeedGenerationDeps;
 
     const items = await new FeedGenerationService(deps).hydrateItems([PRODUCT], scope);

@@ -24,7 +24,8 @@
  * went with them.
  *
  * What that leaves here is every row whose whole content is this module's, which
- * is 203 products and 13 categories.
+ * is 204 products (200 simple, three composites and feature 174's scope
+ * product) and 13 categories.
  *
  * Idempotent by an existence probe on the natural key (§2.4): a second run
  * creates nothing and reports the same counts.
@@ -40,6 +41,7 @@ import {
   DEMO_LEAF_CATEGORIES,
   DEMO_PRODUCT_SLUG_PREFIX,
   DEMO_ROOT_CATEGORY,
+  DEMO_SCOPE_PRODUCT,
   DEMO_SECTION_CATEGORIES,
   PRODUCT_COUNT,
   demoProducts,
@@ -58,7 +60,6 @@ const COMPOSITES = [
     type: 'grouped',
     nameEn: 'Starter set (grouped)',
     descriptionEn: 'Starter set bundling two products with fixed quantities.',
-    price: 49.99,
   },
   {
     sku: 'DEMO-BUNDLE-0001',
@@ -66,7 +67,6 @@ const COMPOSITES = [
     type: 'bundle',
     nameEn: 'Configurable bundle',
     descriptionEn: 'Pick a color and quantity to configure your bundle.',
-    price: 99.99,
   },
   {
     sku: 'DEMO-VIRTUAL-0001',
@@ -74,7 +74,6 @@ const COMPOSITES = [
     type: 'virtual',
     nameEn: 'B2B Buyer Handbook (e-book)',
     descriptionEn: 'Digital e-book — instant download after purchase.',
-    price: 19.99,
     downloadUrl: 'https://example.test/b2b-buyer-handbook.pdf',
   },
 ] as const;
@@ -106,7 +105,7 @@ export async function seedDemo(
     if (!row) {
       row = em.create(Category, {
         parentCategoryId: root.id,
-        name: { 'en-US': section.nameEn },
+        name: { 'en-US': section.nameEn, 'pl-PL': section.namePl },
         slug: section.slug,
       });
       em.persist(row);
@@ -121,7 +120,7 @@ export async function seedDemo(
     if (!row) {
       row = em.create(Category, {
         parentCategoryId: sections.get(leaf.parentSlug)!.id,
-        name: { 'en-US': leaf.nameEn },
+        name: { 'en-US': leaf.nameEn, 'pl-PL': leaf.namePl },
         slug: leaf.slug,
       });
       em.persist(row);
@@ -153,8 +152,8 @@ export async function seedDemo(
         slug: row.slug,
         type: 'simple',
         status: 'active',
-        name: { 'en-US': row.nameEn },
-        description: { 'en-US': row.descriptionEn },
+        name: row.nameEn,
+        description: row.descriptionEn,
         visibility: 'public',
         attributeValues: { ...row.attributeValues },
       }),
@@ -178,15 +177,32 @@ export async function seedDemo(
         slug: composite.slug,
         type: composite.type,
         status: 'active',
-        name: { 'en-US': composite.nameEn },
-        description: { 'en-US': composite.descriptionEn },
+        name: composite.nameEn,
+        description: composite.descriptionEn,
         visibility: 'public',
-        attributeValues: { defaultPrice: composite.price },
+        attributeValues: {},
         ...('downloadUrl' in composite ? { downloadUrl: composite.downloadUrl } : {}),
       }),
     );
   }
   await em.flush();
+
+  // ── feature 174's scope product, Global texts only ────────────────────
+  if (!present.has(DEMO_SCOPE_PRODUCT.slug) && !(await em.findOne(Product, { slug: DEMO_SCOPE_PRODUCT.slug }))) {
+    em.persist(
+      em.create(Product, {
+        sku: DEMO_SCOPE_PRODUCT.sku,
+        slug: DEMO_SCOPE_PRODUCT.slug,
+        type: 'simple',
+        status: 'active',
+        name: DEMO_SCOPE_PRODUCT.name,
+        description: DEMO_SCOPE_PRODUCT.description,
+        visibility: 'public',
+        attributeValues: {},
+      }),
+    );
+    await em.flush();
+  }
 
   // ── the composites' own structure ─────────────────────────────────────
   //
@@ -252,7 +268,7 @@ export async function seedDemo(
         entity: 'Category',
         count: 1 + DEMO_SECTION_CATEGORIES.length + DEMO_LEAF_CATEGORIES.length,
       },
-      { entity: 'Product', count: PRODUCT_COUNT + DEMO_COMPOSITE_SKUS.length },
+      { entity: 'Product', count: PRODUCT_COUNT + DEMO_COMPOSITE_SKUS.length + 1 },
     ],
   };
 }

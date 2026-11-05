@@ -22,7 +22,10 @@ switched off by a special case.
 - Standalone registration, gated by the
   `customers.allow_registration_without_organization` setting. On success the
   account and its personal organization are written in one transaction and the
-  new account is logged in automatically.
+  new account is logged in automatically. While the setting is off, the
+  storefront's `/register-customer` page shows a notice with a link to the
+  organization registration instead of the form, so a visitor does not fill
+  it in only to be refused.
 - A personal address book (billing/delivery), one default per kind, plus the
   ability to select the Organization's shared addresses (org-bound customers).
 - Default payment method, delivery method, and default addresses.
@@ -38,8 +41,14 @@ switched off by a special case.
   is the one inherited from the customer's Organization. A personal organization
   never carries a sales-rep assignment, so the unassigned-organization fallback
   leaves a standalone customer open to any salesperson. An org-owner depletion
-  guard refuses blocking or deleting the last organization administrator.
-- Impersonation; audited as `impersonation.start` / `impersonation.end`.
+  guard refuses blocking, deleting or detaching the last active holder of a
+  company organization's Administrator role (`409 ORG_OWNER_DEPLETION`);
+  blocked administrators do not count. It
+  does not apply to a personal organization, whose sole member is its
+  Administrator: blocking or deleting that customer is allowed.
+- Impersonation; audited as `impersonation.start` / `impersonation.end`. The
+  answer names the customer's `organizationRole`, and the impersonation acts
+  with exactly that customer's organization permissions.
 - Admin-triggered password reset (emails a set-password link).
 - NIP/VAT validation (VIES / Biała lista port).
 - Organization assign, and detach-from-organization, which moves the customer to
@@ -66,7 +75,8 @@ Admin routes are gated by `customers:read` (reads), `customers:manage`
 | Verb + Path | Audience | Purpose |
 | --- | --- | --- |
 | `POST /api/v1/customers/register` | anon | Standalone registration (setting-gated) |
-| `GET /api/v1/me/customer` | customer | Own profile |
+| `GET /api/v1/storefront/settings/customer-registration` | anon | Whether standalone registration is offered (`allowRegistrationWithoutOrganization`) |
+| `GET /api/v1/me/customer` | customer | Own profile, with `organizationRole` and the effective `permissions` |
 | `POST /api/v1/me/customer/change-password` | customer | Change password. A successful change signs the account out of every other session (the one the request was made from is kept), retires its outstanding reset tokens and withdraws any sign-in it had begun and not finished. |
 | `GET /api/v1/me/customer/addresses` | customer | Personal + org-shared addresses |
 | `POST/PATCH/DELETE /api/v1/me/customer/addresses[/:id]` | customer | Manage personal addresses |

@@ -16,7 +16,7 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Nikt jesz
 | | |
 | --- | --- |
 | Identyfikator modułu | `admin_notifications` |
-| Nazwa | Admin Notifications |
+| Nazwa | Admin notifications |
 | Wersja | `1.0.0` |
 | Pakiet | `@endora-commerce/mod-admin-notifications` |
 | Licencja | `MIT` |
@@ -29,6 +29,7 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 
 | Moduł | Wiążąca | Co to oznacza |
 | --- | --- | --- |
+| `admin_roles` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `admin_users` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `auth` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 
@@ -36,7 +37,7 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 
 | Kod | Etykieta | Wymaga też |
 | --- | --- | --- |
-| `admin:read` | View admin notifications | — |
+| `admin:read` | View notifications sent to all admins | — |
 
 ## Paleta poleceń
 

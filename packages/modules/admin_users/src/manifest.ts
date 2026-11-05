@@ -42,7 +42,7 @@ const demo: ModuleDemoManifest<ModuleContext> = {
  */
 export const manifest = defineModuleManifest({
   id: 'admin_users',
-  name: 'Admin Users',
+  name: 'Admin users',
   description:
     'Admin user accounts, sessions, and impersonation flows.',
   version: '1.0.0',
@@ -101,6 +101,16 @@ export const manifest = defineModuleManifest({
         'impersonation that cannot identify its target refuses rather than minting a session ' +
         'against a customer nobody looked up.',
     },
+    {
+      moduleId: 'organizations',
+      port: 'organizationRoleReadPort',
+      reason:
+        'The impersonation start answer names the role the session acts under ' +
+        '(`specs/170-organization-roles/` FR-062), and roles belong to organizations, which ' +
+        'declares this module — declaring it back closes a cycle. With organizations absent ' +
+        'the seam fails closed: the start refuses rather than answer a session whose role ' +
+        'nobody can name.',
+    },
   ],
   /**
    * D-96 — `mfaLoginPort`, the second factor on admin login.
@@ -113,6 +123,19 @@ export const manifest = defineModuleManifest({
    * operator a switch for exactly that reason.
    */
   nonBindingDependencies: [
+    {
+      moduleId: 'assets_library',
+      name: 'assetReadPort',
+      kind: 'degrades-without',
+      whenAbsent:
+        'An administrator cannot set an author avatar while the library is off; the one already ' +
+        'set is kept and comes back with the library. Everything else on the profile still saves.',
+      reason:
+        'Feature 171 (US6): the avatar must name a live library asset, which only `assets_library` ' +
+        'can answer. That module depends on this one (it reads `adminUserReadPort`), so the edge ' +
+        'cannot be a dependency without a cycle. The check asks for the module first and answers ' +
+        '`MODULE_DISABLED` without resolving the port, so nothing is laundered out of a closed gate.',
+    },
     {
       moduleId: 'mfa',
       name: 'mfaLoginPort',
@@ -200,7 +223,8 @@ export const manifest = defineModuleManifest({
       icon: 'Users',
       targetRoute: '/admin-users',
       requiredPermission: 'admin_users:manage',
-      keywords: ['admin', 'users', 'uzytkownicy', 'operators', 'operatorzy', 'staff', 'konta'],
+      keywords: ['admin', 'users', 'operators', 'staff'],
+      keywordsKey: 'actions.openAdminUsers.keywords',
       weight: 200,
     },
   ],
@@ -214,6 +238,8 @@ export const manifest = defineModuleManifest({
    * supplies the one they already have.
    */
   errorCodes: [
+    // Feature 171 (US6) — an author avatar that names no library asset.
+    { code: 'ADMIN_USER_AVATAR_NOT_FOUND' },
     { code: 'ADMIN_AUTHENTICATION_THROTTLED' },
     { code: 'ADMIN_AUTHENTICATION_UNAVAILABLE' },
     { code: 'ADMIN_USER_OUTRANKS_ACTOR' },

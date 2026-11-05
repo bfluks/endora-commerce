@@ -1,9 +1,9 @@
 'use client';
 
-import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { loadCartItemCount } from '../lib/cartCount';
+import { LocalizedLink } from '../lib/i18n/localized-link';
 
 /**
  * Header cart icon + count badge — client component that hydrates with
@@ -72,14 +72,14 @@ export function CartCounterBadge(props: {
       : props.emptyAriaLabel;
 
   return (
-    <Link href="/cart" className="icon-btn" aria-label={ariaLabel}>
+    <LocalizedLink href="/cart" className="icon-btn" aria-label={ariaLabel}>
       <CartIcon />
       {count > 0 ? (
         <span className="icon-btn__count" aria-hidden="true">
           {count > 99 ? '99+' : count}
         </span>
       ) : null}
-    </Link>
+    </LocalizedLink>
   );
 }
 

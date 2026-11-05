@@ -92,7 +92,7 @@ const settings = defineModuleSettingsManifest({
 /** Module-lifecycle manifest (feature 018). */
 export const manifest = defineModuleManifest({
   id: 'quote_requests',
-  name: 'Quote Requests',
+  name: 'Quote requests',
   description:
     'Customer-initiated RFQ workflow with admin pricing, approvals, and expiry.',
   version: '1.0.0',
@@ -306,7 +306,16 @@ export const manifest = defineModuleManifest({
    * `PRODUCT_NOT_FOUND`, which is `catalog`'s and is declared there. None is
    * declared here and every one of those sentences stays where it is.
    *
-   * **No `tokens`, and it is derived rather than assumed.** The envelope's
+   * **One code carries `tokens`, and it is raised by another module.**
+   * `QUOTE_VALIDITY_ENDED` is also `orders`' refusal at placement of a basket
+   * still priced at a quote that no longer binds (issue #167): it puts the
+   * reason in `details.code`, and the three members below are
+   * `quoteCommitmentRefusalSchema`'s in `packages/contracts/src/orders.ts`, in
+   * its order — the enum is the authority, as for `carts`' coupon reasons.
+   * The code stays this module's: the sentence is about this module's quote,
+   * and ownership follows the code, not the raise site.
+   *
+   * **No other `tokens`, and it is derived rather than assumed.** The envelope's
    * `refusalToken` (`packages/platform/src/http/error-envelope.ts`) reads
    * exactly one member of `details` — `code`, and only when `details` is an
    * object — as the tail of `errors.<CODE>.<token>`. Every raise of these
@@ -318,7 +327,7 @@ export const manifest = defineModuleManifest({
    */
   errorCodes: [
     { code: 'QUOTE_INCOMPLETE' },
-    { code: 'QUOTE_VALIDITY_ENDED' },
+    { code: 'QUOTE_VALIDITY_ENDED', tokens: ['lapsed', 'withdrawn', 'unavailable'] },
     { code: 'RFQ_ALREADY_CLAIMED' },
     { code: 'RFQ_EMPTY' },
     { code: 'RFQ_EXPIRED' },
@@ -328,6 +337,11 @@ export const manifest = defineModuleManifest({
     { code: 'RFQ_NOT_QUOTED' },
     { code: 'RFQ_PRICE_PROPOSAL_NOT_ALLOWED' },
     { code: 'RFQ_SAVED_VIEW_NAME_TAKEN' },
+    // Feature 163 (security review M1) — an operator's on-behalf request on a channel,
+    // named or resolved (owner decision 2026-10-29 "A"), that is not one of the
+    // Organization's active channels. Minted by this feature;
+    // owner and reason in `MINTED_ERROR_CODES`.
+    { code: 'RFQ_SALES_CHANNEL_NOT_ALLOWED' },
     // Feature 153 (owner answer Q4) — sending the quote PDF by e-mail. Minted
     // by this feature; owner and reason in `MINTED_ERROR_CODES`.
     { code: 'QUOTE_REQUEST_PDF_TOO_LARGE' },
@@ -341,7 +355,8 @@ export const manifest = defineModuleManifest({
    * (D-175, feature 080 T057).
    *
    * `RfqCreatePage` prefills an agreed price from
-   * `GET /api/v1/admin/products/:id/resolved-price`, which `price_lists` gates
+   * `POST /api/v1/admin/price-books/resolve` (feature 160; it was the per-product
+   * resolved-price probe), which `price_lists` gates
    * with `price_lists:read`. D-173 made that gate deliberately: the route used
    * to enforce `rfqs:handle`, a code its own switchable owner could take off
    * `/admin-roles` while `price_lists` — `nonDeactivatable` — went on demanding
@@ -365,6 +380,28 @@ export const manifest = defineModuleManifest({
    */
   permissions: [
     { code: 'rfqs:handle', label: 'Handle quote requests', requires: ['price_lists:read'] },
+  ],
+  /**
+   * The buyer action this module gates for an Organization's members
+   * (`specs/170-organization-roles/`, FR-040; `contracts/organization-permissions-manifest.md`
+   * §3). Enforced on every route that creates a quote request here — from
+   * scratch and by resubmitting — and by the modules that create one on the
+   * buyer's behalf (a cart, a shopping list, a quick-order build).
+   * Translations: `organizationPermissions.<code>.*` in
+   * `i18n/{en,pl}.json`.
+   *
+   * Seeing every quote request of the Organization is **not** a code until P3
+   * declares `quote_requests.approve` (research R-30): it is reserved to the
+   * *Administrator* role kind, judged in `rfq-service.ts`.
+   */
+  organizationPermissions: [
+    {
+      code: 'quote_requests.create',
+      label: 'Create quote requests',
+      description:
+        'Ask for a quote from scratch or by resubmitting one, and turn a cart, a shopping list or a quick order into a quote request.',
+      memberDefault: true,
+    },
   ],
   /**
    * Feature 153 — the four quote blocks of the document-template editor
@@ -522,7 +559,8 @@ export const manifest = defineModuleManifest({
       icon: 'Inbox',
       targetRoute: '/quote-requests',
       requiredPermission: 'rfqs:handle',
-      keywords: ['rfq', 'quote', 'inbox', 'zapytanie', 'oferta'],
+      keywords: ['rfq', 'quote', 'inbox'],
+      keywordsKey: 'actions.openInbox.keywords',
       weight: 310,
     },
   ],

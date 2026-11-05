@@ -15,14 +15,22 @@ import { HttpError } from '@endora-commerce/platform/http';
 import { Organization } from '../entities/organization.entity.js';
 import { EmailVerificationToken } from '../entities/email-verification-token.entity.js';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { AuditPort, SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
+import { withSystemScope } from '@endora-commerce/platform/tenancy';
+import { predefinedRoleIdOn } from './organization-role-store.js';
+import { OrganizationTaxIdValidation } from '../entities/organization-tax-id-validation.entity.js';
+import type { RegistryLookupSnapshot } from '../registry-lookup/company-registry-port.js';
+import {
+  registrationValidationRow,
+  type RegistrationValidationRow,
+} from '../registry-lookup/registration-snapshot.js';
 
 /**
  * Registration flow (T117, FR-040).
  *
  * - Creates the Organization in `pending_verification`.
- * - Creates the first CustomerAccount with `role='organization_admin'`, email
- *   unverified, argon2-hashed password.
+ * - Creates the first CustomerAccount holding the Organization's
+ *   *Administrator* role, email unverified, argon2-hashed password.
  * - Issues an EmailVerificationToken; the raw token is returned so callers
  *   can dispatch the email. Only its sha256 hash is stored.
  * - Emits `organization.registered.v1`.
@@ -91,6 +99,19 @@ export interface RegistrationAccountPorts {
   write: CustomerAccountMemberWritePort;
 }
 
+/**
+ * Feature 173 — what registration needs to persist the registry lookup a buyer
+ * carried (research R-13): the switch, and the module's ticket store. Optional
+ * so a composition without the lookup keeps working.
+ */
+export interface RegistrationRegistryLookup {
+  /** `registry_lookup_enabled`, fail-closed. Off ⇒ every reference is ignored. */
+  isEnabled(): Promise<boolean>;
+  readTicket(lookupId: string): Promise<RegistryLookupSnapshot | null>;
+  deleteTicket(lookupId: string): Promise<void>;
+  logger?: { info(obj: object, msg: string): void };
+}
+
 export class RegistrationService {
   constructor(
     private readonly emFactory: () => EntityManager,
@@ -98,9 +119,30 @@ export class RegistrationService {
     private readonly accounts: RegistrationAccountPorts,
     private readonly dictionaryValidator?: DictionaryValidator,
     private readonly auditLog?: AuditPort,
+    /**
+     * Feature 154 — the kernel's audited channel-membership writer. An
+     * Organization with no sales channel may shop nowhere, so a created one is
+     * bound in the creating step (FR-016, FR-019). Optional so a unit
+     * composition without it keeps working.
+     */
+    private readonly channelMembership?: Pick<
+      SalesChannelMembershipPort,
+      'bindToDefaultIfEmpty' | 'replaceChannelsForEntity'
+    >,
+    private readonly registryLookup?: RegistrationRegistryLookup,
   ) {}
 
-  async registerOrganization(req: RegisterOrganizationRequest): Promise<RegistrationResult> {
+  /**
+   * @param context.salesChannelId the channel of the store the business
+   *   registered on — the request's resolved channel. Feature 154 (owner
+   *   decision D6): the new Organization gets exactly that channel, also on a
+   *   store closed to anonymous visitors, where registering is how a business
+   *   applies. `null` (no request channel) binds the system default.
+   */
+  async registerOrganization(
+    req: RegisterOrganizationRequest,
+    context: { salesChannelId: string | null } = { salesChannelId: null },
+  ): Promise<RegistrationResult> {
     const em = this.emFactory();
     await this.validateCountry(req.organization.registeredAddress.country);
 
@@ -123,6 +165,10 @@ export class RegistrationService {
         'An account with this email already exists.',
       );
     }
+
+    // Feature 173 — the ticket is read before anything is written, so a slow or
+    // failing Redis costs the registration nothing but this one read (FR-021).
+    const ticket = await this.readRegistryTicket(req.registryLookupId);
 
     const organization = em.create(Organization, {
       name: req.organization.name,
@@ -148,6 +194,18 @@ export class RegistrationService {
       }
       throw err;
     }
+    // Feature 154 — on this `EntityManager`, right after the Organization row,
+    // so "no Organization without a channel" holds by construction.
+    if (context.salesChannelId !== null) {
+      await this.channelMembership?.replaceChannelsForEntity(
+        'organization',
+        organization.id,
+        [context.salesChannelId],
+        { em },
+      );
+    } else {
+      await this.channelMembership?.bindToDefaultIfEmpty('organization', organization.id, { em });
+    }
 
     // `create` raises the same 409 `EMAIL_ALREADY_REGISTERED` on the unique
     // index that the `catch` here used to, so the translation moved with the
@@ -158,8 +216,34 @@ export class RegistrationService {
       password: req.firstUser.password,
       firstName: req.firstUser.firstName,
       lastName: req.firstUser.lastName,
-      role: 'organization_admin',
+      // The registering user administers the new Organization
+      // (`specs/170-organization-roles/` WP-02b). Read on this `em`: the role
+      // row was written by the Organization's own insert trigger.
+      organizationRoleId: await predefinedRoleIdOn(em, organization.id, 'administrator'),
     });
+
+    // Feature 173 — one validation row for the lookup this registration carried,
+    // when the ticket was issued for the same normalised tax ID and country
+    // (FR-020). Written for the Organization being created, on this `em`. The
+    // actor is anonymous, so the write needs the sanctioned hatch; a module's is
+    // `withSystemScope` (ruling D-285 keeps `withOrgScope` host-only), and the
+    // row names the Organization explicitly, as `predefinedRoleIdOn` does. The
+    // summary is stamped as the admin trigger stamps it; the registry's legal
+    // name is **not** written (OD-7).
+    const lookupRow = ticket
+      ? registrationValidationRow(ticket, {
+          name: req.organization.name,
+          taxId: req.organization.taxId,
+          registeredAddress: req.organization.registeredAddress,
+        })
+      : null;
+    if (ticket && !lookupRow) {
+      this.registryLookup?.logger?.info(
+        { organizationId: organization.id },
+        'organizations: registry lookup reference ignored — issued for another tax ID',
+      );
+    }
+    if (lookupRow) await this.persistLookupRow(em, organization, lookupRow);
 
     const rawToken = randomBytes(32).toString('base64url');
     const token = em.create(EmailVerificationToken, {
@@ -175,10 +259,22 @@ export class RegistrationService {
         objectType: 'organization',
         objectId: organization.id,
         stateBefore: null,
-        stateAfter: { name: organization.name, taxId: organization.taxId, status: organization.status },
+        stateAfter: {
+          name: organization.name,
+          taxId: organization.taxId,
+          status: organization.status,
+          ...(lookupRow ? { registryLookup: { provider: lookupRow.provider, outcome: lookupRow.outcome } } : {}),
+        },
       });
     }
     await em.persistAndFlush(token);
+
+    // After the commit, best effort: the ticket expires on its own anyway. A
+    // refused registration never reaches this line, so its ticket stays usable
+    // for the retry.
+    if (lookupRow && req.registryLookupId) {
+      await this.registryLookup?.deleteTicket(req.registryLookupId).catch(() => undefined);
+    }
 
     this.events.emit('organization.registered.v1', {
       eventId: crypto.randomUUID(),
@@ -188,6 +284,50 @@ export class RegistrationService {
     emitCustomerAccountCreated(this.events, customerAccount.id, organization.id);
 
     return { organization, customerAccount, verificationToken: rawToken };
+  }
+
+  /** The ticket behind a reference, or `null`: switch off, unknown, expired, or Redis failing. */
+  private async readRegistryTicket(lookupId: string | undefined): Promise<RegistryLookupSnapshot | null> {
+    if (!lookupId || !this.registryLookup) return null;
+    try {
+      if (!(await this.registryLookup.isEnabled())) return null;
+      return await this.registryLookup.readTicket(lookupId);
+    } catch (err) {
+      this.registryLookup.logger?.info(
+        { err: err instanceof Error ? err.message : String(err) },
+        'organizations: registry lookup ticket unreadable; registering without it',
+      );
+      return null;
+    }
+  }
+
+  private async persistLookupRow(
+    em: EntityManager,
+    organization: Organization,
+    row: RegistrationValidationRow,
+  ): Promise<void> {
+    await withSystemScope(
+      'organizations: registration persists the registry lookup of the Organization it creates',
+      async () => {
+        em.create(OrganizationTaxIdValidation, {
+          organizationId: organization.id,
+          provider: row.provider,
+          outcome: row.outcome,
+          taxIdValue: row.taxIdValue,
+          legalNameReturned: row.legalNameReturned,
+          addressReturned: row.addressReturned,
+          errorKind: row.errorKind,
+          requestedByAdminUserId: null,
+          origin: row.origin,
+          registryDetails: row.registryDetails,
+          submittedValues: row.submittedValues,
+        });
+        organization.vatValidatedAt = new Date();
+        organization.vatValidationProvider = row.provider;
+        organization.vatValidationOutcome = row.outcome;
+        await em.flush();
+      },
+    );
   }
 
   private async validateCountry(country: string): Promise<void> {

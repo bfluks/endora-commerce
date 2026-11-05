@@ -1,6 +1,5 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import { notFound, redirect } from 'next/navigation';
 import {
   type AddToCartResult,
   nextAddToCartToken,
@@ -35,10 +34,11 @@ import { Hook } from '../../../../components/Hook';
 import { JsonLd } from '../../../../lib/seo/JsonLd';
 import { ViewItemTracker } from '../../../../components/analytics/EcommerceTrackers';
 import { getStorefrontQuoteRequestSettings } from '../../../../lib/api/rfq';
-import { getProductBySlug } from '../../../../lib/api/catalog';
-import { getStorefrontProductStock } from '../../../../lib/api/inventory';
+import { getProductBySlug, resolveProductKey } from '../../../../lib/api/catalog';
 import { getResolvedPrice, PRICING_UNAVAILABLE } from '../../../../lib/api/pricing';
-import { getMe } from '../../../../lib/api/account';
+import { getStorefrontProductStock } from '../../../../lib/api/inventory';
+import { getMe, type MeResult } from '../../../../lib/api/account';
+import { commerceAbilities, memberSession } from '../../../../lib/commerce-permissions';
 import { addCartItem, type CartCookieJar } from '../../../../lib/api/cart';
 import {
   getAnonCartCookie,
@@ -51,15 +51,21 @@ import {
   placeOneClickOrder,
 } from '../../../../lib/api/quick-order';
 import { getServerContext } from '../../../../lib/server-context';
-import { canonicalPath } from '../../../../lib/seo/route-seo';
-import { seo } from './seo';
+import { alternateLanguages, productById, productIdForKey } from './resolution';
+import { productTabPlan } from '../../../../lib/catalog/product-tabs';
+import { ProductDescriptionPanel } from '../../../../components/catalog/ProductDescriptionPanel';
 import { tForLocale } from '../../../../lib/i18n/messages';
 import { cartActionFailure } from '../../../../lib/cart-action-failure';
-import { StorefrontApiError, withoutViewer } from '../../../../lib/api/client';
+import { withoutViewer } from '../../../../lib/api/client';
 import { publicApiBaseUrl } from '../../../../lib/env.mjs';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
 
 interface PageProps {
   params: Promise<{ slug: string }>;
+  /**
+   * `variant` — a preselected variant SKU. The page language is the path's
+   * (feature 167, OR-4); 163's interim `?lang=` is no longer read.
+   */
   searchParams?: Promise<{ variant?: string | string[] }>;
 }
 
@@ -77,13 +83,19 @@ export async function generateMetadata({
   const { slug } = await params;
   const search = searchParams ? await searchParams : {};
   const variantSku = typeof search.variant === 'string' ? search.variant : null;
-  const { ctx } = await getServerContext();
+  const { ctx, locale } = await getServerContext();
+  // Deliberately the anonymous answer, even for a signed-in buyer (issue
+  // #265): this output is the crawler's and the social card's, it carries no
+  // price to personalise, and asking it as the buyer would cost the shared
+  // Data Cache entry every visitor to this page reuses.
+  const anonymous = withoutViewer(ctx);
   try {
-    // Deliberately the anonymous answer, even for a signed-in buyer (issue
-    // #265): this output is the crawler's and the social card's, it carries no
-    // price to personalise, and asking it as the buyer would cost the shared
-    // Data Cache entry every visitor to this page reuses.
-    const product = await getProductBySlug(slug, withoutViewer(ctx));
+    // Feature 163 — the key first (K1). A redirect key has no metadata of its
+    // own: the page answers the permanent redirect, so nothing here is indexed.
+    const resolution = await resolveProductKey(slug, anonymous);
+    if (resolution.kind === 'redirect') return { robots: { index: false, follow: true } };
+    const product = await getProductBySlug(resolution.productId, anonymous);
+    const languages = alternateLanguages(product.paths);
     // Feature 002 (T052) — if `?variant=<sku>` is present and the
     // SKU is a known variant, surface the variant's identity in the
     // social card title so different variants get distinct previews
@@ -102,8 +114,14 @@ export async function generateMetadata({
       // Indexable (FR-010/FR-012), and the canonical is the product's own path
       // **without** `?variant=`: every variant URL is the same product page
       // with a different preselection, so one of them is the page a crawler
-      // should hold and the rest point at it.
-      alternates: { canonical: canonicalPath(seo.route, { slug }) },
+      // should hold and the rest point at it. Feature 163 (FR-074) — both the
+      // canonical and the `hreflang` alternates are the backend's paths, built
+      // for the effective key per language; alternates only where the product
+      // is available to anonymous visitors.
+      alternates: {
+        canonical: product.paths.canonical,
+        ...(languages ? { languages } : {}),
+      },
       openGraph: {
         title: `${product.seo.openGraph.title}${titleSuffix}`,
         description: product.seo.openGraph.description,
@@ -111,7 +129,7 @@ export async function generateMetadata({
       },
     };
   } catch {
-    return { title: 'Product not found', robots: { index: false, follow: false } };
+    return { title: tForLocale(locale)('commerce.pdp.notFound'), robots: { index: false, follow: false } };
   }
 }
 
@@ -122,36 +140,40 @@ export default async function ProductPage({
   const { slug } = await params;
   const search = searchParams ? await searchParams : {};
   const selectedVariantSku = typeof search.variant === 'string' ? search.variant : null;
-  const { ctx, locale } = await getServerContext();
+  const { ctx, locale, modules } = await getServerContext();
   const t = tForLocale(locale);
 
-  let product;
-  try {
-    product = await getProductBySlug(slug, ctx);
-  } catch (err) {
-    if (err instanceof StorefrontApiError && err.status === 404) notFound();
-    throw err;
-  }
+  // Feature 163 — which product the key names here, or the permanent redirect to
+  // where it moved (FR-071, FR-072); then the product, read by id.
+  const productId = await productIdForKey(slug, ctx);
+  const product = await productById(productId, ctx);
 
   const primaryCategory = product.categories[0];
   const rfqSettings = await getStorefrontQuoteRequestSettings();
-  const [stock, resolvedPrice] = await Promise.all([
-    getStorefrontProductStock(product.id, ctx),
-    getResolvedPrice(product.id, { quantity: 1 }, ctx),
-  ]);
-  const customerEmail = await readCustomerEmail();
+  const stock = await getStorefrontProductStock(product.id, ctx);
+  const member = await readMember();
+  const customerEmail = member?.customerAccount.email ?? null;
+  // `specs/170-organization-roles/` (FR-030, FR-040, FR-047, FR-057; research
+  // R-12) — each action the member's role does not allow is hidden: on a
+  // product page its absence explains itself. A signed-out visitor keeps
+  // add-to-cart and the rest exactly as before (owner ruling PR-4).
+  const abilities = commerceAbilities(memberSession(member));
   /**
-   * `price_lists` is not present (issue #124). Nothing on this page may quote a
-   * figure: the catalogue's legacy `defaultPrice` projection is not a price the
-   * platform stands behind, and an Add-to-cart posted against it can only come
-   * back 503. The page still renders — the product, its media, its attributes —
-   * with no price and no cart action; the quote path stays open where the
-   * deployment offers one, because a quote is a request for a price rather than
-   * a claim about one.
+   * D-287 P0 — **one** resolution prices this page. The product detail carries
+   * the base / sale / display-mode split (`resolvedPrice`) from the resolution
+   * that priced `price`; this page used to ask
+   * `GET /storefront/products/:id/resolved-price` as well, so every view
+   * resolved the product twice.
+   *
+   * `price_lists` not being present (issue #124) still quotes nothing: the
+   * catalogue detail cannot price without it and refuses, so no figure reaches
+   * this page from a module the platform is not serving. A viewer whose
+   * display mode withholds prices (`none`, e.g. a guest on a channel that hides
+   * prices until sign-in) is answered `price: null` and a `resolvedPrice` with
+   * no amounts and `displayMode: 'none'`.
    */
-  const pricingAbsent = resolvedPrice === PRICING_UNAVAILABLE;
-  const resolved = pricingAbsent ? null : resolvedPrice;
-  const price = pricingAbsent ? null : product.price;
+  let resolved = product.resolvedPrice ?? null;
+  let price = product.price;
   const isQuoteOnly = resolved?.displayMode === 'none';
   // Feature 039 (US5) — one-click buy is offered only to a logged-in buyer who
   // is eligible (setting enabled for the channel + all four valid defaults).
@@ -167,88 +189,82 @@ export default async function ProductPage({
     selectedVariantSku
       ? product.variants.find((v) => v.sku === selectedVariantSku)?.id ?? null
       : null;
+  // Feature 160 (FR-031) — a selected variant is priced as itself: the price
+  // the cart will charge for it, resolved by the price books. One resolution,
+  // and only when a variant is selected; the listing's "from" price stands
+  // otherwise.
+  let selectedVariantPrice: { amount: string; currency: string } | null = null;
+  if (selectedVariantId) {
+    const variantResolved = await getResolvedPrice(product.id, { variantId: selectedVariantId }, ctx);
+    if (variantResolved && variantResolved !== PRICING_UNAVAILABLE) {
+      resolved = {
+        basePrice: variantResolved.basePrice,
+        salePrice: variantResolved.salePrice,
+        displayMode: variantResolved.displayMode,
+        // Feature 161 (FR-026) — the variant's own "list price / your price".
+        ...(variantResolved.listPrice ? { listPrice: variantResolved.listPrice } : {}),
+      };
+      const charged = variantResolved.salePrice ?? variantResolved.basePrice;
+      selectedVariantPrice = charged;
+      price = charged ? { amount: Number(charged.amount), currency: charged.currency } : null;
+    }
+  }
 
   // The "Add to compare" toggle rides in the ProductBuyActions second row when
   // that row renders; otherwise it's shown on its own below the action zone.
-  const buyShowCart = !!price && !stock?.showNotifyButton;
-  const buyShowQuote = rfqSettings.showAddToQuoteOnPdp;
+  const buyShowCart = !!price && !stock?.showNotifyButton && abilities.editCart;
+  const buyShowQuote = rfqSettings.showAddToQuoteOnPdp && abilities.requestQuote;
+  const buyRowOffered = (!!price && abilities.editCart) || buyShowQuote;
   const buyActionsRendered =
     (product.type === 'simple' || product.type === 'configurable') &&
     !isQuoteOnly &&
-    (!!price || buyShowQuote) &&
+    buyRowOffered &&
     (buyShowCart || buyShowQuote);
 
   // Industria PDP detail tabs (below the gallery). "Opis" (description) is the
   // lead tab; "Parametry" and "Załączniki" are added only when they have
-  // content — mirroring the reference `.tabs`/`.tabpanel` section.
-  const visibleAttributes =
-    (product as { visibleAttributes?: Array<{ key: string; label: string; valueType: string; valueRendered: string }> })
-      .visibleAttributes ?? null;
-  const hasAttributeValues = Object.keys(product.attributeValues).length > 0;
+  // content — mirroring the reference `.tabs`/`.tabpanel` section. Which tabs,
+  // and what each holds, is `productTabPlan`'s to decide (feature 172).
+  // Feature 172 — a content attribute counts toward "Opis" only when it would
+  // draw something here: blocks of switched-off modules draw nothing, and with
+  // the CMS off no content is drawn at all (FR-051). The backend omits it too
+  // (research R-13); this check closes the window in which a cached product
+  // read still carries content after the CMS was switched off.
+  const tabPlan = productTabPlan(product, {
+    pageBuilderPresent: modules.isPresent('cms'),
+    absentModuleIds: modules.absentIds,
+  });
   const productTabs: ProductTab[] = [];
-  if (product.description) {
+  if (tabPlan.description) {
     productTabs.push({
       id: 'description',
       label: t('product.tabs.description'),
-      panel: (
-        <p className="max-w-[70ch] whitespace-pre-line text-[15px] leading-[1.7] text-muted">
-          {product.description}
-        </p>
-      ),
+      // The plain description, then each content attribute (feature 172, FR-030).
+      panel: <ProductDescriptionPanel text={tabPlan.description.text} content={tabPlan.description.content} />,
     });
   }
-  if (hasAttributeValues || (visibleAttributes && visibleAttributes.length > 0)) {
+  if (tabPlan.parameters) {
     productTabs.push({
       id: 'parameters',
       label: t('product.tabs.parameters'),
-      panel: (
-        <div className="flex flex-col gap-6">
-          {hasAttributeValues ? (
-            <div>
-              {product.attributeSet ? (
-                <p className="mb-2 text-[0.875rem] text-muted">
-                  {product.attributeSet.name[locale] ??
-                    product.attributeSet.name['en-US'] ??
-                    Object.values(product.attributeSet.name)[0] ??
-                    product.attributeSet.code}
-                </p>
-              ) : null}
-              <table className="w-full border-collapse">
-                <tbody>
-                  {Object.entries(product.attributeValues).map(([key, value]) => (
-                    <tr key={key}>
-                      <th
-                        scope="row"
-                        className="border-b border-line p-[8px] text-left text-[13px] font-medium text-muted"
-                      >
-                        {key}
-                      </th>
-                      <td className="border-b border-line p-[8px] text-left font-mono text-[13px]">
-                        {String(value)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
-          {/* Feature 012 / US6 — "Parametry produktu": only attributes the
-              operator flagged isVisibleOnProductPage AND that have a value on
-              this product. Renders null when nothing matches (FR-030). */}
-          <ParametryTab attributes={visibleAttributes} locale={locale} />
-        </div>
-      ),
+      // Feature 012 / US6 — "Parametry produktu": only attributes the operator
+      // flagged isVisibleOnProductPage AND that have a value on this product.
+      // Feature 172 (US4, FR-038) removed the raw table that used to sit above
+      // it and listed every stored value, hidden ones included, by key.
+      panel: <ParametryTab attributes={tabPlan.parameters} locale={locale} />,
     });
   }
-  if (product.attachments && product.attachments.length > 0) {
+  if (tabPlan.attachments !== null && product.attachments) {
     productTabs.push({
       id: 'attachments',
       label: t('product.tabs.attachments'),
-      count: product.attachments.length,
+      count: tabPlan.attachments,
       panel: <AttachmentsList attachments={product.attachments} locale={locale} />,
     });
   }
 
+  // Feature 167 — `<html lang>` is the path language, which is this page's, so
+  // T155 (B3)'s own `lang` mark on this element is gone.
   return (
     <div className="mx-auto max-w-[1360px] px-[24px] pt-[18px] pb-[64px] max-md:pb-[96px]">
       {/* Feature 049 — GA4 view_item (no-op unless Enhanced Ecommerce is on). */}
@@ -261,25 +277,27 @@ export default async function ProductPage({
           ...(price?.currency ? { currency: price.currency } : {}),
         }}
       />
-      <Breadcrumbs
+      <Breadcrumbs locale={locale}
         crumbs={[
           { href: '/', label: t('nav.home') },
           { href: '/catalog', label: t('catalog.heading') },
           ...(primaryCategory
             ? [{ href: `/c/${primaryCategory.slug}`, label: primaryCategory.name }]
             : []),
-          { href: `/p/${product.slug}`, label: product.name },
+          // Feature 163 — the page's own URL as the backend built it (`productPath()`).
+          { href: product.paths.canonical, label: product.name },
         ]}
       />
       <Hook code="product.top" />
 
       <article className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-[24px] max-[720px]:grid-cols-1">
         {product.gallery && product.gallery.length > 0 ? (
-          <GallerySwitcher gallery={product.gallery} alt={product.name} />
+          <GallerySwitcher gallery={product.gallery} alt={product.name} locale={locale} />
         ) : (
           <ProductGallery
             assets={product.assets}
             alt={product.name}
+            locale={locale}
             placeholderUrl={product.primaryAssetUrl}
           />
         )}
@@ -297,7 +315,7 @@ export default async function ProductPage({
           </h1>
           <div className="mb-[16px] flex flex-wrap items-center gap-x-[18px] gap-y-[6px] border-y border-line py-[10px] font-mono text-[12px] text-muted">
             <span className="inline-flex gap-[6px]">
-              SKU: <strong className="font-medium text-fg">{product.sku}</strong>
+              {t('commerce.pdp.sku')} <strong className="font-medium text-fg">{product.sku}</strong>
             </span>
           </div>
           {/* Give the price extra breathing room (above + below) so it draws the
@@ -309,8 +327,10 @@ export default async function ProductPage({
               <PdpPriceToggle
                 basePrice={resolved.basePrice}
                 salePrice={resolved.salePrice}
+                listPrice={resolved.listPrice ?? null}
+                listPriceLabel={t('product.listPrice')}
+                yourPriceLabel={t('product.yourPrice')}
                 locale={locale}
-                labels={{ net: 'NETTO', gross: 'BRUTTO' }}
               />
               <div className="mt-3">
                 <StockBadge product={product} stock={stock} locale={locale} />
@@ -341,13 +361,17 @@ export default async function ProductPage({
               */}
             {product.type === 'simple' || product.type === 'configurable' ? (
               isQuoteOnly ? (
-                <QuoteRequestCta
-                  productId={product.id}
-                  productSlug={product.slug}
-                  productName={product.name}
-                  unitPrice={price ?? null}
-                  variant="pdp"
-                />
+                abilities.requestQuote ? (
+                  <QuoteRequestCta
+                    productId={product.id}
+                    productSlug={product.slug}
+                    productName={product.name}
+                    unitPrice={price ?? null}
+                    variant="pdp"
+                    minOrderQuantity={product.minOrderQuantity ?? null}
+                    locale={locale}
+                  />
+                ) : null
               ) : (
                 <>
                   {stock?.showNotifyButton ? (
@@ -367,46 +391,61 @@ export default async function ProductPage({
                       }}
                     />
                   ) : null}
-                  {price || rfqSettings.showAddToQuoteOnPdp ? (
+                  {buyRowOffered ? (
                     <ProductBuyActions
                       productId={product.id}
                       productSlug={product.slug}
                       productName={product.name}
                       unitPrice={price ?? null}
                       {...(selectedVariantId ? { variantId: selectedVariantId } : {})}
-                      showCart={!!price && !stock?.showNotifyButton}
-                      showQuote={rfqSettings.showAddToQuoteOnPdp}
+                      showCart={buyShowCart}
+                      showQuote={buyShowQuote}
                       packagingUnits={product.packagingUnits}
                       singlePieceLabel={t('product.packaging.singlePiece')}
                       piecesLabel={t('product.packaging.pieces')}
+                      minOrderQuantity={product.minOrderQuantity ?? null}
+                      locale={locale}
                       addToCartAction={addToCartAction}
                       addToCartLabel={t('product.addToCart')}
                       // Secondary actions row, next to compare + quote.
                       leadingAction={
-                        <AddToShoppingListButton
-                          apiBase={PDP_API_BASE}
-                          productId={product.id}
-                          {...(selectedVariantId ? { variantId: selectedVariantId } : {})}
-                          label="Dodaj do listy zakupowej"
-                          removeLabel="Usuń z listy zakupowej"
-                          showLabel
-                          className="btn btn--outline h-[40px] w-full justify-center md:w-auto"
-                        />
+                        abilities.editShoppingLists ? (
+                          <AddToShoppingListButton
+                            locale={locale}
+                            apiBase={PDP_API_BASE}
+                            productId={product.id}
+                            {...(selectedVariantId ? { variantId: selectedVariantId } : {})}
+                            label={t('card.list.add')}
+                            removeLabel={t('card.list.remove')}
+                            showLabel
+                            className="btn btn--outline h-[40px] w-full justify-center md:w-auto"
+                          />
+                        ) : null
                       }
                       // Secondary actions row, alongside the shopping-list + quote.
-                      compareAction={<CompareToggle productId={product.id} variant="inline" />}
+                      compareAction={
+                        <CompareToggle
+                          productId={product.id}
+                          variant="inline"
+                          salesChannelCode={ctx.salesChannelCode}
+                          locale={locale}
+                        />
+                      }
                     />
-                  ) : (
-                    // No buy-actions row (no price and RFQ-on-PDP off): still
-                    // offer the shopping-list heart on its own.
+                  ) : abilities.editShoppingLists ? (
+                    // No buy-actions row (no price and RFQ-on-PDP off, or neither
+                    // offered to this member): still offer the shopping-list heart.
                     <AddToShoppingListButton
+                      locale={locale}
                       apiBase={PDP_API_BASE}
                       productId={product.id}
                       {...(selectedVariantId ? { variantId: selectedVariantId } : {})}
-                      label="Dodaj do listy zakupowej"
-                      removeLabel="Usuń z listy zakupowej"
+                      label={t('card.list.add')}
+                      removeLabel={t('card.list.remove')}
                     />
-                  )}
+                  ) : null}
+                  {/* FR-051 — only when eligibility answers enabled: the backend judges the
+                      member's `quick_order.one_click` and `carts.order_without_approval` first. */}
                   {oneClickEnabled && price ? (
                     <form action={oneClickAction} style={{ display: 'inline-flex', gap: 8 }}>
                       <input type="hidden" name="productId" value={product.id} />
@@ -414,14 +453,14 @@ export default async function ProductPage({
                         <input type="hidden" name="variantId" value={selectedVariantId} />
                       ) : null}
                       <button type="submit" className="b2b-cta">
-                        Buy in one click
+                        {t('commerce.pdp.oneClick')}
                       </button>
                     </form>
                   ) : null}
                 </>
               )
             ) : null}
-            {product.type === 'virtual' && product.virtual ? (
+            {product.type === 'virtual' && product.virtual && abilities.editCart ? (
               <VirtualCta
                 productId={product.id}
                 virtual={product.virtual}
@@ -430,12 +469,18 @@ export default async function ProductPage({
                   digitalDelivery: t('product.virtual.digitalDelivery'),
                 }}
                 addToCartAction={addToCartAction}
+                locale={locale}
               />
             ) : null}
           </div>
           {!buyActionsRendered ? (
             <div className="mt-3">
-              <CompareToggle productId={product.id} variant="inline" />
+              <CompareToggle
+                productId={product.id}
+                variant="inline"
+                salesChannelCode={ctx.salesChannelCode}
+                locale={locale}
+              />
             </div>
           ) : null}
           <Hook code="product.buttons.after" />
@@ -443,12 +488,15 @@ export default async function ProductPage({
           {product.type === 'configurable' && product.variants.length > 0 ? (
             <VariantPicker
               productSlug={product.slug}
-              variants={product.variants}
+              locale={locale}
+              variants={product.variants.map((v) => ({
+                ...v,
+                price: v.id === selectedVariantId ? selectedVariantPrice : null,
+              }))}
               selectedSku={selectedVariantSku}
               labels={{
                 heading: t('product.variants.heading'),
                 sku: t('product.variants.sku'),
-                priceOverride: t('product.variants.priceOverride'),
                 stockLevel: t('product.variants.stockLevel'),
                 outOfStock: t('product.variants.outOfStock'),
                 selectThisVariant: t('product.variants.selectThisVariant'),
@@ -456,7 +504,7 @@ export default async function ProductPage({
             />
           ) : null}
 
-          {product.type === 'grouped' && product.groupedItems ? (
+          {product.type === 'grouped' && product.groupedItems && abilities.editCart ? (
             <GroupedSummary
               items={product.groupedItems}
               addToCartLabel={t('product.grouped.addBundleToCart')}
@@ -465,7 +513,7 @@ export default async function ProductPage({
             />
           ) : null}
 
-          {product.type === 'bundle' && product.bundleSlots ? (
+          {product.type === 'bundle' && product.bundleSlots && abilities.editCart ? (
             <BundleConfigurator
               productSlug={product.slug}
               slots={product.bundleSlots}
@@ -502,13 +550,17 @@ export default async function ProductPage({
   );
 }
 
-async function readCustomerEmail(): Promise<string | null> {
+/**
+ * The signed-in buyer's `/api/v1/me`, or `null` for a visitor or a session it
+ * does not answer for — read once for the notify dialog's e-mail and the
+ * member's role (170, FR-057).
+ */
+async function readMember(): Promise<MeResult | null> {
   const cookieStore = await cookies();
   const session = cookieStore.get('b2b_session')?.value;
   if (!session) return null;
   try {
-    const me = await getMe(session);
-    return me.customerAccount.email;
+    return await getMe(session);
   } catch {
     return null;
   }
@@ -553,10 +605,10 @@ async function failureLocale(): Promise<string | undefined> {
 async function oneClickAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const productId = ((formData.get('productId') as string) ?? '').trim();
   const variantId = ((formData.get('variantId') as string) ?? '').trim();
-  if (!productId) redirect('/cart?error=missing-product');
+  if (!productId) return await localeRedirect('/cart?error=missing-product');
 
   let result;
   try {
@@ -571,12 +623,12 @@ async function oneClickAction(formData: FormData): Promise<void> {
     );
   } catch (err) {
     const message = cartActionFailure(err, await failureLocale(), 'product.oneClickFailed');
-    redirect(`/cart?error=${encodeURIComponent(message)}`);
+    return await localeRedirect(`/cart?error=${encodeURIComponent(message)}`);
   }
   if (result!.nextAction?.kind === 'redirect_to_gateway' && result!.nextAction.url) {
-    redirect(result!.nextAction.url);
+    return await localeRedirect(result!.nextAction.url);
   }
-  redirect(`/orders/${result!.order.id}`);
+  return await localeRedirect(`/orders/${result!.order.id}`);
 }
 
 async function addGroupedToCartAction(formData: FormData): Promise<void> {
@@ -587,9 +639,11 @@ async function addGroupedToCartAction(formData: FormData): Promise<void> {
   const entries = (formData.getAll('item') as string[])
     .map((e) => e.trim())
     .filter(Boolean);
-  if (entries.length === 0) redirect('/cart?error=missing-product');
+  if (entries.length === 0) return await localeRedirect('/cart?error=missing-product');
   const jar = await readCartJar();
   let anon: string | null = jar.anon ?? null;
+  // `ctx` carries the storefront's language and channel, so a refusal reads in the page's language.
+  const { ctx } = await getServerContext();
   try {
     for (const entry of entries) {
       const [productId, qtyRaw] = entry.split(':');
@@ -599,6 +653,7 @@ async function addGroupedToCartAction(formData: FormData): Promise<void> {
       const result = await addCartItem(
         { ...jar, anon },
         { productId, quantity: qty },
+        ctx,
       );
       // Reuse the freshly-minted anon cart for the remaining children so every
       // line lands in the same cart.
@@ -607,9 +662,9 @@ async function addGroupedToCartAction(formData: FormData): Promise<void> {
     if (anon && anon !== (jar.anon ?? null)) await setAnonCartCookie(anon);
   } catch (err) {
     const message = cartActionFailure(err, await failureLocale(), 'product.addToCartFailed');
-    redirect(`/cart?error=${encodeURIComponent(message)}`);
+    return await localeRedirect(`/cart?error=${encodeURIComponent(message)}`);
   }
-  redirect('/cart');
+  return await localeRedirect('/cart');
 }
 
 async function addBundleToCartAction(formData: FormData): Promise<void> {
@@ -629,14 +684,16 @@ async function addBundleToCartAction(formData: FormData): Promise<void> {
     const qty = Number.isFinite(quantity) && quantity >= 1 ? Math.floor(quantity) : 1;
     selections.push({ productId, quantity: qty });
   }
-  if (selections.length === 0) redirect('/cart?error=missing-product');
+  if (selections.length === 0) return await localeRedirect('/cart?error=missing-product');
   const jar = await readCartJar();
   let anon: string | null = jar.anon ?? null;
+  const { ctx } = await getServerContext();
   try {
     for (const sel of selections) {
       const result = await addCartItem(
         { ...jar, anon },
         { productId: sel.productId, quantity: sel.quantity },
+        ctx,
       );
       // Reuse the freshly-minted anon cart for the remaining slots so every
       // line lands in the same cart.
@@ -645,9 +702,9 @@ async function addBundleToCartAction(formData: FormData): Promise<void> {
     if (anon && anon !== (jar.anon ?? null)) await setAnonCartCookie(anon);
   } catch (err) {
     const message = cartActionFailure(err, await failureLocale(), 'product.addToCartFailed');
-    redirect(`/cart?error=${encodeURIComponent(message)}`);
+    return await localeRedirect(`/cart?error=${encodeURIComponent(message)}`);
   }
-  redirect('/cart');
+  return await localeRedirect('/cart');
 }
 
 // PDP add-to-cart. Returns a result state (consumed by `useActionState` in the
@@ -670,12 +727,18 @@ async function addToCartAction(
   }
   const qty = Number.isFinite(quantity) && quantity >= 1 ? Math.floor(quantity) : 1;
   try {
-    const result = await addCartItem(await readCartJar(), {
-      productId,
-      ...(variantId ? { variantId } : {}),
-      ...(packagingUnitId ? { packagingUnitId } : {}),
-      quantity: qty,
-    });
+    // `ctx` carries the storefront's language: the minimum refusal (FR-008) is worded in it.
+    const { ctx } = await getServerContext();
+    const result = await addCartItem(
+      await readCartJar(),
+      {
+        productId,
+        ...(variantId ? { variantId } : {}),
+        ...(packagingUnitId ? { packagingUnitId } : {}),
+        quantity: qty,
+      },
+      ctx,
+    );
     if (result.newAnonCookie) await setAnonCartCookie(result.newAnonCookie);
   } catch (err) {
     return {

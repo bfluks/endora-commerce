@@ -26,7 +26,7 @@ export const shoppingListsSettingsManifest = defineModuleSettingsManifest({
  */
 export const manifest = defineModuleManifest({
   id: 'shopping_lists',
-  name: 'Shopping Lists',
+  name: 'Shopping lists',
   description:
     'Customer-owned saved shopping lists.',
   version: '1.0.0',
@@ -55,6 +55,29 @@ export const manifest = defineModuleManifest({
   // covered the quick-order surfaces too while this module hosted them; T139
   // separated the two, so this now switches shopping lists and nothing else.
   activation: { settingCode: 'shopping_lists.enabled', default: true },
+  /**
+   * `specs/170-organization-roles/` (FR-022, FR-047, FR-048) — what a member's
+   * role may do with lists. Reading one's own lists needs neither. Converting
+   * also needs the target's create permission (`carts.create`,
+   * `quote_requests.create`), declared by those modules: two guards, never a
+   * combined code. Both member-default, so nothing changes on upgrade.
+   */
+  organizationPermissions: [
+    {
+      code: 'shopping_lists.create',
+      label: 'Create and edit shopping lists',
+      description:
+        'Create, rename and delete shopping lists, add, change and remove their items, choose the default list and save cart lines to a list.',
+      memberDefault: true,
+    },
+    {
+      code: 'shopping_lists.convert',
+      label: 'Convert shopping lists into quote requests and carts',
+      description:
+        'Move a shopping list, or chosen lines of it, into the cart or into a quote request; also needs the permission to create that cart or quote request.',
+      memberDefault: true,
+    },
+  ],
   /**
    * This module's first i18n bundle — D-129's remaining sweep, MR 3.
    *

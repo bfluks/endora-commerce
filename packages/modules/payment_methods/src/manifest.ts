@@ -31,7 +31,7 @@ const demo: ModuleDemoManifest<ModuleContext> = {
  */
 export const manifest = defineModuleManifest({
   id: 'payment_methods',
-  name: 'Payment Methods',
+  name: 'Payment methods',
   description:
     'Payment method definitions and per-channel availability.',
   version: '1.0.0',
@@ -143,7 +143,8 @@ export const manifest = defineModuleManifest({
       icon: 'CreditCard',
       targetRoute: '/payment-methods',
       requiredPermission: 'payment_methods:read',
-      keywords: ['payment', 'method', 'availability', 'checkout', 'płatność', 'metoda'],
+      keywords: ['payment', 'method', 'availability', 'checkout'],
+      keywordsKey: 'actions.openPaymentMethods.keywords',
       weight: 150,
     },
   ],

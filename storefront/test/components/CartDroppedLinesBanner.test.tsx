@@ -17,6 +17,7 @@ const STRINGS = {
   reasonOutOfStock: 'out of stock',
   reasonNoPriceInCustomerList: 'no price available',
   reasonRemovedByConversion: 'skipped during conversion',
+  reasonBelowMinimum: (minimum: number | undefined) => `below the minimum (${String(minimum)})`,
 };
 
 describe('CartDroppedLinesBanner — SSR rendering', () => {

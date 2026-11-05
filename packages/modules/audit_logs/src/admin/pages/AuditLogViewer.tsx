@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { ApiError, apiClient, formatDateTime } from '@endora-commerce/admin-kit/lib';
 import {
   Alert,
@@ -25,7 +25,18 @@ import { useTranslation, useTranslationContext } from '@endora-commerce/admin-ki
  * Filters mirror the backend query: actor, action, objectType, objectId,
  * impersonated customer. The detail row expands stateBefore / stateAfter
  * as JSON so support can compare changes inline.
+ *
+ * The action, object type and object id filters live in the URL query
+ * (`?action=…&objectType=…&objectId=…`, feature 161 G13), so another screen
+ * links to an object's history — a price book's *History* is
+ * `/audit-log?objectType=price_list&objectId=<id>` — and a reload or a shared
+ * link shows the same view. A change is written back with `replace`, so typing
+ * a filter does not stack history entries.
  */
+
+/** The filters kept in the URL, by their query-parameter name. */
+const URL_FILTERS = ['action', 'objectType', 'objectId'] as const;
+type UrlFilter = (typeof URL_FILTERS)[number];
 
 interface AuditLogRow {
   id: string;
@@ -35,6 +46,13 @@ interface AuditLogRow {
   /** Enriched by the backend — actor's email, when resolvable. */
   actorEmail: string | null;
   impersonatedCustomerAccountId: string | null;
+  /**
+   * A customer who acted for themselves on the storefront (issue #741). Absent
+   * from a server that predates it.
+   */
+  actorCustomerAccountId?: string | null;
+  /** Enriched by the backend — the customer's audit label, when resolvable. */
+  actorCustomerLabel?: string | null;
   actedAt: string;
   action: string;
   actionModuleId?: string;
@@ -53,10 +71,32 @@ export default function AuditLogViewer(): ReactNode {
   const [rows, setRows] = useState<AuditLogRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const action = searchParams.get('action') ?? '';
+  const objectType = searchParams.get('objectType') ?? '';
+  const objectId = searchParams.get('objectId') ?? '';
+  const setUrlFilters = useCallback(
+    (values: Partial<Record<UrlFilter, string>>): void => {
+      setSearchParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+          for (const key of URL_FILTERS) {
+            if (!(key in values)) continue;
+            const value = values[key] ?? '';
+            if (value) next.set(key, value);
+            else next.delete(key);
+          }
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+  const setAction = (value: string): void => setUrlFilters({ action: value });
+  const setObjectType = (value: string): void => setUrlFilters({ objectType: value });
+  const setObjectId = (value: string): void => setUrlFilters({ objectId: value });
   const [actor, setActor] = useState('');
-  const [action, setAction] = useState('');
-  const [objectType, setObjectType] = useState('');
-  const [objectId, setObjectId] = useState('');
   const [impersonated, setImpersonated] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -158,9 +198,7 @@ export default function AuditLogViewer(): ReactNode {
                 variant="outline"
                 onClick={(): void => {
                   setActor('');
-                  setAction('');
-                  setObjectType('');
-                  setObjectId('');
+                  setUrlFilters({ action: '', objectType: '', objectId: '' });
                   setImpersonated('');
                 }}
               >
@@ -302,12 +340,17 @@ function ObjectIdCell({
 
 /**
  * Renders the actor column: an admin user's name + email (linked to the
- * users admin page) when resolvable, the bare id as a fallback, or the
- * "system" label when there is no actor.
+ * users admin page) when resolvable, the bare id as a fallback, a customer who
+ * acted for themselves as "Customer: <label>" (issue #741), or the "system"
+ * label when there is no actor.
  */
 function ActorCell({ row }: { row: AuditLogRow }): ReactNode {
   const t = useTranslation('core');
   if (!row.actorAdminUserId) {
+    if (row.actorCustomerAccountId) {
+      const name = row.actorCustomerLabel?.trim() || row.actorCustomerAccountId.slice(0, 8);
+      return <span title={row.actorCustomerAccountId}>{t('auditLog.actor.customer', { name })}</span>;
+    }
     return <span className="text-muted-foreground">{t('auditLog.actor.system')}</span>;
   }
   const name = row.actorName?.trim();

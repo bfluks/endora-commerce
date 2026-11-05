@@ -19,7 +19,7 @@ Admin routes are gated by `returns:read` (read) / `returns:write` (mutations).
 | --- | --- | --- |
 | `GET /api/v1/orders/:orderId/returnable` | customer | Returnable lines + eligibility for an order |
 | `POST /api/v1/returns` | customer | Open a return/complaint case |
-| `GET /api/v1/returns` | customer | List the caller's cases |
+| `GET /api/v1/returns` | customer | List the caller's cases, or the Organization's (see *Who may open, see and act on a case*) |
 | `GET /api/v1/returns/:id` | customer | Case detail (customer-visible comments only) |
 | `POST /api/v1/returns/:id/comments` | customer | Reply on a case |
 | `POST /api/v1/returns/:id/select-delivery-method` | customer | Choose a return delivery method |
@@ -35,7 +35,73 @@ Admin routes are gated by `returns:read` (read) / `returns:write` (mutations).
 | `GET\|POST /api/v1/admin/returns/:id/settlement` | admin | Prefill / execute settlement |
 | `GET\|POST /api/v1/admin/returns/:id/comments` | admin | List / add comment (visibility + notify) |
 | `GET\|POST /api/v1/admin/returns/:id/shipments` + `/:shipmentId/receive` | admin | Return shipments |
-| `…/statuses`, `…/transitions`, `…/reasons`, `…/delivery-methods`, `…/list-views` | admin | Configuration + saved views |
+| `GET\|POST /api/v1/admin/returns/list-views` | admin | The caller's own saved views plus every shared one / save a view |
+| `PATCH\|DELETE /api/v1/admin/returns/list-views/:id` | admin | Change / delete a saved view (owner, or a platform admin for a shared one) |
+| `…/statuses`, `…/transitions`, `…/reasons`, `…/delivery-methods` | admin | Configuration |
+
+## Who may open, see and act on a case
+
+On the storefront a buyer's reach follows their organization role. This module
+declares two organization permissions, which an Organization's administrator
+grants per role:
+
+| Permission | Code | *Member* holds it |
+| --- | --- | --- |
+| **Create returns and complaints** | `returns.create` | yes (member default) |
+| **View the organization's returns and complaints** | `returns.view_organization` | no |
+
+*Administrator* holds both, as it holds every permission. One code covers returns
+and complaints alike: they are one form and one route.
+
+- **Opening a case** (`POST /api/v1/returns`) needs `returns.create`. Without it
+  the request is refused `403 ORGANIZATION_PERMISSION_REQUIRED`, naming the
+  permission, before the order is read; nothing is created.
+- **Which orders a case may be opened for**: any order the buyer may read — the
+  orders they placed, and a colleague's order when their role holds the `orders`
+  module's **View the organization's orders** (`orders.view_organization`). The
+  rule is the `orders` module's, through `OrderReadPort.findByIdForCustomer`, so
+  it matches the order list. An order out of reach answers `404` to the
+  returnable-lines read and to the submission alike. A case opened from a
+  colleague's order is filed in the name of the member who opened it: its
+  e-mails go to them, and the colleague who placed the order sees the case only
+  with `returns.view_organization`.
+- **Seeing cases** (`GET /api/v1/returns`, `GET /api/v1/returns/:id`): the cases
+  the buyer filed, or — with `returns.view_organization` — every case of their
+  Organization, and of its subtree for a head-office login with roll-up enabled.
+  Roll-up widens the reach; it never grants the permission. A case out of reach
+  answers `404`, never `403`. Each case in the list carries `customerAccountId`,
+  the member who filed it.
+- **Acting on a case** — commenting, attaching files, choosing the return
+  delivery method and cancelling — stays with the member who filed it, whatever
+  anyone else's permissions; to anyone else these requests answer `404`. None of
+  them needs `returns.create`, so a member whose role loses it can still follow
+  up the cases they already filed. Reading an order's returnable lines needs no
+  permission either.
+
+Before organization roles, every buyer — administrators included — saw and
+opened cases for the orders they placed only. *Member* keeps exactly that; an
+administrator now sees every case of the Organization and may open a case from a
+colleague's order.
+
+On the storefront:
+
+- **Returns** (`/returns`) lists the cases the member may see. A colleague's case
+  is marked *Filed by a colleague*. **Start a new return** is offered only to a
+  member whose role holds `returns.create`; the order page offers its return or
+  complaint entry on the same rule.
+- Without `returns.create`, the new-case page (`/returns/new`) says so instead of
+  showing the form: *"Your role does not include the “Create returns and
+  complaints” permission, so you can't start a return or a complaint. Ask your
+  organization's administrator if you need it."*
+- A colleague's case opens read-only. The page offers no comment box,
+  attachment upload, return delivery choice or cancel button, and says why in
+  one line: *"This case was filed by a colleague. You can read it, but only they
+  can add messages or change it."* The filer's messages are labelled
+  *Colleague*, not *You*.
+
+When the module is switched off, both permissions leave the Organization's
+permission catalogue and every member's effective permissions; a role's stored
+grant is kept and applies again when the module is switched back on.
 
 ## Status machine (configurable)
 
@@ -79,13 +145,90 @@ before/after events and is written to the audit log.
   distinct from a deployment that has **no** PSP refund integration at all,
   which still settles as `pending_manual` for a person to pay out by hand —
   there is nothing there to switch on.
+- **Saved views on the Returns list** — the *Saved views* control above the
+  list stores its status, kind and RMA-number filters and its sort (the list
+  has no column picker), privately or shared with every admin who can open the
+  list. The four `list-views` routes are gated by `returns:read` and follow the
+  same rules as the order, product and quote request lists' saved views: names
+  are trimmed, 1–160 characters, without control or format characters; one
+  admin cannot hold two views whose names differ only by case or surrounding
+  spaces (`409 RETURN_SAVED_VIEW_NAME_TAKEN`); `filters` is capped at 8 KB,
+  `visibleColumns` at 64 entries of 64 characters and `sort.field` at 64
+  characters; `shared` and `sort` are required on create. Another admin's
+  private view and an id that is not a UUID both answer `404`; a shared view
+  is changed or deleted by its owner or by an admin whose access is not
+  restricted to a set of organizations (`403` otherwise). List items carry
+  `ownedByCaller` and `canModify`, and `DELETE` answers `{ data: { deleted:
+  <id> } }`. Views saved before these rules keep their names as stored —
+  including blank names and duplicates — until their owner renames or deletes
+  them; a change that leaves the name alone is never refused for it.
+
+## Returnable products
+
+Whether a line may be returned is decided by the product's **Returnable** flag
+as it stood when the order was placed — the Orders module records it on each
+order line at placement, and later changes to the product do not reach orders
+already placed. The flag is set on the product in the catalogue (the Catalog
+module's page describes it, including how to set it for many products at once
+through **Bulk edit**).
+
+- **Per-line answer.** `GET /api/v1/orders/:orderId/returnable` gives each line
+  `returnable` (always present) and, for a line that may not be returned,
+  `notReturnableReason: 'product_not_returnable'`. A line of an order placed
+  before the flag was recorded carries no recorded value and **counts as
+  returnable**.
+- **`eligible` answers for return-kind cases only.** The order-level verdict
+  is, in this order of precedence: `order_not_completing`, `fully_returned`,
+  then `no_returnable_lines`. `eligible: false` with
+  `reason: 'no_returnable_lines'` means the order still has quantities left
+  but none of them on a returnable line: **no return can be opened, but a
+  complaint still can.**
+- **A return naming a non-returnable line is refused.** `POST /api/v1/returns`
+  with `kind: 'return'` answers `422 RETURN_LINE_NOT_RETURNABLE` when any
+  requested line was recorded as not returnable, with `details.productName`
+  (the first such line), `details.orderItemIds[]` and `details.lines[]`
+  (`orderItemId`, `productName`) naming every such line. Nothing is written.
+- **Complaints are never restricted** by the flag: a `complaint` may name any
+  line of the order. **Nothing is refunded for a non-returnable line by
+  default**: such a complaint line is stored with an approved refund of `0`,
+  while its default refund stays the amount paid — the most the operator may
+  approve. The admin case view marks the line **Not returnable at purchase**
+  and the settlement form starts from `0` for it, so a refund or credit for it
+  happens only when the operator enters an amount. The case detail gives each
+  line `returnableAtPurchase` (`true`, `false`, or `null` for a line placed
+  before the value was recorded).
+- **Duplicate lines are summed.** When a request names one order line more
+  than once, the quantities are added up per order line and that total is
+  checked against the line's remaining quantity, for both kinds; a total above
+  it is refused with `422 VALIDATION_FAILED`, `details.code:
+  'qty_exceeds_returnable'`. The entries are still stored as sent.
+- **Order of the checks.** A line that does not belong to the order
+  (`details.code: 'unknown_line'`) is reported before any quantity error, the
+  quantity check runs before the reason check (`unknown_reason`), and
+  returnability is checked last. Cases opened before a product was marked not
+  returnable are never re-evaluated.
+
+**On upgrade, every existing product is not returnable.** The flag defaults to
+off, so lines of orders placed after the release are not returnable until the
+product is marked returnable in the catalogue — select the products on the
+product list and use **Bulk edit → Returnable → Yes — returnable**. Orders
+placed before the release are unaffected: their lines carry no recorded value
+and stay returnable.
 
 ## Cross-module interfaces
 
 The module reads/affects other domains only through documented ports, never
 internal imports:
 
-- `OrderReturnContextPort` (orders) — paid-per-line amounts + completing-status time.
+- `OrderReadPort.findByIdForCustomer` (orders) — whether the buyer may read the
+  order a case is opened for (their own, or a colleague's with
+  `orders.view_organization`).
+- `OrganizationPermissionPort` (organizations) — `returns.create` and
+  `returns.view_organization`, asked per request.
+- `OrderReturnContextPort` (orders) — paid-per-line amounts + completing-status
+  time, and each line's `returnableAtPurchase` (`true`/`false` as recorded at
+  placement, `null` for an order placed before it was recorded). Orders reports
+  the fact; the policy for `null` — returnable — is this module's.
 - `PaymentRefundPort` (payments) — issue the refund, answer `pending_manual`
   where no PSP integration exists, or refuse when the gateway that took the
   payment is switched off.

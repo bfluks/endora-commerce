@@ -3,6 +3,7 @@ import type { FastifyRequest } from 'fastify';
 import type { Redis } from 'ioredis';
 import { z } from 'zod';
 import type {
+  AdminI18nTranslatePort,
   Actor,
   AddressReadPort,
   AddressServicePort,
@@ -11,9 +12,13 @@ import type {
   AssetReadPort,
   CartReadPort,
   CartWritePort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CreditLimitReadPort,
   CustomerAccountReadPort,
+  CustomFieldCarryPort,
+  CustomFieldCarryReceiverPort,
+  CustomFieldListFilterPort,
   DeliveryMethodReadPort,
   EmailDefaultsRegistryPort,
   InventoryFulfilmentPlanningPort,
@@ -22,10 +27,12 @@ import type {
   InvoiceReadPort,
   OrderListPort,
   OrderPlacementPort,
+  OrderQuoteSourcePort,
   OrderReadPort,
   OrderStatusAnnouncePort,
   OrderTransitionPort,
   OrganizationDetailsPort,
+  OrganizationPermissionPort,
   OrganizationRestrictionPort,
   PaymentEmailRendererPort,
   PaymentMethodReadPort,
@@ -35,10 +42,12 @@ import type {
   ResolvedTax,
   SalesChannelAttributionRegistryPort,
   SalesRepAssignmentPort,
+  SettingWriteValidatorRegistryPort,
   ShippingEmailRendererPort,
   TransactionalEmailSender,
 } from '@endora-commerce/contracts';
 import { ERROR_CODES } from '@endora-commerce/contracts';
+import { createMinOrderValueValidator } from './services/min-order-value-write-validator.js';
 /**
  * Two owners' own published interfaces, each on that owner's `./ports` subpath
  * (D-169/D-171, layout contract R8).
@@ -79,6 +88,7 @@ import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import type { SettingsReadPort } from '@endora-commerce/platform/kernel';
 import type { OrderPaymentStatusApplyPort } from '../ports/index.js';
 import { commerceModule, type OrdersModuleOptions } from './plugin.js';
+import { OrderCustomFieldCarryReceiver } from './services/order-custom-field-carry-receiver.js';
 import { PurchaseConversionService } from './services/purchase-conversion-service.js';
 import { emitOrderStatusAfter } from './events/order-status-events.js';
 import { OrderPaymentStatusApplyService } from './services/order-payment-status-apply-port.js';
@@ -109,6 +119,7 @@ import {
 import { OrderAppliedPromotion } from './entities/order-applied-promotion.entity.js';
 import { OrderComment } from './entities/order-comment.entity.js';
 import { OrderItem } from './entities/order-item.entity.js';
+import { OrderItemGroup } from './entities/order-item-group.entity.js';
 import { OrderListSavedView } from './entities/order-list-saved-view.entity.js';
 import { OrderPlacementIntent } from './entities/order-placement-intent.entity.js';
 import { OrderStatusTransition } from './entities/order-status-transition.entity.js';
@@ -572,6 +583,13 @@ export function registerModule(ctx: ModuleContext): void {
             purchaseConversion: orderPurchaseConversion,
             transitionEffects: orderTransitionEffectService,
             log: ctx.log,
+            translate: (key, language, params) =>
+              lazyPort<AdminI18nTranslatePort>(ctx, 'adminI18nService').translate(
+                'orders',
+                key,
+                language,
+                params,
+              ),
             // Ports, every one of them read lazily: this registration is a
             // singleton and a gate may not be frozen inside one.
             cartWritePort: lazyPort<CartWritePort>(ctx, 'cartWritePort'),
@@ -585,7 +603,16 @@ export function registerModule(ctx: ModuleContext): void {
             cartPlacementApply: lazyPort<CartPlacementApplyPort>(ctx, 'cartPlacementApplyPort'),
             cartRead: lazyPort<CartReadPort>(ctx, 'cartReadPort'),
             catalogProductRead: lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
+            catalogProductAvailability: lazyPort<CatalogProductAvailabilityPort>(
+              ctx,
+              'catalogProductAvailabilityPort',
+            ),
             customerAccountRead: lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
+            // `specs/170-organization-roles/` FR-049 — the buyer's order read
+            // scope asks whether the buyer holds `orders.view_organization`.
+            // `organizations` is non-deactivatable and a binding dependency,
+            // so this is the port itself, resolved per call.
+            organizationPermissions: lazyPort<OrganizationPermissionPort>(ctx, 'organizationPermissionPort'),
             organizationDetails: lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
             // The Organization's method allow-lists, which placement and the
             // total preview refuse against. `organizations` is a binding
@@ -637,6 +664,9 @@ export function registerModule(ctx: ModuleContext): void {
               effectiveState.isPresent('quote_requests')
                 ? lazyPort<QuoteRequestReadPort>(ctx, 'quoteRequestReadPort')
                 : null,
+            // Feature 162 — the custom-field values a vouched Quote Request
+            // carries into the Order (`custom_fields` is not deactivatable).
+            customFieldCarry: () => lazyPort<CustomFieldCarryPort>(ctx, 'customFieldCarryPort'),
             // The payment row placement opens (feature 080, T048; D-179). **No
             // presence question**, unlike every other switchable owner on this
             // list — and the difference is a fallback rather than a lock. An
@@ -662,6 +692,8 @@ export function registerModule(ctx: ModuleContext): void {
               ctx,
               'customFieldValueService',
             ),
+            // Feature 157 — the admin list's custom-field filters.
+            customFieldListFilter: lazyPort<CustomFieldListFilterPort>(ctx, 'customFieldListFilterPort'),
             creditLimit: lazyPort<CreditLimitPort>(ctx, 'creditLimitService'),
             pricingService: lazyPort<OrdersCradle['pricingService']>(ctx, 'pricingService'),
             promotionService: lazyPort<OrdersCradle['promotionService']>(ctx, 'promotionService'),
@@ -858,9 +890,35 @@ export function registerModule(ctx: ModuleContext): void {
   // `quick_order` already translates it into a 503 by hand.
   // ---------------------------------------------------------------------------
 
+  /**
+   * Feature 162 — a Sales Opportunity's custom-field values received into an
+   * Order created from it (`specs/162-custom-fields-value-carry/`, contract
+   * `carry-api.md` §4.2). The carry is planned by `custom_fields`.
+   */
+  ctx.di.providePort<CustomFieldCarryReceiverPort>(
+    'orderCustomFieldCarryPort',
+    ctx
+      .asFunction(
+        ({ commandBus }: OrdersCradle) =>
+          new OrderCustomFieldCarryReceiver({
+            commandBus,
+            customFieldCarry: lazyPort<CustomFieldCarryPort>(ctx, 'customFieldCarryPort'),
+          }),
+      )
+      .singleton(),
+  );
+
   ctx.di.providePort<OrderReadPort>(
     'orderReadPort',
-    ctx.asFunction(({ emFactory }: OrdersCradle) => new OrderReadService(emFactory)).singleton(),
+    ctx
+      .asFunction(
+        ({ emFactory }: OrdersCradle) =>
+          new OrderReadService(
+            emFactory,
+            lazyPort<OrganizationPermissionPort>(ctx, 'organizationPermissionPort'),
+          ),
+      )
+      .singleton(),
   );
 
   ctx.di.providePort<OrderListPort>(
@@ -882,13 +940,32 @@ export function registerModule(ctx: ModuleContext): void {
         // placement, and publishing `OrderRecord` alone would have dropped the
         // payment redirect from `quick_order`'s one-click response (feature
         // 075, corrected in the `quick_order` cut).
-        placeOrder: async (customerContext, req) => {
+        placeOrder: async (customerContext, req, options) => {
           const order = await requireExposed(
             exposed.orderService,
             'order placement',
-          ).placeOrder(customerContext, req);
+          ).placeOrder(customerContext, req, {
+            ...(options?.language ? { language: options.language } : {}),
+            ...(options?.workingBasketId ? { workingBasketId: options.workingBasketId } : {}),
+          });
           return { ...toOrderRecord(order), nextAction: order.nextAction ?? null };
         },
+      }))
+      .singleton(),
+  );
+
+  /**
+   * Feature 155 (FR-039) — the checkout preview's quote-source confirmation, for
+   * `carts`' submit-for-approval. Same timing as `orderPlacementPort`: the
+   * service is built inside the plugin body, so a call before route
+   * registration answers 503 rather than a guess.
+   */
+  ctx.di.providePort<OrderQuoteSourcePort>(
+    'orderQuoteSourcePort',
+    ctx
+      .asFunction((): OrderQuoteSourcePort => ({
+        quoteSourceHonoursExemptions: (input) =>
+          requireExposed(exposed.orderService, 'quote-source confirmation').quoteSourceHonoursExemptions(input),
       }))
       .singleton(),
   );
@@ -1110,6 +1187,19 @@ export function registerModule(ctx: ModuleContext): void {
     );
   });
 
+  /**
+   * Issue #428 — the minimum order value is a typed money amount, so a write
+   * with more than two decimal places is refused (`400 AMOUNT_PRECISION_EXCEEDED`).
+   * A **contribution** hook, like the two above: it pushes an inert validator
+   * into `settings`' registry, which filters by contributor presence at
+   * enumeration, so it carries no presence probe (D-67/D-68).
+   */
+  ctx.onBoot(() => {
+    lazyPort<SettingWriteValidatorRegistryPort>(ctx, 'settingWriteValidatorRegistry').register(
+      createMinOrderValueValidator(),
+    );
+  });
+
   ctx.onBoot(() => {
     const registry = cradle().promptActionToolRegistry;
     for (const tool of ordersPromptTools({
@@ -1153,6 +1243,7 @@ export const entities = [
   OrderAppliedPromotion,
   OrderComment,
   OrderItem,
+  OrderItemGroup,
   OrderListSavedView,
   OrderPlacementIntent,
   OrderStatusTransition,

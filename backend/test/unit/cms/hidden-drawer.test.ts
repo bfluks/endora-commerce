@@ -28,12 +28,18 @@ describe('the CMS palette hidden drawer', () => {
     expect(keys).not.toContain('_internal');
   });
 
-  it('is hidden and holds exactly the two slot-only blocks', () => {
+  // Feature 163, T054 (deliberately changed, standing rule 13): the Carousel's
+  // four item blocks are slot-only too — insertable only into its `slides`.
+  it('is hidden and holds exactly the slot-only blocks', () => {
     const internal = categories.find((category) => category.key === 'internal')!;
     expect(internal.visible).toBe(false);
     expect(blocks.filter((b) => b.category === 'internal').map((b) => b.name)).toEqual([
       'cms.Column',
       'cms.Slide',
+      'cms.CarouselImage',
+      'cms.CarouselSplit',
+      'cms.LinkTile',
+      'cms.DownloadTile',
     ]);
   });
 

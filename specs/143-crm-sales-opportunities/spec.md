@@ -513,6 +513,8 @@ the rest of the sentence; send it; confirm the message shows `@` and the colleag
 and that the colleague — and nobody else — has a notification naming the Opportunity by its
 number and leading to it.
 
+> `@@` superseded by `specs/163-projects-and-tasks/` FR-044: it opens one document list (Orders · Quote Requests · Tasks), not the Organization's Orders (scenario 2).
+
 **Acceptance Scenarios**:
 
 1. **Given** a text field of an Opportunity, **When** the user types `@` at the start of the

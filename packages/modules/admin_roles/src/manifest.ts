@@ -41,7 +41,7 @@ const demo: ModuleDemoManifest<ModuleContext> = {
  */
 export const manifest = defineModuleManifest({
   id: 'admin_roles',
-  name: 'Admin Roles',
+  name: 'Admin roles',
   description:
     'Admin RBAC — roles, permissions, and policy enforcement for admin sessions.',
   version: '1.0.0',
@@ -127,7 +127,8 @@ export const manifest = defineModuleManifest({
       icon: 'ShieldCheck',
       targetRoute: '/admin-roles',
       requiredPermission: 'admin_users:manage',
-      keywords: ['roles', 'role', 'rbac', 'permissions', 'uprawnienia', 'access'],
+      keywords: ['roles', 'role', 'rbac', 'permissions', 'access'],
+      keywordsKey: 'actions.openAdminRoles.keywords',
       weight: 300,
     },
   ],

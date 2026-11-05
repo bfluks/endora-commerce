@@ -62,6 +62,11 @@ const bundle = passthroughBundle('product_feeds', [
   'runs.table.emitted',
   'runs.table.skipped',
   'permission.needWrite',
+  'feeds.pinnedBook.not_active',
+  'feeds.pinnedBook.audience_restricted',
+  'feeds.pinnedBook.withdrawn',
+  'runs.outcome.withdrawn',
+  'runs.outcome.completed',
 ]);
 
 const { ProductFeedDetailPage } = await import(
@@ -98,6 +103,7 @@ const FEED = {
   publishedAt: null,
   isRunning: false,
   scheduleTooTightWarning: false,
+  pinnedPriceBookWarning: null,
   version: 1,
   createdAt: '2026-08-01T10:00:00.000Z',
   updatedAt: '2026-08-01T10:00:00.000Z',
@@ -118,6 +124,7 @@ function run(): FeedRunDetail {
     warningCount: 0,
     consideredCount: 12,
     failureCode: null,
+    withdrawalReason: null,
     failureDetail: null,
     skipReason: null,
     issueOverflow: false,
@@ -174,5 +181,51 @@ describe('ProductFeedDetailPage — design-system alignment', () => {
     expect(empty?.querySelector('.b2b-empty__icon')).not.toBeNull();
     expect(empty?.closest('.rounded-lg.border.bg-card')).not.toBeNull();
     expect(document.querySelector('.border-dashed')).toBeNull();
+  });
+
+  /**
+   * Feature 160 (FR-029, owner ruling 2026-10-23) — a feed pinned to a price
+   * book that does not apply now publishes no prices from it, and the page
+   * says why, as a warning above the tabs.
+   */
+  it('warns, with the reason, when the pinned price book publishes no prices', async () => {
+    get.mockResolvedValue({ data: { ...FEED, priceListId: 'pb1', pinnedPriceBookWarning: 'not_active' } });
+    listRuns.mockResolvedValue({ data: [] });
+    await openRunsTab();
+    const warning = await screen.findByText('feeds.pinnedBook.not_active');
+    expect(warning.closest('[role="status"]')).not.toBeNull();
+  });
+
+  /**
+   * Owner ruling 2026-10-23 — a run that found the pinned book not applying
+   * withdrew the published file; the page says so beside the reason, and says
+   * it after the book applies again too, until a run publishes.
+   */
+  it('says the file was withdrawn when the last run withdrew it', async () => {
+    const withdrawn = { ...run(), status: 'withdrawn' as const, withdrawalReason: 'not_active' as const, emittedCount: 0, consideredCount: 0 };
+    get.mockResolvedValue({
+      data: { ...FEED, priceListId: 'pb1', pinnedPriceBookWarning: 'not_active', lastRun: withdrawn },
+    });
+    listRuns.mockResolvedValue({ data: [withdrawn] });
+    await openRunsTab();
+    const notice = await screen.findByText('feeds.pinnedBook.withdrawn');
+    expect(notice.closest('[role="status"]')).not.toBeNull();
+    expect(screen.getByText('feeds.pinnedBook.not_active')).toBeTruthy();
+  });
+
+  it('keeps saying the file was withdrawn once the book applies again, until a run publishes', async () => {
+    const withdrawn = { ...run(), status: 'withdrawn' as const, withdrawalReason: 'not_active' as const };
+    get.mockResolvedValue({ data: { ...FEED, priceListId: 'pb1', lastRun: withdrawn } });
+    listRuns.mockResolvedValue({ data: [withdrawn] });
+    await openRunsTab();
+    expect(await screen.findByText('feeds.pinnedBook.withdrawn')).toBeTruthy();
+    expect(screen.queryByText('feeds.pinnedBook.not_active')).toBeNull();
+  });
+
+  it('shows no pinned-book warning when the book publishes', async () => {
+    listRuns.mockResolvedValue({ data: [] });
+    await openRunsTab();
+    await waitFor(() => expect(screen.getByText('feeds.runs.empty.title')).toBeTruthy());
+    expect(screen.queryByText(/feeds\.pinnedBook\./)).toBeNull();
   });
 });

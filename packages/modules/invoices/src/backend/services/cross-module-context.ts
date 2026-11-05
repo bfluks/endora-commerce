@@ -1,3 +1,4 @@
+import type { ChannelUrlFacts } from '@endora-commerce/contracts';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
   AssetReadPort,
@@ -72,6 +73,27 @@ export function createChannelLanguageResolver(
     (salesChannelId
       ? (await emFactory().findOne(SalesChannel, { id: salesChannelId }))?.defaultLanguage
       : null) ?? 'en-US';
+}
+
+/**
+ * Feature 167 (OR-14) — a channel's URL-language facts (its languages, default and
+ * *prefix the default language* setting), for links to storefront pages. The kernel
+ * `SalesChannel` row, read as the language resolver above reads it.
+ */
+export function createChannelUrlFactsResolver(
+  emFactory: () => EntityManager,
+): (salesChannelId: string | null) => Promise<ChannelUrlFacts | null> {
+  return async (salesChannelId) => {
+    if (!salesChannelId) return null;
+    const channel = await emFactory().findOne(SalesChannel, { id: salesChannelId });
+    return channel
+      ? {
+          languages: channel.languages,
+          defaultLanguage: channel.defaultLanguage,
+          prefixDefaultLanguage: channel.prefixDefaultLanguage,
+        }
+      : null;
+  };
 }
 
 /**

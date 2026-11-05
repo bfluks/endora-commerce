@@ -1,11 +1,11 @@
 ---
 title: customer_accounts
-description: Customer login, password reset, 2FA, role assignment
+description: Customer login, password reset, two-step verification, role assignment
 ---
 
 # `customer_accounts`
 
-Per-user state for Customers: login, password management, optional 2FA,
+Per-user state for Customers: login, password management, optional two-step verification,
 role within their Organization. Backed by the shared `auth` session
 service; this module owns the customer-facing identity surface.
 
@@ -13,7 +13,7 @@ service; this module owns the customer-facing identity surface.
 
 | Verb + Path | Purpose |
 | --- | --- |
-| `POST /api/v1/auth/login` | Email + password (+ TOTP step if 2FA enabled) |
+| `POST /api/v1/auth/login` | Email + password (+ TOTP step if two-step verification is enabled) |
 | `POST /api/v1/auth/logout` | Destroy session |
 | `POST /api/v1/me/password` | Change password (rejects wrong `currentPassword`). A successful change signs the account out of every other session (the one the request was made from is kept), retires its outstanding reset tokens and withdraws any sign-in it had begun and not finished. |
 | `POST /api/v1/auth/password-reset/request` | Begin reset flow. A new link retires every earlier unused one, so only the newest e-mail works. Repeated requests for one address are limited (see below) |
@@ -59,17 +59,60 @@ When a delay starts for an existing account, one audit entry
 answer within three seconds the attempt is refused with **503
 `CUSTOMER_AUTHENTICATION_UNAVAILABLE`**.
 
+## Organization roles
+
+Every account holds exactly one **organization role**, a role of its own
+Organization: *Administrator*, *Member* or a custom role the Organization's
+administrators defined (the roles themselves, their permissions and their
+routes belong to the `organizations` module). The database holds the
+assignment: an account cannot point at another Organization's role, and a role
+that any account still holds — a blocked or removed one included — cannot be
+deleted.
+
+- **New accounts.** The person who registers a company is its *Administrator*.
+  An individual (B2C) customer is the *Administrator* of their own personal
+  Organization — after self-registration and after a first sign-in through an
+  external identity provider alike. An invited member gets the role the
+  invitation names.
+- **Moving an account.** When an operator assigns a customer to another
+  company, the customer becomes that company's *Administrator* if they
+  administered the company they came from, and its *Member* otherwise; a custom
+  role does not travel. A customer coming from their own personal Organization
+  becomes a *Member*. Detaching a customer from a company makes them the
+  *Administrator* of their own personal Organization again.
+- **The last administrator.** An Organization keeps at least one active
+  administrator: demoting or removing the last one is refused with **409
+  `CANNOT_DEMOTE_LAST_ADMIN`** / **409 `CANNOT_REMOVE_LAST_ADMIN`**. A blocked
+  administrator does not count. Two administrators stepping down at the same
+  moment cannot both succeed.
+- **The next request.** The session reads the account on every request, so a
+  role change applies to the member's very next request, on every server.
+
+Role changes are Commands, each recorded in the audit log against the
+Organization:
+
+| Action | When |
+| --- | --- |
+| `customer_account.change_role` | An account is moved to another role — also once per member when a role they hold is deleted and its members move to a replacement |
+| `customer_account.remove_member` | A member is removed from the Organization |
+| `customer_account.promote_organization_admin` | An operator restores access to an Organization left without an administrator |
+
+A role change also announces `customer_account.organization_role_changed.v1`
+once it is committed.
+
 ## Entities
 
-`CustomerAccount` (email, passwordHash, role), `PasswordResetToken`. Role is
-enum `organization_admin | regular_user`.
+`CustomerAccount` (email, passwordHash, organizationRoleId), `PasswordResetToken`.
+`organizationRoleId` names the account's organization role. The older two-value
+`role` (`organization_admin | regular_user`) is still kept in step with it while
+the platform moves off it, and will be removed.
 
 ## Extension points
 
 - **Password policy** — `password-hasher.ts` wraps argon2id; tune cost
   parameters there.
 - **Backup codes and second factors** — not this module's. Customer and admin
-  2FA is the `mfa` module's, over `mfa_enrolments`, served at
+  two-step verification is the `mfa` module's, over `mfa_enrolments`, served at
   `/api/v1/account/mfa/*`; recovery codes are single-use rows there. The
   superseded scaffolding this bullet used to point at
   (`totp-enrolment-service.ts`) was deleted on 2026-08-25 — it could never

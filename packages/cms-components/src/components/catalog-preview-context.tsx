@@ -1,27 +1,28 @@
 'use client';
 
 import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react';
-import type { CatalogBlockData } from '../utils/catalog-block-data.js';
+import type { BlockData } from '../utils/block-data.js';
 import type { CatalogPreviewApi } from '../utils/catalog-preview-bridge.js';
 import { registerCatalogPreviewGetter } from '../utils/catalog-preview-bridge.js';
 
 export type { CatalogPreviewApi } from '../utils/catalog-preview-bridge.js';
 export type {
-  CatalogBlockData,
-  CatalogBlockDataRequest,
-  CatalogBlockDataSource,
+  BlockData,
+  BlockDataRequest,
+  BlockDataSource,
   CatalogCategoryItem,
-} from '../utils/catalog-block-data.js';
+} from '../utils/block-data.js';
 
 const CatalogPreviewContext = createContext<CatalogPreviewApi | null>(null);
-const CatalogBlockDataContext = createContext<CatalogBlockData | null>(null);
+const BlockDataContext = createContext<BlockData | null>(null);
 
 /**
- * The seam through which catalogue data reaches the catalogue blocks. Two
+ * The seam through which fetched data reaches the data-driven blocks — the
+ * catalogue blocks and `blog.LatestPosts` (`utils/block-data.ts`). Two
  * callers, two props, and a block is told which it has by which one arrived:
  *
  *  - **`data`** — the storefront. A Server Component resolved what the page's
- *    blocks declare (`utils/catalog-block-data.ts`) and passes the answers
+ *    blocks declare (`utils/block-data.ts`) and passes the answers
  *    here. They are part of the server render and of the hydration render, so
  *    the HTML carries the products and the browser asks for nothing.
  *  - **`api`** — the editor. The admin page builder has no server to resolve
@@ -37,7 +38,7 @@ export function CatalogPreviewProvider({
   children,
 }: {
   api?: CatalogPreviewApi;
-  data?: CatalogBlockData;
+  data?: BlockData;
   children: ReactNode;
 }): React.ReactElement {
   useEffect(() => {
@@ -57,7 +58,7 @@ export function CatalogPreviewProvider({
   // A provider nested in another adds to what the outer one resolved rather than hiding it: a
   // tree rendered inside a page — a hook region, an embedded block — may show a block whose
   // answer the page's own provider holds.
-  const outer = useContext(CatalogBlockDataContext);
+  const outer = useContext(BlockDataContext);
   const merged = useMemo(
     () => (data === undefined ? outer : outer === null ? data : { ...outer, ...data }),
     [outer, data],
@@ -65,7 +66,7 @@ export function CatalogPreviewProvider({
   return data === undefined ? (
     <>{withApi}</>
   ) : (
-    <CatalogBlockDataContext.Provider value={merged}>{withApi}</CatalogBlockDataContext.Provider>
+    <BlockDataContext.Provider value={merged}>{withApi}</BlockDataContext.Provider>
   );
 }
 
@@ -74,6 +75,6 @@ export function useCatalogPreviewApi(): CatalogPreviewApi | null {
 }
 
 /** The answers a server resolved for this tree, or `null` when nothing above resolved any. */
-export function useProvidedCatalogBlockData(): CatalogBlockData | null {
-  return useContext(CatalogBlockDataContext);
+export function useProvidedBlockData(): BlockData | null {
+  return useContext(BlockDataContext);
 }

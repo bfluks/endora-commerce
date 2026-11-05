@@ -29,8 +29,8 @@
 # listed, because its directory is not there to be walked. That is the correct answer: its
 # sources will not arrive either.
 #
-# Needs GNU `cp --parents`, which both callers have: the images are `node:22.18-slim` and the
-# test that runs this script runs on Linux.
+# Plain `mkdir -p` and `cp`, not GNU `cp --parents`: the images have GNU coreutils, but the
+# test that runs this script also runs on macOS, whose `cp` has no `--parents` (issue #315).
 set -eu
 
 destination="${1:-}"
@@ -60,7 +60,7 @@ if [ -z "$members" ]; then
 fi
 
 mkdir -p "$destination"
-cp --parents pnpm-workspace.yaml pnpm-lock.yaml "$destination/"
+cp pnpm-workspace.yaml pnpm-lock.yaml "$destination/"
 
 # Read from a here-document rather than a pipe: a pipeline runs its `while` in a subshell, and
 # `count` would come back zero however many manifests were copied.
@@ -77,7 +77,8 @@ while IFS= read -r member; do
   esac
   relative="${member#"$root"}"
   relative="${relative#/}"
-  cp --parents "${relative:+$relative/}package.json" "$destination/"
+  mkdir -p "$destination/${relative:-.}"
+  cp "${relative:+$relative/}package.json" "$destination/${relative:-.}/"
   count=$((count + 1))
 done <<MEMBERS
 $members

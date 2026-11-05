@@ -9,12 +9,12 @@ import {
  * setting under the `storage` group. The active adapter and per-adapter
  * configuration are read by `AdapterRegistry` on demand.
  *
- * Limitation (v1): the Settings schema currently lacks a `redactedRead` flag,
- * so credentials (`assets.s3.secretAccessKey`, `assets.gcs.serviceAccountJson`)
- * are stored plaintext. FR-022 asked for masking parity with existing
- * sensitive settings — there is no existing mechanism to inherit. A follow-up
- * change to spec 004's manifest schema will add `redactedRead`; until then,
- * operators must restrict admin Settings access to trusted users.
+ * The two credentials (`assets.s3.secret_access_key`,
+ * `assets.gcs.service_account_json`) are the `secret` value type (feature 043,
+ * issue #333): encrypted at rest and in the settings cache, never returned
+ * after saving. A value stored before they were — plaintext — still resolves,
+ * and is encrypted on its next save; the reconciler applies `string` → `secret`
+ * in place.
  */
 const settings = defineModuleSettingsManifest({
   moduleCode: 'assets_library',
@@ -49,14 +49,14 @@ const settings = defineModuleSettingsManifest({
     { code: 'assets.s3.bucket',           name: 'S3 — bucket',                            groupCode: 'storage', valueType: 'string', defaultValue: '' },
     { code: 'assets.s3.region',           name: 'S3 — region',                            groupCode: 'storage', valueType: 'string', defaultValue: '' },
     { code: 'assets.s3.access_key_id',    name: 'S3 — access key id',                     groupCode: 'storage', valueType: 'string', defaultValue: '' },
-    { code: 'assets.s3.secret_access_key', name: 'S3 — secret access key (sensitive)',    groupCode: 'storage', valueType: 'string', defaultValue: '' },
+    { code: 'assets.s3.secret_access_key', name: 'S3 — secret access key (sensitive)',    groupCode: 'storage', valueType: 'secret', defaultValue: '' },
     { code: 'assets.s3.endpoint',         name: 'S3 — custom endpoint (optional)',        groupCode: 'storage', valueType: 'string', defaultValue: '' },
     { code: 'assets.s3.prefix',           name: 'S3 — key prefix (optional)',             groupCode: 'storage', valueType: 'string', defaultValue: '' },
     { code: 'assets.s3.public_base_url',  name: 'S3 — public CDN base URL (optional)',    groupCode: 'storage', valueType: 'string', defaultValue: '' },
 
     // — GCS
     { code: 'assets.gcs.bucket',                name: 'GCS — bucket',                          groupCode: 'storage', valueType: 'string', defaultValue: '' },
-    { code: 'assets.gcs.service_account_json',  name: 'GCS — service-account JSON (sensitive)', groupCode: 'storage', valueType: 'string', defaultValue: '' },
+    { code: 'assets.gcs.service_account_json',  name: 'GCS — service-account JSON (sensitive)', groupCode: 'storage', valueType: 'secret', defaultValue: '' },
     { code: 'assets.gcs.prefix',                name: 'GCS — object prefix (optional)',         groupCode: 'storage', valueType: 'string', defaultValue: '' },
     { code: 'assets.gcs.public_base_url',       name: 'GCS — public CDN base URL (optional)',   groupCode: 'storage', valueType: 'string', defaultValue: '' },
 
@@ -108,7 +108,7 @@ const settings = defineModuleSettingsManifest({
 /** Module-lifecycle manifest (feature 018). */
 export const manifest = defineModuleManifest({
   id: 'assets_library',
-  name: 'Assets Library',
+  name: 'Assets library',
   description:
     'Storage adapter registry (local / S3 / GCS), asset upload, and reference tracking.',
   version: '1.0.0',
@@ -138,8 +138,47 @@ export const manifest = defineModuleManifest({
   // `auth` owns the `requireAdmin` port the admin routes are gated by; the
   // edge became real with the conversion (feature 072, T092), which also made
   // the gate non-optional.
-  dependencies: ['auth'],
+  //
+  // `admin_users` publishes `adminUserReadPort`, which the asset detail reads to
+  // name who replaced the kept previous version (feature 156,
+  // `specs/156-asset-stable-url/` research R-14). The read is one display
+  // name; when nobody is found the detail answers `replacedBy: null`.
+  //
+  // `admin_roles` publishes `permissionService`, whose `listPermissions` tells
+  // a holder of the platform wildcard `*` — who sees every asset — from a
+  // reader whose files follow the records that use them
+  // (`specs/166-asset-reference-visibility/` research R-3). `admin_roles` is
+  // non-deactivatable, so the edge owes no degrade classification.
+  dependencies: ['auth', 'admin_users', 'admin_roles'],
   settings,
+  /**
+   * The module's landing action under ⌘K (Constitution XVI) — "Assets library",
+   * named like the sidebar entry: the product decision `specs/156-asset-stable-url/`
+   * research R-16 records, with the name the owner ruled later. Its keywords keep
+   * "media" so a search for the media library still finds it.
+   */
+  actions: [
+    {
+      id: 'open-assets-library',
+      labelKey: 'actions.openLibrary.label',
+      descriptionKey: 'actions.openLibrary.description',
+      icon: 'Image',
+      targetRoute: '/assets-library',
+      requiredPermission: 'assets.read',
+      keywords: [
+        'assets',
+        'assets library',
+        'media',
+        'media library',
+        'files',
+        'images',
+        'permalink',
+        'multimedia',
+      ],
+      keywordsKey: 'actions.openLibrary.keywords',
+      weight: 250,
+    },
+  ],
   // Feature 074 (Constitution XVII), test C3 — platform primitive. This module
   // had no activation declaration at all, which resolved as "always activated"
   // and read as an omission. Media storage carries no independent business
@@ -168,13 +207,14 @@ export const manifest = defineModuleManifest({
       'do not want files" is not a business decision.',
   },
   /**
-   * The fifteen error codes this module owns — feature 090 Phase 3
-   * (`specs/090-module-owned-error-codes/contracts/error-code-declaration.md`
-   * §1.1). This is where each sentence is looked up from: `errors.<CODE>` in
-   * this module's own `i18n/{en,pl}.json`, which holds all fifteen in both
-   * languages and no sixteenth.
+   * The twenty-two error codes this module owns — fifteen from feature 090
+   * Phase 3 (`specs/090-module-owned-error-codes/contracts/error-code-declaration.md`
+   * §1.1) and seven minted by feature 156 (`specs/156-asset-stable-url/`).
+   * This is where each sentence is looked up from: `errors.<CODE>` in this
+   * module's own `i18n/{en,pl}.json`, which holds all twenty-two in both
+   * languages and no twenty-third.
    *
-   * The list is answer-preserving, not a judgement (§6.2 and §6.5): it is
+   * The fifteen are answer-preserving, not a judgement (§6.2 and §6.5): they are
    * exactly what the prefix chain that used to route error codes sent here,
    * copied from the frozen capture at
    * `backend/test/fixtures/error-code-routing/chain-answers.ts` rather than
@@ -206,17 +246,34 @@ export const manifest = defineModuleManifest({
    * two codes this module raises and does not own are `INTERNAL` and
    * `VALIDATION_FAILED`, both the platform's.
    *
-   * **No `tokens`, and it is derived rather than assumed.** The envelope's
-   * `refusalToken` (`packages/platform/src/http/error-envelope.ts`) reads
-   * exactly one member of `details` — `code`, and only when `details` is an
-   * object — as the tail of `errors.<CODE>.<token>`. All twenty-nine raises of
-   * these codes were enumerated over `packages` and `backend/src` rather than
-   * over this package alone (runbook §5): twenty-seven pass no fourth argument
-   * at all, and the two that do — `ASSET_REFERENCED` in
-   * `assets-library.service.ts` and in `folders.service.ts` — pass the
-   * Zod-style **array** of `{ path, issue }` pairs, which `refusalToken`
-   * refuses by construction. The bundle agrees from the other direction: it
-   * holds fifteen `errors.<CODE>` keys and not one `errors.<CODE>.<token>`.
+   * **One code with `tokens`, and it is derived rather than assumed.** The
+   * envelope's `refusalToken` (`packages/platform/src/http/error-envelope.ts`)
+   * reads exactly one member of `details` — `code`, and only when `details` is
+   * an object — as the tail of `errors.<CODE>.<token>`. Of the fifteen codes of
+   * feature 090, all twenty-nine raises were enumerated over `packages` and
+   * `backend/src` rather than over this package alone (runbook §5):
+   * twenty-seven pass no fourth argument at all, and the two that do —
+   * `ASSET_REFERENCED` in `assets-library.service.ts` and in
+   * `folders.service.ts` — pass the Zod-style **array** of `{ path, issue }`
+   * pairs, which `refusalToken` refuses by construction. Of the seven of
+   * feature 156, `ASSET_PERMALINK_INVALID` passes `details.code` — the reason
+   * `validateAssetPermalink` (`@endora-commerce/contracts`) names — so it
+   * declares those five reasons as tokens, and the bundle holds one
+   * `errors.ASSET_PERMALINK_INVALID.<reason>` sentence for each; the other six
+   * pass no `details.code`.
+   *
+   * Issue #86 added three **literal** tokens and issue #623 a fourth, which is
+   * why they are not declared: `check:error-translations`' P6 reads a literal
+   * `details.code` off the raise, and a declaration is only required for a
+   * token it cannot spell. `ASSET_UPLOAD_TYPE_NOT_ALLOWED` is raised with
+   * `not_allowed_by_policy` (the `assets.allowed_file_types` refusals, beside
+   * `fileType` and `allowedTypes`) and `active_content` (the documents a
+   * browser would run); `crm`'s and `projects`' attachment refusals raise it
+   * with `attachment_active_content`, whose sentence lives here because the
+   * code is this module's. And
+   * `ASSET_NO_PREVIOUS_VERSION` is raised with `retention_expired` past
+   * `restorableUntil`, because the base sentence says there is no previous
+   * version at all.
    */
   errorCodes: [
     { code: 'ASSET_ACCESS_DENIED' },
@@ -234,6 +291,16 @@ export const manifest = defineModuleManifest({
     { code: 'ASSET_UPLOAD_NO_FILE' },
     { code: 'ASSET_UPLOAD_TOO_LARGE' },
     { code: 'ASSET_UPLOAD_TYPE_NOT_ALLOWED' },
+    { code: 'ASSET_REPLACE_KIND_MISMATCH' },
+    { code: 'ASSET_LEGACY_CANNOT_REPLACE' },
+    { code: 'ASSET_REPLACE_CONFLICT' },
+    { code: 'ASSET_NO_PREVIOUS_VERSION' },
+    { code: 'ASSET_PERMALINK_TAKEN' },
+    { code: 'ASSET_PERMALINK_PREVIOUSLY_USED' },
+    {
+      code: 'ASSET_PERMALINK_INVALID',
+      tokens: ['empty', 'too_long', 'invalid_characters', 'invalid_segment', 'uuid_shaped'],
+    },
   ],
   i18n: { bundlesDir: 'i18n' },
   docs: { dir: 'docs' },

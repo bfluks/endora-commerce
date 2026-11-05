@@ -41,7 +41,9 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 
 ## Paleta poleceń
 
-_Brak._
+| Akcja | Otwiera | Uprawnienie |
+| --- | --- | --- |
+| `open-taxes` | `/taxes` | `taxes:read` |
 
 ## Ustawienia
 

@@ -1,10 +1,17 @@
 import type { ReactNode } from 'react';
-import { redirect } from 'next/navigation';
 import { getSessionCookie } from '../../../../lib/session';
 import { createAddress, deleteAddress, listAddresses } from '../../../../lib/api/organization';
 import { StorefrontApiError } from '../../../../lib/api/client';
 import { CountryPicker } from '../../../../lib/dictionary/pickers/CountryPicker';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
+import { getServerContext } from '../../../../lib/server-context';
+import { tForLocale, type MessageKey } from '../../../../lib/i18n/messages';
+import { codeLabel } from '../../../../lib/account/labels';
+import { getMe } from '../../../../lib/api/account';
+import { memberSession } from '../../../../lib/commerce-permissions';
+import { mayManageOrganizationAddresses } from '../../../../lib/account/organization-addresses';
+import { organizationAreaAccess } from '../../../../lib/account/organization-area';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -14,9 +21,20 @@ import type { Metadata } from 'next';
 export const metadata: Metadata = { robots: { index: false, follow: false } };
 
 /**
- * Organization addresses (T155). Anyone in the org can list/create/remove
- * delivery + billing addresses; the backend tags one of each kind as the
- * default for downstream checkout (FR-046).
+ * Organization addresses (T155). Anyone in the org can list the delivery and
+ * billing addresses; the backend tags one of each kind as the default for
+ * downstream checkout (FR-046).
+ *
+ * Feature 170 (`specs/170-organization-roles/` WP-16; FR-057, OR-8) — adding
+ * and removing one needs `addresses.manage`, which the API enforces. A member
+ * whose role lacks it reads the list without the *Remove* buttons and gets one
+ * line saying why in place of the add form (owner ruling of 2026-11-04: a
+ * member who cannot act is not shown the controls). A session that cannot be
+ * read keeps today's page — the API is the gate.
+ *
+ * Issue #757 — a personal Organization's member, as an org-less customer, is
+ * sent to their own address book, `/addresses`, which lists the
+ * Organization's addresses beside theirs (the FR-070a gate).
  */
 
 export default async function AddressesPage({
@@ -25,111 +43,128 @@ export default async function AddressesPage({
   searchParams: Promise<{ status?: string; error?: string }>;
 }): Promise<ReactNode> {
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const params = await searchParams;
-  const addresses = await listAddresses(session);
+  const [addresses, me] = await Promise.all([listAddresses(session), getMe(session).catch(() => null)]);
+  if (me && organizationAreaAccess(me, 'addresses') === 'absent') return await localeRedirect('/addresses');
+  const canManage = mayManageOrganizationAddresses(memberSession(me));
+  const { locale } = await getServerContext();
+  const t = tForLocale(locale);
 
   return (
     <>
-      <h2>Addresses</h2>
+      <h2>{t('account.addresses.organizationHeading')}</h2>
       {params.status === 'created' ? (
-        <p className="b2b-auth__success">Address added.</p>
+        <p className="b2b-auth__success">{t('account.addresses.created')}</p>
       ) : null}
       {params.status === 'removed' ? (
-        <p className="b2b-auth__success">Address removed.</p>
+        <p className="b2b-auth__success">{t('account.addresses.removed')}</p>
       ) : null}
       {params.error ? <p className="b2b-auth__error">{params.error}</p> : null}
 
       <table className="b2b-account__table">
         <thead>
           <tr>
-            <th>Kind</th>
-            <th>Recipient</th>
-            <th>Address</th>
-            <th>Default</th>
-            <th></th>
+            <th>{t('account.addresses.col.kind')}</th>
+            <th>{t('account.addresses.col.recipient')}</th>
+            <th>{t('account.addresses.col.address')}</th>
+            <th>{t('account.addresses.col.default')}</th>
+            {canManage ? <th></th> : null}
           </tr>
         </thead>
         <tbody>
           {addresses.map((a) => (
             <tr key={a.id}>
-              <td>{a.kind}</td>
+              <td>{codeLabel(t, 'account.addressKind', a.kind)}</td>
               <td>{a.recipientName}</td>
               <td>
                 {a.street}, {a.postalCode} {a.city}, {a.country}
               </td>
-              <td>{a.isDefault ? 'yes' : ''}</td>
-              <td>
-                <form action={removeAddressAction}>
-                  <input type="hidden" name="id" value={a.id} />
-                  <button type="submit">Remove</button>
-                </form>
-              </td>
+              <td>{a.isDefault ? t('account.addresses.isDefaultShort') : ''}</td>
+              {canManage ? (
+                <td>
+                  <form action={removeAddressAction}>
+                    <input type="hidden" name="id" value={a.id} />
+                    <button type="submit">{t('account.common.remove')}</button>
+                  </form>
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>
       </table>
 
-      <h3>Add an address</h3>
-      <form action={createAddressAction} className="b2b-auth__form">
-        <div className="b2b-auth__row">
-          <div className="b2b-auth__field">
-            <label htmlFor="addr-kind">Kind</label>
-            <select id="addr-kind" name="kind" defaultValue="delivery">
-              <option value="delivery">delivery</option>
-              <option value="billing">billing</option>
-            </select>
-          </div>
-          <div className="b2b-auth__field">
-            <label htmlFor="addr-recipient">Recipient</label>
-            <input id="addr-recipient" name="recipientName" required maxLength={160} placeholder=" " />
-          </div>
-        </div>
-        <div className="b2b-auth__field">
-          <label htmlFor="addr-street">Street</label>
-          <input id="addr-street" name="street" required maxLength={255} placeholder=" " />
-        </div>
-        <div className="b2b-auth__row">
-          <div className="b2b-auth__field">
-            <label htmlFor="addr-city">City</label>
-            <input id="addr-city" name="city" required maxLength={120} placeholder=" " />
-          </div>
-          <div className="b2b-auth__field">
-            <label htmlFor="addr-postal">Postal code</label>
-            <input id="addr-postal" name="postalCode" required maxLength={20} placeholder=" " />
-          </div>
-        </div>
-        <div className="b2b-auth__row">
-          <div className="b2b-auth__field">
-            <label htmlFor="addr-country">Country</label>
-            <CountryPicker
-              id="addr-country"
-              name="country"
-              required
-              defaultValue="PL"
-            />
-          </div>
-          <div className="b2b-auth__field">
-            <label htmlFor="addr-phone">Phone (optional)</label>
-            <input id="addr-phone" name="phone" maxLength={32} placeholder=" " />
-          </div>
-        </div>
-        <label>
-          <input type="checkbox" name="isDefault" value="true" /> Make this the default for its
-          kind
-        </label>
-        <div className="b2b-auth__actions">
-          <button type="submit">Add address</button>
-        </div>
-      </form>
+      {canManage ? (
+        <>
+          <h3>{t('account.addresses.add.heading')}</h3>
+          <form action={createAddressAction} className="b2b-auth__form">
+            <div className="b2b-auth__row">
+              <div className="b2b-auth__field">
+                <label htmlFor="addr-kind">{t('account.addresses.col.kind')}</label>
+                <select id="addr-kind" name="kind" defaultValue="delivery">
+                  <option value="delivery">{t('account.addressKind.delivery')}</option>
+                  <option value="billing">{t('account.addressKind.billing')}</option>
+                </select>
+              </div>
+              <div className="b2b-auth__field">
+                <label htmlFor="addr-recipient">{t('account.addresses.col.recipient')}</label>
+                <input id="addr-recipient" name="recipientName" required maxLength={160} placeholder=" " />
+              </div>
+            </div>
+            <div className="b2b-auth__field">
+              <label htmlFor="addr-street">{t('account.addresses.add.street')}</label>
+              <input id="addr-street" name="street" required maxLength={255} placeholder=" " />
+            </div>
+            <div className="b2b-auth__row">
+              <div className="b2b-auth__field">
+                <label htmlFor="addr-city">{t('checkout.address.city')}</label>
+                <input id="addr-city" name="city" required maxLength={120} placeholder=" " />
+              </div>
+              <div className="b2b-auth__field">
+                <label htmlFor="addr-postal">{t('checkout.address.postalCode')}</label>
+                <input id="addr-postal" name="postalCode" required maxLength={20} placeholder=" " />
+              </div>
+            </div>
+            <div className="b2b-auth__row">
+              <div className="b2b-auth__field">
+                <label htmlFor="addr-country">{t('account.addresses.add.country')}</label>
+                <CountryPicker
+                  id="addr-country"
+                  name="country"
+                  required
+                  defaultValue="PL"
+                />
+              </div>
+              <div className="b2b-auth__field">
+                <label htmlFor="addr-phone">{t('checkout.address.phone')}</label>
+                <input id="addr-phone" name="phone" maxLength={32} placeholder=" " />
+              </div>
+            </div>
+            <label>
+              <input type="checkbox" name="isDefault" value="true" /> {t('account.addresses.add.makeDefault')}
+            </label>
+            <div className="b2b-auth__actions">
+              <button type="submit">{t('account.addresses.add.submit')}</button>
+            </div>
+          </form>
+        </>
+      ) : (
+        <p className="b2b-auth__hint">{t('account.addresses.manageNotAllowed')}</p>
+      )}
     </>
   );
+}
+
+/** A server action's own refusal, in the page's language. */
+async function failure(key: MessageKey): Promise<string> {
+  const { locale } = await getServerContext();
+  return tForLocale(locale)(key);
 }
 
 async function createAddressAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const phone = (formData.get('phone') as string | null) || undefined;
   try {
     await createAddress(session, {
@@ -144,23 +179,23 @@ async function createAddressAction(formData: FormData): Promise<void> {
     });
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not save address.';
-    redirect(`/organization/addresses?error=${encodeURIComponent(message)}`);
+      err instanceof StorefrontApiError ? err.detail : await failure('account.addresses.saveFailed');
+    return await localeRedirect(`/organization/addresses?error=${encodeURIComponent(message)}`);
   }
-  redirect(`/organization/addresses?status=created`);
+  return await localeRedirect(`/organization/addresses?status=created`);
 }
 
 async function removeAddressAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const id = (formData.get('id') as string) ?? '';
   try {
     await deleteAddress(session, id);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not remove address.';
-    redirect(`/organization/addresses?error=${encodeURIComponent(message)}`);
+      err instanceof StorefrontApiError ? err.detail : await failure('account.addresses.removeFailed');
+    return await localeRedirect(`/organization/addresses?error=${encodeURIComponent(message)}`);
   }
-  redirect(`/organization/addresses?status=removed`);
+  return await localeRedirect(`/organization/addresses?status=removed`);
 }

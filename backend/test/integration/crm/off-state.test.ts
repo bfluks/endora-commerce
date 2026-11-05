@@ -29,7 +29,9 @@ import {
 import { TEST_ADMIN_ID, TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 import { crmEventReminderRow, seedCrmEventRow } from '../../helpers/seed-crm-events.js';
 import { CRM_SETTING_CODES } from '../../../../packages/modules/crm/src/manifest.js';
+import { acceptedQuoteRequest, checkOutBasket, convertQuoteRequestToCart } from '../../helpers/quote-conversion.js';
 import {
+  crmPlacedDocumentsHandled,
   changeOrderStatusAsOperator,
   createCrmOpportunity,
   defineCrmCustomField,
@@ -99,6 +101,8 @@ describe('crm off-state (Constitution XVII)', () => {
     { method: 'GET', route: `${API}/lookups/contacts` },
     { method: 'GET', route: `${API}/lookups/mentionable` },
     { method: 'GET', route: `${API}/lookups/quote-requests` },
+    // `specs/163-projects-and-tasks/` FR-044 — the `@@` document list.
+    { method: 'GET', route: `${API}/lookups/documents` },
     { method: 'POST', route: `${API}/statuses`, payload: { code: 'off_state', defaultName: 'Off', kind: 'open' } },
     { method: 'PATCH', route: `${API}/statuses/:code`, payload: { defaultName: 'Renamed' } },
     { method: 'DELETE', route: `${API}/statuses/:code` },
@@ -106,6 +110,8 @@ describe('crm off-state (Constitution XVII)', () => {
     { method: 'PUT', route: `${API}/order-status-mappings`, payload: { mappings: [] } },
     { method: 'PUT', route: `${API}/value-counting-statuses`, payload: { order: [], quoteRequest: [] } },
     { method: 'GET', route: `${API}/opportunities` },
+    // `specs/157-custom-fields-list-filters/` — the list's offered custom-field filters.
+    { method: 'GET', route: `${API}/opportunities/custom-field-filters` },
     { method: 'POST', route: `${API}/opportunities`, payload: { title: 'Off', organizationId: ID, currency: 'PLN' } },
     { method: 'GET', route: `${API}/opportunities/:id` },
     { method: 'PATCH', route: `${API}/opportunities/:id`, payload: { title: 'Off' } },
@@ -216,7 +222,16 @@ describe('crm off-state (Constitution XVII)', () => {
       // manifests, against the effective enabled-set — no admin-side test can
       // see it. Positive control first: a registry answering nothing to anybody
       // would otherwise pass.
-      const declared = ['new-opportunity', 'open-crm-analytics', 'open-crm-calendar', 'open-opportunities', 'open-opportunity-board'];
+      // `open-crm-tags` and `open-crm-workflow` arrived with issue #516.
+      const declared = [
+        'new-opportunity',
+        'open-crm-analytics',
+        'open-crm-calendar',
+        'open-crm-tags',
+        'open-crm-workflow',
+        'open-opportunities',
+        'open-opportunity-board',
+      ];
       expect(await paletteActionIds()).toEqual(declared);
       await withModuleOff('crm', axis, async () => {
         expect(await paletteActionIds()).toEqual([]);
@@ -719,6 +734,157 @@ describe('crm off-state (Constitution XVII)', () => {
         } finally {
           await setCrmSetting(h, CRM_SETTING_CODES.AUTO_CREATE_FROM_QUOTE_REQUESTS, false);
         }
+      },
+    );
+  });
+
+  /**
+   * Feature 162 (`specs/162-custom-fields-value-carry/` T036; FR-005, FR-014, US2-4) —
+   * custom-field carry with `crm` off. A Quote Request's value still follows it
+   * into the Order placed from it: that pair is `custom_fields`' and `orders`'
+   * own. No Sales Opportunity is created or joined, so nothing carries into one,
+   * the Order's values are left as placement wrote them, and switching `crm`
+   * back on replays nothing. Meanwhile no type offers `opportunity` as a carry
+   * target.
+   */
+  describe('feature 162 — custom-field carry while crm is off', () => {
+    const CUSTOM_FIELDS_API = '/api/v1/admin/custom-fields';
+    const RUN = randomUUID().slice(0, 8);
+    const KEY = `cfc_${RUN}_crm_off`;
+    const SETTINGS = [
+      CRM_SETTING_CODES.AUTO_CREATE_FROM_ORDERS,
+      CRM_SETTING_CODES.AUTO_CREATE_FROM_QUOTE_REQUESTS,
+    ] as const;
+    const stored = new Map<string, unknown>();
+    const created: string[] = [];
+
+    const define = async (entityType: string, carryTo: string[]) => {
+      const response = await h.app.inject({
+        method: 'POST',
+        url: `${CUSTOM_FIELDS_API}/definitions`,
+        cookies: admin,
+        payload: {
+          entityType,
+          key: KEY,
+          label: {},
+          labelDefault: KEY,
+          valueType: 'text',
+          required: false,
+          sortOrder: 0,
+          config: {},
+          options: [],
+          audience: 'internal',
+          carryTo,
+        },
+      });
+      expect(response.statusCode, response.body).toBe(201);
+      created.push((response.json() as { data: { id: string } }).data.id);
+    };
+
+    const valuesOf = async (table: 'orders' | 'crm_opportunities', id: string): Promise<Record<string, unknown>> => {
+      const rows = (await h
+        .em()
+        .getConnection()
+        .execute(`select custom_field_values from "${table}" where id = ?`, [id])) as Array<{
+        custom_field_values: Record<string, unknown> | null;
+      }>;
+      expect(rows).toHaveLength(1);
+      return rows[0]!.custom_field_values ?? {};
+    };
+
+    const opportunityLinkOf = (orderId: string) =>
+      h.em().findOne(CrmOpportunityLink, { documentKind: 'order', documentId: orderId }, { filters: false });
+
+    const carryTargets = async (): Promise<Map<string, string[]>> => {
+      const response = await h.app.inject({ method: 'GET', url: `${CUSTOM_FIELDS_API}/entity-types`, cookies: admin });
+      expect(response.statusCode, response.body).toBe(200);
+      const rows = (response.json() as { data: Array<{ entityType: string; carryTargets: string[] }> }).data;
+      return new Map(rows.map((row) => [row.entityType, row.carryTargets]));
+    };
+
+    /** An accepted Quote Request holding `value` under the key, converted into the basket and placed. */
+    const placeFromQuote = async (value: string) => {
+      await h
+        .em()
+        .getConnection()
+        .execute(`update "carts" set "status" = 'completed' where "customer_account_id" = ? and "status" = 'active'`, [
+          TEST_CUSTOMER_ID,
+        ]);
+      const rfq = await acceptedQuoteRequest(h, { quantity: 2, agreedUnitPrice: 11.25 });
+      await h
+        .em()
+        .getConnection()
+        .execute(`update "quote_requests" set custom_field_values = ?::jsonb where id = ?`, [
+          JSON.stringify({ [KEY]: value }),
+          rfq.id,
+        ]);
+      await convertQuoteRequestToCart(h, rfq.id);
+      return whenCrmEventSettled(h, 'order.created.v1', () => true, () => checkOutBasket(h));
+    };
+
+    beforeAll(async () => {
+      for (const code of SETTINGS) {
+        // The value in force, read and kept to write back (standing rule 7).
+        const rows = (await h
+          .em()
+          .getConnection()
+          .execute(`select coalesce(global_value, default_value) as value from "settings" where code = ?`, [
+            code,
+          ])) as Array<{ value: unknown }>;
+        const row = rows[0];
+        if (!row) throw new Error(`The setting ${code} is not registered.`);
+        stored.set(code, row.value);
+      }
+      await restoreDefaultCrmWorkflow(h.em());
+      await h.em().execute(`update "stock_levels" set "on_hand" = 10000`);
+      // An Opportunity per placed Order; none for the request, which the Order would otherwise join.
+      await setCrmSetting(h, CRM_SETTING_CODES.AUTO_CREATE_FROM_ORDERS, true);
+      await setCrmSetting(h, CRM_SETTING_CODES.AUTO_CREATE_FROM_QUOTE_REQUESTS, false);
+      // Targets first: a carry option is refused towards a field that does not exist.
+      await define('opportunity', []);
+      await define('order', ['opportunity']);
+      await define('quote_request', ['order', 'opportunity']);
+    });
+
+    afterAll(async () => {
+      for (const code of SETTINGS) await setCrmSetting(h, code, stored.get(code));
+      for (const id of [...created].reverse()) {
+        await h.app.inject({ method: 'DELETE', url: `${CUSTOM_FIELDS_API}/definitions/${id}`, cookies: admin });
+      }
+    });
+
+    it('carries the value into the Order and on into its Opportunity while on — the positive control', async () => {
+      const value = `on_${RUN}`;
+      const order = await placeFromQuote(value);
+      expect((await valuesOf('orders', order.id))[KEY]).toBe(value);
+      const link = await opportunityLinkOf(order.id);
+      expect(link).not.toBeNull();
+      expect((await valuesOf('crm_opportunities', link!.opportunityId))[KEY]).toBe(value);
+      const targets = await carryTargets();
+      expect(targets.get('order')).toContain('opportunity');
+      expect(targets.get('quote_request')).toContain('opportunity');
+    });
+
+    it.each<OffStateAxis>(['deactivated', 'platform-unavailable'])(
+      'while %s the request still carries into the Order, no Opportunity is created or joined, and nothing is replayed once back on',
+      async (axis) => {
+        const value = `off_${axis}_${RUN}`;
+        let orderId = '';
+        let during: Record<string, unknown> = {};
+        await withModuleOff('crm', axis, async () => {
+          orderId = (await placeFromQuote(value)).id;
+          during = await valuesOf('orders', orderId);
+          expect(during[KEY]).toBe(value);
+          expect(await opportunityLinkOf(orderId)).toBeNull();
+          const targets = await carryTargets();
+          expect(targets.has('opportunity')).toBe(false);
+          expect([...targets.values()].flat()).not.toContain('opportunity');
+        });
+        // Back on: the Order placed meanwhile gets no Opportunity, and its values stay as placement wrote them.
+        await crmPlacedDocumentsHandled(h);
+        expect(await opportunityLinkOf(orderId)).toBeNull();
+        expect(await valuesOf('orders', orderId)).toEqual(during);
+        expect((await carryTargets()).get('order')).toContain('opportunity');
       },
     );
   });

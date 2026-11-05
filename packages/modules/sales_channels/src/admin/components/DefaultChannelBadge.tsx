@@ -14,7 +14,7 @@ import { useTranslation } from '@endora-commerce/admin-kit/i18n';
  * they import this file, and the other one is deleted — which is what the note
  * that stood here said would happen. `EntityChannelMembership` beside it went
  * the same way one merge request earlier.
- * `admin/test/modules/sales_channels/organization-channels-zone.test.tsx`
+ * `admin/test/modules/sales_channels/product-channels-zone.test.tsx`
  * asserts that no file remains at the old path, because nothing in this estate
  * compares two copies of one component.
  */

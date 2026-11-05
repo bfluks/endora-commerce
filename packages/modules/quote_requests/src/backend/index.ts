@@ -14,14 +14,19 @@ import type {
   BuyerLinePricePort,
   CartWritePort,
   CatalogAttributeReadPort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
+  CustomFieldCarryPort,
+  CustomFieldCarryReceiverPort,
+  CustomFieldListFilterPort,
   CustomFieldDefinitionReadPort,
   DocumentRenderPort,
   DocumentTypeRegistryPort,
   EmailDefaultsRegistryPort,
   OrderReadPort,
   OrganizationDetailsPort,
+  OrganizationPermissionPort,
   OrganizationTaxProfilePort,
   QuoteRequestReadPort,
   RfqCustomerPort,
@@ -34,6 +39,7 @@ import type {
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import type { Redis } from 'ioredis';
 import { QuoteRequestReadService } from './services/quote-request-read-port.js';
+import { QuoteRequestCustomFieldCarryReceiver } from './services/quote-request-custom-field-carry-receiver.js';
 import {
   createQuoteRequestAdminSearchProvider,
   type QuoteRequestAdminSearchProviderDeps,
@@ -58,6 +64,7 @@ import { quoteRequestsModule, type QuoteRequestsModuleOptions } from './plugin.j
 import { QuoteRequest } from './entities/quote-request.entity.js';
 import { QuoteRequestEvent } from './entities/quote-request-event.entity.js';
 import { QuoteRequestItem } from './entities/quote-request-item.entity.js';
+import { QuoteRequestItemGroup } from './entities/quote-request-item-group.entity.js';
 import { QuoteRequestListSavedView } from './entities/quote-request-list-saved-view.entity.js';
 import { QuoteRequestNotificationEvent } from './entities/quote-request-notification-event.entity.js';
 import { QuoteRequestRevision } from './entities/quote-request-revision.entity.js';
@@ -223,8 +230,10 @@ function warnOnce(condition: string, message: string): void {
  *
  * Both bodies are this module's own and carry no deployment judgement. They
  * read `request.actor`, which is the platform's decoration since T118b, and
- * three ports this manifest already declares as binding `dependencies`:
- * `customer_accounts`, `admin_users` and `admin_roles`. A root that wants a
+ * the admin one reads two ports this manifest already declares as binding
+ * `dependencies`: `admin_users` and `admin_roles` (the customer one read
+ * `customer_accounts` for the legacy role until `specs/170-organization-roles/`
+ * WP-05). A root that wants a
  * different answer still contributes one — the test harness does, and its
  * divergence is deliberate — which is what the window is for.
  */
@@ -232,7 +241,10 @@ function registerActorResolvers(ctx: ModuleContext): void {
   ctx.di.register({
     /**
      * Who is asking, in this module's shape: the account, its Organization and
-     * whether the caller administers it.
+     * the role the actor carries (`specs/170-organization-roles/`, R-15).
+     * Whether the caller sees the whole Organization is not stated here: the
+     * service asks `organizationPermissionPort` (R-30), so the legacy `role`
+     * column is no longer read.
      *
      * The Organization guard asserts an invariant rather than describing a
      * business state (D-178) — `customer_accounts.organization_id` is `NOT NULL`
@@ -244,7 +256,6 @@ function registerActorResolvers(ctx: ModuleContext): void {
      */
     rfqCustomerContextResolver: ctx
       .asFunction(() => {
-        const accounts = lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort');
         return async (request: FastifyRequest) => {
           const actor = request.actor as Actor | undefined;
           if (actor?.kind !== 'customer') {
@@ -258,11 +269,10 @@ function registerActorResolvers(ctx: ModuleContext): void {
               { code: 'customer_account_organization_missing' },
             );
           }
-          const account = await accounts.findById(actor.customerAccountId);
           return {
             customerAccountId: actor.customerAccountId,
             organizationId: actor.organizationId,
-            isOrgAdmin: account?.role === 'organization_admin',
+            organizationRoleId: actor.organizationRoleId ?? null,
           };
         };
       })
@@ -440,6 +450,8 @@ export function registerModule(ctx: ModuleContext): void {
             ctx,
             'customFieldValueService',
           ),
+          // Feature 157 — the admin list's custom-field filters.
+          customFieldListFilter: lazyPort<CustomFieldListFilterPort>(ctx, 'customFieldListFilterPort'),
           requireAdmin: (permission) => async (req, reply) =>
             ctx.cradle<QuoteRequestsCradle>().requireAdmin(permission)(req, reply),
           requireAdminAny: (permissions) => async (req, reply) =>
@@ -474,10 +486,20 @@ export function registerModule(ctx: ModuleContext): void {
             ctx,
             'salesChannelMembershipPort',
           ),
+          catalogAvailability: lazyPort<CatalogProductAvailabilityPort>(
+            ctx,
+            'catalogProductAvailabilityPort',
+          ),
           customerAccounts: lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
           organizations: lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
           adminUsers: lazyPort<AdminUserReadPort>(ctx, 'adminUserReadPort'),
           orders: lazyPort<OrderReadPort>(ctx, 'orderReadPort'),
+          // `specs/170-organization-roles/` — the customer routes' permission
+          // guards (FR-040) and the *Administrator*-only Organization-wide
+          // visibility (R-30). `organizations` is a binding dependency; the
+          // port is resolved per call, so its effective state decides.
+          organizationPermissions: () =>
+            lazyPort<OrganizationPermissionPort>(ctx, 'organizationPermissionPort'),
           // The completion reactor's second look at an order whose commit was
           // still in flight (`specs/143-crm-sales-opportunities/`, FR-104). Off
           // the bus's chain, so in a system scope of its own — the handler's
@@ -554,6 +576,25 @@ export function registerModule(ctx: ModuleContext): void {
     ctx
       .asFunction(
         ({ emFactory }: QuoteRequestsCradle) => new QuoteRequestReadService(emFactory),
+      )
+      .singleton(),
+  );
+
+  /**
+   * Feature 162 — a Sales Opportunity's custom-field values received into a
+   * Quote Request created from it (`specs/162-custom-fields-value-carry/`,
+   * contract `carry-api.md` §4.2). `crm` decides this module's presence before
+   * it calls; the carry itself is planned by `custom_fields`.
+   */
+  ctx.di.providePort<CustomFieldCarryReceiverPort>(
+    'quoteRequestCustomFieldCarryPort',
+    ctx
+      .asFunction(
+        ({ commandBus }: QuoteRequestsCradle) =>
+          new QuoteRequestCustomFieldCarryReceiver({
+            commandBus,
+            customFieldCarry: lazyPort<CustomFieldCarryPort>(ctx, 'customFieldCarryPort'),
+          }),
       )
       .singleton(),
   );
@@ -783,6 +824,7 @@ export const entities = [
   QuoteRequest,
   QuoteRequestEvent,
   QuoteRequestItem,
+  QuoteRequestItemGroup,
   QuoteRequestListSavedView,
   QuoteRequestNotificationEvent,
   QuoteRequestRevision,

@@ -62,7 +62,6 @@ export class Organization {
     | 'rejectedAt'
     | 'approvedAt'
     | 'approvedByAdminUserId'
-    | 'requiresCartApproval'
     | 'nameSearch'
     | 'orderConfirmationEmails'
     | 'fulfilmentStrategy'
@@ -157,16 +156,6 @@ export class Organization {
 
   @Property({ type: 'uuid', nullable: true })
   approvedByAdminUserId?: string | null;
-
-  /**
-   * Per-Organization policy flag (feature 027 US4). When `true`, ordinary
-   * Customer members of this Organization must submit their cart for
-   * approval by an Organization Administrator before checkout. Carts
-   * created by an Organization Administrator are exempt from the gate
-   * (self-approval exemption — see research.md §R11 for feature 027).
-   */
-  @Property({ type: 'boolean' })
-  requiresCartApproval: boolean = false;
 
   /**
    * Organization-level override of the warehouse-picking (fulfilment) strategy
@@ -290,6 +279,7 @@ export const ORGANIZATION_STATUSES = [
   'rejected',
 ] as const;
 
-export type VatValidationProvider = 'vies' | 'mf_pl' | 'format_only';
+/** `gus_pl` — feature 173: the GUS REGON registry, written by a registration-time lookup. */
+export type VatValidationProvider = 'vies' | 'mf_pl' | 'format_only' | 'gus_pl';
 
 export type VatValidationOutcome = 'validated' | 'failed' | 'deferred' | 'unverified';

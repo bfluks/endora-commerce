@@ -118,6 +118,7 @@ function orderItem(): OrderItemRecord {
 function readPort(order: OrderRecord, items: OrderItemRecord[]): OrderReadPort {
   return {
     findById: async () => order,
+    findByIdForCustomer: async () => order,
     findByIds: async () => [order],
     listAll: async () => [order],
     listItems: async () => items,
@@ -177,6 +178,7 @@ const PENDING_DETAIL = {
   grossTotal: 123,
   paidTotal: 0,
   amountDue: 123,
+  overpayment: 0,
   total: 123,
   originalInvoiceId: null,
   templateId: null,

@@ -1,9 +1,11 @@
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 import type { I18nConfigResponse, ResolvedMegamenu } from '@endora-commerce/contracts';
 import type { MeResult } from '../lib/api/account';
+import type { ModulePresenceSet } from '../lib/api/module-presence';
 import { tForLocale } from '../lib/i18n/messages';
-import { CategoriesMega } from './Megamenu/CategoriesMega';
+import { format } from '../lib/i18n/format';
+import { REFERENCE_BRAND_MARK, REFERENCE_BRAND_NAME } from '../lib/theme/reference-brand';
+import { NavigationBar } from './Megamenu/NavigationBar';
 import { MegamenuMobileDrawer } from './Megamenu/MegamenuMobileDrawer';
 import { MobileSearchOverlay } from './mobile/MobileSearchOverlay';
 import { CompareCounterLink } from './CompareToggle';
@@ -13,6 +15,7 @@ import { ShoppingListHeartBadge } from './ShoppingListHeartBadge';
 import { SearchAutocomplete } from './SearchAutocomplete';
 import { CurrencySwitcher, LocaleSwitcher } from './HeaderPreferenceSwitchers';
 import { publicApiBaseUrl } from '../lib/env.mjs';
+import { LocalizedLink, LocalizedAnchor, LocalizedForm } from '../lib/i18n/localized-link';
 
 /**
  * Industria-themed storefront header. Three rows:
@@ -29,25 +32,45 @@ export function Header(props: {
   locale: string;
   /** Currently-selected display currency (from the `currency` cookie), if any. */
   currency?: string;
-  /** Optional sales-channel code for the autocomplete's `X-Sales-Channel` header. */
-  salesChannelCode?: string;
+  /**
+   * The active sales-channel code, sent by the search box and the comparison
+   * counter on their browser-side calls. Required: the layout always has one.
+   */
+  salesChannelCode: string | undefined;
   /** Feature 027 — buyer's cart line count for the icon-btn badge. */
   cartItemCount?: number;
-  /** Feature 015 — resolved megamenu powering the "Wszystkie kategorie" panel. */
+  /** Feature 015 / 168 — the resolved megamenu: the navigation bar's tabs. */
   megamenu?: ResolvedMegamenu | null;
   /** Logged-in customer + organization, or null when signed out. */
   user?: MeResult | null;
+  /**
+   * The request's effective enabled-set. Required, so no caller can render the
+   * module-owned icons without asking: a module that is off contributes no
+   * header element (Constitution XVII item 5, issue #666).
+   */
+  modules: ModulePresenceSet;
 }): ReactNode {
   const t = tForLocale(props.locale);
+  const showShoppingList = props.modules.isPresent('shopping_lists');
+  const showQuoteRequest = props.modules.isPresent('quote_requests');
+  const showCompare = props.modules.isPresent('comparisons');
   // Handed to client components (shopping-list heart badge, search
   // autocomplete) that fetch from the browser, so it must be the
   // public, build-time-baked `NEXT_PUBLIC_API_BASE_URL` — never the
   // server-only `BACKEND_BASE_URL` (internal `http://backend:3001`) that
   // triggers a Mixed Content block over HTTPS.
   const apiBaseUrl = publicApiBaseUrl();
+  const cutoff = new Intl.DateTimeFormat(props.locale, {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'UTC',
+  }).format(SHIPPING_CUTOFF);
 
-  // Category/brand shortcut pills for the mobile search overlay (top departments).
-  const mobileSearchQuickLinks = (props.megamenu?.items ?? [])
+  // Category/brand shortcut pills for the mobile search overlay: the catalogue
+  // tab's departments when the menu has one (feature 168), else the tabs.
+  const tabs = props.megamenu?.items ?? [];
+  const departments = tabs.find((tab) => tab.presentation === 'catalog')?.children ?? tabs;
+  const mobileSearchQuickLinks = departments
     .filter((i): i is typeof i & { url: string } => typeof i.url === 'string' && i.url.length > 0)
     .slice(0, 6)
     .map((i) => ({ label: i.label, href: i.url }));
@@ -73,39 +96,38 @@ export function Header(props: {
             </span>
             <span className="industria-topbar__sep" aria-hidden="true" />
             <span className="industria-topbar__item">
-              <TruckIcon /> Wysyłka dziś, jeśli zamówisz do 14:00
+              <TruckIcon /> {format(t('chrome.header.shipsTodayBy'), { time: cutoff })}
             </span>
             <span className="industria-topbar__sep" aria-hidden="true" />
             <span className="industria-topbar__item">
-              <DocIcon /> Faktura VAT
+              <DocIcon /> {t('chrome.shared.vatInvoice')}
             </span>
           </div>
           <div className="industria-topbar__right">
             <span className="industria-topbar__chip">
-              <strong>NIP</strong> 7251234567
+              <strong>{t('chrome.header.taxId')}</strong> {DEMO_TAX_ID}
             </span>
-            <CurrencySwitcher currency={props.currency} />
+            <CurrencySwitcher currency={props.currency} label={t('chrome.header.currency')} />
             <span className="industria-topbar__sep" aria-hidden="true" />
-            <a href="/help" className="industria-topbar__item">
-              <HelpIcon /> Wsparcie B2B
-            </a>
-            {props.config.languages.length > 1 ? (
-              <LocaleSwitcher locale={props.locale} />
-            ) : null}
+            <LocalizedAnchor href="/help" className="industria-topbar__item">
+              <HelpIcon /> {t('chrome.header.support')}
+            </LocalizedAnchor>
+            {/* Feature 167 — the channel's languages decide; it hides itself for one. */}
+            <LocaleSwitcher label={t('header.language')} />
           </div>
         </div>
       </div>
 
       <header className="industria-header">
         <div className="mx-auto max-w-[1360px] px-[24px] industria-header__inner hidden min-[877px]:grid">
-          <Link href="/" className="industria-header__brand">
-            <span className="industria-header__mark">IN</span>
+          <LocalizedLink href="/" className="industria-header__brand">
+            <span className="industria-header__mark">{REFERENCE_BRAND_MARK}</span>
             <span className="industria-header__brand__name">
-              Industria
-              <small>B2B · Komponenty przemysłowe</small>
+              {REFERENCE_BRAND_NAME}
+              <small>{t('chrome.header.tagline')}</small>
             </span>
-          </Link>
-          <form
+          </LocalizedLink>
+          <LocalizedForm
             action="/search"
             method="GET"
             className="industria-search b2b-header__search"
@@ -122,31 +144,38 @@ export function Header(props: {
               seeAllResultsLabel={t('search.seeAllResults')}
               unavailableLabel={t('search.unavailable')}
               requestQuoteLabel={t('product.requestQuote')}
+              listPriceLabel={t('product.listPrice')}
+              yourPriceLabel={t('product.yourPrice')}
               showKeyboardHint
-              {...(props.salesChannelCode !== undefined
-                ? { salesChannelCode: props.salesChannelCode }
-                : {})}
+              salesChannelCode={props.salesChannelCode}
             />
-          </form>
+          </LocalizedForm>
           <div className="industria-header__actions">
-            <ShoppingListHeartBadge
-              apiBase={apiBaseUrl}
-              loggedIn={Boolean(props.user)}
-              ariaLabel="Lista zakupowa"
-            />
-            <RfqDraftBadge
-              ariaLabel="Zapytanie ofertowe"
-              itemsAriaLabelTemplate="Zapytanie ofertowe · {count} pozycji"
-            />
-            <CompareCounterLink
-              href="/compare"
-              ariaLabel="Porównaj produkty"
-              icon={<CompareIcon />}
-            />
+            {showShoppingList ? (
+              <ShoppingListHeartBadge
+                apiBase={apiBaseUrl}
+                loggedIn={Boolean(props.user)}
+                ariaLabel={t('chrome.header.shoppingList')}
+              />
+            ) : null}
+            {showQuoteRequest ? (
+              <RfqDraftBadge
+                ariaLabel={t('chrome.header.quoteRequest')}
+                itemsAriaLabelTemplate={t('chrome.header.quoteRequestItems')}
+              />
+            ) : null}
+            {showCompare ? (
+              <CompareCounterLink
+                href="/compare"
+                ariaLabel={t('chrome.header.compare')}
+                icon={<CompareIcon />}
+                salesChannelCode={props.salesChannelCode}
+              />
+            ) : null}
             <CartCounterBadge
               initialCount={props.cartItemCount ?? 0}
-              emptyAriaLabel="Koszyk"
-              itemsAriaLabelTemplate="Koszyk · {count} pozycji"
+              emptyAriaLabel={t('nav.cart')}
+              itemsAriaLabelTemplate={t('chrome.header.cartItems')}
             />
             <UserPill user={props.user ?? null} loginLabel={t('nav.login')} />
           </div>
@@ -161,30 +190,46 @@ export function Header(props: {
         <div className="min-[877px]:hidden">
           <div className="flex h-[56px] items-center gap-[6px] px-[16px]">
             {props.megamenu ? (
-              <MegamenuMobileDrawer megamenu={props.megamenu} account={drawerAccount} />
+              <MegamenuMobileDrawer
+                megamenu={props.megamenu}
+                account={drawerAccount}
+                labels={{
+                  open: t('nav.megamenu.open'),
+                  close: t('nav.megamenu.close'),
+                  title: t('nav.megamenu.title'),
+                  seeAll: t('nav.megamenu.seeAll'),
+                  allIn: t('nav.megamenu.allIn'),
+                  account: t('nav.account'),
+                  login: t('nav.login'),
+                  go: t('nav.megamenu.go'),
+                }}
+              />
             ) : (
-              <Link href="/catalog" className="icon-btn" aria-label={t('nav.catalog')}>
+              <LocalizedLink href="/catalog" className="icon-btn" aria-label={t('nav.catalog')}>
                 <MenuIcon />
-              </Link>
+              </LocalizedLink>
             )}
-            <Link href="/" className="mr-auto inline-flex items-center gap-[8px]">
-              <span className="industria-header__mark">IN</span>
+            <LocalizedLink href="/" className="mr-auto inline-flex items-center gap-[8px]">
+              <span className="industria-header__mark">{REFERENCE_BRAND_MARK}</span>
               <span className="flex flex-col leading-none">
-                <span className="text-[15px] font-bold text-fg">Industria</span>
+                <span className="text-[15px] font-bold text-fg">{REFERENCE_BRAND_NAME}</span>
                 <small className="mt-[2px] text-[9px] font-medium uppercase tracking-[0.12em] text-subtle">
-                  Komponenty B2B
+                  {t('chrome.header.taglineCompact')}
                 </small>
               </span>
-            </Link>
-            <CompareCounterLink
-              href="/compare"
-              ariaLabel="Porównaj produkty"
-              icon={<CompareIcon />}
-            />
+            </LocalizedLink>
+            {showCompare ? (
+              <CompareCounterLink
+                href="/compare"
+                ariaLabel={t('chrome.header.compare')}
+                icon={<CompareIcon />}
+                salesChannelCode={props.salesChannelCode}
+              />
+            ) : null}
             <CartCounterBadge
               initialCount={props.cartItemCount ?? 0}
-              emptyAriaLabel="Koszyk"
-              itemsAriaLabelTemplate="Koszyk · {count} pozycji"
+              emptyAriaLabel={t('nav.cart')}
+              itemsAriaLabelTemplate={t('chrome.header.cartItems')}
             />
           </div>
           <div className="px-[16px] pb-[10px]">
@@ -194,33 +239,34 @@ export function Header(props: {
               placeholder={t('search.placeholder')}
               seeAllResultsLabel={t('search.seeAllResults')}
               quickLinks={mobileSearchQuickLinks}
-              {...(props.salesChannelCode !== undefined
-                ? { salesChannelCode: props.salesChannelCode }
-                : {})}
+              salesChannelCode={props.salesChannelCode}
             />
           </div>
         </div>
       </header>
 
-      <nav className="industria-nav hidden min-[877px]:block" aria-label="Primary">
-        <div className="mx-auto max-w-[1360px] px-[24px] industria-nav__inner">
-          {/* Data-driven "Wszystkie kategorie" trigger + mega panel
-              (seeded "Main navigation"). Replaces the old static link and
-              the hardcoded per-category links. */}
-          <CategoriesMega megamenu={props.megamenu ?? null} />
-          <div className="industria-nav__right">
-            <Link
-              href="/quick-order"
-              className="industria-nav__btn industria-nav__btn--primary"
-            >
-              <LightningIcon /> Quick Order
-            </Link>
-          </div>
-        </div>
-      </nav>
+      {/* Feature 168 — the active menu's tabs, and nothing the menu does not
+          hold: the former "Wszystkie kategorie" trigger and Quick Order button
+          are tabs an operator configures (FR-004, FR-011). */}
+      <NavigationBar
+        className="industria-nav hidden min-[877px]:block"
+        megamenu={props.megamenu ?? null}
+        labels={{
+          navigation: t('nav.megamenu.label'),
+          more: t('nav.megamenu.more'),
+          allIn: t('nav.megamenu.allIn'),
+          expand: t('nav.megamenu.expand'),
+        }}
+      />
     </>
   );
 }
+
+/** The demo shop's 14:00 shipping cut-off, as a time of day (read in UTC, so the zone never moves it). */
+const SHIPPING_CUTOFF = new Date(Date.UTC(2000, 0, 1, 14, 0));
+
+/** The demo shop's tax identification number. */
+const DEMO_TAX_ID = '7251234567';
 
 /** Two-letter initials from the customer's name (falls back to the email). */
 function initials(user: MeResult): string {
@@ -245,14 +291,14 @@ function UserPill({
 }): ReactNode {
   if (!user) {
     return (
-      <Link href="/login" className="industria-header__user">
+      <LocalizedLink href="/login" className="industria-header__user">
         <span className="industria-header__user__avatar" aria-hidden="true">
           <UserIcon />
         </span>
         <span className="industria-header__user__name">
           <strong>{loginLabel}</strong>
         </span>
-      </Link>
+      </LocalizedLink>
     );
   }
 
@@ -261,14 +307,14 @@ function UserPill({
   const subtitle = user.organization?.name ?? email;
 
   return (
-    <Link href="/account" className="industria-header__user">
+    <LocalizedLink href="/account" className="industria-header__user">
       <span className="industria-header__user__avatar">{initials(user)}</span>
       <span className="industria-header__user__name">
         <strong>{fullName}</strong>
         <em>{subtitle}</em>
       </span>
       <ChevDownIcon />
-    </Link>
+    </LocalizedLink>
   );
 }
 
@@ -365,9 +411,6 @@ function UserIcon(): ReactNode {
     </>,
     17,
   );
-}
-function LightningIcon(): ReactNode {
-  return svg(<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />, 13);
 }
 function MenuIcon(): ReactNode {
   return svg(

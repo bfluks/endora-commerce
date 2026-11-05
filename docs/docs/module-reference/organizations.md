@@ -40,12 +40,15 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | `addresses` | gating only | resolves `addressServicePort`; withheld from `dependencies` because the install order cannot carry the edge |
 | `customer_accounts` | gating only | resolves `customerAccountMemberWritePort`; withheld from `dependencies` because the install order cannot carry the edge |
 | `customer_accounts` | gating only | resolves `customerAccountReadPort`; withheld from `dependencies` because the install order cannot carry the edge |
+| `customer_accounts` | gating only | resolves `customerAccountRoleCommandPort`; withheld from `dependencies` because the install order cannot carry the edge |
 | `customer_accounts` | gating only | resolves `customerAuthPort`; withheld from `dependencies` because the install order cannot carry the edge |
 | `customer_accounts` | gating only | resolves `customerRolePort`; withheld from `dependencies` because the install order cannot carry the edge |
 | `customer_accounts` | gating only | resolves `passwordResetService`; withheld from `dependencies` because the install order cannot carry the edge |
 | `price_lists` | gating only | resolves `priceListReadPort`; withheld from `dependencies` because the install order cannot carry the edge |
 | `admin_notifications` | no | refuses-without `adminNotificationRecordPort` — nobody is told a new organisation has registered: the bell entry refuses, and that refusal stops the new-registration e-mails too — the registration itself still completes |
 | `admin_search` | no | contributes-to `adminSearchProviderRegistry` |
+| `credentials` | no | contributes-to `configurationTypeRegistry` |
+| `credentials` | no | degrades-without `credentialsService` — the registration company lookup cannot use GUS; Polish lookups use the Ministry of Finance VAT White List alone |
 | `credit_limits` | no | refuses-without `creditLimitReadPort` — the ancestor-chain lookup for who holds a credit limit refuses — no screen reaches it, because its only caller is that module's own service |
 
 ## Permissions
@@ -55,12 +58,16 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | `customers:manage` | Manage customer organizations | — |
 | `customers:read` | View customers | — |
 | `organizations:assign-sales-rep` | Assign sales representatives to organizations | — |
+| `organizations:manage-roles` | Manage organization roles | `organizations:read-roles` |
+| `organizations:read-roles` | View organization roles | — |
 
 ## Command palette
 
 | Action | Opens | Permission |
 | --- | --- | --- |
+| `new-organization` | `/organizations/new` | `customers:manage` |
 | `open-organizations` | `/organizations` | `customers:read` |
+| `open-registration-registry-lookup-settings` | `/settings` | `settings:read` |
 
 ## Settings
 
@@ -69,6 +76,9 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | `organizations.hierarchy.credit_inheritance_mode` | Credit inheritance mode (organization hierarchy) | `string` |
 | `organizations.moderation.mode` | Moderation mode for new Organizations | `string` |
 | `organizations.notifications.new_registration_recipients` | New Organization registration — email recipients | `json` |
+| `organizations.registration.gus_credentials` | Registration — GUS REGON credentials | `credential_ref` |
+| `organizations.registration.registry_lookup_enabled` | Registration — company registry lookup | `boolean` |
+| `organizations.registration.registry_lookup_pl_sources` | Registration — registries for Polish NIPs | `string` |
 
 ## Translations
 

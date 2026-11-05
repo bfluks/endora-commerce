@@ -55,7 +55,7 @@ const demo: ModuleDemoManifest<ModuleContext> = {
  */
 export const manifest = defineModuleManifest({
   id: 'delivery_methods',
-  name: 'Delivery Methods',
+  name: 'Delivery methods',
   description:
     'Shipping/delivery method definitions and per-channel availability.',
   version: '1.0.0',
@@ -182,7 +182,8 @@ export const manifest = defineModuleManifest({
       icon: 'Truck',
       targetRoute: '/delivery-methods',
       requiredPermission: 'delivery_methods:read',
-      keywords: ['delivery', 'shipping', 'methods', 'courier', 'metody dostawy', 'wysyłka', 'kurier'],
+      keywords: ['delivery', 'shipping', 'methods', 'courier'],
+      keywordsKey: 'actions.openDeliveryMethods.keywords',
       weight: 300,
     },
   ],

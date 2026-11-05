@@ -18,6 +18,8 @@ import {
   QuoteRequestOrgPolicy,
 } from '../../helpers/package-entities.js';
 import { setEscapeHatchAuditSink, withSystemScope } from '../../../src/tenancy/escape-hatch.js';
+import { bindOrganizationsToFixtureChannelsSql } from '../../helpers/sales-channel-access.js';
+import { predefinedRoleIdOf } from '../../helpers/seed-organization-roles.js';
 
 /**
  * Feature 146, Phase 10b (T064) — the admin controls and the storefront read of
@@ -148,6 +150,8 @@ describe('146 — price-negotiation admin and storefront routes [integration]', 
       orgA = a.id;
       orgB = b.id;
       orgC = c.id;
+      // Feature 154 — the three tenants shop on the stores the harness seeds.
+      await bindOrganizationsToFixtureChannelsSql(em, [orgA, orgB, orgC]);
 
       const account = (organizationId: string, label: string) =>
         em.create(CustomerAccount, {
@@ -156,7 +160,6 @@ describe('146 — price-negotiation admin and storefront routes [integration]', 
           passwordHash: 'x'.repeat(60),
           firstName: '146',
           lastName: label,
-          role: 'regular_user',
         });
       const ca = account(orgA, 'a');
       const cb = account(orgB, 'b');
@@ -341,6 +344,8 @@ describe('146 — price-negotiation admin and storefront routes [integration]', 
         const em = fresh();
         const account = await em.findOneOrFail(CustomerAccount, { id: movedCustomer });
         account.organizationId = orgC;
+        // The role moves with the Organization (`specs/170-organization-roles/` WP-02b).
+        account.organizationRoleId = await predefinedRoleIdOf(em, orgC, 'member');
         await em.flush();
       });
       const res = await get(accountUrl(movedCustomer), PLATFORM);

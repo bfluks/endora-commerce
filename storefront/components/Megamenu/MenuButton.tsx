@@ -1,14 +1,21 @@
 import type { ReactNode } from 'react';
 import type { ResolvedMenuItem } from '@endora-commerce/contracts';
+import { LocalizedAnchor } from '../../lib/i18n/localized-link';
 
 interface MenuButtonProps {
   item: ResolvedMenuItem;
 }
 
+/**
+ * The storefront's own button styles (`.btn*` in `globals.css`). The menu used
+ * `bg-primary` / `text-primary-foreground`, which no storefront theme defines,
+ * so a button in a panel rendered with no background and the page's text
+ * colour (feature 168 review).
+ */
 const variantClasses: Record<string, string> = {
-  primary: 'bg-primary text-primary-foreground hover:bg-primary/90',
-  secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/90',
-  ghost: 'bg-transparent text-foreground hover:bg-muted',
+  primary: 'btn--primary',
+  secondary: 'btn--outline',
+  ghost: 'btn--ghost',
 };
 
 /**
@@ -20,12 +27,10 @@ const variantClasses: Record<string, string> = {
 export function MenuButton({ item }: MenuButtonProps): ReactNode {
   if (!item.url) return null;
   const variant = item.variant ?? 'primary';
-  const className = `inline-flex h-10 items-center rounded-md px-4 text-sm font-medium transition ${
-    variantClasses[variant] ?? variantClasses['primary']!
-  }`;
+  const className = `btn btn--sm ${variantClasses[variant] ?? variantClasses['primary']!}`;
   return (
-    <a href={item.url} className={className}>
+    <LocalizedAnchor href={item.url} className={className}>
       {item.label}
-    </a>
+    </LocalizedAnchor>
   );
 }

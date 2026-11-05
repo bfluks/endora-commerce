@@ -5,6 +5,7 @@ import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type {
   AddressReadPort,
   CartWritePort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CatalogQuickSearchPort,
   CustomerAccountReadPort,
@@ -12,6 +13,7 @@ import type {
   DefaultPreferencePort,
   DeliveryMethodReadPort,
   OrderPlacementPort,
+  OrganizationPermissionPort,
   OrganizationRestrictionPort,
   PaymentMethodReadPort,
   RfqCustomerPort,
@@ -21,7 +23,6 @@ import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import { lazyPort } from '@endora-commerce/platform/kernel';
 import { effectiveState } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
-import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { SettingNotRegistered, SettingOutOfScopeForChannel } from '@endora-commerce/platform/kernel';
 import type { SettingsReadPort } from '@endora-commerce/platform/kernel';
 import {
@@ -30,7 +31,11 @@ import {
   DEFAULT_ONE_CLICK_BUY_ENABLED,
 } from '../manifest.js';
 import { CatalogPortLookup } from './services/catalog-lookup.js';
-import { QuickOrderImportPipeline } from './services/import-pipeline.js';
+import {
+  QUICK_ORDER_IMPORT_ROWS_CEILING,
+  QuickOrderImportPipeline,
+  clampImportMaxRows,
+} from './services/import-pipeline.js';
 import { QuickOrderBuildService } from './services/quick-order-build-service.js';
 import { DefaultPreferenceService } from './services/default-preference-service.js';
 import { OneClickService } from './services/one-click-service.js';
@@ -188,9 +193,10 @@ export function registerModule(ctx: ModuleContext): void {
           new QuickOrderImportPipeline(
             new CatalogPortLookup(
               lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
-              // Issue #259 — the channel assortment gate on the pasted-SKU
-              // seam. A kernel registration, so no module edge to declare.
-              lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+              // Issue #259 / feature 163 — the availability gate on the
+              // pasted-SKU seam: `catalog`'s answer, with the kernel's channel
+              // membership inside it.
+              lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
             ),
           ),
       )
@@ -205,6 +211,10 @@ export function registerModule(ctx: ModuleContext): void {
             // strict mode refuses a transient inside a longer-lived object.
             lazyPort<CartWritePort>(ctx, 'cartWritePort'),
             lazyPort<RfqCustomerPort>(ctx, 'rfqService'),
+            // `specs/170-organization-roles/` — a buyer's build is judged by
+            // the target's create permission. `organizations` is a binding
+            // dependency already, and non-deactivatable.
+            lazyPort<OrganizationPermissionPort>(ctx, 'organizationPermissionPort'),
           ),
       )
       .singleton(),
@@ -277,6 +287,12 @@ export function registerModule(ctx: ModuleContext): void {
                 throw error;
               }
             },
+            // Feature 155 (FR-010) — the default quantity is the product's
+            // minimum; a gated port, so held lazily like the two above.
+            lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
+            // `specs/170-organization-roles/` (FR-050, #653) — one-click needs
+            // `quick_order.one_click` and `carts.order_without_approval`.
+            lazyPort<OrganizationPermissionPort>(ctx, 'organizationPermissionPort'),
           ),
       )
       .singleton(),
@@ -296,6 +312,11 @@ export function registerModule(ctx: ModuleContext): void {
       req: FastifyRequest,
     ): { customerAccountId: string; organizationId: string } =>
       cradle().customerContextResolver(req);
+    // `specs/170-organization-roles/` — the route guards' port. A lazy proxy
+    // resolving per call, handed to the guards behind a thunk, so nothing
+    // holds a port resolved at registration (`module-composition.md` item 4a).
+    const permissions = lazyPort<OrganizationPermissionPort>(ctx, 'organizationPermissionPort');
+    const organizationPermissions = (): OrganizationPermissionPort => permissions;
 
     /**
      * Read **platform-wide** (feature 072, D-41 case c). The manifest has
@@ -316,11 +337,22 @@ export function registerModule(ctx: ModuleContext): void {
      */
     const resolveImportMaxRows = async (): Promise<number> => {
       try {
-        return await cradle().settingsReadPort.get(
+        const configured = await cradle().settingsReadPort.get(
           QUICK_ORDER_SETTING_CODES.IMPORT_MAX_ROWS,
           null,
           z.number().int().positive(),
         );
+        // Feature 155 (R20, threat F4) — the Setting declares no maximum, so
+        // the value is clamped at read and the preview's work stays bounded.
+        if (configured > QUICK_ORDER_IMPORT_ROWS_CEILING) {
+          warnOnce(
+            `out-of-range:${QUICK_ORDER_SETTING_CODES.IMPORT_MAX_ROWS}`,
+            `[quick_order] setting "${QUICK_ORDER_SETTING_CODES.IMPORT_MAX_ROWS}" is ${configured}, ` +
+              `above the ceiling of ${QUICK_ORDER_IMPORT_ROWS_CEILING} rows — clamped to the ceiling ` +
+              `(logged once per process).`,
+          );
+        }
+        return clampImportMaxRows(configured);
       } catch (error) {
         if (error instanceof SettingNotRegistered) return DEFAULT_IMPORT_MAX_ROWS;
         if (error instanceof SettingOutOfScopeForChannel) {
@@ -345,6 +377,7 @@ export function registerModule(ctx: ModuleContext): void {
       // Issue #174 — one port where three deps used to be, and the type-ahead
       // is scoped to the request's sales channel because `catalog` scopes it.
       catalogQuickSearch: lazyPort<CatalogQuickSearchPort>(ctx, 'catalogQuickSearchPort'),
+      organizationPermissions,
     });
 
     await registerQuickOrderAdminRoutes(app, {
@@ -358,6 +391,7 @@ export function registerModule(ctx: ModuleContext): void {
     await registerQuickOrderPreferenceRoutes(app, {
       service: preferenceService,
       customerAccounts: lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
+      organizationPermissions,
       requireCustomer,
       resolveCustomerContext,
     });
@@ -374,6 +408,7 @@ export function registerModule(ctx: ModuleContext): void {
       service: oneClickService,
       requireCustomer,
       resolveCustomerContext,
+      organizationPermissions,
     });
   });
 }

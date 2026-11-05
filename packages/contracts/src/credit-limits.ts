@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isoDateTimeSchema, uuidSchema } from './common.js';
+import { twoDecimalAmount } from './money-input.js';
 
 /**
  * Credit Limit module contracts (US6) — see
@@ -23,6 +24,20 @@ export const creditLimitViewSchema = z.object({
   grantedAmount: z.number().finite().nonnegative(),
   availableAmount: z.number().finite(),
   currency: z.string().length(3),
+  /**
+   * How many reservations the limit holds — **every** one of them, whoever
+   * placed the order (issue #748). The limit is shared, so `availableAmount`
+   * and this count are the Organization's figures; `activeReservations` is the
+   * list the caller may read, which for the customer's `GET
+   * /api/v1/me/credit-limit` is narrower when their organization role lacks
+   * `orders.view_organization`. Never derive the count from the list's length.
+   */
+  activeReservationCount: z.number().int().nonnegative(),
+  /**
+   * The active reservations the caller may read. The admin views list every
+   * one; the customer view lists the reservations of the orders the buyer may
+   * read under `orders`' read scope (`specs/170-organization-roles/` FR-049).
+   */
   activeReservations: z.array(
     z.object({
       orderId: uuidSchema,
@@ -35,14 +50,14 @@ export const creditLimitViewSchema = z.object({
 export type CreditLimitView = z.infer<typeof creditLimitViewSchema>;
 
 export const grantCreditLimitRequestSchema = z.object({
-  grantedAmount: z.number().finite().positive(),
+  grantedAmount: twoDecimalAmount(z.number().finite().positive()),
   currency: z.string().length(3),
   reason: z.string().max(2000).optional(),
 });
 export type GrantCreditLimitRequest = z.infer<typeof grantCreditLimitRequestSchema>;
 
 export const adjustCreditLimitRequestSchema = z.object({
-  grantedAmount: z.number().finite().nonnegative(),
+  grantedAmount: twoDecimalAmount(z.number().finite().nonnegative()),
   reason: z.string().max(2000).optional(),
   allowOverAllocation: z.boolean().optional(),
 });

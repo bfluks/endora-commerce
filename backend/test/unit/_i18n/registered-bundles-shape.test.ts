@@ -1,11 +1,16 @@
-import { dirname } from 'node:path';
+import { readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { SUPPORTED_LANGUAGES } from '@endora-commerce/contracts';
+import { parseBundleKeywords, SUPPORTED_LANGUAGES } from '@endora-commerce/contracts';
 import {
   BundleLoadError,
   loadModuleBundles,
 } from '@endora-commerce/mod-i18n/backend';
-import { REGISTERED_MANIFESTS } from '../../../src/lifecycle/registered-manifests.js';
+import {
+  REGISTERED_MANIFESTS,
+  resolvedManifestEntries,
+} from '../../../src/lifecycle/registered-manifests.js';
 
 /**
  * Regression guard — every on-disk bundle shipped by a registered module
@@ -69,7 +74,7 @@ describe('registered module i18n bundles — real filesystem shape', () => {
     },
   );
 
-  it('every action label/description key declared in a manifest resolves in every shipped language', () => {
+  it('every action label/description/keywords key declared in a manifest resolves in every shipped language', () => {
     const missing: string[] = [];
     for (const entry of withBundles) {
       const actions = entry.manifest.actions ?? [];
@@ -93,7 +98,7 @@ describe('registered module i18n bundles — real filesystem shape', () => {
           continue;
         }
         for (const action of actions) {
-          const keys = [action.labelKey, action.descriptionKey].filter(
+          const keys = [action.labelKey, action.descriptionKey, action.keywordsKey].filter(
             (k): k is string => typeof k === 'string',
           );
           for (const key of keys) {
@@ -105,6 +110,142 @@ describe('registered module i18n bundles — real filesystem shape', () => {
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  /**
+   * Issue #560 — a `keywordsKey` value is a comma-separated word list
+   * (`parseBundleKeywords`), held to the bounds `ModuleActionSchema` puts on
+   * `keywords`; and a template variable's `sampleValueKey` resolves in every
+   * shipped language, its English value being the manifest's own `sampleValue`
+   * — the literal the preview falls back to — so the two cannot drift apart.
+   */
+  it('every action keywordsKey resolves to a bounded word list in every shipped language', () => {
+    const problems: string[] = [];
+    let declared = 0;
+    for (const entry of withBundles) {
+      const actions = (entry.manifest.actions ?? []).filter((a) => a.keywordsKey);
+      if (actions.length === 0) continue;
+      const loaded = loadModuleBundles(
+        entry.manifest.id,
+        dirname(entry.filePath),
+        entry.manifest.i18n!.bundlesDir,
+      );
+      for (const action of actions) {
+        declared += 1;
+        for (const language of SUPPORTED_LANGUAGES) {
+          const value = loaded.byLanguage.get(language)?.[action.keywordsKey!];
+          const words = value === undefined ? [] : parseBundleKeywords(value);
+          if (words.length === 0 || words.length > 10 || words.some((w) => w.length > 64)) {
+            problems.push(`${entry.manifest.id}/${language}.json → ${action.keywordsKey}: ${JSON.stringify(value)}`);
+          }
+        }
+      }
+    }
+    expect(problems).toEqual([]);
+    expect(declared).toBeGreaterThan(0);
+  });
+
+  /**
+   * Issue #573 — a manifest's `keywords` are English; a word an operator types
+   * in another language goes under the action's `keywordsKey`. The prose
+   * detector (`check:default-language-prose`) cannot see a single Polish word
+   * with no diacritic and no stopword (`statusy`, `klient`), which is how about
+   * forty-five modules kept them inline after #560.
+   *
+   * So the rule is positive rather than a detector: every word of every
+   * `keywords` entry is a word the platform's **English** bundles already use —
+   * every registered module's `en.json`, minus its `*.keywords` entries, so the
+   * rule cannot be satisfied by writing the same word into the list it judges —
+   * or one of the few English and technical tokens below that no English string
+   * happens to contain. A Polish word is in no `en.json`, so it fails here
+   * whether or not it carries a diacritic. The corpus is the whole platform's
+   * rather than the declaring module's own because that one is too small to
+   * hold even its own screen's vocabulary, and a guard that needs a ledger
+   * entry for every ordinary English word is one nobody keeps.
+   *
+   * The allowlist is two-way: an entry no keyword uses, or one the corpus now
+   * holds anyway, fails too, so it cannot grow into a place Polish hides.
+   */
+  it('every manifest action keyword is English — a word the English bundles use, or allowlisted', () => {
+    const KEYWORD_TOKENS_OUTSIDE_THE_ENGLISH_BUNDLES = new Set([
+      '2fa', 'article', 'balance', 'clients', 'datalayer', 'ecommerce', 'ga4',
+      'i18n', 'insight', 'kanban', 'multimedia', 'orgs', 'pipeline', 'presence', 'purge',
+      'rbac', 'refunds', 'sgtm', 'smtp', 'swagger', 'timezone', 'todo', 'urgency',
+    ]);
+    const wordsOf = (text: string): string[] => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+
+    const english = new Set<string>();
+    for (const entry of withBundles) {
+      const bundle = loadModuleBundles(
+        entry.manifest.id,
+        dirname(entry.filePath),
+        entry.manifest.i18n!.bundlesDir,
+      ).byLanguage.get('en');
+      for (const [key, value] of Object.entries(bundle ?? {})) {
+        if (!key.endsWith('.keywords')) for (const word of wordsOf(value)) english.add(word);
+      }
+    }
+
+    const problems: string[] = [];
+    const allowlistUsed = new Set<string>();
+    let checked = 0;
+    for (const entry of REGISTERED_MANIFESTS) {
+      for (const action of entry.manifest.actions ?? []) {
+        for (const keyword of action.keywords ?? []) {
+          checked += 1;
+          for (const word of wordsOf(keyword)) {
+            if (english.has(word)) continue;
+            if (KEYWORD_TOKENS_OUTSIDE_THE_ENGLISH_BUNDLES.has(word)) {
+              allowlistUsed.add(word);
+              continue;
+            }
+            problems.push(
+              `${entry.manifest.id}/${action.id}: "${keyword}" — "${word}" is in no en.json. ` +
+                'A non-English word goes in i18n/<language>.json under the action\'s keywordsKey; ' +
+                'an English one the bundles do not use goes in this allowlist.',
+            );
+          }
+        }
+      }
+    }
+    for (const word of KEYWORD_TOKENS_OUTSIDE_THE_ENGLISH_BUNDLES) {
+      if (english.has(word)) problems.push(`allowlist: "${word}" is in an en.json now — delete the entry`);
+      else if (!allowlistUsed.has(word)) problems.push(`allowlist: "${word}" is in no manifest keyword — delete the entry`);
+    }
+    expect(problems).toEqual([]);
+    expect(english.size).toBeGreaterThan(1000);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it('every template-variable sampleValueKey resolves in every shipped language, English matching the manifest', () => {
+    const problems: string[] = [];
+    let declared = 0;
+    for (const entry of withBundles) {
+      const variables = (entry.manifest.transactionalEmails ?? []).flatMap((e) => e.variables ?? []);
+      const keyed = variables.filter((v) => v.sampleValueKey);
+      if (keyed.length === 0) continue;
+      const loaded = loadModuleBundles(
+        entry.manifest.id,
+        dirname(entry.filePath),
+        entry.manifest.i18n!.bundlesDir,
+      );
+      for (const variable of keyed) {
+        declared += 1;
+        for (const language of SUPPORTED_LANGUAGES) {
+          const value = loaded.byLanguage.get(language)?.[variable.sampleValueKey!];
+          if (value === undefined) {
+            problems.push(`${entry.manifest.id}/${language}.json → ${variable.sampleValueKey}`);
+          } else if (language === 'en' && value !== variable.sampleValue) {
+            problems.push(
+              `${entry.manifest.id}/en.json → ${variable.sampleValueKey} is ${JSON.stringify(value)}, ` +
+                `the manifest sampleValue is ${JSON.stringify(variable.sampleValue)}`,
+            );
+          }
+        }
+      }
+    }
+    expect(problems).toEqual([]);
+    expect(declared).toBeGreaterThan(0);
   });
 
   /**
@@ -183,6 +324,113 @@ describe('registered module i18n bundles — real filesystem shape', () => {
     }
     expect(missing).toEqual([]);
     expect(declared).toBeGreaterThan(0);
+  });
+
+  /**
+   * Issue #739 — a module that declares `organizationPermissions` heads its own
+   * group on the role form (storefront and the admin Roles tab), and
+   * `OrganizationRoleService.permissionCatalogue` resolves that heading from the
+   * module's `module.name` key. A missing key does not fail loudly: it falls
+   * back to the manifest's English `name`, so a Polish page shows "Orders"
+   * beside "Szybkie zamówienia".
+   *
+   * The population is every registered manifest declaring at least one
+   * permission — `REGISTERED_MANIFESTS`, not `withBundles`, so a module that
+   * declares permissions and no bundles directory fails here too — held to
+   * `SUPPORTED_LANGUAGES`, never to the languages the module happens to ship.
+   */
+  it('every module declaring organizationPermissions translates module.name in every shipped language', () => {
+    const declaring = REGISTERED_MANIFESTS.filter(
+      (e) => (e.manifest.organizationPermissions ?? []).length > 0,
+    );
+    const missing: string[] = [];
+    for (const entry of declaring) {
+      if (!entry.manifest.i18n) {
+        missing.push(`${entry.manifest.id}: declares organizationPermissions and no i18n bundles`);
+        continue;
+      }
+      const loaded = loadModuleBundles(
+        entry.manifest.id,
+        dirname(entry.filePath),
+        entry.manifest.i18n.bundlesDir,
+      );
+      for (const language of SUPPORTED_LANGUAGES) {
+        const value = loaded.byLanguage.get(language)?.['module.name'];
+        if (typeof value !== 'string' || value.trim() === '') {
+          missing.push(`${entry.manifest.id}/${language}.json → module.name`);
+        }
+      }
+    }
+    expect(missing).toEqual([]);
+    // An empty population would make the case vacuous — feature 170's own
+    // modules declare permissions, so zero means the filter broke.
+    expect(declaring.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * Issue #746 — English module display names and sidebar labels are sentence
+   * case, like the rest of the UI ("Quote requests", not "Quote Requests").
+   * `module.name` heads the permission groups on the role form, the module
+   * screen and the command palette; the manifest `name` is its English fallback
+   * wherever a bundle has no `module.name`. Polish was sentence case already.
+   *
+   * The population is every core manifest, plus every deployment's overlay
+   * modules, plus every module's English `module.name` and `nav.*` labels. A
+   * word after the first may not start with a capital followed by a lowercase
+   * letter; acronyms (`API`, `CRM`) are all capitals and pass. Product names
+   * are the allowlist, which is two-way: an entry nothing uses fails too.
+   */
+  it('every English module display name and nav label is sentence case', async () => {
+    const PROPER_NOUNS = ['Google Analytics', 'Google Tag Manager', 'LinkedIn Ads', 'Meta Ads'];
+    const used = new Set<string>();
+    const problems: string[] = [];
+    let checked = 0;
+    const judge = (where: string, text: string): void => {
+      checked += 1;
+      let rest = text;
+      for (const noun of PROPER_NOUNS) {
+        if (rest.includes(noun)) {
+          used.add(noun);
+          rest = rest.split(noun).join('X');
+        }
+      }
+      const [first = '', ...others] = rest.trim().split(/\s+/);
+      const offending = others.filter((word) => /^[A-Z][a-z]/.test(word));
+      if (/^\p{Ll}/u.test(first)) offending.unshift(first);
+      if (offending.length > 0) {
+        problems.push(`${where}: ${JSON.stringify(text)} (${offending.join(', ')})`);
+      }
+    };
+
+    const appsDir = join(dirname(fileURLToPath(import.meta.url)), '../../../src/apps');
+    const manifests = new Map(REGISTERED_MANIFESTS.map((e) => [e.manifest.id, e] as const));
+    for (const deployment of readdirSync(appsDir)) {
+      for (const entry of await resolvedManifestEntries({ DEPLOYMENT: deployment } as NodeJS.ProcessEnv)) {
+        manifests.set(entry.manifest.id, entry);
+      }
+    }
+    const NAV_LABEL = /(^|\.)nav\.[A-Za-z]+(\.label)?$/;
+    for (const entry of manifests.values()) {
+      judge(`${entry.manifest.id} manifest name`, entry.manifest.name);
+      if (!entry.manifest.i18n) continue;
+      const en = loadModuleBundles(
+        entry.manifest.id,
+        dirname(entry.filePath),
+        entry.manifest.i18n.bundlesDir,
+      ).byLanguage.get('en');
+      for (const [key, value] of Object.entries(en ?? {})) {
+        if (key === 'module.name' || (NAV_LABEL.test(key) && !/[dD]escription$/.test(key))) {
+          judge(`${entry.manifest.id}/en.json → ${key}`, value);
+        }
+      }
+    }
+    for (const noun of PROPER_NOUNS) {
+      if (!used.has(noun)) problems.push(`allowlist: "${noun}" is in no name or nav label — delete the entry`);
+    }
+    expect(problems).toEqual([]);
+    // Overlay modules joined the core set: more than the core alone was judged.
+    expect(manifests.size).toBeGreaterThan(REGISTERED_MANIFESTS.length);
+    expect(checked).toBeGreaterThan(manifests.size);
   });
 
   /**

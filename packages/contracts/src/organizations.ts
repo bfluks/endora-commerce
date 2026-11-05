@@ -2,11 +2,13 @@ import { z } from 'zod';
 import {
   addressSnapshotSchema,
   isoDateTimeSchema,
-  organizationRoleSchema,
   uuidSchema,
 } from './common.js';
 import { fulfilmentStrategySchema, type FulfilmentStrategy } from './inventory.js';
+import { organizationRoleRefSchema } from './organization-roles.js';
+import { SalesChannelOptionSchema } from './sales-channels.js';
 import { foldDiacritics } from './text-normalization.js';
+import { registryLookupIdSchema } from './organization-registry-lookup.js';
 
 /**
  * Organizations, customer accounts, addresses, invitations — Source of truth
@@ -149,7 +151,13 @@ export const customerAccountSchema = z.object({
   email: z.string().email(),
   firstName: z.string(),
   lastName: z.string(),
-  role: organizationRoleSchema,
+  /**
+   * The member's role (`specs/170-organization-roles/`, FR-008, FR-056); it
+   * replaced the legacy two-value `role`, removed by WP-12 (FR-073).
+   */
+  organizationRole: organizationRoleRefSchema,
+  /** The member's effective organization permissions, sorted (FR-056). */
+  permissions: z.array(z.string()),
   emailVerifiedAt: isoDateTimeSchema.nullable(),
   twoFactorEnabled: z.boolean(),
   createdAt: isoDateTimeSchema,
@@ -195,6 +203,14 @@ export const registerOrganizationRequestSchema = z.object({
     lastName: z.string().min(1).max(120),
   }),
   acceptedTermsVersion: z.string(),
+  /**
+   * Feature 173 — the reference a registry lookup answered
+   * (`organization-registry-lookup.ts`). Top-level, not inside `organization`:
+   * `AdminOrganizationCreateBodySchema` is derived from that member and the
+   * admin create must not accept it. The snapshot is read from the platform's
+   * own store by this id, never from the client (FR-019).
+   */
+  registryLookupId: registryLookupIdSchema.optional(),
 });
 export type RegisterOrganizationRequest = z.infer<typeof registerOrganizationRequestSchema>;
 
@@ -226,7 +242,12 @@ export const customerLoginRequestSchema = z.object({
  * `'noop'`; see `cartMergeOutcomePublicSchema` below.
  */
 export const cartMergeOutcomeSchema = z.object({
-  outcome: z.enum(['adopted', 'merged', 'noop_empty', 'noop_no_anon']),
+  /**
+   * `skipped_permission` (owner ruling PR-12, `specs/170-organization-roles/`):
+   * the member's role lacks `carts.create`, so sign-in did not merge the guest
+   * basket. The HTTP narrowing reports it as `'noop'`.
+   */
+  outcome: z.enum(['adopted', 'merged', 'noop_empty', 'noop_no_anon', 'skipped_permission']),
   movedLineCount: z.number().int().min(0),
   summedLineCount: z.number().int().min(0),
   destinationCartId: uuidSchema,
@@ -257,7 +278,10 @@ export const customerLoginResponseSchema = z.object({
       id: uuidSchema,
       email: z.string().email(),
       organizationId: uuidSchema.nullable(),
-      role: organizationRoleSchema,
+      /** The member's role (FR-056); it replaced the legacy `role` (FR-073). */
+      organizationRole: organizationRoleRefSchema,
+      /** The member's effective organization permissions, sorted (FR-056). */
+      permissions: z.array(z.string()),
       twoFactorEnabled: z.boolean(),
     }),
     cartMerge: cartMergeOutcomePublicSchema.nullable().optional(),
@@ -285,19 +309,10 @@ export type CreateAddressRequest = z.infer<typeof createAddressRequestSchema>;
 export const updateAddressRequestSchema = createAddressRequestSchema.partial();
 export type UpdateAddressRequest = z.infer<typeof updateAddressRequestSchema>;
 
-export const inviteMemberRequestSchema = z.object({
-  email: z.string().email(),
-  role: organizationRoleSchema.optional(),
-});
-
 export const acceptInvitationRequestSchema = z.object({
   password: z.string().min(12),
   firstName: z.string().min(1).max(120),
   lastName: z.string().min(1).max(120),
-});
-
-export const changeMemberRoleRequestSchema = z.object({
-  role: organizationRoleSchema,
 });
 
 /** Platform admin — PATCH `/admin/organizations/:id` */
@@ -322,21 +337,6 @@ export const adminPatchOrganizationRequestSchema = z.object({
 /** Platform admin — POST `/admin/organizations/:id/recover-admin-access` */
 export const adminRecoverOrgAccessRequestSchema = z.object({
   promoteCustomerAccountId: uuidSchema,
-});
-
-/** Platform admin — POST `/admin/organizations/:id/members` (direct create) */
-export const adminDirectMemberRequestSchema = z.object({
-  email: z.string().email(),
-  firstName: z.string().min(1).max(120),
-  lastName: z.string().min(1).max(120),
-  password: z.string().min(12).max(256),
-  role: organizationRoleSchema.optional(),
-});
-
-/** Platform admin — PATCH member role */
-export const adminPatchMemberRoleRequestSchema = z.object({
-  role: organizationRoleSchema,
-  expectedUpdatedAt: z.string().optional(),
 });
 
 /**
@@ -444,7 +444,8 @@ export type SalesRepOrganization = z.infer<typeof salesRepOrganizationSchema>;
 // in-process calls, not an API boundary.
 // ---------------------------------------------------------------------------
 
-export type VatValidationProvider = 'vies' | 'mf_pl' | 'format_only';
+/** `gus_pl` — feature 173: the GUS REGON registry, written by a registration-time lookup. */
+export type VatValidationProvider = 'vies' | 'mf_pl' | 'format_only' | 'gus_pl';
 
 export type VatValidationOutcome = 'validated' | 'failed' | 'deferred' | 'unverified';
 
@@ -482,7 +483,6 @@ export interface OrganizationRecord {
   rejectedAt: Date | null;
   approvedAt: Date | null;
   approvedByAdminUserId: string | null;
-  requiresCartApproval: boolean;
   fulfilmentStrategy: FulfilmentStrategy | null;
   fulfilmentStrategyWarehouseOrder: string[] | null;
   parentId: string | null;
@@ -535,6 +535,30 @@ export interface OrganizationDetailsPort {
   searchByName(query: string, limit: number): Promise<OrganizationRecord[]>;
   /** The same search, ids only — for the order list's organisation filter. */
   searchIdsByName(query: string): Promise<string[]>;
+}
+
+/**
+ * The tax id a reader may print or hand out for an Organization: a company's,
+ * never a personal (B2C) Organization's, whose `taxId` is an internal 32-hex
+ * placeholder derived from the account id (issue #767). `null` — not an empty
+ * string — when there is nothing to show, so every renderer drops its tax-id
+ * line rather than printing a label with no value.
+ *
+ * Published as a **function, not a port**, for the reason
+ * {@link normalizeOrganizationName} is: it is pure over its argument. Every
+ * module that prints an {@link OrganizationRecord}'s tax id asks it — the quote
+ * request document, the admin order and quote request panels, the price-book
+ * and push audience pickers, and the storefront's checkout — so the rule has
+ * one home.
+ */
+export function organizationCompanyTaxId(organization: {
+  /** Absent reads as a company, as a session payload without the flag does. */
+  readonly isPersonal?: boolean | undefined;
+  readonly taxId: string;
+}): string | null {
+  if (organization.isPersonal) return null;
+  const taxId = organization.taxId.trim();
+  return taxId === '' ? null : taxId;
 }
 
 /**
@@ -622,44 +646,6 @@ export interface OrganizationInheritancePort {
   creditOwner(organizationId: string): Promise<OrganizationCreditOwner>;
 }
 
-/** What a cart-approval-policy write answers with. */
-export interface CartApprovalPolicyWriteResult {
-  readonly organization: OrganizationRecord;
-  /**
-   * `false` when the row already carried the requested value, so nothing was
-   * written and nothing was audited. It is part of the return type rather than
-   * something the caller re-derives from a read, because the caller's cascade
-   * hangs off it: `carts` resets its pending and approved carts when — and only
-   * when — the policy actually moved to `false`.
-   */
-  readonly changed: boolean;
-}
-
-/**
- * Container name: `organizationCartApprovalWritePort`. Owner: `organizations`.
- *
- * The per-organisation "an Org Admin must approve a cart before checkout"
- * policy (feature 027 US4). `carts` drives both surfaces that flip it — the
- * platform-admin route and the Org-Admin self-service one — but the column is
- * this module's, so the operation is (issue #175, D-78 step 1).
- *
- * The write runs through `CommandBus.run`, so it carries the audit row it had
- * never had while `carts` was writing the column directly, with the actor
- * derived from the caller's ambient context (Constitution XIII). The cart
- * cascade that follows a switch-off stays with `carts`: those are its rows, and
- * they are audited in its own per-cart trail.
- *
- * This module is non-deactivatable, so the gate the port registration applies
- * cannot be reached; the registration is a `providePort` anyway, for the reason
- * its siblings give.
- */
-export interface OrganizationCartApprovalWritePort {
-  setCartApprovalPolicy(
-    organizationId: string,
-    requiresCartApproval: boolean,
-  ): Promise<CartApprovalPolicyWriteResult>;
-}
-
 /** The three allow-list kinds an organisation can restrict. */
 export type OrganizationAllowListKind =
   | 'paymentMethodIds'
@@ -687,6 +673,16 @@ export interface OrganizationRestrictionPort {
     organizationId: string,
     kind: OrganizationAllowListKind,
   ): Promise<string[] | null>;
+}
+
+/**
+ * A personal organisation as {@link PersonalOrganizationPort.provisionPersonalOrganization}
+ * answers it: the record, and the id of its *Administrator* role — the role
+ * its single member holds (`specs/170-organization-roles/`, owner ruling PR-3,
+ * research R-34), which a caller moving the account there writes with it.
+ */
+export interface ProvisionedPersonalOrganizationRecord extends OrganizationRecord {
+  administratorRoleId: string;
 }
 
 /**
@@ -732,7 +728,7 @@ export interface PersonalOrganizationPort {
    * Idempotent: the personal organisation's `taxId` is derived from the account
    * id, so a second call re-finds the row rather than creating a second one.
    */
-  provisionPersonalOrganization(customerAccountId: string): Promise<OrganizationRecord>;
+  provisionPersonalOrganization(customerAccountId: string): Promise<ProvisionedPersonalOrganizationRecord>;
 
   /**
    * Feature 051, the other end of the same rule — the retention sweep's
@@ -924,3 +920,75 @@ export interface OrganizationTaxProfilePort {
     country: string | null;
   } | null>;
 }
+
+// --- Sales-channel assignment and admin creation (feature 154) ------------
+
+/**
+ * A set of sales-channel ids an Organization is assigned to: at least one (an
+ * Organization with no channel may shop nowhere), at most 100, no repeats.
+ */
+const organizationSalesChannelIdsSchema = z
+  .array(uuidSchema)
+  .min(1)
+  .max(100)
+  .refine((ids) => new Set(ids).size === ids.length, {
+    message: 'Each sales channel may be listed once.',
+  });
+
+/**
+ * `GET`/`PUT /api/v1/admin/organizations/:id/sales-channels` — the channels an
+ * Organization's members may sign in and shop on
+ * (`specs/154-sales-channel-access/contracts/admin-api-and-ui.md` §2).
+ *
+ * `options` is every channel the Organization may be assigned to, inactive ones
+ * included and flagged, so the panel needs no `sales_channels:read`.
+ */
+export const OrganizationSalesChannelOptionSchema = SalesChannelOptionSchema.extend({
+  systemDefault: z.boolean(),
+});
+export type OrganizationSalesChannelOption = z.infer<typeof OrganizationSalesChannelOptionSchema>;
+
+export const OrganizationSalesChannelsResponseSchema = z.object({
+  data: z.object({
+    organizationId: uuidSchema,
+    assignedSalesChannelIds: z.array(uuidSchema),
+    options: z.array(OrganizationSalesChannelOptionSchema),
+  }),
+});
+export type OrganizationSalesChannelsResponse = z.infer<
+  typeof OrganizationSalesChannelsResponseSchema
+>;
+
+/** `PUT /api/v1/admin/organizations/:id/sales-channels` — replaces the whole set. */
+export const OrganizationSalesChannelsUpdateBodySchema = z.object({
+  salesChannelIds: organizationSalesChannelIdsSchema,
+});
+export type OrganizationSalesChannelsUpdateBody = z.infer<
+  typeof OrganizationSalesChannelsUpdateBodySchema
+>;
+
+/**
+ * `POST /api/v1/admin/organizations` — an operator creates a customer
+ * Organization and chooses its sales channels (§3). The organization fields are
+ * self-registration's own, so the two creation paths cannot drift apart; the
+ * status is one an operator may start from, and the channels are bound in the
+ * creating transaction.
+ */
+export const AdminOrganizationCreateBodySchema = registerOrganizationRequestSchema.shape.organization
+  .extend({
+    status: z.enum(['active', 'pending_verification']).default('active'),
+    salesChannelIds: organizationSalesChannelIdsSchema,
+  });
+export type AdminOrganizationCreateBody = z.infer<typeof AdminOrganizationCreateBodySchema>;
+export type AdminOrganizationCreateRequest = z.input<typeof AdminOrganizationCreateBodySchema>;
+
+/**
+ * `GET /api/v1/admin/organizations/sales-channel-options` — what the *New
+ * organization* form chooses from, before there is an Organization to ask about.
+ */
+export const OrganizationSalesChannelOptionsResponseSchema = z.object({
+  data: z.array(OrganizationSalesChannelOptionSchema),
+});
+export type OrganizationSalesChannelOptionsResponse = z.infer<
+  typeof OrganizationSalesChannelOptionsResponseSchema
+>;

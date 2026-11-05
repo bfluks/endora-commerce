@@ -261,6 +261,54 @@ format_technology_stack() {
     fi
 }
 
+# --- repo-local override: the appendix records new dependencies only --------
+# AGENTS.md § Stack is the hand-maintained baseline. Appending every plan's full
+# Language/Version + Primary Dependencies + Storage strings grew the appendix to
+# 51 near-identical items (~3 500 tokens loaded into every session), and the
+# whole-string duplicate check never matched because each plan words the field
+# differently. So an Active Technologies item is written only for the clauses of
+# Primary Dependencies that declare a new runtime, dev or workspace dependency
+# (Constitution IV), and Storage is not written at all — it is the feature's data
+# model, which its own plan.md and data-model.md already carry.
+#
+# Clauses are split on ";", " — " and ". "; a clause saying "no new" is never one.
+# Prints the matching clauses joined by "; ", markdown bold removed, or nothing.
+extract_new_dependencies() {
+    local framework="$1"
+    [[ -z "$framework" ]] && return 0
+    printf '%s\n' "$framework" | awk '
+        {
+            gsub(/\*\*/, "")
+            gsub(/ — /, ";"); gsub(/\. /, ";")
+            n = split($0, clauses, ";")
+            out = ""
+            for (i = 1; i <= n; i++) {
+                c = clauses[i]
+                sub(/^[ \t,]+/, "", c); sub(/[ \t,.]+$/, "", c)
+                lc = tolower(c)
+                if (lc ~ /no new/) continue
+                if (lc ~ /new (runtime|dev|workspace)/ || lc ~ /devdependenc/) {
+                    out = (out == "" ? c : out "; " c)
+                }
+            }
+            print out
+        }'
+}
+
+# One Active Technologies item, "- <slug>: <declaration>", capped at 200 chars
+# (agents-router.test.ts holds the same cap).
+format_dependency_entry() {
+    local branch="$1"
+    local deps="$2"
+    [[ -z "$deps" ]] && return 0
+    local entry="- $branch: $deps"
+    if (( ${#entry} > 200 )); then
+        entry="${entry:0:197}..."
+    fi
+    printf '%s\n' "$entry"
+}
+# -----------------------------------------------------------------------------
+
 #==============================================================================
 # Template and Content Generation Functions
 #==============================================================================
@@ -356,16 +404,8 @@ create_new_agent_file() {
         tech_stack="- ($escaped_branch)"
     fi
 
-    local recent_change
-    if [[ -n "$escaped_lang" && -n "$escaped_framework" ]]; then
-        recent_change="- $escaped_branch: Added $escaped_lang + $escaped_framework"
-    elif [[ -n "$escaped_lang" ]]; then
-        recent_change="- $escaped_branch: Added $escaped_lang"
-    elif [[ -n "$escaped_framework" ]]; then
-        recent_change="- $escaped_branch: Added $escaped_framework"
-    else
-        recent_change="- $escaped_branch: Added"
-    fi
+    # Slug only: what a feature added is in its plan.md (repo-local override)
+    local recent_change="- $escaped_branch"
 
     local substitutions=(
         "s|\[PROJECT NAME\]|$project_name|"
@@ -423,24 +463,16 @@ update_existing_agent_file() {
     _CLEANUP_FILES+=("$temp_file")
     
     # Process the file in one pass
-    local tech_stack=$(format_technology_stack "$NEW_LANG" "$NEW_FRAMEWORK")
     local new_tech_entries=()
-    local new_change_entry=""
-    
-    # Prepare new technology entries
-    if [[ -n "$tech_stack" ]] && ! grep -q "$tech_stack" "$target_file"; then
-        new_tech_entries+=("- $tech_stack ($CURRENT_BRANCH)")
-    fi
-    
-    if [[ -n "$NEW_DB" ]] && [[ "$NEW_DB" != "N/A" ]] && [[ "$NEW_DB" != "NEEDS CLARIFICATION" ]] && ! grep -q "$NEW_DB" "$target_file"; then
-        new_tech_entries+=("- $NEW_DB ($CURRENT_BRANCH)")
-    fi
-    
-    # Prepare new change entry
-    if [[ -n "$tech_stack" ]]; then
-        new_change_entry="- $CURRENT_BRANCH: Added $tech_stack"
-    elif [[ -n "$NEW_DB" ]] && [[ "$NEW_DB" != "N/A" ]] && [[ "$NEW_DB" != "NEEDS CLARIFICATION" ]]; then
-        new_change_entry="- $CURRENT_BRANCH: Added $NEW_DB"
+    local new_change_entry="- $CURRENT_BRANCH"
+
+    # Prepare new technology entries: a declared new dependency only, once per
+    # feature (repo-local override above extract_new_dependencies). -F, because
+    # the entry is markdown, not a regular expression.
+    local dependency_entry
+    dependency_entry=$(format_dependency_entry "$CURRENT_BRANCH" "$(extract_new_dependencies "$NEW_FRAMEWORK")")
+    if [[ -n "$dependency_entry" ]] && ! grep -qF -- "- $CURRENT_BRANCH: " "$target_file"; then
+        new_tech_entries+=("$dependency_entry")
     fi
     
     # Check if sections exist in the file
@@ -503,7 +535,12 @@ update_existing_agent_file() {
             in_changes_section=false
             continue
         elif [[ $in_changes_section == true ]] && [[ "$line" == "- "* ]]; then
-            # Keep only first 2 existing changes
+            # Keep only first 2 existing changes (3 with the new one), never a
+            # second line for the feature being planned; entries a merge brought
+            # in beyond the cap are dropped here too
+            if [[ "$line" == "$new_change_entry" ]]; then
+                continue
+            fi
             if [[ $existing_changes_count -lt 2 ]]; then
                 echo "$line" >> "$temp_file"
                 ((existing_changes_count++))
@@ -799,17 +836,15 @@ print_summary() {
     echo
     log_info "Summary of changes:"
     
-    if [[ -n "$NEW_LANG" ]]; then
-        echo "  - Added language: $NEW_LANG"
+    # Repo-local override: only a declared new dependency and the slug are written
+    local declared
+    declared=$(extract_new_dependencies "$NEW_FRAMEWORK")
+    if [[ -n "$declared" ]]; then
+        echo "  - Recorded new dependency: $declared"
+    else
+        echo "  - No new dependency declared; Active Technologies unchanged"
     fi
-    
-    if [[ -n "$NEW_FRAMEWORK" ]]; then
-        echo "  - Added framework: $NEW_FRAMEWORK"
-    fi
-    
-    if [[ -n "$NEW_DB" ]] && [[ "$NEW_DB" != "N/A" ]]; then
-        echo "  - Added database: $NEW_DB"
-    fi
+    echo "  - Recent Changes: $CURRENT_BRANCH (newest 3 kept)"
     
     echo
     log_info "Usage: $0 [claude|gemini|copilot|cursor-agent|qwen|opencode|codex|windsurf|junie|kilocode|auggie|roo|codebuddy|amp|shai|tabnine|kiro-cli|agy|bob|vibe|qodercli|kimi|trae|pi|iflow|forge|generic]"

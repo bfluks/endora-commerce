@@ -33,6 +33,13 @@ export interface RfqDetailActionsProps {
   rejectAction: (formData: FormData) => Promise<void>;
   convertAction: (formData: FormData) => Promise<void>;
   resubmitAction: (formData: FormData) => Promise<void>;
+  /**
+   * `specs/170-organization-roles/` (FR-030, FR-057) — "place order" fills the basket, so it is
+   * offered only when the member's role holds `carts.create`. Defaults to `true`.
+   */
+  canConvert?: boolean;
+  /** FR-040 — resubmitting raises a new quote request: `quote_requests.create`. Defaults to `true`. */
+  canResubmit?: boolean;
 }
 
 const NOTICE_ID = 'rfq-validity-notice';
@@ -48,6 +55,8 @@ export function RfqDetailActions({
   rejectAction,
   convertAction,
   resubmitAction,
+  canConvert = true,
+  canResubmit = true,
 }: RfqDetailActionsProps): ReactNode {
   const t = tForLocale(locale);
   /**
@@ -76,7 +85,7 @@ export function RfqDetailActions({
                 disabled={gate.acceptBlocked}
                 aria-describedby={gate.acceptBlocked ? NOTICE_ID : undefined}
               >
-                Akceptuj wersję
+                {t('quoteRequests.actions.acceptRevision')}
               </button>
             </form>
             {/*
@@ -91,7 +100,7 @@ export function RfqDetailActions({
               <input
                 type="text"
                 name="reason"
-                placeholder="Powód odrzucenia (opcjonalny)"
+                placeholder={t('quoteRequests.actions.rejectReasonPlaceholder')}
                 style={{
                   border: '1px solid var(--line)',
                   borderRadius: 'var(--r-sm)',
@@ -100,13 +109,13 @@ export function RfqDetailActions({
                 }}
               />
               <button type="submit" className="btn btn--outline">
-                Odrzuć
+                {t('quoteRequests.actions.reject')}
               </button>
             </form>
           </>
         ) : null}
 
-        {status === 'Approved' ? (
+        {status === 'Approved' && canConvert ? (
           <form action={convertAction}>
             <input type="hidden" name="rfqId" value={rfqId} />
             <button
@@ -115,17 +124,19 @@ export function RfqDetailActions({
               disabled={gate.convertBlocked}
               aria-describedby={gate.convertBlocked ? NOTICE_ID : undefined}
             >
-              Złóż zamówienie z tej oferty
+              {t('quoteRequests.actions.placeOrder')}
             </button>
           </form>
         ) : null}
 
-        <form action={resubmitAction}>
-          <input type="hidden" name="rfqId" value={rfqId} />
-          <button type="submit" className={anythingBlocked ? 'btn btn--dark' : 'btn btn--outline'}>
-            {t('quoteRequests.resubmit')}
-          </button>
-        </form>
+        {canResubmit ? (
+          <form action={resubmitAction}>
+            <input type="hidden" name="rfqId" value={rfqId} />
+            <button type="submit" className={anythingBlocked ? 'btn btn--dark' : 'btn btn--outline'}>
+              {t('quoteRequests.resubmit')}
+            </button>
+          </form>
+        ) : null}
       </div>
     </>
   );

@@ -27,6 +27,7 @@
  *
  * | What is known about the channel | Served |
  * | --- | --- |
+ * | it is closed to anonymous visitors | `200`, its name and that its content is for signed-in customers — nothing else |
  * | it may be indexed, and its content was read now or is remembered | `200`, the base and the content |
  * | its default robots forbids indexing | **`404`**, whatever the content holds (FR-027) |
  * | there is no such feature — `seo` is switched off, or the backend has none | **`404`** (FR-030) |
@@ -73,7 +74,11 @@ import {
   type CrawlerFiles,
   type CrawlerFilesRead,
 } from './crawler-policy';
-import { LLMS_TXT_CONDITIONAL_PAGES, renderLlmsTxtBase } from './llms-txt-base';
+import {
+  LLMS_TXT_CONDITIONAL_PAGES,
+  renderClosedStoreLlmsTxt,
+  renderLlmsTxtBase,
+} from './llms-txt-base';
 
 /** Which listed pages this storefront does not serve for a channel right now. */
 export interface UnservedPages {
@@ -85,6 +90,8 @@ export interface UnservedPages {
    * is served for the request in hand and may be kept by no cache.
    */
   readonly certain: boolean;
+  /** Feature 171 — where a served page lives when that is not its route (the blog's prefix). */
+  readonly servedAt?: Readonly<Record<string, string>>;
 }
 
 export interface LlmsTxtDeps {
@@ -134,6 +141,17 @@ export async function llmsTxtResponse(request: Request, deps: LlmsTxtDeps): Prom
   if (read.kind === 'none') return notFound();
 
   const configuration = read.value;
+
+  // A store closed to anonymous visitors: a file that names it and lists
+  // nothing, served whatever the policy and the operator's content say —
+  // neither is read for it, so neither being unreadable withholds it.
+  if (configuration.anonymousAccess === false) {
+    const closed = renderClosedStoreLlmsTxt(configuration.shop.name);
+    return new URL(request.url).searchParams.get('part') === 'base'
+      ? crawlerFileGeneratedPart(closed)
+      : crawlerFileServed(closed);
+  }
+
   const unreadable = configuration.unreadable ?? [];
   if (unreadable.includes(UNREADABLE_POLICY) || unreadable.includes(UNREADABLE_LLMS_TXT)) {
     return crawlerFileUnavailable('llms.txt');
@@ -148,6 +166,7 @@ export async function llmsTxtResponse(request: Request, deps: LlmsTxtDeps): Prom
   const base = renderLlmsTxtBase({
     shopName: configuration.shop.name,
     unservedPaths: unserved.paths,
+    servedAt: unserved.servedAt,
   });
 
   if (new URL(request.url).searchParams.get('part') === 'base') {

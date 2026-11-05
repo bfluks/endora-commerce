@@ -13,6 +13,10 @@ import {
   removeFromDefaultListAction,
   type ShoppingListOption,
 } from '../lib/actions/shoppingList';
+import { useLocalizedPath, useUrlLanguageState } from '../lib/i18n/localized-link';
+import { tForLocale } from '../lib/i18n/messages';
+import { shoppingListDisplayName } from '../lib/shopping-list-name';
+import { format } from '../lib/i18n/format';
 
 /**
  * Heart toggle for the customer's default shopping list. A first click adds the
@@ -41,9 +45,19 @@ export function AddToShoppingListButton(props: {
    * the other labelled buttons. The hover tooltip is dropped in this mode.
    */
   showLabel?: boolean;
+  /**
+   * The page language (issue #85), from the server component that renders the
+   * button. Until every caller passes it, the language the root layout put in
+   * the URL-language context is used — the same server-resolved page language,
+   * never the browser's.
+   */
+  locale?: string;
 }): ReactNode {
+  const urlLanguage = useUrlLanguageState();
+  const t = tForLocale(props.locale ?? urlLanguage.current);
   const [state, setState] = useState<'idle' | 'busy' | 'error'>('idle');
   /** Whether this product is currently in the customer's default list. */
+  const localize = useLocalizedPath();
   const [inList, setInList] = useState(false);
   /** The customer's shopping lists — drives the split-button list picker; the
    *  arrow only renders when there is more than one list. */
@@ -119,7 +133,7 @@ export function AddToShoppingListButton(props: {
           itemId: existingItemId,
         });
         if (!res.ok && res.reason === 'auth') {
-          window.location.href = '/login?next=/shopping-lists';
+          window.location.href = localize(`/login?next=${encodeURIComponent(localize('/shopping-lists'))}`);
           return;
         }
         if (!res.ok) throw new Error('list');
@@ -132,7 +146,7 @@ export function AddToShoppingListButton(props: {
           quantity: props.quantity && props.quantity > 0 ? Math.floor(props.quantity) : 1,
         });
         if (!res.ok && res.reason === 'auth') {
-          window.location.href = '/login?next=/shopping-lists';
+          window.location.href = localize(`/login?next=${encodeURIComponent(localize('/shopping-lists'))}`);
           return;
         }
         if (!res.ok) throw new Error('list');
@@ -163,7 +177,7 @@ export function AddToShoppingListButton(props: {
         quantity: props.quantity && props.quantity > 0 ? Math.floor(props.quantity) : 1,
       });
       if (!res.ok && res.reason === 'auth') {
-        window.location.href = '/login?next=/shopping-lists';
+        window.location.href = localize(`/login?next=${encodeURIComponent(localize('/shopping-lists'))}`);
         return;
       }
       if (!res.ok) throw new Error('list');
@@ -172,7 +186,7 @@ export function AddToShoppingListButton(props: {
       setInList(fresh.byProduct.has(props.productId));
       emitActionEvents('add_to_shopping_list', { sku: props.productId, quantity: props.quantity ?? 1 });
       window.dispatchEvent(new CustomEvent('b2b:shopping-list:changed'));
-      setAddedTo(option.name);
+      setAddedTo(shoppingListDisplayName(option, t));
       window.setTimeout(() => setAddedTo(null), 2200);
       setState('idle');
     } catch {
@@ -181,12 +195,12 @@ export function AddToShoppingListButton(props: {
     }
   };
 
-  const activeLabel = inList ? (props.removeLabel ?? 'Usuń z listy zakupowej') : props.label;
-  const tooltip = state === 'error' ? 'Nie udało się zmienić listy' : activeLabel;
+  const activeLabel = inList ? (props.removeLabel ?? t('card.list.remove')) : props.label;
+  const tooltip = state === 'error' ? t('card.list.failed') : activeLabel;
 
   if (props.showLabel) {
     const hasPicker = lists.length > 1;
-    const mainLabel = addedTo ? `Dodano do „${addedTo}”` : activeLabel;
+    const mainLabel = addedTo ? format(t('account.shoppingListButton.addedTo'), { name: addedTo }) : activeLabel;
     const baseClass = props.className ?? 'btn btn--outline';
     return (
       <div ref={rootRef} className="relative inline-flex">
@@ -210,7 +224,7 @@ export function AddToShoppingListButton(props: {
               className={`${baseClass} btn--split rounded-l-none border-l-0 px-2`}
               aria-haspopup="menu"
               aria-expanded={menuOpen}
-              aria-label="Wybierz listę zakupową"
+              aria-label={t('account.shoppingListButton.chooseList')}
             >
               <ChevronIcon open={menuOpen} />
             </button>
@@ -230,9 +244,9 @@ export function AddToShoppingListButton(props: {
                   disabled={state === 'busy'}
                   className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-[13px] text-fg hover:bg-surface-alt"
                 >
-                  <span className="truncate">{l.name}</span>
+                  <span className="truncate">{shoppingListDisplayName(l, t)}</span>
                   {l.isDefault ? (
-                    <span className="shrink-0 text-[11px] text-muted">domyślna</span>
+                    <span className="shrink-0 text-[11px] text-muted">{t('account.shoppingListButton.default')}</span>
                   ) : null}
                 </button>
               </li>

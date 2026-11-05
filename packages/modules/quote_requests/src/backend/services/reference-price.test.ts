@@ -46,14 +46,14 @@ const line = (productId: string, quantity = 1, extra: Record<string, unknown> = 
 });
 
 describe('resolveReferencePrices', () => {
-  it('asks the port for the owner on the request channel and normalises the amount to 2 dp', async () => {
+  it('asks the port for the owner on the request channel and keeps the amount at its four places (§10.18)', async () => {
     const { port, queries } = answeringPort();
     const out = await resolveReferencePrices(port, {
       owner: OWNER,
       salesChannelId: 'ch-a',
       lines: [line('p-1', 3, { variantId: 'v-1' })],
     });
-    expect(out).toEqual([{ amount: '120.00', currency: 'PLN' }]);
+    expect(out).toEqual([{ amount: '120.0000', currency: 'PLN' }]);
     expect(queries).toHaveLength(1);
     expect(queries[0]).toEqual({
       buyer: { customerAccountId: 'acc-1', organizationId: 'org-1' },
@@ -62,7 +62,13 @@ describe('resolveReferencePrices', () => {
     });
   });
 
-  it('stores no reference for an amount a numeric(12,2) column cannot hold, and still answers', async () => {
+  it('stores a sub-cent reference unrounded (owner ruling of 2026-10-25)', async () => {
+    const { port } = answeringPort(() => '0.0125');
+    const out = await resolveReferencePrices(port, { owner: OWNER, salesChannelId: null, lines: [line('p-1', 10_000)] });
+    expect(out).toEqual([{ amount: '0.0125', currency: 'PLN' }]);
+  });
+
+  it('stores no reference for an amount a numeric(14,4) column cannot hold, and still answers', async () => {
     // Review fix N1 — 1e10 and above passed the finite / non-negative guard and
     // then failed the insert with a 500. The reference is informational
     // (research R2), so such a line stores none and the request goes on.
@@ -78,8 +84,8 @@ describe('resolveReferencePrices', () => {
       salesChannelId: null,
       lines: [line('p-1'), line('p-2'), line('p-3'), line('p-4')],
     });
-    expect(out).toEqual([null, { amount: '9999999999.99', currency: 'PLN' }, null, {
-      amount: '9999999999.99',
+    expect(out).toEqual([null, { amount: '9999999999.9940', currency: 'PLN' }, null, {
+      amount: '9999999999.9900',
       currency: 'PLN',
     }]);
   });
@@ -113,8 +119,8 @@ describe('resolveReferencePrices', () => {
     });
     expect(out).toEqual([
       { amount: '1.00', currency: 'PLN' },
-      { amount: '7.50', currency: 'PLN' },
-      { amount: '7.50', currency: 'PLN' },
+      { amount: '7.5000', currency: 'PLN' },
+      { amount: '7.5000', currency: 'PLN' },
     ]);
     expect(queries[0]?.lines.map((l) => l.key)).toEqual(['1', '2']);
   });
@@ -126,7 +132,7 @@ describe('resolveReferencePrices', () => {
       salesChannelId: null,
       lines: [line('p-1'), line('p-unpriced')],
     });
-    expect(out).toEqual([{ amount: '5.00', currency: 'PLN' }, null]);
+    expect(out).toEqual([{ amount: '5.0000', currency: 'PLN' }, null]);
   });
 
   it('a thrown error means no reference for any resolved line (the write proceeds)', async () => {
@@ -193,7 +199,7 @@ describe('resolveReferencePrices', () => {
       5,
     ]);
     expect(out).toHaveLength(count);
-    expect(out.every((r) => r?.amount === '120.00')).toBe(true);
+    expect(out.every((r) => r?.amount === '120.0000')).toBe(true);
     // Keys stay the line's index in the request, across chunks.
     expect(queries[1]?.lines[0]?.key).toBe(String(REFERENCE_PRICE_CHUNK_SIZE));
   });
@@ -223,6 +229,8 @@ describe('assertValidSuppliedReferences (T6)', () => {
   it('accepts index-aligned, well-formed entries and nulls', () => {
     expect(() => assertValidSuppliedReferences([ok, null, { amount: '0', currency: 'EUR' }], 3)).not.toThrow();
     expect(() => assertValidSuppliedReferences([{ amount: '7.5', currency: 'USD' }], 1)).not.toThrow();
+    // A cart line's four-place unit price, handed over on conversion (§10.18).
+    expect(() => assertValidSuppliedReferences([{ amount: '0.0125', currency: 'PLN' }], 1)).not.toThrow();
   });
 
   it('refuses a length that is not the number of items', () => {
@@ -234,11 +242,11 @@ describe('assertValidSuppliedReferences (T6)', () => {
     ['negative', { amount: '-1.00', currency: 'PLN' }],
     ['non-finite', { amount: 'Infinity', currency: 'PLN' }],
     ['NaN', { amount: 'NaN', currency: 'PLN' }],
-    ['three decimals', { amount: '1.005', currency: 'PLN' }],
+    ['five decimals', { amount: '1.00005', currency: 'PLN' }],
     ['not a number', { amount: 'abc', currency: 'PLN' }],
     ['empty amount', { amount: '', currency: 'PLN' }],
     ['exponent', { amount: '1e3', currency: 'PLN' }],
-    ['beyond numeric(12,2)', { amount: '12345678901.00', currency: 'PLN' }],
+    ['beyond numeric(14,4)', { amount: '12345678901.00', currency: 'PLN' }],
     ['lower-case currency', { amount: '1.00', currency: 'pln' }],
     ['two-letter currency', { amount: '1.00', currency: 'PL' }],
     ['four-letter currency', { amount: '1.00', currency: 'PLNX' }],

@@ -16,7 +16,7 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | | |
 | --- | --- |
 | Module id | `import_export` |
-| Name | Import / Export |
+| Name | Import / export |
 | Version | `1.0.0` |
 | Ships from | `@endora-commerce/mod-import-export` |
 | Licence | `MIT` |
@@ -30,14 +30,17 @@ An operator switches this module on and off on **/platform/modules**. The choice
 | Module | Binding | What it means |
 | --- | --- | --- |
 | `auth` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
+| `catalog` | no | degrades-without `catalogAttributeReadPort` — The import/export centre stops offering the Products import; every other entity is unaffected. |
 | `catalog` | no | degrades-without `catalogBulkImportPort` — The import/export centre stops offering the Products and Categories imports; every other entity is unaffected. |
 | `catalog` | no | degrades-without `catalogCategoryReadPort` — The import/export centre stops offering the Categories entity; every other entity is unaffected. |
+| `catalog` | no | degrades-without `catalogProductAvailabilityPort` — The import/export centre stops offering the Products import; every other entity is unaffected. |
 | `catalog` | no | degrades-without `catalogProductReadPort` — The import/export centre stops offering the Products and Stock entities; every other entity is unaffected. |
 | `customer_accounts` | no | degrades-without `customerAccountReadPort` — The import/export centre stops offering the Customers export; every other entity is unaffected. |
 | `inventory` | no | degrades-without `inventoryStockImportPort` — The import/export centre stops offering the Stock import; every other entity is unaffected. |
 | `inventory` | no | degrades-without `inventoryStockReadPort` — The import/export centre stops offering the Stock entity; every other entity is unaffected. |
 | `orders` | no | degrades-without `orderReadPort` — The import/export centre stops offering the Orders export; every other entity is unaffected. |
 | `organizations` | no | degrades-without `organizationDetailsPort` — The import/export centre stops offering the Customers export; every other entity is unaffected. |
+| `organizations` | no | degrades-without `organizationRoleReadPort` — The import/export centre stops offering the Customers export; every other entity is unaffected. |
 
 ## Permissions
 

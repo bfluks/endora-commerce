@@ -1,6 +1,4 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import {
   acceptRevision,
   convertRfqToOrder,
@@ -11,13 +9,23 @@ import {
   type RfqStatus,
 } from '../../../../lib/api/rfq';
 import { getSessionCookie } from '../../../../lib/session';
+import { getCommerceAbilitiesAction } from '../../../../lib/actions/cart';
 import { getServerContext } from '../../../../lib/server-context';
 import { StorefrontApiError } from '../../../../lib/api/client';
+import { isRecordId } from '../../../../lib/record-id';
 import { formatMoney } from '../../../../lib/i18n/money';
 import { rfqValidity, rfqValidityGate } from '../../../../lib/quote-requests/validity';
 import { RfqValidityMeta } from '../../../../components/rfq/RfqValidityMeta';
 import { RfqDetailActions } from '../../../../components/rfq/RfqDetailActions';
+import { lineAmountHalfUp, unitPriceDisplayText } from '@endora-commerce/contracts';
+import { GroupedLineRows, quoteSectionTotals } from '../../../../components/line-groups/GroupedLineRows';
+import { describeRfqDiff } from '../../../../lib/quote-requests/describe-diff';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
+import { LocalizedLink } from '../../../../lib/i18n/localized-link';
+import { tForLocale, type MessageKey } from '../../../../lib/i18n/messages';
+import { format } from '../../../../lib/i18n/format';
+import { quoteRequestEventLabel, quoteRequestStatusLabel } from '../../../../lib/account/labels';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -58,26 +66,33 @@ export default async function QuoteRequestDetailPage({
 }): Promise<ReactNode> {
   const session = await getSessionCookie();
   const { id } = await params;
-  if (!session) redirect(`/login?next=/quote-requests/${id}`);
+  if (!session) return await localeRedirect(`/login?next=/quote-requests/${id}`);
+
+  const { locale } = await getServerContext();
+  const t = tForLocale(locale);
+
+  const notFound = (
+    <div className="mx-auto max-w-[1360px] px-[24px]" style={{ paddingTop: 24, paddingBottom: 48 }}>
+      <p className="muted">{t('account.quoteRequest.notFound')}</p>
+      <LocalizedLink href="/quote-requests" className="btn btn--outline btn--sm">
+        {t('account.quoteRequest.backToList')}
+      </LocalizedLink>
+    </div>
+  );
+  // Issue #749 — an id that cannot name a request is not asked for: the API answers it 500.
+  if (!isRecordId(id)) return notFound;
 
   let rfq: RfqDetail;
   try {
     rfq = await getRfqById(session, id);
   } catch (err) {
-    if (err instanceof StorefrontApiError && err.status === 404) {
-      return (
-        <div className="mx-auto max-w-[1360px] px-[24px]" style={{ paddingTop: 24, paddingBottom: 48 }}>
-          <p className="muted">Nie znaleziono zapytania ofertowego.</p>
-          <Link href="/quote-requests" className="btn btn--outline btn--sm">
-            ← Lista zapytań
-          </Link>
-        </div>
-      );
-    }
+    if (err instanceof StorefrontApiError && err.status === 404) return notFound;
     throw err;
   }
   const sp = await searchParams;
-  const { locale } = await getServerContext();
+  // 170 (FR-030, FR-040, FR-057) — "place order" fills the basket (`carts.create`);
+  // "resubmit" raises a new quote request (`quote_requests.create`).
+  const abilities = await getCommerceAbilitiesAction();
   // The server's clock, taken once so the meta sentence and the gate below it
   // cannot disagree about which side of the deadline this render is on.
   const now = new Date();
@@ -88,36 +103,36 @@ export default async function QuoteRequestDetailPage({
     validity,
   });
 
-  const total = rfq.items.every((it) => it.agreedUnitPrice !== null)
-    ? rfq.items.reduce((s, it) => s + (it.agreedUnitPrice ?? 0) * it.quantity, 0)
-    : rfq.items.every((it) => it.desiredUnitPrice !== null)
-      ? rfq.items.reduce((s, it) => s + (it.desiredUnitPrice ?? 0) * it.quantity, 0)
-      : null;
   const currency = rfq.items[0]?.lineCurrency ?? 'PLN';
   // Quote prices are net; surface VAT + gross. `rfq.taxRate` is the flat rate
-  // resolved server-side from the organization's VAT status + tax rules.
+  // resolved server-side from the organization's VAT status + tax rules. The
+  // section rule, for the whole quote: agreed prices on every line, else desired
+  // prices on every line, VAT on the net total — exact (issue #417).
   const taxRate = rfq.taxRate ?? 0;
-  const taxTotal = total !== null ? total * taxRate : null;
-  const grossTotal = total !== null && taxTotal !== null ? total + taxTotal : null;
+  const totals = quoteSectionTotals(rfq.items, taxRate);
+  const total = totals.net;
+  const taxTotal = totals.vat;
+  const grossTotal = totals.gross;
   const fmt = (n: number): string => formatMoney(n, currency);
 
   return (
     <div className="mx-auto max-w-[1360px] px-[24px]" style={{ paddingTop: 24, paddingBottom: 48 }}>
-      <Link href="/quote-requests" className="btn btn--ghost btn--sm" style={{ marginBottom: 8 }}>
-        ← Lista zapytań
-      </Link>
+      <LocalizedLink href="/quote-requests" className="btn btn--ghost btn--sm" style={{ marginBottom: 8 }}>
+        {t('account.quoteRequest.backToList')}
+      </LocalizedLink>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
-        <h1>Zapytanie #{rfq.businessId}</h1>
+        <h1>{format(t('account.quoteRequest.heading'), { number: rfq.businessId })}</h1>
         <RfqStatusBadge
           status={rfq.status}
           awaiting={rfq.awaitingCustomerRevisionAcceptance}
+          locale={locale}
         />
       </div>
       <p className="muted" style={{ fontSize: 13, marginBottom: 18 }}>
-        Utworzone {new Date(rfq.createdAt).toLocaleString('pl-PL')}
+        {format(t('account.quoteRequest.created'), { date: new Date(rfq.createdAt).toLocaleString(locale) })}
         {rfq.submittedAt
-          ? ` · zgłoszone ${new Date(rfq.submittedAt).toLocaleString('pl-PL')}`
+          ? ` · ${format(t('account.quoteRequest.submitted'), { date: new Date(rfq.submittedAt).toLocaleString(locale) })}`
           : null}
         {/*
           The deadline reads as a third instant of the same kind, beside the two
@@ -159,20 +174,20 @@ export default async function QuoteRequestDetailPage({
             fontSize: 13,
           }}
         >
-          <strong>Powód anulowania: </strong>
+          <strong>{t('account.quoteRequest.cancellationReason')} </strong>
           {rfq.cancellationReason}
         </p>
       ) : null}
 
       {rfq.headerNote ? (
         <p style={{ fontSize: 13, color: 'var(--ink-700)', marginBottom: 18 }}>
-          <strong>Uwagi: </strong>
+          <strong>{t('account.quoteRequest.notes')} </strong>
           {rfq.headerNote}
         </p>
       ) : null}
 
       {rfq.awaitingCustomerRevisionAcceptance && rfq.comparisonAgainstLastSeen ? (
-        <ComparisonBlock comparison={rfq.comparisonAgainstLastSeen} />
+        <ComparisonBlock comparison={rfq.comparisonAgainstLastSeen} locale={locale} />
       ) : null}
 
       <div
@@ -187,36 +202,50 @@ export default async function QuoteRequestDetailPage({
         <table className="industria-orders" style={{ width: '100%' }}>
           <thead>
             <tr>
-              <th>Produkt</th>
-              <th>Ilość</th>
-              <th>Cena żądana</th>
-              <th>Cena uzgodniona</th>
-              <th>Razem</th>
+              <th>{t('account.common.product')}</th>
+              <th>{t('account.quoteRequest.col.quantity')}</th>
+              <th>{t('account.quoteRequest.col.requestedPrice')}</th>
+              <th>{t('account.quoteRequest.col.agreedPrice')}</th>
+              <th>{t('account.common.total')}</th>
             </tr>
           </thead>
           <tbody>
-            {rfq.items.map((it) => {
-              const lineTotal =
-                it.agreedUnitPrice !== null
-                  ? it.agreedUnitPrice * it.quantity
-                  : it.desiredUnitPrice !== null
-                    ? it.desiredUnitPrice * it.quantity
-                    : null;
-              return (
-                <tr key={it.id}>
-                  <td>
-                    <strong>{it.productName}</strong>
-                    {it.lineNote ? <div className="muted" style={{ fontSize: 11 }}>{it.lineNote}</div> : null}
-                  </td>
-                  <td>{it.quantity}</td>
-                  <td>{it.desiredUnitPrice !== null ? it.desiredUnitPrice.toFixed(2) : '—'}</td>
-                  <td>{it.agreedUnitPrice !== null ? it.agreedUnitPrice.toFixed(2) : '—'}</td>
-                  <td style={{ fontWeight: 600 }}>
-                    {lineTotal !== null ? formatMoney(lineTotal, it.lineCurrency) : '—'}
-                  </td>
-                </tr>
-              );
-            })}
+            {/*
+              Feature 159 — the groups the representative arranged, each headed
+              and summarised by this page's own totals rule; a quote with no
+              group renders exactly these rows.
+            */}
+            <GroupedLineRows
+              groups={rfq.itemGroups ?? []}
+              lines={rfq.items}
+              columnCount={5}
+              locale={locale}
+              currency={currency}
+              taxRate={taxRate}
+              renderRow={(it) => {
+                const lineTotal =
+                  it.agreedUnitPrice !== null
+                    ? Number(lineAmountHalfUp(it.agreedUnitPrice, it.quantity))
+                    : it.desiredUnitPrice !== null
+                      ? Number(lineAmountHalfUp(it.desiredUnitPrice, it.quantity))
+                      : null;
+                return (
+                  <tr key={it.id}>
+                    <td>
+                      <strong>{it.productName}</strong>
+                      {it.lineNote ? <div className="muted" style={{ fontSize: 11 }}>{it.lineNote}</div> : null}
+                    </td>
+                    <td>{it.quantity}</td>
+                    {/* Unit prices: their significant places, up to four (owner ruling of 2026-10-25). */}
+                    <td>{it.desiredUnitPrice !== null ? unitPriceDisplayText(it.desiredUnitPrice) : '—'}</td>
+                    <td>{it.agreedUnitPrice !== null ? unitPriceDisplayText(it.agreedUnitPrice) : '—'}</td>
+                    <td style={{ fontWeight: 600 }}>
+                      {lineTotal !== null ? formatMoney(lineTotal, it.lineCurrency) : '—'}
+                    </td>
+                  </tr>
+                );
+              }}
+            />
           </tbody>
           {total !== null ? (
             <tfoot>
@@ -224,7 +253,7 @@ export default async function QuoteRequestDetailPage({
                 <>
                   <tr>
                     <td colSpan={4} style={{ textAlign: 'right' }}>
-                      Suma netto
+                      {t('account.quoteRequest.totals.net')}
                     </td>
                     <td>
                       {fmt(total)}
@@ -232,7 +261,7 @@ export default async function QuoteRequestDetailPage({
                   </tr>
                   <tr>
                     <td colSpan={4} style={{ textAlign: 'right' }}>
-                      VAT ({(taxRate * 100).toFixed(0)}%)
+                      {format(t('account.quoteRequest.totals.vat'), { rate: (taxRate * 100).toFixed(0) })}
                     </td>
                     <td>
                       {fmt(taxTotal ?? 0)}
@@ -242,7 +271,7 @@ export default async function QuoteRequestDetailPage({
               ) : null}
               <tr>
                 <th colSpan={4} style={{ textAlign: 'right' }}>
-                  {taxRate > 0 ? 'Suma brutto' : 'Suma'}
+                  {taxRate > 0 ? t('account.quoteRequest.totals.gross') : t('account.common.total')}
                 </th>
                 <th>
                   {fmt(grossTotal ?? total)}
@@ -271,11 +300,13 @@ export default async function QuoteRequestDetailPage({
         rejectAction={rejectAction}
         convertAction={convertAction}
         resubmitAction={resubmitAction}
+        canConvert={abilities.editCart}
+        canResubmit={abilities.requestQuote}
       />
 
       {rfq.events.length > 0 ? (
         <section style={{ marginTop: 32 }}>
-          <h2>Historia zmian</h2>
+          <h2>{t('account.quoteRequest.history')}</h2>
           <ul
             style={{
               listStyle: 'none',
@@ -290,10 +321,10 @@ export default async function QuoteRequestDetailPage({
                 style={{ padding: '10px 0 10px 16px', borderBottom: '1px dashed var(--line)' }}
               >
                 <div style={{ fontSize: 12, color: 'var(--ink-500)' }}>
-                  {new Date(e.createdAt).toLocaleString('pl-PL')}
+                  {new Date(e.createdAt).toLocaleString(locale)}
                   {e.actorRoleLabel ? ` · ${e.actorRoleLabel}` : null}
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 500 }}>{describeEvent(e.eventType)}</div>
+                <div style={{ fontSize: 13, fontWeight: 500 }}>{quoteRequestEventLabel(t, e.eventType)}</div>
               </li>
             ))}
           </ul>
@@ -305,8 +336,10 @@ export default async function QuoteRequestDetailPage({
 
 function ComparisonBlock({
   comparison,
+  locale,
 }: {
   comparison: NonNullable<RfqDetail['comparisonAgainstLastSeen']>;
+  locale: string;
 }): ReactNode {
   if (comparison.diff.length === 0) return null;
   return (
@@ -320,73 +353,50 @@ function ComparisonBlock({
       }}
     >
       <strong style={{ display: 'block', marginBottom: 8 }}>
-        Co zmieniło się od Twojej ostatniej wizyty:
+        {tForLocale(locale)('account.quoteRequest.changesSinceLastVisit')}
       </strong>
       <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13 }}>
         {comparison.diff.map((d, i) => (
-          <li key={i}>{describeDiff(d)}</li>
+          <li key={i}>{describeRfqDiff(d, locale)}</li>
         ))}
       </ul>
     </div>
   );
 }
 
-function describeDiff(d: NonNullable<RfqDetail['comparisonAgainstLastSeen']>['diff'][number]): string {
-  switch (d.kind) {
-    case 'header_note':
-      return `Uwagi: „${d.before ?? '—'}” → „${d.after ?? '—'}”`;
-    case 'line_added':
-      return `Dodano: ${d.productName} × ${d.quantity}${d.agreedUnitPrice !== null ? ` po ${d.agreedUnitPrice.toFixed(2)}` : ''}`;
-    case 'line_removed':
-      return `Usunięto: ${d.productName}`;
-    case 'line_quantity':
-      return `${d.productName}: ilość ${d.before} → ${d.after}`;
-    case 'line_agreed_unit_price':
-      return `${d.productName}: cena ${d.before !== null ? d.before.toFixed(2) : '—'} → ${d.after !== null ? d.after.toFixed(2) : '—'}`;
-  }
-}
-
-function describeEvent(t: string): string {
-  const map: Record<string, string> = {
-    created: 'Utworzono zapytanie',
-    submitted: 'Zgłoszono do realizacji',
-    modified: 'Zmodyfikowano',
-    approved: 'Zaakceptowano',
-    canceled: 'Anulowano',
-    expired: 'Wygasło',
-    completed: 'Zrealizowane',
-    'customer-accepted-revision': 'Klient zaakceptował zmiany',
-    'customer-rejected-revision': 'Klient odrzucił zmiany',
-    're-submitted': 'Złożono ponownie',
-    'note-added': 'Dodano notatkę',
-  };
-  return map[t] ?? t;
-}
-
 function RfqStatusBadge({
   status,
   awaiting,
+  locale,
 }: {
   status: RfqStatus;
   awaiting: boolean;
+  locale: string;
 }): ReactNode {
+  const t = tForLocale(locale);
   if (awaiting) {
     return (
       <span className="industria-status industria-status--processing">
-        Oczekuje akceptacji
+        {t('account.quoteRequestStatus.awaitingAcceptance')}
       </span>
     );
   }
-  const map: Record<RfqStatus, { cls: string; label: string }> = {
-    Pending: { cls: 'industria-status--processing', label: 'Oczekuje' },
-    'Created from admin': { cls: 'industria-status--processing', label: 'Od opiekuna' },
-    Approved: { cls: 'industria-status--paid', label: 'Zatwierdzone' },
-    Completed: { cls: 'industria-status--delivered', label: 'Zrealizowane' },
-    Canceled: { cls: 'industria-status--draft', label: 'Anulowane' },
-    Expired: { cls: 'industria-status--draft', label: 'Wygasłe' },
+  const tone: Record<RfqStatus, string> = {
+    Pending: 'industria-status--processing',
+    'Created from admin': 'industria-status--processing',
+    Approved: 'industria-status--paid',
+    Completed: 'industria-status--delivered',
+    Canceled: 'industria-status--draft',
+    Expired: 'industria-status--draft',
   };
-  const entry = map[status] ?? { cls: 'industria-status--draft', label: status };
-  return <span className={`industria-status ${entry.cls}`}>{entry.label}</span>;
+  const cls = tone[status] ?? 'industria-status--draft';
+  return <span className={`industria-status ${cls}`}>{quoteRequestStatusLabel(t, status)}</span>;
+}
+
+/** A server action's own refusal, in the page's language. */
+async function failure(key: MessageKey): Promise<string> {
+  const { locale } = await getServerContext();
+  return tForLocale(locale)(key);
 }
 
 async function acceptAction(formData: FormData): Promise<void> {
@@ -394,14 +404,14 @@ async function acceptAction(formData: FormData): Promise<void> {
   const rfqId = formData.get('rfqId') as string;
   const expectedRevisionNumber = Number(formData.get('expectedRevisionNumber'));
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   try {
     await acceptRevision(session, rfqId, expectedRevisionNumber);
   } catch (err) {
-    const msg = err instanceof StorefrontApiError ? err.message : 'Nie udało się zaakceptować zmian.';
-    redirect(`/quote-requests/${rfqId}?error=${encodeURIComponent(msg)}`);
+    const msg = err instanceof StorefrontApiError ? err.detail : await failure('account.quoteRequest.acceptFailed');
+    return await localeRedirect(`/quote-requests/${rfqId}?error=${encodeURIComponent(msg)}`);
   }
-  redirect(`/quote-requests/${rfqId}`);
+  return await localeRedirect(`/quote-requests/${rfqId}`);
 }
 
 async function rejectAction(formData: FormData): Promise<void> {
@@ -410,27 +420,27 @@ async function rejectAction(formData: FormData): Promise<void> {
   const expectedRevisionNumber = Number(formData.get('expectedRevisionNumber'));
   const reason = (formData.get('reason') as string | null) ?? undefined;
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   try {
     await rejectRevision(session, rfqId, expectedRevisionNumber, reason || undefined);
   } catch (err) {
-    const msg = err instanceof StorefrontApiError ? err.message : 'Nie udało się odrzucić zmian.';
-    redirect(`/quote-requests/${rfqId}?error=${encodeURIComponent(msg)}`);
+    const msg = err instanceof StorefrontApiError ? err.detail : await failure('account.quoteRequest.rejectFailed');
+    return await localeRedirect(`/quote-requests/${rfqId}?error=${encodeURIComponent(msg)}`);
   }
-  redirect(`/quote-requests/${rfqId}`);
+  return await localeRedirect(`/quote-requests/${rfqId}`);
 }
 
 async function convertAction(formData: FormData): Promise<void> {
   'use server';
   const rfqId = formData.get('rfqId') as string;
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   try {
     const { checkoutUrl } = await convertRfqToOrder(session, rfqId);
-    redirect(checkoutUrl);
+    return await localeRedirect(checkoutUrl);
   } catch (err) {
     if (err instanceof StorefrontApiError) {
-      redirect(`/quote-requests/${rfqId}?error=${encodeURIComponent(err.message)}`);
+      return await localeRedirect(`/quote-requests/${rfqId}?error=${encodeURIComponent(err.detail)}`);
     }
     throw err;
   }
@@ -440,12 +450,12 @@ async function resubmitAction(formData: FormData): Promise<void> {
   'use server';
   const rfqId = formData.get('rfqId') as string;
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   try {
     const created = await resubmitRfq(session, rfqId);
-    redirect(`/quote-requests/${created.id}`);
+    return await localeRedirect(`/quote-requests/${created.id}`);
   } catch (err) {
-    const msg = err instanceof StorefrontApiError ? err.message : 'Nie udało się złożyć ponownie.';
-    redirect(`/quote-requests/${rfqId}?error=${encodeURIComponent(msg)}`);
+    const msg = err instanceof StorefrontApiError ? err.detail : await failure('account.quoteRequest.resubmitFailed');
+    return await localeRedirect(`/quote-requests/${rfqId}?error=${encodeURIComponent(msg)}`);
   }
 }

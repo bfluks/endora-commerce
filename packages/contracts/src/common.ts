@@ -15,6 +15,21 @@ export type IsoDateTime = z.infer<typeof isoDateTimeSchema>;
 export const uuidSchema = z.string().uuid();
 export type Uuid = z.infer<typeof uuidSchema>;
 
+/** Whether `YYYY-MM-DD` names a day the calendar has: `2026-02-31` and `2026-13-01` do not. */
+export function isCalendarDate(value: string): boolean {
+  const [year = 0, month = 0, day = 0] = value.split('-').map(Number);
+  if (year < 1) return false;
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+/** A calendar date as `YYYY-MM-DD`, refusing a day the calendar does not have. */
+export const calendarDateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD')
+  .refine(isCalendarDate, 'Not a date of the calendar');
+
 /**
  * Monetary amount — decimal string or number in the minor-unit-plus-currency form.
  * We keep amount as a `number` on the wire; backend persists as numeric(14,2).
@@ -86,10 +101,6 @@ export type OrderStatus = z.infer<typeof orderStatusSchema>;
 /** Payment lifecycle statuses (FR-014). `failed` added by feature 034 (payment-method adapter framework). */
 export const paymentStatusSchema = z.enum(['awaiting_payment', 'paid', 'failed', 'deferred', 'refunded']);
 export type PaymentStatus = z.infer<typeof paymentStatusSchema>;
-
-/** Roles within a Customer Organization (FR-042). */
-export const organizationRoleSchema = z.enum(['organization_admin', 'regular_user']);
-export type OrganizationRole = z.infer<typeof organizationRoleSchema>;
 
 /** Supported Sales Channel visibility modes (R-18 + FR-106). */
 export const productVisibilitySchema = z.enum(['public', 'logged_in_only', 'organization_restricted']);

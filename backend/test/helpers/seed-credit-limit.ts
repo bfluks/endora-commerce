@@ -9,7 +9,9 @@ import {
   SEED_DELIVERY_METHOD_ID,
 } from './seed-commerce.js';
 import { Order } from './package-entities.js';
+import { systemDefaultSalesChannelId } from './sales-channel-fixtures.js';
 import { Payment } from './package-entities.js';
+import { predefinedRoleIdOf } from './seed-organization-roles.js';
 
 /**
  * US6 fixture IDs.
@@ -57,7 +59,7 @@ export async function seedCreditLimitRaceFixture(em: EntityManager): Promise<voi
     passwordHash,
     firstName: 'CL',
     lastName: 'A',
-    role: 'regular_user',
+    organizationRoleId: await predefinedRoleIdOf(em, TEST_ORGANIZATION_ID, 'member'),
     emailVerifiedAt: new Date(),
   });
   const b = em.create(CustomerAccount, {
@@ -67,17 +69,19 @@ export async function seedCreditLimitRaceFixture(em: EntityManager): Promise<voi
     passwordHash,
     firstName: 'CL',
     lastName: 'B',
-    role: 'regular_user',
+    organizationRoleId: await predefinedRoleIdOf(em, TEST_ORGANIZATION_ID, 'member'),
     emailVerifiedAt: new Date(),
   });
   await em.persistAndFlush([a, b]);
 
   // 4. Each gets a cart with quantity 50 of product 101 (price 19.99) → ~999.50.
+  const salesChannelId = await systemDefaultSalesChannelId(em);
   for (const cust of [a, b]) {
     const cart = em.create(Cart, {
       customerAccountId: cust.id,
       organizationId: TEST_ORGANIZATION_ID,
       status: 'active',
+      salesChannelId,
     });
     await em.persistAndFlush(cart);
     const item = em.create(CartItem, {

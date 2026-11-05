@@ -7,6 +7,7 @@
  * sales-channel header.
  */
 
+import { channelHeaders, SALES_CHANNEL_REQUEST_HEADER } from '../../../lib/channel/channel-header';
 import { backendBaseUrl } from '../../../lib/env.mjs';
 
 export const dynamic = 'force-dynamic';
@@ -17,9 +18,8 @@ function forwardHeaders(request: Request): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   const cookie = request.headers.get('cookie');
   if (cookie) headers['cookie'] = cookie;
-  const channel = request.headers.get('x-sales-channel');
-  if (channel) headers['X-Sales-Channel'] = channel;
-  return headers;
+  // The channel the middleware stamped (or a proxy did) on this request.
+  return { ...headers, ...channelHeaders(request.headers.get(SALES_CHANNEL_REQUEST_HEADER)) };
 }
 
 export async function POST(request: Request): Promise<Response> {

@@ -180,6 +180,55 @@ describe('robots.txt — what is served', () => {
   });
 });
 
+/**
+ * A store closed to anonymous visitors (`specs/154-sales-channel-access/`):
+ * nothing on it is public, so there is nothing a crawler may fetch. The file
+ * is still served — a crawler that cannot read it assumes it may fetch
+ * everything — and it closes the whole site.
+ */
+describe('robots.txt — on a store closed to anonymous visitors', () => {
+  const CLOSED = 'User-Agent: *\nDisallow: /\n';
+
+  it('disallows everything, and names no sitemap', async () => {
+    const served = await serve({ kind: 'value', value: files({ anonymousAccess: false }) }).response;
+    expectServedHeaders(served);
+    const body = await served.text();
+    expect(body).toBe(CLOSED);
+    expect(body).not.toMatch(/^sitemap\s*:/im);
+    expect(body).not.toMatch(/^allow\s*:/im);
+  });
+
+  it('serves none of the operator’s custom instructions — the closed-store rule wins', async () => {
+    // A group written for one crawler would replace `Disallow: /` for that
+    // crawler and open the store to it.
+    const served = await serve({
+      kind: 'value',
+      value: files({ anonymousAccess: false, robotsTxtCustom: 'User-agent: GPTBot\nAllow: /\n' }),
+    }).response;
+    expect(await served.text()).toBe(CLOSED);
+  });
+
+  it('is the same whatever the default robots policy says, or whether it could be read', async () => {
+    for (const value of [
+      files({ anonymousAccess: false, index: false, follow: false }),
+      files({ anonymousAccess: false, index: false, follow: false, unreadable: ['policy'] }),
+      files({ anonymousAccess: false, unreadable: ['llmsTxtAdditional'] }),
+    ]) {
+      expect(await (await serve({ kind: 'value', value }).response).text()).toBe(CLOSED);
+    }
+  });
+
+  it('is unchanged on an open store, and when the backend does not say', async () => {
+    for (const anonymousAccess of [true, undefined]) {
+      const served = await serve({
+        kind: 'value',
+        value: files({ robotsTxtCustom: CUSTOM, ...(anonymousAccess === undefined ? {} : { anonymousAccess }) }),
+      }).response;
+      expect(await served.text()).toBe(`${BEFORE}\n${CUSTOM}`);
+    }
+  });
+});
+
 describe('robots.txt — when the instructions cannot be read (FR-022)', () => {
   it('answers a temporary failure when nothing was ever known — never a file that omits them', async () => {
     const { response } = serve({ kind: 'unknown' });

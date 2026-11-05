@@ -1,11 +1,11 @@
 ---
 title: customer_accounts
-description: Logowanie klientów, reset hasła, 2FA, przypisanie roli
+description: Logowanie klientów, reset hasła, weryfikacja dwuetapowa, przypisanie roli
 ---
 
 # `customer_accounts`
 
-Dane każdego użytkownika po stronie klienta: logowanie, zarządzanie hasłem, opcjonalne 2FA i rola
+Dane każdego użytkownika po stronie klienta: logowanie, zarządzanie hasłem, opcjonalna weryfikacja dwuetapowa i rola
 w organizacji. Moduł korzysta ze wspólnej usługi sesji z `auth`; odpowiada za tożsamość użytkowników
 po stronie klienta.
 
@@ -13,7 +13,7 @@ po stronie klienta.
 
 | Metoda i ścieżka | Przeznaczenie |
 | --- | --- |
-| `POST /api/v1/auth/login` | E-mail i hasło (oraz krok TOTP, gdy włączone jest 2FA) |
+| `POST /api/v1/auth/login` | E-mail i hasło (oraz krok TOTP, gdy włączona jest weryfikacja dwuetapowa) |
 | `POST /api/v1/auth/logout` | Zakończenie sesji |
 | `POST /api/v1/me/password` | Zmiana hasła (odrzuca błędne `currentPassword`). Udana zmiana wylogowuje konto ze wszystkich pozostałych sesji (sesja, z której wysłano żądanie, zostaje), unieważnia niewykorzystane tokeny resetu hasła i wycofuje każde rozpoczęte, a niedokończone logowanie. |
 | `POST /api/v1/auth/password-reset/request` | Rozpoczęcie resetu hasła. Nowy link unieważnia wszystkie wcześniejsze niewykorzystane, więc działa tylko ten z najnowszej wiadomości. Powtarzane żądania dla jednego adresu są ograniczane (zob. niżej) |
@@ -59,17 +59,58 @@ wpis dziennika audytu `customer_account.authentication_throttled`. Jeśli Redis
 nie odpowie w ciągu trzech sekund, próba jest odrzucana z **503
 `CUSTOMER_AUTHENTICATION_UNAVAILABLE`**.
 
+## Role w organizacji
+
+Każde konto ma dokładnie jedną **rolę w organizacji**, rolę własnej
+Organizacji: *Administrator*, *Członek* albo rolę niestandardową zdefiniowaną
+przez administratorów Organizacji (same role, ich uprawnienia i trasy należą do
+modułu `organizations`). Przypisanie pilnuje baza danych: konto nie może
+wskazywać roli innej Organizacji, a roli, którą ma jeszcze jakiekolwiek konto —
+także zablokowane lub usunięte — nie da się usunąć.
+
+- **Nowe konta.** Osoba rejestrująca firmę jest jej *Administratorem*. Klient
+  indywidualny (B2C) jest *Administratorem* własnej, osobistej Organizacji — po
+  samodzielnej rejestracji i po pierwszym logowaniu przez zewnętrznego dostawcę
+  tożsamości. Zaproszony członek otrzymuje rolę wskazaną w zaproszeniu.
+- **Przeniesienie konta.** Gdy operator przypisuje klienta do innej firmy,
+  klient zostaje jej *Administratorem*, jeśli administrował firmą, z której
+  przychodzi, a w przeciwnym razie jej *Członkiem*; rola niestandardowa nie
+  przechodzi. Klient przenoszony z własnej osobistej Organizacji zostaje
+  *Członkiem*. Odłączenie klienta od firmy przywraca go jako *Administratora*
+  jego osobistej Organizacji.
+- **Ostatni administrator.** Organizacja zachowuje co najmniej jednego
+  aktywnego administratora: degradacja lub usunięcie ostatniego jest odrzucane
+  z **409 `CANNOT_DEMOTE_LAST_ADMIN`** / **409 `CANNOT_REMOVE_LAST_ADMIN`**.
+  Zablokowany administrator się nie liczy. Gdy dwóch administratorów w tej
+  samej chwili rezygnuje z tej roli, uda się to tylko jednemu.
+- **Następne żądanie.** Sesja odczytuje konto przy każdym żądaniu, więc zmiana
+  roli obowiązuje od najbliższego żądania członka, na każdym serwerze.
+
+Zmiany ról są poleceniami (Commands), a każde jest zapisywane w dzienniku
+audytu przy Organizacji:
+
+| Akcja | Kiedy |
+| --- | --- |
+| `customer_account.change_role` | Konto przechodzi do innej roli — także raz na członka, gdy usuwana jest rola, którą ma, a jej członkowie przechodzą do roli zastępczej |
+| `customer_account.remove_member` | Członek zostaje usunięty z Organizacji |
+| `customer_account.promote_organization_admin` | Operator przywraca dostęp Organizacji, która została bez administratora |
+
+Po zatwierdzeniu zmiany roli ogłaszane jest też zdarzenie
+`customer_account.organization_role_changed.v1`.
+
 ## Encje
 
-`CustomerAccount` (e-mail, passwordHash, rola), `PasswordResetToken`. Rola to wyliczenie
-`organization_admin | regular_user`.
+`CustomerAccount` (e-mail, passwordHash, organizationRoleId), `PasswordResetToken`.
+`organizationRoleId` wskazuje rolę konta w organizacji. Starsze, dwuwartościowe
+pole `role` (`organization_admin | regular_user`) jest nadal utrzymywane zgodnie
+z nią, dopóki platforma z niego nie zrezygnuje, i zostanie usunięte.
 
 ## Punkty rozszerzenia
 
 - **Polityka haseł** — `password-hasher.ts` opakowuje argon2id; tam dostosowuje się parametry
   kosztu.
-- **Kody zapasowe i drugie składniki uwierzytelniania** — nie należą do tego modułu. 2FA klientów i
-  administratorów obsługuje moduł `mfa`, na tabeli `mfa_enrolments`, udostępniony pod
+- **Kody zapasowe i drugie składniki uwierzytelniania** — nie należą do tego modułu. Weryfikację dwuetapową klientów
+  i administratorów obsługuje moduł `mfa`, na tabeli `mfa_enrolments`, udostępniony pod
   `/api/v1/account/mfa/*`; kody odzyskiwania to tam jednorazowe wiersze. Zastąpiony szkielet, na
   który ten punkt wcześniej wskazywał (`totp-enrolment-service.ts`), usunięto 2026-08-25 — nigdy
   nie pozwalał dokończyć ani jednej rejestracji drugiego składnika.

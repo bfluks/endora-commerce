@@ -28,6 +28,8 @@ import type {
   OrderListPort,
   OrderReadPort,
   OrganizationDetailsPort,
+  OrganizationPermissionPort,
+  OrganizationRoleReadPort,
   PersonalOrganizationPort,
   RfqCustomerPort,
   SalesRepAssignmentPort,
@@ -306,6 +308,11 @@ export function registerModule(ctx: ModuleContext): void {
               ctx,
               'personalOrganizationPort',
             ),
+            // `specs/170-organization-roles/` WP-02b — the role an account moved
+            // to another Organization holds there.
+            organizationRoleReadPort: lazyPort<OrganizationRoleReadPort>(ctx, 'organizationRoleReadPort'),
+            // `specs/170-organization-roles/` WP-03 — the self-service profile's permissions (FR-056).
+            organizationPermissionPort: lazyPort<OrganizationPermissionPort>(ctx, 'organizationPermissionPort'),
             // `addresses`' read: the org-shared book a customer may pick a
             // delivery address from, which this module used to query directly.
             addressReadPort: lazyPort<AddressReadPort>(ctx, 'addressReadPort'),
@@ -357,6 +364,7 @@ export function registerModule(ctx: ModuleContext): void {
             // `MODULE_DISABLED` at the seam rather than half a set of defaults.
             defaultPreferencePort: lazyPort<DefaultPreferencePort>(ctx, 'defaultPreferencePort'),
             storefrontBaseUrl: cradle().storefrontBaseUrl,
+            linkChannel: () => cradle().salesChannelResolutionPort.getSystemDefault(),
             requireAdmin: (permission) => async (req, reply) =>
               cradle().requireAdmin(permission)(req, reply),
             requireCustomer: (req, reply) => cradle().requireCustomer(req, reply),

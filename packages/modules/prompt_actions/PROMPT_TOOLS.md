@@ -90,6 +90,12 @@ the operator confirms the plan.
 
 | Module | File | Tools |
 | --- | --- | --- |
-| catalog | `packages/modules/catalog/src/backend/prompt-tools.ts` | `search_products`, `search_categories`, `assign_products_to_category`, `remove_products_from_category`, `set_product_status`, `set_products_visibility` |
+| catalog | `packages/modules/catalog/src/backend/prompt-tools.ts` | `search_products`, `search_categories`, `assign_products_to_category`, `remove_products_from_category`, `set_product_status`, `set_products_visibility`, `archive_product`, `restore_product` |
 | inventory | `packages/modules/inventory/src/backend/prompt-tools.ts` | `search_warehouses`, `set_stock_level` |
 | orders | `packages/modules/orders/src/backend/prompt-tools.ts` | `search_orders`, `set_order_status`, `bulk_set_order_status` |
+
+`catalog.set_product_status` switches products on or off and never archives or restores them (feature
+163, FR-019). Archiving is `catalog.archive_product` / `catalog.restore_product`, which run the audited
+`product.archive` / `product.restore` Commands of the admin's Archive / Restore actions, with the
+confirming admin as actor; above 50 products they ride the bulk Archive / Restore on the
+`catalog.bulk-operation` queue. They are contributed only where catalog's Command Bus is wired.

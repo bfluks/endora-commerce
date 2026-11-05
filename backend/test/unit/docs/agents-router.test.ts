@@ -6,7 +6,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   analyseRouter,
+  APPENDIX_CHANGES_CAP,
+  APPENDIX_ITEM_MAX_CHARS,
   APPENDIX_MARKER,
+  APPENDIX_TECHNOLOGIES_CAP,
+  appendixItems,
   bodyLineCount,
   CONVENTIONS_DIR,
   normaliseHeading,
@@ -104,6 +108,20 @@ describe('AGENTS.md is a router — the real tree', () => {
 
   it('keeps the body under the ceiling', () => {
     expect(bodyLineCount(real.routerText)).toBeLessThanOrEqual(ROUTER_BODY_CEILING);
+  });
+
+  it('keeps the speckit appendix inside its caps, measuring something', () => {
+    // Non-vacuous: both sections must parse to items, or "within the cap" would
+    // be a statement about a parser that found nothing.
+    const technologies = appendixItems(real.routerText, 'Active Technologies');
+    const changes = appendixItems(real.routerText, 'Recent Changes');
+    expect(technologies.length).toBeGreaterThan(0);
+    expect(changes.length).toBeGreaterThan(0);
+    expect(technologies.length).toBeLessThanOrEqual(APPENDIX_TECHNOLOGIES_CAP);
+    expect(changes.length).toBeLessThanOrEqual(APPENDIX_CHANGES_CAP);
+    for (const item of [...technologies, ...changes]) {
+      expect(item.length, item).toBeLessThanOrEqual(APPENDIX_ITEM_MAX_CHARS);
+    }
   });
 
   it('declares in each document that it is the single home', () => {
@@ -218,11 +236,63 @@ describe('AGENTS.md is a router — one red proof per finding', () => {
 
   it('does not count the speckit appendix toward the ceiling', () => {
     // The appendix grows on its own, so a ceiling over the whole file would go
-    // red on a `/speckit.plan` run through no fault of whoever triggered it.
+    // red on a `/speckit.plan` run through no fault of whoever triggered it. It
+    // has caps of its own instead, which is the one finding this may produce.
     const appendix = Array.from({ length: ROUTER_BODY_CEILING + 50 }, () => '- a technology').join('\n');
     const router = `${goodRouter(ONE_ROW)}\n${appendix}\n`;
     const analysis = analyseRouter(inputs(router, { 'module-migrations.md': '# Migrations\nsingle home\n' }));
+    expect(kinds(analysis.findings)).not.toContain('oversized-router');
+    expect(kinds(analysis.findings)).toEqual(['oversized-appendix']);
+  });
+
+  /** The appendix fixtures: a valid router plus the given appendix lines. */
+  function withAppendix(...lines: string[]) {
+    const router = [goodRouter(ONE_ROW), ...lines, ''].join('\n');
+    return analyseRouter(inputs(router, { 'module-migrations.md': '# Migrations\nsingle home\n' }));
+  }
+  const slugs = (n: number) => Array.from({ length: n }, (_, i) => `- 9${i}-x`);
+
+  it('accepts an appendix at its caps', () => {
+    const technologies = slugs(APPENDIX_TECHNOLOGIES_CAP).map((s) => `${s}: new dependency \`x\``);
+    const analysis = withAppendix(
+      ...technologies,
+      '',
+      '## Recent Changes',
+      ...slugs(APPENDIX_CHANGES_CAP),
+    );
     expect(kinds(analysis.findings)).toEqual([]);
+  });
+
+  it('reports oversized-appendix for too many Active Technologies items', () => {
+    const technologies = slugs(APPENDIX_TECHNOLOGIES_CAP + 1).map((s) => `${s}: \`x\``);
+    const analysis = withAppendix(...technologies, '', '## Recent Changes', '- 1-a');
+    expect(kinds(analysis.findings)).toEqual(['oversized-appendix']);
+    expect(analysis.findings[0]!.subject).toBe('Active Technologies');
+  });
+
+  it('reports oversized-appendix for a Recent Changes list a merge pushed past its cap', () => {
+    const analysis = withAppendix('', '## Recent Changes', ...slugs(APPENDIX_CHANGES_CAP + 1));
+    expect(kinds(analysis.findings)).toEqual(['oversized-appendix']);
+    expect(analysis.findings[0]!.subject).toBe('Recent Changes');
+  });
+
+  it('reports oversized-appendix for an item that restates a whole stack', () => {
+    const item = `- 999-x: ${'TypeScript 5.x strict, Fastify, MikroORM, '.repeat(6)}`;
+    expect(item.length).toBeGreaterThan(APPENDIX_ITEM_MAX_CHARS);
+    const analysis = withAppendix(item);
+    expect(kinds(analysis.findings)).toEqual(['oversized-appendix']);
+    expect(analysis.findings[0]!.detail).toContain("not the plan's whole stack");
+  });
+
+  it('measures only the appendix, not a same-named heading above the marker', () => {
+    const above = [
+      '## Recent Changes',
+      ...slugs(APPENDIX_CHANGES_CAP + 2),
+      '',
+      '## Where the rest',
+    ];
+    const router = goodRouter(ONE_ROW).replace('## Where the rest', above.join('\n'));
+    expect(appendixItems(router, 'Recent Changes')).toEqual([]);
   });
 });
 

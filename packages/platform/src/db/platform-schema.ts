@@ -72,6 +72,10 @@ import {
   Migration20260816T203339CoreRetireCoreActivationSettings,
   Migration20260919T101500CoreModuleRegistrationsBootConverged,
   Migration20261011T135250CoreSettingsMultiline,
+  Migration20261018T101912CoreSalesChannelsAnonymousAccess,
+  Migration20261028T173317CoreSalesChannelsRetireIsPublic,
+  Migration20261029T152922CoreSalesChannelsPrefixDefaultLanguage,
+  Migration20261103T162518CoreAuditActorCustomerAccount,
 } from '../migrations/index.js';
 import type { MigrationRegistryEntry } from './migration-order.js';
 
@@ -133,6 +137,10 @@ export const PLATFORM_MIGRATION_ENTRIES: readonly MigrationRegistryEntry[] = [
   Migration20260816T203339CoreRetireCoreActivationSettings,
   Migration20260919T101500CoreModuleRegistrationsBootConverged,
   Migration20261011T135250CoreSettingsMultiline,
+  Migration20261018T101912CoreSalesChannelsAnonymousAccess,
+  Migration20261028T173317CoreSalesChannelsRetireIsPublic,
+  Migration20261029T152922CoreSalesChannelsPrefixDefaultLanguage,
+  Migration20261103T162518CoreAuditActorCustomerAccount,
 ].map((cls) => ({ moduleId: CORE_MODULE_ID, cls }));
 
 /**

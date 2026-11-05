@@ -1,5 +1,7 @@
 import { z } from 'zod';
+import { adminPreferencesSchema } from './admin-preferences.js';
 import { isoDateTimeSchema, uuidSchema } from './common.js';
+import { organizationRoleRefSchema } from './organization-roles.js';
 
 /**
  * Admin module contracts (US4) — AdminUser, AdminRole, Impersonation,
@@ -21,8 +23,23 @@ export const adminUserSchema = z.object({
   lastLoginAt: isoDateTimeSchema.nullable(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
+  /** Feature 171 (US6) — the author avatar, a library asset. Optional for clients that predate it. */
+  avatarAssetId: uuidSchema.nullable().optional(),
+  /** Feature 171 (US6) — the author biography per language. */
+  bio: z.record(z.string(), z.string()).nullable().optional(),
 });
 export type AdminUser = z.infer<typeof adminUserSchema>;
+
+/**
+ * Feature 171 (US6) — an administrator's public author profile: the avatar (one
+ * library asset, the same in every language) and the biography per language, each
+ * at most {@link ADMIN_USER_BIO_MAX_LENGTH} characters. `null` clears either.
+ */
+export const ADMIN_USER_BIO_MAX_LENGTH = 2000;
+const adminUserAuthorProfileFields = {
+  avatarAssetId: uuidSchema.nullable().optional(),
+  bio: z.record(z.string().min(2).max(16), z.string().max(ADMIN_USER_BIO_MAX_LENGTH)).nullable().optional(),
+};
 
 export const adminRoleSchema = z.object({
   id: uuidSchema,
@@ -53,6 +70,12 @@ export const adminMeResponseSchema = z.object({
   role: adminRoleSchema.nullable(),
   permissions: z.array(z.string()),
   idleLogoutMinutes: z.number().positive().nullable(),
+  /**
+   * The signed-in admin's own preferences (feature 164, FR-016). `null` when the
+   * server could not read them; the Admin UI then opens with the defaults and
+   * saves nothing (FR-018).
+   */
+  preferences: adminPreferencesSchema.nullable(),
 });
 export type AdminMeResponse = z.infer<typeof adminMeResponseSchema>;
 
@@ -74,7 +97,11 @@ export const impersonationStartResponseSchema = z.object({
     email: z.string().email(),
     firstName: z.string(),
     lastName: z.string(),
-    role: z.enum(['organization_admin', 'regular_user']),
+    /**
+     * The impersonated member's role — whose permissions the impersonation acts
+     * under (spec *Impersonation*); it replaced the legacy `role` (FR-073).
+     */
+    organizationRole: organizationRoleRefSchema,
   }),
 });
 export type ImpersonationStartResponse = z.infer<typeof impersonationStartResponseSchema>;
@@ -96,6 +123,7 @@ export const updateAdminUserRequestSchema = z
     lastName: z.string().min(1).max(120).optional(),
     adminRoleId: uuidSchema.nullable().optional(),
     status: z.enum(['active', 'inactive']).optional(),
+    ...adminUserAuthorProfileFields,
   })
   .strict();
 export type UpdateAdminUserRequest = z.infer<typeof updateAdminUserRequestSchema>;
@@ -123,6 +151,7 @@ export const updateAdminUserSelfRequestSchema = z
     lastName: z.string().min(1).max(120).optional(),
     password: z.string().min(12).max(120).optional(),
     currentPassword: z.string().min(1).max(256).optional(),
+    ...adminUserAuthorProfileFields,
   })
   .strict()
   .superRefine((body, ctx) => {
@@ -305,6 +334,14 @@ export const auditLogEntrySchema = z.object({
   id: uuidSchema,
   actorAdminUserId: uuidSchema.nullable(),
   impersonatedCustomerAccountId: uuidSchema.nullable(),
+  /**
+   * The customer who acted for themselves — a storefront Organization
+   * administrator managing roles, invitations or members
+   * (`specs/170-organization-roles/` FR-065, R-21; issue #741). `null` for an
+   * admin, under impersonation, and for the system. Optional so a payload from
+   * a server that predates the column still parses.
+   */
+  actorCustomerAccountId: uuidSchema.nullable().optional(),
   actedAt: isoDateTimeSchema,
   action: z.string(),
   objectType: z.string(),
@@ -315,4 +352,11 @@ export const auditLogEntrySchema = z.object({
   userAgent: z.string().nullable(),
   requestId: z.string().nullable(),
 });
-export type AuditLogEntry = z.infer<typeof auditLogEntrySchema>;
+export type AuditLogEntryResponse = z.infer<typeof auditLogEntrySchema>;
+/**
+ * @deprecated Use {@link AuditLogEntryResponse}. `@endora-commerce/platform/kernel`
+ * publishes `AuditLogEntry` as the MikroORM entity of an `audit_logs` row, a
+ * different thing under the same name (issue #84). This alias is removed in the
+ * next minor release.
+ */
+export type AuditLogEntry = AuditLogEntryResponse;

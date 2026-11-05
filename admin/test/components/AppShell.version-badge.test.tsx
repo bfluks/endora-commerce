@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ADMIN_PREFERENCES_DEFAULTS } from '@endora-commerce/contracts';
 import { act, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { setMobileViewport } from '../setup';
 import { renderWithI18n } from '../helpers/render-with-i18n';
 import { withLocalStorage } from '../helpers/with-local-storage';
-import type { Bundle } from '../../../packages/admin-shell/src/i18n/types';
+import type { Bundle } from '@endora-commerce/admin-kit/i18n';
 import {
   adminSession,
   everyDeclaredModule,
@@ -61,7 +62,8 @@ const coreBundle = {
 
 const { AppShell } = await import('../../../packages/admin-shell/src/components/AppShell');
 
-function renderShell(bundle: Bundle = coreBundle): void {
+function renderShell(bundle: Bundle = coreBundle, options: { railMode?: boolean } = {}): void {
+  const session = adminSession({ permissions: ['*'] });
   renderWithI18n(
     withSession(
       <MemoryRouter initialEntries={['/']}>
@@ -72,7 +74,11 @@ function renderShell(bundle: Bundle = coreBundle): void {
         </Routes>
       </MemoryRouter>,
       {
-        session: adminSession({ permissions: ['*'] }),
+        // Feature 164 — rail mode is the admin's server-held preference.
+        session:
+          options.railMode === undefined
+            ? session
+            : { ...session, preferences: { ...ADMIN_PREFERENCES_DEFAULTS, sidebarRailMode: options.railMode } },
         presence: modulePresence({ present: everyDeclaredModule() }),
       },
     ),
@@ -196,9 +202,8 @@ describe('AppShell version badge', () => {
    * release, is still the wordmark it always was.
    */
   it('moves the release into the logo’s tooltip when the sidebar is collapsed', async () => {
-    window.localStorage.setItem('b2b-admin.nav.rail-mode', '1');
     getPlatformInfo.mockResolvedValue({ version: '0.104.0' });
-    renderShell();
+    renderShell(coreBundle, { railMode: true });
 
     const link = screen.getByRole('link', { name: 'Go to dashboard' });
     expect(link).toHaveAttribute('title', 'Endora Commerce');

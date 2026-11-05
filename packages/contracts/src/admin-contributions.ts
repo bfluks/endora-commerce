@@ -27,6 +27,9 @@
  * the `AdminRouteDeclaration` interface.
  */
 import { z } from 'zod';
+import type { ScopeRef } from './product-scope-model.js';
+import type { ScopedValuesData } from './product-scoped-values.js';
+import type { ScopedWriteOp } from './scoped-write-encoding.js';
 
 import { KnownIconNameSchema } from './admin-actions.js';
 import { blockNameRe } from './cms.js';
@@ -97,6 +100,11 @@ export const AdminNavSectionNameSchema = z.enum([
   // R-19): the CRM screens get a group of their own. The section is the
   // shell's, declared here and in `AppShell.tsx`; the `crm` module joins it.
   'crm',
+  // `specs/163-projects-and-tasks/` research R-16: Projects and Tasks get a
+  // group of their own, after CRM — they are not a sales or CRM sub-feature,
+  // and Tasks is meant for every module. The `projects` and `tasks` modules
+  // join it.
+  'work',
   'catalog',
   'inventory',
   'pricing',
@@ -263,6 +271,15 @@ export const AdminZoneNameSchema = z.enum([
    */
   'product.editor.channels',
   /**
+   * The product editor's SEO section at the editor scope (feature 174, FR-090…FR-092,
+   * `contracts/editor-ui.md` §5). Replaces 163's `product.editor.seo.after`.
+   *
+   * Mounted **once** per editor. Props: {@link ProductEditorSeoZoneProps}. `seo` contributes
+   * its fields here, staged into catalog's one Save; `catalog` renders the SEO tab only when the
+   * zone has a contributor, so with `seo` off there is no tab, no request and no error.
+   */
+  'product.editor.seo',
+  /**
    * Below the sales-channel editor's identity form.
    *
    * Mounted **once** per channel, and only for a channel that already exists —
@@ -359,6 +376,21 @@ export const AdminZoneNameSchema = z.enum([
    * `quote_requests` names no contributor and gains no edge.
    */
   'quote_request.detail.after',
+  /**
+   * The stack of panels an Opportunity's detail screen ends with.
+   *
+   * Mounted **once** per Opportunity, after the card that holds its tabs, on
+   * `order.detail.after`'s terms and for its reasons: every contribution
+   * renders its own card, the host puts no chrome around the zone, and an
+   * empty zone renders nothing at all, so the screen is identical to one
+   * without the member. Props: {@link OpportunityDetailZoneProps}, the
+   * Opportunity's id and nothing else (Z3).
+   *
+   * The first contributor is `projects`' Project panel
+   * (`specs/163-projects-and-tasks/contracts/admin-surfaces.md` §3); `crm`
+   * names no contributor and gains no edge.
+   */
+  'opportunity.detail.after',
   /**
    * The per-row action cell of the order detail's Delivery tab.
    *
@@ -485,6 +517,27 @@ export const AdminZoneNameSchema = z.enum([
    */
   'category.content.editor',
   /**
+   * The editor of one product content attribute's Page Builder document, one
+   * language at a time (`specs/172-product-content-attributes/`).
+   *
+   * Mounted **once** on `catalog`'s product content screen
+   * (`ProductContentPage.tsx`), named from the host's own words for the place
+   * (Z14): the screen is the product's *content*, the place is its *editor*.
+   * Props: {@link ProductContentEditorZoneProps}.
+   *
+   * **The direction is inverted, as on `category.content.editor` and for the
+   * same reason.** `catalog` is `nonDeactivatable` and `cms` is switchable, so
+   * `catalog` can neither declare an edge to the Page Builder's owner (it would
+   * make `cms.enabled` a dead switch) nor import it undeclared. The host owns
+   * the document, its storage and its save; whoever owns a Page Builder
+   * contributes the canvas and reports edits through `onChange`. `catalog`
+   * names no module. A platform with no contributor shows the host's own
+   * notice (Z15) and offers no save, and the stored content stays stored —
+   * unlike category content it is not rendered on the storefront while the
+   * CMS is off (spec FR-051, owner ruling OR-7).
+   */
+  'product.content.editor',
+  /**
    * Below the field of one setting on the Settings screen.
    *
    * Mounted **once per setting row** by `settings`' row editor
@@ -512,6 +565,21 @@ export const AdminZoneNameSchema = z.enum([
    * contribution of that module, through the renderer's own presence filter.
    */
   'settings.setting.after',
+  /**
+   * The stack of panels a Task's detail screen ends with.
+   *
+   * Mounted **once** per Task, below the host's own cards, on
+   * `order.detail.after`'s terms and for its reasons: every contribution
+   * renders its own card, the host puts no chrome around the zone, and an
+   * empty zone renders nothing at all, so the screen is identical to one
+   * without the member. Props: {@link TaskDetailZoneProps}, the Task's id and
+   * nothing else (Z3).
+   *
+   * The first contributor is `projects`' Project panel
+   * (`specs/163-projects-and-tasks/contracts/admin-surfaces.md` §3); `tasks`
+   * names no contributor and gains no edge.
+   */
+  'task.detail.after',
 ])
 
 export type AdminZoneName = z.infer<typeof AdminZoneNameSchema>;
@@ -523,6 +591,32 @@ export type AdminZoneName = z.infer<typeof AdminZoneNameSchema>;
 /** A zone mounted once per product editor. */
 export interface ProductEditorZoneProps {
   readonly productId: string;
+}
+
+/**
+ * The product editor's SEO zone (feature 174, `contracts/editor-ui.md` §5): the editor scope,
+ * the SEO block of the scoped-values read, and the staging callback into catalog's one Save.
+ */
+export interface ProductEditorSeoZoneProps {
+  readonly productId: string;
+  readonly scope: ScopeRef;
+  /** "Global", "<channel>" or "<channel> · <language>", already translated. */
+  readonly scopeLabel: string;
+  /** The scope one level up, already translated; `null` at Global. */
+  readonly parentScopeLabel: string | null;
+  readonly view: ScopedValuesData['seo'];
+  /** The staged SEO cells, keyed by field (`title`, `description`, …). */
+  readonly staged: ReadonlyMap<string, ScopedWriteOp<string>>;
+  onStage(field: string, op: ScopedWriteOp<string> | undefined): void;
+  readonly readOnly: boolean;
+  /** Field → translated error message from the last save. */
+  readonly errors: Readonly<Record<string, string>>;
+  /**
+   * The product's scope version (`scoped-values-api.md` R7) of the editor's last read, Save or
+   * copy; `null` before the first read. A change means saved values moved, so the zone re-reads
+   * what it derives from them.
+   */
+  readonly version: string | null;
 }
 
 /**
@@ -591,6 +685,26 @@ export interface CategoryContentEditorZoneProps {
 }
 
 /**
+ * A zone mounted once on the product content screen, around one content
+ * attribute's Page Builder document in one language.
+ *
+ * {@link CategoryContentEditorZoneProps}' terms: the document is `unknown` on
+ * both sides of the seam, the host re-mounts the zone per language, and the
+ * contributor reports every edit through `onChange` and never saves.
+ */
+export interface ProductContentEditorZoneProps {
+  readonly productId: string;
+  /** The content attribute being edited (its immutable key). */
+  readonly attributeKey: string;
+  /** The content language being edited — a key of the stored envelope. */
+  readonly language: string;
+  /** That language's Page Builder document, or `null` when none is stored. */
+  readonly data: unknown;
+  /** Reports the edited document. The host saves; the contributor never does. */
+  readonly onChange: (data: unknown) => void;
+}
+
+/**
  * A zone mounted once below the sales-channel editor's identity form.
  *
  * The channel's **id**, not its code: every route the one contribution calls is
@@ -646,6 +760,26 @@ export interface OrderDetailZoneProps {
  */
 export interface QuoteRequestDetailZoneProps {
   readonly quoteRequestId: string;
+}
+
+/**
+ * A zone mounted once per Opportunity, at the end of its detail screen.
+ *
+ * The Opportunity's own id and nothing else: a contribution reads what it
+ * shows through routes of its own, and the host hands over none of its data.
+ */
+export interface OpportunityDetailZoneProps {
+  readonly opportunityId: string;
+}
+
+/**
+ * A zone mounted once per Task, at the end of its detail screen.
+ *
+ * The Task's own id and nothing else: a contribution reads what it shows
+ * through routes of its own, and the host hands over none of its data.
+ */
+export interface TaskDetailZoneProps {
+  readonly taskId: string;
 }
 
 /**
@@ -752,8 +886,13 @@ export interface ProductEditorFieldZoneProps {
    */
   readonly fieldPath: string;
   /**
+   * Feature 174 (FR-106) — the editor scope the field is shown at. Optional: a contributor
+   * that ignores it keeps working.
+   */
+  readonly scope?: ScopeRef;
+  /**
    * The locales this field is edited in, or `null` for a field that is not
-   * language-scoped.
+   * language-scoped. Feature 174: the host passes `null` (protection is whole-field, FR-046).
    *
    * The host passes the set; a contributor that wants one control per locale
    * fans out over it. That is what collapses the two `LOCALES.map(...)` loops
@@ -796,18 +935,22 @@ export interface AdminZonePropsMap extends Record<AdminZoneName, object> {
   // places in one editor that both carry a product id carry the same shape.
   'product.editor.pricing.after': ProductEditorZoneProps;
   'product.editor.channels': ProductEditorZoneProps;
+  'product.editor.seo': ProductEditorSeoZoneProps;
   'sales_channel.editor.after': SalesChannelEditorZoneProps;
   'organization.detail.after': OrganizationDetailZoneProps;
   'customer.detail.after': CustomerDetailZoneProps;
   'order.detail.payment': OrderDetailZoneProps;
   'order.detail.after': OrderDetailZoneProps;
   'quote_request.detail.after': QuoteRequestDetailZoneProps;
+  'opportunity.detail.after': OpportunityDetailZoneProps;
   'order.shipment.row.actions': OrderShipmentRowZoneProps;
   'order.shipments.tab.actions': OrderShipmentsActionsZoneProps;
   'order.entry.tabs': OrderEntryTabsZoneProps;
   'ledger.section.tabs': LedgerSectionTabsZoneProps;
   'category.content.editor': CategoryContentEditorZoneProps;
+  'product.content.editor': ProductContentEditorZoneProps;
   'settings.setting.after': SettingsSettingAfterZoneProps;
+  'task.detail.after': TaskDetailZoneProps;
 }
 
 /** The props of one zone, by name. */

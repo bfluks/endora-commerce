@@ -1,28 +1,21 @@
 import { useState, type ReactElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { OpportunityReference } from '@endora-commerce/contracts';
-import { ADMIN_ID, ORDER_ID, ORGANIZATION_ID, caretAt, crmLookupResponse, en, renderCrm, storedText } from './crm-fixtures';
-import {
-  chipBeside,
-  domPositionOf,
-  readReferenceText,
-  renderReferenceText,
-  textOffsetOf,
-  type DescribeToken,
-} from '../../../../packages/modules/crm/src/admin/lib/reference-editor-dom';
+import { ADMIN_ID, ORDER_ID, ORGANIZATION_ID, caretAt, core, crmLookupResponse, editorOf, renderCrm, storedText } from './crm-fixtures';
 
 /**
- * The field a description, a note or a message is written in
- * (`specs/143-crm-sales-opportunities/`, User Story 18; research N-M11): it
- * shows names, never tokens, and what it stores is the token text unchanged.
+ * The field a description, a note, a message or an Event's description is
+ * written in (`specs/158-crm-opportunity-inline-editing/`, FR-010 – FR-011;
+ * `specs/143-crm-sales-opportunities/` User Story 18): formatted text that
+ * shows names, never tokens, and stores the text grammar of the contracts
+ * package — formatting as its markers, a chip as its token.
  *
  * What is proven here is what a DOM without layout can express: what the field
- * draws for a text, what it reads back, and what each edit does to the stored
- * text. That the caret *looks* right around a chip, that the arrow keys step
- * over one, and where the list is drawn are the browser walk's
- * (`research.md` N-M11).
+ * draws for a text, and what each edit does to the stored text. That the caret
+ * *looks* right around a chip, and where the list is drawn, are the browser
+ * walk's.
  */
 
 const getSpy = vi.fn();
@@ -95,89 +88,13 @@ function mount(props: Parameters<typeof Harness>[0] = {}): HTMLElement {
 }
 
 const chips = (field: HTMLElement): string[] =>
-  Array.from(field.querySelectorAll('[data-crm-token]')).map((chip) => chip.textContent ?? '');
+  Array.from(field.querySelectorAll('[data-reference-token]')).map((chip) => chip.textContent ?? '');
 const sent = (): string => screen.getByTestId('stored').textContent ?? '';
 
 beforeEach(() => {
   getSpy.mockReset();
   changes.mockReset();
   getSpy.mockImplementation((path: string) => crmLookupResponse(path) ?? Promise.resolve({ data: [] }));
-});
-
-describe('the field’s content and the text it stands for', () => {
-  const describeToken: DescribeToken = (token) =>
-    token.id === UNKNOWN_ID
-      ? null
-      : token.id === HIDDEN_ORDER_ID
-        ? { type: token.type, available: false, text: 'Order unavailable' }
-        : { type: token.type, available: true, text: token.type === 'admin_user' ? '@Anna Nowak' : 'ORD-1001' };
-  const root = (text: string): HTMLElement => {
-    const element = document.createElement('div');
-    document.body.appendChild(element);
-    renderReferenceText(element, text, describeToken);
-    return element;
-  };
-
-  it.each([
-    ['plain text', 'Call back on Friday.'],
-    ['nothing', ''],
-    ['lines', 'one\ntwo\n\nfour'],
-    ['a line break at the end', 'one\n'],
-    ['only line breaks', '\n\n'],
-    ['a chip between words', `Ask ${person} about ${order}.`],
-    ['a chip at the start, at the end and next to another', `${person}${order} and ${person}`],
-    ['a chip on a line of its own', `first\n${person}\nlast`],
-    ['a target the reader may not see', `See ${hidden}.`],
-    ['a token the field has no name for', `Ask ${unknown} today`],
-    ['markup, as the characters it is', '<b>bold</b> & [[order:nope]]'],
-  ])('reads back exactly what it drew: %s', (_name, text) => {
-    expect(readReferenceText(root(text))).toBe(text);
-  });
-
-  it('draws a name for a token it knows, the characters for one it does not, and says unavailable for one out of reach', () => {
-    const element = root(`${person} ${unknown} ${hidden}`);
-    expect(element.textContent).toBe(`@Anna Nowak ${unknown} Order unavailable`);
-    const drawn = Array.from(element.querySelectorAll('[data-crm-token]'));
-    expect(drawn.map((chip) => chip.getAttribute('contenteditable'))).toEqual(['false', 'false']);
-    expect(drawn.map((chip) => chip.getAttribute('data-crm-token'))).toEqual([person, hidden]);
-  });
-
-  it('never draws markup: a text is text nodes, line breaks and chips', () => {
-    const element = root('<img src=x onerror=alert(1)>\n<script>1</script>');
-    expect(element.querySelector('img, script')).toBeNull();
-    expect(Array.from(element.children).map((child) => child.tagName)).toEqual(['BR']);
-  });
-
-  it('counts a chip as its token and a line break as one character, both ways', () => {
-    const text = `a${person}b\nc`;
-    const element = root(text);
-    const after = `a${person}`.length;
-    for (const offset of [0, 1, after, after + 1, after + 2, text.length]) {
-      const position = domPositionOf(element, offset);
-      expect(textOffsetOf(element, position.node, position.offset), `offset ${offset}`).toBe(offset);
-    }
-    // There is no place inside a chip: one asked for is the place after it.
-    const inside = domPositionOf(element, 5);
-    expect(textOffsetOf(element, inside.node, inside.offset)).toBe(after);
-  });
-
-  it('finds the chip a caret touches, on the side asked', () => {
-    const element = root(`a${person}b`);
-    const end = 1 + person.length;
-    expect(chipBeside(element, end, 'before')).toEqual({ start: 1, end });
-    expect(chipBeside(element, 1, 'after')).toEqual({ start: 1, end });
-    expect(chipBeside(element, 1, 'before')).toBeNull();
-    expect(chipBeside(element, end, 'after')).toBeNull();
-    expect(chipBeside(element, 0, 'before')).toBeNull();
-  });
-
-  it('reads what a browser left behind — a block per line, a placeholder break — as the lines they show', () => {
-    const element = document.createElement('div');
-    element.innerHTML = 'one<div>two</div><div><br></div><div>four</div>';
-    expect(readReferenceText(element)).toBe('one\ntwo\n\nfour');
-    element.innerHTML = '<br>';
-    expect(readReferenceText(element)).toBe('');
-  });
 });
 
 describe('a text opened for editing', () => {
@@ -192,22 +109,35 @@ describe('a text opened for editing', () => {
     expect(changes).not.toHaveBeenCalled();
   });
 
+  it('shows formatting as formatting — bold, italic, strikethrough, lists, links — and no markers', () => {
+    const text = '**Deal** _soon_ ~~maybe~~\n- one\n2. two\n[site](https://example.com)';
+    const field = mount({ initial: text });
+    expect(field.querySelector('strong')).toHaveTextContent('Deal');
+    expect(field.querySelector('em')).toHaveTextContent('soon');
+    expect(field.querySelector('s')).toHaveTextContent('maybe');
+    expect(field.querySelector('ul > li')).toHaveTextContent('one');
+    expect(field.querySelector('ol')).toHaveAttribute('start', '2');
+    expect(field.querySelector('a')).toHaveAttribute('href', 'https://example.com');
+    expect(field.textContent).not.toMatch(/\*\*|~~|\]\(/);
+    expect(storedText(field)).toBe(text);
+    expect(changes).not.toHaveBeenCalled();
+  });
+
   it('says unavailable for a target the reader may not see, and keeps its token through an edit', async () => {
     const text = `See ${hidden} first.`;
     const field = mount({ initial: text });
-    expect(chips(field)).toEqual([en('references.unavailable.order')]);
+    expect(chips(field)).toEqual([core('references.unavailable.order')]);
     caretAt(field, text.length);
-    await userEvent.type(field, ' Then call.');
+    await userEvent.type(field, ' Then call.', { skipClick: true });
     expect(sent()).toBe(`${text} Then call.`);
   });
 
-  it('leaves a token it has no name for as the characters it is, and sends it unchanged', async () => {
+  it('keeps a token it has no name for — as an unavailable chip — and sends it unchanged', async () => {
     const text = `Ask ${unknown}`;
     const field = mount({ initial: text });
-    expect(field.textContent).toBe(text);
-    expect(chips(field)).toEqual([]);
+    expect(chips(field)).toEqual([core('references.unavailable.admin_user')]);
     caretAt(field, text.length);
-    await userEvent.type(field, '!');
+    await userEvent.type(field, '!', { skipClick: true });
     expect(sent()).toBe(`${text}!`);
   });
 
@@ -219,29 +149,80 @@ describe('a text opened for editing', () => {
     expect(screen.getByRole('textbox', { name: 'Description' })).toBe(field);
     expect(field).toHaveAttribute('aria-placeholder', 'Write here');
     await userEvent.click(screen.getByText('Description'));
-    expect(field).toHaveFocus();
+    await waitFor(() => expect(field).toHaveFocus());
   });
 
   it('marks an empty field so its placeholder shows, and a filled one so it does not', async () => {
     const field = mount();
     expect(field).toHaveAttribute('data-empty', 'true');
     await userEvent.type(field, 'x');
-    expect(field).toHaveAttribute('data-empty', 'false');
+    await waitFor(() => expect(field).toHaveAttribute('data-empty', 'false'));
   });
 
   it('cannot be typed into while disabled, and says so', () => {
     const field = mount({ initial: `Ask ${person}`, disabled: true });
     expect(field).toHaveAttribute('contenteditable', 'false');
     expect(field).toHaveAttribute('aria-disabled', 'true');
-    expect(field).toHaveAttribute('tabindex', '-1');
     expect(chips(field)).toEqual(['@Anna Nowak']);
+    for (const button of within(screen.getByRole('toolbar')).getAllByRole('button')) expect(button).toBeDisabled();
   });
 
   it('follows a value set from outside — the form cleared after a message was sent', async () => {
     const field = mount({ initial: `Ask ${person}` });
     await userEvent.click(screen.getByRole('button', { name: 'reset' }));
     expect(field.textContent).toBe('');
-    expect(field).toHaveAttribute('data-empty', 'true');
+    await waitFor(() => expect(field).toHaveAttribute('data-empty', 'true'));
+    expect(changes).not.toHaveBeenCalled();
+  });
+});
+
+describe('formatting', () => {
+  it('formats what is selected from the toolbar, and stores it as the text grammar', async () => {
+    const field = mount({ initial: 'Call Anna today' });
+    // "Anna" selected.
+    editorOf(field).commands.setTextSelection({ from: 6, to: 10 });
+    await userEvent.click(screen.getByRole('button', { name: core('editor.format.bold') }));
+    expect(sent()).toBe('Call **Anna** today');
+    expect(screen.getByRole('button', { name: core('editor.format.bold') })).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.click(screen.getByRole('button', { name: core('editor.format.italic') }));
+    expect(sent()).toBe('Call **_Anna_** today');
+    await userEvent.click(screen.getByRole('button', { name: core('editor.format.strike') }));
+    expect(sent()).toBe('Call **_~~Anna~~_** today');
+  });
+
+  it('turns lines into a bulleted and a numbered list from the toolbar', async () => {
+    const field = mount({ initial: 'one\ntwo' });
+    editorOf(field).commands.selectAll();
+    await userEvent.click(screen.getByRole('button', { name: core('editor.format.bulletList') }));
+    expect(sent()).toBe('- one\n- two');
+    await userEvent.click(screen.getByRole('button', { name: core('editor.format.orderedList') }));
+    expect(sent()).toBe('1. one\n2. two');
+  });
+
+  it('starts a list when a line begins as one is written', async () => {
+    const field = mount();
+    await userEvent.type(field, '- first{Enter}second');
+    expect(sent()).toBe('- first\n- second');
+  });
+
+  it('links what is selected to an address, and refuses one a reader may not follow', async () => {
+    const field = mount({ initial: 'see the offer' });
+    editorOf(field).commands.setTextSelection({ from: 9, to: 14 });
+    await userEvent.click(screen.getByRole('button', { name: core('editor.format.link') }));
+    const address = screen.getByRole('textbox', { name: core('editor.link.url') });
+    await userEvent.type(address, 'javascript:alert(1){Enter}');
+    expect(screen.getByRole('alert')).toHaveTextContent(core('editor.link.invalid'));
+    expect(sent()).toBe('see the offer');
+    await userEvent.clear(address);
+    await userEvent.type(address, 'example.com/offer{Enter}');
+    expect(sent()).toBe('see the [offer](https://example.com/offer)');
+    expect(field.querySelector('a')).toHaveAttribute('href', 'https://example.com/offer');
+  });
+
+  it('keeps the characters of formatting typed by hand as the characters they are', async () => {
+    const field = mount();
+    await userEvent.type(field, '2 * 3 and a_b_c');
+    expect(sent()).toBe('2 \\* 3 and a\\_b\\_c');
   });
 });
 
@@ -258,77 +239,46 @@ describe('editing around a chip', () => {
     expect(sent()).toBe('Ask now');
   });
 
-  it('Delete before a chip takes the whole of it', async () => {
-    const text = `Ask ${person} now`;
-    const field = mount({ initial: text });
-    caretAt(field, 4);
-    await userEvent.keyboard('{Delete}');
-    expect(sent()).toBe('Ask  now');
-  });
-
   it('typing next to a chip leaves the chip alone', async () => {
     const field = mount({ initial: `${person}` });
     caretAt(field, person.length);
     await userEvent.type(field, ' - take this over', { skipClick: true });
     expect(sent()).toBe(`${person} - take this over`);
     expect(field).toHaveTextContent('@Anna Nowak - take this over');
-    caretAt(field, 0);
-    await userEvent.type(field, 'Hi ', { skipClick: true });
-    expect(sent()).toBe(`Hi ${person} - take this over`);
     expect(chips(field)).toEqual(['@Anna Nowak']);
   });
 
-  it('Enter is a line break in the text — never a block element', async () => {
+  it('Enter starts a new line of the text', async () => {
     const field = mount();
-    await userEvent.type(field, 'one{Enter}two{Enter}');
-    expect(sent()).toBe('one\ntwo\n');
-    expect(field.querySelector('div, p')).toBeNull();
-    await userEvent.type(field, 'three', { skipClick: true });
+    await userEvent.type(field, 'one{Enter}two{Enter}three');
     expect(sent()).toBe('one\ntwo\nthree');
   });
 });
 
 describe('pasting', () => {
-  it('takes the plain text of what is pasted, lines kept, and none of its markup', async () => {
+  it('keeps the formatting the text can hold, and none of the rest of the markup', async () => {
     const field = mount({ initial: 'Start: ' });
     caretAt(field, 7);
     const clipboardData = {
       getData: (type: string): string =>
-        type === 'text/plain' ? 'first line\r\nsecond <b>line</b>\nthird' : '<p>first line</p><script>x</script>',
+        type === 'text/html'
+          ? '<p>first <b>bold</b> <u>under</u></p><h1>heading</h1><script>x</script><img src=x onerror="alert(1)">'
+          : 'first bold under\nheading',
+      types: ['text/html', 'text/plain'],
     };
     fireEvent.paste(field, { clipboardData });
-    expect(sent()).toBe('Start: first line\nsecond <b>line</b>\nthird');
-    expect(field.querySelector('b, p, script, div')).toBeNull();
-    expect(field.querySelectorAll('br')).toHaveLength(2);
+    await waitFor(() => expect(sent()).toBe('Start: first **bold** under\nheading'));
+    expect(field.querySelector('script, img, h1, u')).toBeNull();
   });
 
-  it('draws a pasted token it has a name for as a chip, and leaves one it has none for as typed', async () => {
+  it('draws a pasted token as a chip', async () => {
     const field = mount();
     field.focus();
-    fireEvent.paste(field, { clipboardData: { getData: (): string => `Ask ${person} or ${unknown}` } });
-    expect(sent()).toBe(`Ask ${person} or ${unknown}`);
+    fireEvent.paste(field, {
+      clipboardData: { getData: (type: string): string => (type === 'text/plain' ? `Ask ${person} today` : '') },
+    });
+    expect(sent()).toBe(`Ask ${person} today`);
     expect(chips(field)).toEqual(['@Anna Nowak']);
-    expect(field.textContent).toBe(`Ask @Anna Nowak or ${unknown}`);
-  });
-
-  it('draws a token typed by hand as a chip the moment it is whole', async () => {
-    const field = mount();
-    await userEvent.type(field, `See ${order.replace(/\[/g, '[[')}`);
-    expect(sent()).toBe(`See ${order}`);
-    expect(chips(field)).toEqual(['ORD-1001']);
-  });
-
-  it('copies the text itself, so a chip copied here is a chip where it is pasted', () => {
-    const text = `Ask ${person} now`;
-    const field = mount({ initial: text });
-    field.focus();
-    const range = document.createRange();
-    range.selectNodeContents(field);
-    document.getSelection()?.removeAllRanges();
-    document.getSelection()?.addRange(range);
-    const setData = vi.fn();
-    fireEvent.copy(field, { clipboardData: { setData } });
-    expect(setData).toHaveBeenCalledWith('text/plain', text);
   });
 });
 
@@ -338,45 +288,22 @@ describe('the length limit', () => {
     caretAt(field, person.length);
     await userEvent.type(field, 'abcd', { skipClick: true });
     expect(sent()).toBe(`${person}abc`);
-    expect(screen.getByRole('alert')).toHaveTextContent(en('references.error.tooLong'));
+    expect(screen.getByRole('alert')).toHaveTextContent(core('references.error.tooLong'));
     expect(chips(field)).toEqual(['@Anna Nowak']);
   });
 
-  it('cuts a paste to what fits', () => {
-    const field = mount({ initial: 'ab', maxLength: 5 });
-    caretAt(field, 2);
-    fireEvent.paste(field, { clipboardData: { getData: (): string => 'cdefgh' } });
-    expect(sent()).toBe('abcde');
-    expect(screen.getByRole('alert')).toHaveTextContent(en('references.error.tooLong'));
+  it('counts formatting markers as the characters they are stored as', async () => {
+    const field = mount({ initial: 'abcd', maxLength: 6 });
+    editorOf(field).commands.selectAll();
+    await userEvent.click(screen.getByRole('button', { name: core('editor.format.bold') }));
+    expect(storedText(field)).toBe('abcd');
+    expect(changes).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent(core('references.error.tooLong'));
   });
 });
 
 describe('undo and redo', () => {
-  it('step back over a removed chip and a pasted text, and forward again', async () => {
-    const text = `Ask ${person}`;
-    const field = mount({ initial: text });
-    caretAt(field, text.length);
-    await userEvent.keyboard('{Backspace}');
-    expect(sent()).toBe('Ask ');
-    fireEvent.paste(field, { clipboardData: { getData: (): string => 'everybody' } });
-    expect(sent()).toBe('Ask everybody');
-
-    await userEvent.keyboard('{Control>}z{/Control}');
-    expect(sent()).toBe('Ask ');
-    await userEvent.keyboard('{Control>}z{/Control}');
-    expect(sent()).toBe(text);
-    expect(chips(field)).toEqual(['@Anna Nowak']);
-    // Nothing before the text the field opened with.
-    await userEvent.keyboard('{Control>}z{/Control}');
-    expect(sent()).toBe(text);
-
-    await userEvent.keyboard('{Control>}{Shift>}z{/Shift}{/Control}');
-    expect(sent()).toBe('Ask ');
-    await userEvent.keyboard('{Control>}y{/Control}');
-    expect(sent()).toBe('Ask everybody');
-  });
-
-  it('a mention chosen from the list is one step', async () => {
+  it('a mention chosen from the list is undone as one step', async () => {
     const field = mount();
     await userEvent.type(field, 'Hi @an');
     await userEvent.click(await screen.findByRole('option', { name: 'Anna Nowak' }));
@@ -385,5 +312,51 @@ describe('undo and redo', () => {
     await userEvent.keyboard('{Control>}z{/Control}');
     expect(sent()).not.toContain('[[');
     expect(chips(field)).toEqual([]);
+    await userEvent.keyboard('{Control>}{Shift>}z{/Shift}{/Control}');
+    expect(sent()).toBe(`Hi ${person} `);
+  });
+});
+
+describe('a field hidden and shown again', () => {
+  it('survives its effects being reconnected before the editor is mounted again — a lazy tab revealed anew', async () => {
+    // React reconnects a hidden subtree's effects when it is shown again
+    // (`<Activity>`, a Suspense boundary revealing a lazy tab). The editor's
+    // view is unmounted while hidden; touching it then threw on CI.
+    const { Activity } = await import('react');
+    const errors: unknown[] = [];
+    const onError = (event: ErrorEvent): void => {
+      errors.push(event.error);
+      event.preventDefault();
+    };
+    window.addEventListener('error', onError);
+    try {
+      function Toggle(): ReactElement {
+        const [shown, setShown] = useState(true);
+        return (
+          <div>
+            <button type="button" onClick={(): void => setShown((value) => !value)}>
+              toggle
+            </button>
+            <Activity mode={shown ? 'visible' : 'hidden'}>
+              <Harness initial={`Ask ${person}`} />
+            </Activity>
+          </div>
+        );
+      }
+      renderCrm(<Toggle />);
+      const toggle = screen.getByRole('button', { name: 'toggle' });
+      await userEvent.click(toggle);
+      // Hidden for longer than the editor hook's one-tick grace: the editor
+      // it held is destroyed while the field is away.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await userEvent.click(toggle);
+      const field = await screen.findByLabelText('Description');
+      expect(chips(field)).toEqual(['@Anna Nowak']);
+      await userEvent.click(screen.getByText('Description'));
+      await waitFor(() => expect(field).toHaveFocus());
+      expect(errors).toEqual([]);
+    } finally {
+      window.removeEventListener('error', onError);
+    }
   });
 });

@@ -1,11 +1,22 @@
 /**
- * `carts`' admin surface — two routes, one zone contribution and no sidebar
- * entry, declared by the module that owns them (feature 091, Phase 4, batch
- * four, and P7b;
+ * `carts`' admin surface — two routes and one sidebar entry, declared by the
+ * module that owns them (feature 091, Phase 4, batch four;
  * `specs/091-module-owned-admin-surfaces/contracts/admin-contribution.md`).
  *
- * **The locked-and-nav-less shape.** Batch two rejected this module twice over
- * — once for declaring `activation.nonDeactivatable`, once for contributing no
+ * **The zone contribution is gone.** P7b added a cart-approval policy panel to
+ * `organization.detail.after`; `specs/170-organization-roles/` (OR-3) removed
+ * the per-Organization policy it toggled, and the panel with it: whether a
+ * buyer's basket needs approval is now their role's
+ * `carts.order_without_approval`, edited by the Organization's administrator.
+ *
+ * **The sidebar entry arrived with issue #510.** Until then the list was
+ * reachable from neither the sidebar nor the palette — an operator had to know
+ * the address — which Principle XVI forbids. Nothing recorded that as a
+ * decision: batch four moved the module as it found it. The entry and the
+ * manifest's `open-carts` action both carry `carts:read`, the route's own gate.
+ *
+ * **The locked shape, nav-less when it moved.** Batch two rejected this module
+ * twice over — once for declaring `activation.nonDeactivatable`, once for contributing no
  * sidebar entry — and `plan.md`'s two rulings retire both grounds. What a
  * locked module still has is the **permission** axis, which
  * `useSurfaceVisibility` gates identically to presence, and what a nav-less
@@ -33,10 +44,7 @@
  * qualify, so a consumer reaching into another module's `./admin` stays a
  * counted boundary reach.
  */
-import {
-  zoneComponent,
-  type AdminContributions,
-} from '@endora-commerce/admin-kit/contributions';
+import type { AdminContributions } from '@endora-commerce/admin-kit/contributions';
 
 /** The module's landing route: the platform-wide cart list. */
 const ROUTE_PATH = '/carts';
@@ -55,23 +63,16 @@ export const contributions: AdminContributions = {
       requiredPermission: 'carts:read',
     },
   ],
-  zones: [
-    // Weight 400 of four contributors to the organization detail's zone
-    // (feature 091, P7b): `sales_channels` at 100, `price_lists` at 200,
-    // `quick_order` at 300, then this panel. The first three are the order the
-    // operator saw when those panels were scattered through
-    // `OrganizationDetail.tsx`; this one is last because it is the addition —
-    // the panel behind it was imported by nothing and rendered nowhere (§10.5).
-    //
-    // **`customers:manage`, and not `carts:read`.** Both halves of the policy
-    // route enforce it — `packages/modules/carts/src/backend/routes.admin.ts`
-    // gates the `GET` and the `PATCH` on that one code — and a contribution
-    // declares one. `carts:read` opens this module's cart list and says nothing
-    // about an organization's policy, so declaring it would render a toggle
-    // that 403s on its first use.
-    zoneComponent('organization.detail.after', () => import('./zones/CartApprovalPolicy.js'), {
-      weight: 400,
-      requiredPermission: 'customers:manage',
-    }),
+  nav: [
+    {
+      to: ROUTE_PATH,
+      labelKey: 'nav.carts.label',
+      icon: 'ShoppingCart',
+      section: 'sales',
+      // After `orders`' three rows (100–300), before `quote_requests` and
+      // `returns` (400): a cart is the step before an order.
+      weight: 350,
+      requiredPermission: 'carts:read',
+    },
   ],
 };

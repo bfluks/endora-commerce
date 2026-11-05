@@ -205,16 +205,10 @@ export const MODULES_WITHOUT_DOCUMENTATION: Readonly<Record<string, string>> = {
   admin_notifications:
     'The in-admin notification bell and its per-administrator delivery. Operator-facing and ' +
     'wants a page (spec.md Q3).',
-  custom_fields:
-    'Runtime custom fields — infrastructure other modules consume rather than a capability an ' +
-    'operator configures on its own. A page or `docs: false` is spec.md Q3.',
   email:
     'The outbound mail transport other modules send through. Operator-facing insofar as an ' +
     'operator configures the adapter; wants a page (spec.md Q3).',
   mfa: 'Multi-factor authentication for admin sign-in. Operator-facing and wants a page (spec.md Q3).',
-  pim_connector:
-    'The mutual-exclusion registry the four PIM connectors register into. Infrastructure; a ' +
-    'page or `docs: false` is spec.md Q3.',
 };
 
 /**
@@ -333,10 +327,6 @@ export const DERIVED_FACTS_IN_PROSE: Readonly<Record<string, ProseLedgerEntry>> 
     'cites `packages/modules/customer_accounts/src/manifest.ts` by address. The file is ' +
     'real and the sentence is worth keeping; the repair is to name the module and the ' +
     'file rather than the path.',
-  'deployment/first-deployment-checklist#3bb14526':
-    'cites `packages/modules/price_lists/src/manifest.ts` by address. The file is real ' +
-    'and the sentence is worth keeping; the repair is to name the module and the file ' +
-    'rather than the path.',
   'deployment/first-deployment-checklist#46d41070':
     'cites `packages/modules/mfa/src/manifest.ts` by address. The file is real and the ' +
     'sentence is worth keeping; the repair is to name the module and the file rather than ' +

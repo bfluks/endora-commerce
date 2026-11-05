@@ -87,6 +87,7 @@ describe('Megamenu CMS-block embed (T042 + T044)', () => {
           {
             id: '6f2c7b4a-1d3e-4cb5-ab21-fa1023df1100',
             parentId: null,
+            presentation: 'mega',
             position: 0,
             kind: 'external-link',
             labels: { 'en-US': 'Specials' },

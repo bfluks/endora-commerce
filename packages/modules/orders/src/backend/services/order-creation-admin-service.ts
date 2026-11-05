@@ -16,7 +16,13 @@ import {
   orderEmailNotSent,
   sendOrderTransactionalEmail,
 } from './transactional-email-helper.js';
-import { rethrowIfModuleDisabled, SalesChannel } from '@endora-commerce/platform/kernel';
+import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
+import {
+  assertChannelAllowedForOrganization,
+  type OrganizationChannelsRead,
+} from './organization-channel-gate.js';
+import { assertWithinAdminOrderItemBound } from './request-minimums.js';
+import { planAdminLineGrouping } from '../domain/quote-line-groups.js';
 
 /** A new address typed on the create form (vs. an existing org address id). */
 export interface AdminCreateOrderInlineAddress {
@@ -32,7 +38,18 @@ export interface AdminCreateOrderInlineAddress {
 export interface AdminCreateOrderInput {
   customerAccountId: string;
   salesChannelId: string;
-  items: Array<{ productId: string; variantId?: string | undefined; quantity: number }>;
+  /**
+   * In display order: each group's lines, then the ungrouped ones. `groupKey`
+   * names one of `groups` (feature 159; the route's schema has checked it).
+   */
+  items: Array<{
+    productId: string;
+    variantId?: string | undefined;
+    quantity: number;
+    groupKey?: string | null | undefined;
+  }>;
+  /** Feature 159 — the new order's groups, in display order; a group no line names is not created. */
+  groups?: Array<{ key: string; name: string }> | undefined;
   deliveryMethodId: string;
   paymentMethodId: string;
   /** Per side, supply EITHER an existing org address id OR an inline address. */
@@ -51,7 +68,7 @@ export interface AdminCreateOrderInput {
  *
  * A sales rep / admin builds an order for a customer (own item selection,
  * customer, payment + delivery method, billing + delivery address). We seed the
- * customer's cart from the chosen items, then run the existing on-behalf
+ * customer's working basket from the chosen items, then run the existing on-behalf
  * `placeOrder` (real pricing, stock reservation, min-value gate, payment
  * next-action), and notify the customer that an order awaits their payment.
  */
@@ -62,11 +79,30 @@ export class OrderCreationAdminService {
     private readonly orderService: OrderService,
     private readonly addressService: AddressServicePort,
     private readonly customerAccountRead: CustomerAccountReadPort,
+    /**
+     * Issue #515 — the customer's Organization's channels, which the order's
+     * channel must be one of. Required, though it may be `undefined` where the
+     * module is composed without the port: `create` then fails closed.
+     */
+    private readonly salesChannelMembership: OrganizationChannelsRead | undefined,
     private readonly mailer?: EmailMailerPort,
     private readonly getTransactionalEmailSender?: () => TransactionalEmailSender | undefined,
   ) {}
 
-  async create(adminUserId: string | null, input: AdminCreateOrderInput): Promise<Order> {
+  /**
+   * `options.language` names a product refused for its minimum (the request's
+   * `Accept-Language`); absent, the product record's own fallback chain.
+   */
+  async create(
+    adminUserId: string | null,
+    input: AdminCreateOrderInput,
+    options: { language?: string | undefined } = {},
+  ): Promise<Order> {
+    // Feature 155 (FR-038) — first, before anything is read or written.
+    assertWithinAdminOrderItemBound(input.items.length);
+    // Feature 159 (FR-061) — the request's grouping, every line kept.
+    const lineGrouping =
+      input.groups === undefined ? undefined : planAdminLineGrouping(input.groups, input.items);
     // command-coverage-ignore: the order write is delegated to
     // OrderService.placeOrder (audited there); the only local mutation here is
     // the optional append-only OrderComment, not audited domain-state.
@@ -83,32 +119,32 @@ export class OrderCreationAdminService {
     const organizationId = customer.organizationId;
     const customerCtx = { customerAccountId: input.customerAccountId, organizationId };
 
-    // The operator names the order's channel, so it has to be one. Placement
-    // falls back to the system default for a channel it cannot find, which is
-    // right for a storefront request that named none and wrong here: the
-    // order would land on a channel nobody chose. Refused before anything is
-    // written — the customer's basket included.
-    const channel = await em.findOne(
-      SalesChannel,
-      { id: input.salesChannelId },
-      { fields: ['id'] },
+    // The operator names the order's channel, and it has to be one of the
+    // customer's Organization's active assigned channels (issue #515) — the
+    // channels its members may shop on, and the rule the on-behalf quote
+    // request follows. An unassigned, inactive or nonexistent channel is
+    // refused alike with `422 ORDER_SALES_CHANNEL_NOT_ALLOWED`, never replaced
+    // by another: placement falls back to the system default for a channel it
+    // cannot find, which is right for a storefront request that named none and
+    // wrong here. Refused before anything is written — the working basket and
+    // the inline addresses included.
+    await assertChannelAllowedForOrganization(
+      this.salesChannelMembership,
+      organizationId,
+      input.salesChannelId,
     );
-    if (!channel) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Sales channel not found.');
 
     // The customer's Organization allow-lists bind the operator too. Asked
-    // here as well as inside `placeOrder`, because this method replaces the
-    // customer's basket before it places: nothing is written yet, no inline
-    // address either.
+    // here as well as inside `placeOrder`, because this method writes a working
+    // basket and inline addresses before it places: nothing is written yet.
     await this.orderService.assertMethodsAllowedForOrganization({
       organizationId,
       deliveryMethodId: input.deliveryMethodId,
       paymentMethodId: input.paymentMethodId,
     });
 
-    // Before the customer's basket is touched. The cart is cleared and reseeded
-    // with this order's lines further down, and `placeOrder`'s own channel gate
-    // would refuse only after that — leaving the customer with the
-    // administrator's lines in place of their own.
+    // Before anything is written. `placeOrder`'s own channel gate would refuse
+    // only after the working basket and the inline addresses exist.
     await this.orderService.assertMethodsOfferedInChannel({
       salesChannelId: input.salesChannelId,
       deliveryMethodId: input.deliveryMethodId,
@@ -170,22 +206,43 @@ export class OrderCreationAdminService {
         input.billingAddress,
       );
 
-      // Seed the customer's cart from the admin-entered items (current pricing
-      // via CartService). Clearing first matches the platform's single-active-cart
-      // model (same approach as RfqService.convertToOrder). The assortment is
-      // judged on the order's channel, not on the admin request's.
-      await this.cartService.clearForCustomer(customerCtx);
-      for (const it of input.items) {
-        await this.cartService.addItem(
-          { customer: customerCtx },
-          {
-            productId: it.productId,
-            ...(it.variantId ? { variantId: it.variantId } : {}),
-            quantity: it.quantity,
-            salesChannelId: input.salesChannelId,
-          },
-        );
-      }
+      // Write the admin-entered items into a working basket of the customer's
+      // (current pricing via CartService) and place the order from it. The
+      // customer's own active basket — a quote-seeded one included — is not
+      // touched (issue #169): the working basket stands beside it and ends
+      // completed against this order, or is removed when placement refuses. The
+      // assortment is judged on the order's channel, not on the admin request's.
+      //
+      // Feature 155 (FR-009, R8): one batch, so a product's minimum is judged
+      // on its total across the request's lines (D1). A line the customer may
+      // not see, or that the channel does not sell, is thrown before anything
+      // is written, with the unknown id's answer (FR-035); any line below a
+      // minimum refuses the whole request, keyed by its index. Placement checks
+      // the basket again (FR-037) — this is the earlier, request-shaped answer,
+      // not the only one.
+      //
+      // The basket is one of the order's channel, the channel the operator
+      // named (`specs/154-sales-channel-access/`, contracts/basket-attribution.md
+      // §1), so placement below reads the basket this writes.
+      const basketCtx = { ...customerCtx, salesChannelId: input.salesChannelId };
+      const lines = input.items.map((it) => ({
+        productId: it.productId,
+        ...(it.variantId ? { variantId: it.variantId } : {}),
+        quantity: it.quantity,
+        salesChannelId: input.salesChannelId,
+      }));
+      //
+      // Feature 159 (research N-31) — every request line stays a line of its
+      // own (`keepRepeatedLines`): one product may sit on lines of several
+      // groups, each priced at its own quantity, and the basket reads back in
+      // request order, which is what placement lays the groups out by.
+      const working = await this.cartService.addItems({ customer: basketCtx }, lines, {
+        onLineError: 'throw',
+        onBelowMinimum: 'throw',
+        workingBasket: true,
+        keepRepeatedLines: true,
+        ...(options.language ? { language: options.language } : {}),
+      });
 
       order = await this.orderService.placeOrder(
         { customerAccountId: input.customerAccountId, organizationId, impersonatorAdminUserId: adminUserId },
@@ -197,7 +254,12 @@ export class OrderCreationAdminService {
           salesChannelId: input.salesChannelId,
           ...(input.customerNote ? { customerNote: input.customerNote } : {}),
         },
-        input.origin ? { origin: input.origin } : undefined,
+        {
+          ...(input.origin ? { origin: input.origin } : {}),
+          ...(options.language ? { language: options.language } : {}),
+          ...(lineGrouping ? { lineGrouping } : {}),
+          workingBasketId: working.cart.id,
+        },
       );
     } catch (err) {
       await cleanupTransient();

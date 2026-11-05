@@ -39,6 +39,19 @@ export class CmsCache {
     this.enabled = (options.enabled ?? true) && this.ttlSeconds > 0;
   }
 
+  /**
+   * The channel segment of a page key (feature 167): the channel code and the URL
+   * facts the answered URLs are derived from, so a flipped *prefix the default
+   * language* or a changed language list misses the entry instead of serving URLs
+   * under the old prefixes. `invalidatePagesBySlug` still matches every segment.
+   */
+  static pageChannel(
+    code: string,
+    urlFacts: { readonly prefixDefaultLanguage: boolean; readonly languages: readonly string[] },
+  ): string {
+    return `${code}|${urlFacts.prefixDefaultLanguage ? 'p' : 'u'}|${urlFacts.languages.join(',')}`;
+  }
+
   static pageKey(slug: string, channel: string, language: string): string {
     return `${CMS_CACHE_KEY_PREFIX}page:${encodeURIComponent(slug)}:${channel}:${language}`;
   }

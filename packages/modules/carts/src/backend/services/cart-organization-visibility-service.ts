@@ -9,6 +9,9 @@ import type {
 import { HttpError } from '@endora-commerce/platform/http';
 import { Cart } from '../entities/cart.entity.js';
 import { CartItem } from '../entities/cart-item.entity.js';
+import { cartTotalsByCart } from './cart-money.js';
+import { readOrganizationCarts } from './organization-cart-reach.js';
+import { cartOwnerIdentity } from './cart-owner-identity.js';
 
 /**
  * Organization-Administrator visibility surface (feature 027 US4).
@@ -32,16 +35,21 @@ export class CartOrganizationVisibilityService {
     private readonly emFactory: () => EntityManager,
     /**
      * `customer_accounts`' read model (feature 075, Phase C). The org-admin
-     * cart list renders each cart's owner by e-mail, and it read the account
-     * row itself — out of a table deactivation leaves in place.
+     * cart list names each cart's owner (issue #751: by name, the e-mail
+     * beside it), and it read the account row itself — out of a table
+     * deactivation leaves in place.
      */
     private readonly customerAccounts: CustomerAccountReadPort,
   ) {}
 
   async list(organizationId: string, query: OrgCartsListQuery = {}): Promise<OrgCartsListResponse> {
     const em = this.emFactory();
-    const where: Record<string, unknown> = { organizationId };
-    if (query.status && query.status.length > 0) where['status'] = { $in: query.status };
+    // A working basket (issue #169) is transient placement state, never a cart
+    // of the organisation's to list: it is seen once it is `completed`.
+    const where: Record<string, unknown> = { organizationId, status: { $ne: 'working' } };
+    if (query.status && query.status.length > 0) {
+      where['status'] = { $in: query.status.filter((status) => status !== 'working') };
+    }
     if (query.approvalStatus && query.approvalStatus.length > 0) {
       where['approvalStatus'] = { $in: query.approvalStatus };
     }
@@ -49,11 +57,15 @@ export class CartOrganizationVisibilityService {
     const pageSize = Math.min(query.pageSize ?? 50, 100);
     const orderBy = this.sortClause(query.sort ?? 'last_activity_desc');
 
-    const [rows, totalCount] = await em.findAndCount(Cart, where, {
-      orderBy,
-      limit: pageSize,
-      offset: (page - 1) * pageSize,
-    });
+    // Issue #619 — a member's cart is outside the administrator's own customer
+    // filter; `where` names `organizationId`, so the read stays in the tenant.
+    const [rows, totalCount] = await readOrganizationCarts(organizationId, () =>
+      em.findAndCount(Cart, where, {
+        orderBy,
+        limit: pageSize,
+        offset: (page - 1) * pageSize,
+      }),
+    );
 
     const ownerIds = Array.from(
       new Set(rows.map((r) => r.customerAccountId).filter((id): id is string => Boolean(id))),
@@ -63,16 +75,8 @@ export class CartOrganizationVisibilityService {
 
     // Bulk item-count + total resolution.
     const cartIds = rows.map((r) => r.id);
-    const itemCounts = new Map<string, { count: number; total: number; currency: string }>();
-    if (cartIds.length > 0) {
-      const items = await em.find(CartItem, { cartId: { $in: cartIds } });
-      for (const it of items) {
-        const prev = itemCounts.get(it.cartId) ?? { count: 0, total: 0, currency: it.currency };
-        prev.count += 1;
-        prev.total += Number(it.unitPrice) * it.quantity;
-        itemCounts.set(it.cartId, prev);
-      }
-    }
+    const itemCounts =
+      cartIds.length > 0 ? cartTotalsByCart(await em.find(CartItem, { cartId: { $in: cartIds } })) : new Map();
 
     return {
       data: rows
@@ -83,7 +87,8 @@ export class CartOrganizationVisibilityService {
           return {
             id: cart.id,
             ownerCustomerAccountId: cart.customerAccountId!,
-            ownerDisplayName: owner?.email ?? cart.customerAccountId!,
+            ...cartOwnerIdentity(owner, cart.customerAccountId!),
+            orderId: cart.completedOrderId ?? null,
             status: cart.status,
             approvalStatus: cart.approvalStatus,
             itemCount: ic.count,
@@ -103,8 +108,12 @@ export class CartOrganizationVisibilityService {
    */
   async getInOrganization(cartId: string, organizationId: string): Promise<Cart> {
     const em = this.emFactory();
-    const cart = await em.findOne(Cart, { id: cartId });
-    if (!cart || cart.organizationId !== organizationId) {
+    // Issue #619 — read across the administrator's own customer filter, inside
+    // the Organization; a working basket is not an Organization cart (#169).
+    const cart = await readOrganizationCarts(organizationId, () =>
+      em.findOne(Cart, { id: cartId, organizationId, status: { $ne: 'working' } }),
+    );
+    if (!cart) {
       throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'cart_not_found');
     }
     return cart;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ApiError, apiClient } from '../../lib/api-client.js';
+import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
 
 /**
  * Feature 024 — admin-side hook that fetches the dashboard's curated
@@ -29,7 +29,8 @@ export interface RecentActivityItem {
   /** Verb key, relative to `module`'s i18n namespace. */
   labelKey: string;
   actorDisplayName: string;
-  actorKind: 'admin' | 'system';
+  /** `customer` — a customer who acted for themselves (issue #741). */
+  actorKind: 'admin' | 'customer' | 'system';
   targetType: string;
   targetId: string;
   targetDisplayName: string;

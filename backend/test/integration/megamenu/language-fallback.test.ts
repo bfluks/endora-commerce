@@ -31,7 +31,6 @@ describe('Megamenu language fallback (T053)', () => {
       defaultCurrency: 'PLN',
       active: true,
       systemDefault: false,
-      isPublic: true,
       status: 'active',
     });
     await em.persistAndFlush(channel);
@@ -63,6 +62,7 @@ describe('Megamenu language fallback (T053)', () => {
         items: [
           {
             parentId: null,
+            presentation: 'mega',
             position: 0,
             kind: 'external-link',
             labels: { 'en-US': 'EN only' },
@@ -70,6 +70,7 @@ describe('Megamenu language fallback (T053)', () => {
           },
           {
             parentId: null,
+            presentation: 'mega',
             position: 1,
             kind: 'external-link',
             labels: { 'pl-PL': 'PL only' },
@@ -77,6 +78,7 @@ describe('Megamenu language fallback (T053)', () => {
           },
           {
             parentId: null,
+            presentation: 'mega',
             position: 2,
             kind: 'external-link',
             labels: { 'en-US': 'Both EN', 'pl-PL': 'Both PL' },
@@ -134,6 +136,7 @@ describe('Megamenu language fallback (T053)', () => {
         items: [
           {
             parentId: null,
+            presentation: 'mega',
             position: 0,
             kind: 'external-link',
             labels: { 'fr-FR': 'Bonjour' },

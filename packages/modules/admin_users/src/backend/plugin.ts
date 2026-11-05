@@ -5,6 +5,7 @@ import type {
   AuthSessionPort,
   CustomerAccountReadPort,
   MfaLoginPort,
+  OrganizationRoleReadPort,
   PermissionCataloguePort,
   PermissionReadPort,
 } from '@endora-commerce/contracts';
@@ -17,10 +18,12 @@ import {
 } from './services/authentication-throttle.js';
 import { ImpersonationService } from './services/impersonation-service.js';
 import { AdminUserService } from './services/admin-user-service.js';
+import { AdminPreferenceService } from './services/admin-preference-service.js';
 import type { AuditPort, PlatformLogger } from '@endora-commerce/platform/kernel';
 import { registerAdminPublicRoutes } from './routes.public.js';
 import { registerImpersonationRoutes } from './routes.impersonation.js';
 import { registerAdminUsersAdminRoutes } from './routes.admin.js';
+import { registerAdminPreferenceRoutes } from './routes.preferences.js';
 import type { RequireAdminFactory, SettingsReadPort } from '@endora-commerce/platform/kernel';
 import type { TwoFactorEnrolmentReader } from './services/two-factor-enrolments.js';
 
@@ -52,12 +55,16 @@ export interface AdminModuleOptions {
   adminRolePort: AdminRolePort;
   /** `customer_accounts` — who an impersonation is started against. */
   customerAccountReadPort: CustomerAccountReadPort;
+  /** `organizations` — the role an impersonation acts under, named on its answer (`specs/170-organization-roles/`). */
+  organizationRoleReadPort: Pick<OrganizationRoleReadPort, 'roleRef'>;
   requireAdmin: RequireAdminFactory;
   /** Resolves the current admin's id from `request.actor` (prod) or
    *  `request.testActor` (test harness). Used by `GET /admin/me`. */
   resolveAdminContext: (req: FastifyRequest) => { adminUserId: string };
   /** Feature 042 — lazily resolved MFA login port (absent ⇒ password-only). */
   getMfaLoginPort?: () => MfaLoginPort | undefined;
+  /** Feature 171 (US6) — whether a live library asset has this id (the avatar check). */
+  assetExists?: (assetId: string) => Promise<boolean>;
   /**
    * Which admins hold a second factor. Required, not optional: the field it
    * feeds has a value on every response that carries an admin user, and the
@@ -87,6 +94,12 @@ export interface AdminModuleHandle {
    * now, and identity lookup is the one thing it still wants from here.
    */
   adminUserService: AdminUserService;
+  /**
+   * Feature 164 — the signed-in admin's own Admin UI preferences. On the handle
+   * for the composition and its tests to reach; deliberately **not** published
+   * as a port, because no other module has a demand for it.
+   */
+  adminPreferenceService: AdminPreferenceService;
 }
 
 /**
@@ -136,7 +149,9 @@ export function adminModule(
     options.authSessionPort,
     options.auditLogService,
     options.getMfaLoginPort,
+    options.assetExists,
   );
+  const adminPreferenceService = new AdminPreferenceService(options.emFactory, options.log);
   const handle: AdminModuleHandle = {
     adminAuthService,
     authenticationThrottle,
@@ -144,6 +159,7 @@ export function adminModule(
     permissionService: options.permissionService,
     auditLogService: options.auditLogService,
     adminUserService,
+    adminPreferenceService,
   };
   return {
     handle,
@@ -161,6 +177,7 @@ export function adminModule(
         // (feature 080, T051) — the module already had the right resolver in
         // hand for `GET /admin/me`.
         resolveAdminUserId: (req) => options.resolveAdminContext(req).adminUserId,
+        organizationRoles: options.organizationRoleReadPort,
       });
       await registerAdminUsersAdminRoutes(app, {
         adminUserService,
@@ -172,6 +189,12 @@ export function adminModule(
         resolveAdminContext: options.resolveAdminContext,
         twoFactorEnrolments: options.twoFactorEnrolments,
         settingsReadPort: options.settingsReadPort,
+        adminPreferenceService,
+      });
+      await registerAdminPreferenceRoutes(app, {
+        adminPreferenceService,
+        requireAdmin: options.requireAdmin,
+        resolveAdminContext: options.resolveAdminContext,
       });
     },
   };

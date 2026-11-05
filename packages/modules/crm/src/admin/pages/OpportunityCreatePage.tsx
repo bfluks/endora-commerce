@@ -12,7 +12,7 @@ import {
   PageHeader,
   Select,
 } from '@endora-commerce/admin-kit/ui';
-import { StickyFormActions } from '@endora-commerce/admin-kit/components';
+import { StickyFormActions, TagMultiSelect } from '@endora-commerce/admin-kit/components';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { crmApi } from '../api.js';
 import {
@@ -24,7 +24,6 @@ import {
 } from '../components/LookupPickers.js';
 import { customFieldIssues, NewOpportunityCustomFields } from '../components/OpportunityCustomFields.js';
 import { ReferenceField } from '../components/ReferenceField.js';
-import { TagMultiSelect } from '../components/TagPicker.js';
 import { errorMessage, normaliseAmount } from '../lib/labels.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -335,6 +334,7 @@ export function OpportunityCreatePage(): ReactNode {
                 <span className="text-sm font-medium leading-none">{t('tags.section')}</span>
                 <TagMultiSelect
                   ariaLabel={t('tags.section')}
+                  loadTags={crmApi.listTags}
                   selected={tagIds}
                   onChange={setTagIds}
                   className="w-full"

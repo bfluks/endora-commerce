@@ -14,6 +14,7 @@ import { manifest as customersManifest } from '../../../../packages/modules/cust
 import { CustomerAccount } from '../../helpers/package-entities.js';
 import { STUB_CUSTOMER_PASSWORD } from '../../helpers/seed-organizations.js';
 import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+import { predefinedRoleIdOf } from '../../helpers/seed-organization-roles.js';
 
 /**
  * Issue #222 — `passwordSetAt` records that a password was actually set.
@@ -46,12 +47,15 @@ describe('customer_accounts — passwordSetAt (issue #222)', () => {
     (h.container.cradle as unknown as { passwordResetService: CustomerPasswordResetPort })
       .passwordResetService;
 
-  const socialLogin = (): { autoCreate(email: string): Promise<{ id: string } | null> } =>
-    (
-      h.container.cradle as unknown as {
-        customerSocialLoginPort: { autoCreate(email: string): Promise<{ id: string } | null> };
-      }
-    ).customerSocialLoginPort;
+  type SocialLogin = {
+    autoCreate(
+      email: string,
+      context: { salesChannelId: string | null },
+    ): Promise<{ id: string } | null>;
+  };
+  const socialLogin = (): SocialLogin =>
+    (h.container.cradle as unknown as { customerSocialLoginPort: SocialLogin })
+      .customerSocialLoginPort;
 
   async function rowFor(email: string): Promise<CustomerAccount> {
     const row = await h.em().findOne(CustomerAccount, { email });
@@ -107,7 +111,7 @@ describe('customer_accounts — passwordSetAt (issue #222)', () => {
       password: 'another-very-strong-pass',
       firstName: 'New',
       lastName: 'Member',
-      role: 'regular_user',
+      organizationRoleId: await predefinedRoleIdOf(h.em(), TEST_ORGANIZATION_ID, 'member'),
     });
 
     const account = await rowFor(created.email);
@@ -122,7 +126,7 @@ describe('customer_accounts — passwordSetAt (issue #222)', () => {
       password: 'the-password-they-forgot',
       firstName: 'Reset',
       lastName: 'Me',
-      role: 'regular_user',
+      organizationRoleId: await predefinedRoleIdOf(h.em(), TEST_ORGANIZATION_ID, 'member'),
     });
     // Back to "no password on record", so the assertion below is about the
     // confirm and not about the create two lines above it.
@@ -186,7 +190,7 @@ describe('customer_accounts — passwordSetAt (issue #222)', () => {
 
   it('leaves the column null when federated sign-in auto-creates the account', async () => {
     const email = `pw-set-social-${Date.now()}@example.test`;
-    const created = await socialLogin().autoCreate(email);
+    const created = await socialLogin().autoCreate(email, { salesChannelId: null });
     expect(created, 'auto-create is allowed in this composition').not.toBeNull();
 
     const account = await rowFor(email);

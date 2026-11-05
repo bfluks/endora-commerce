@@ -1,9 +1,10 @@
-import { ERROR_CODES, type ImportExportEntity } from '@endora-commerce/contracts';
+import { ERROR_CODES, type BulkImportReport, type ImportExportEntity, type ImportProfile } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { effectiveState } from '@endora-commerce/platform/kernel';
 import { parseCsv, rowsToRecords, serializeCsv } from './csv-codec.js';
-import type { ImportExportAdapter, ImportExportPorts } from './adapter.js';
+import type { AdapterImportReport, ImportExportAdapter, ImportExportPorts } from './adapter.js';
 import { productsAdapter } from './adapters/products.adapter.js';
+import { ProductsFileError } from './adapters/products-csv-grammar.js';
 import { categoriesAdapter } from './adapters/categories.adapter.js';
 import { stockAdapter } from './adapters/stock.adapter.js';
 import { customersAdapter } from './adapters/customers.adapter.js';
@@ -33,6 +34,21 @@ import { ordersAdapter } from './adapters/orders.adapter.js';
 export interface ImportReport {
   imported: number;
   errors: Array<{ rowNumber: number; reason: string }>;
+  /** Feature 174 (`import-profiles-and-csv.md` §2.3) — products imports only. */
+  dryRun?: boolean;
+  cellCounts?: BulkImportReport['cellCounts'];
+  warnings?: BulkImportReport['warnings'];
+  fieldErrors?: Array<{ rowNumber: number; column: string; code: string }>;
+  /** Present when the lists were cut at their cap: how many row and field errors there were in all. */
+  truncated?: { errors: number; fieldErrors: number };
+}
+
+/** Feature 174 — how a products run is asked for (`POST …/import/products?profileId=&dryRun=`). */
+export interface ImportRunOptions {
+  readonly profileId?: string | undefined;
+  readonly dryRun?: boolean | undefined;
+  /** The run's profile, read once (snapshot); answers `404 IMPORT_PROFILE_NOT_FOUND` for an unknown id. */
+  readonly loadProfile?: (id: string) => Promise<ImportProfile>;
 }
 
 export class ImportExportService {
@@ -112,6 +128,12 @@ export class ImportExportService {
 
   async exportToCsv(entity: string): Promise<string> {
     const adapter = this.adapterFor(entity);
+    // An adapter whose columns depend on the data (feature 163 — one scoped-status
+    // column per sales channel and language) answers the whole table.
+    if (adapter.exportTable) {
+      const table = await adapter.exportTable();
+      return serializeCsv([table.header, ...table.rows]);
+    }
     const rows = await adapter.exportRows();
     return serializeCsv([Array.from(adapter.exportHeader), ...rows]);
   }
@@ -122,7 +144,7 @@ export class ImportExportService {
    * returned; the presence of any error means nothing was applied, so the
    * operator can fix the spreadsheet and re-upload deterministically.
    */
-  async importFromCsv(entity: string, csv: string): Promise<ImportReport> {
+  async importFromCsv(entity: string, csv: string, options: ImportRunOptions = {}): Promise<ImportReport> {
     const adapter = this.adapterFor(entity);
     if (!adapter.importHeader || !adapter.importRows) {
       throw new HttpError(
@@ -156,9 +178,63 @@ export class ImportExportService {
       }
     }
 
-    const report = await adapter.importRows(rowsToRecords(parsed));
+    for (const refused of adapter.refusedHeader ?? []) {
+      if (rawHeader.includes(refused.column)) {
+        throw new HttpError(400, refused.code, refused.message, [
+          { path: refused.column, issue: 'this column is not accepted' },
+        ]);
+      }
+    }
+
+    // Feature 174 (FR-048) — the profile is required for products and snapshotted at run start:
+    // an edit while the run goes has no effect on it.
+    let profile: ImportProfile | undefined;
+    if (adapter.requiresProfile === true) {
+      if (options.profileId === undefined) {
+        throw new HttpError(422, ERROR_CODES.IMPORT_PROFILE_REQUIRED, 'Choose an import profile for a products import.');
+      }
+      if (options.loadProfile === undefined) throw new Error('A products import needs the profile reader.');
+      profile = structuredClone(await options.loadProfile(options.profileId));
+      if (profile.entity !== entity) {
+        throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, `The profile is not a ${entity} profile.`, [
+          { path: 'profileId', issue: `the profile's entity is ${profile.entity}` },
+        ]);
+      }
+    }
+
+    let report: AdapterImportReport;
+    try {
+      report = await adapter.importRows(rowsToRecords(parsed), {
+        ...(profile ? { profile } : {}),
+        dryRun: options.dryRun === true,
+        header: rawHeader,
+      });
+    } catch (err) {
+      if (err instanceof ProductsFileError) {
+        throw new HttpError(
+          400,
+          ERROR_CODES.VALIDATION_FAILED,
+          err.message,
+          err.fileErrors.map((issue) => ({ path: 'header', issue })),
+        );
+      }
+      throw err;
+    }
     return {
       imported: report.imported,
+      ...(options.dryRun === true ? { dryRun: true } : {}),
+      ...(report.cellCounts ? { cellCounts: report.cellCounts } : {}),
+      ...(report.warnings ? { warnings: report.warnings } : {}),
+      ...(report.truncated ? { truncated: report.truncated } : {}),
+      ...(report.fieldErrors
+        ? {
+            fieldErrors: report.fieldErrors.map((error) => ({
+              rowNumber: error.index + 2,
+              column: error.column,
+              code: error.code,
+            })),
+          }
+        : {}),
       // Row numbers are 1-based and exclude the header line, matching what
       // spreadsheet apps display. The owner counts rows from 0 and knows
       // nothing about a header line, so the translation happens here.

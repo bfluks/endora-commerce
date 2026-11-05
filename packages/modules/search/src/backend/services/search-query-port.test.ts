@@ -25,7 +25,6 @@ const ctx: SearchQueryContext = {
   resolvedChannel: {
     id: '00000000-0000-0000-0000-0000000000c1',
     code: 'pl_retail',
-    isPublic: true,
     defaultCurrency: 'PLN',
     defaultLanguage: 'pl',
   },

@@ -1,12 +1,18 @@
-import type {
-  AssetReadPort,
-  AssetsLibraryPort,
-  CatalogCategoryReadPort,
-  CmsBlockReadPort,
-  CmsPageReadPort,
-  MegamenuAssetKind,
-  MegamenuResolvedBlock,
+import {
+  effectiveCustomerGroupId,
+  type AssetReadPort,
+  type AssetsLibraryPort,
+  type CatalogCategoryReadPort,
+  type CmsBlockReadPort,
+  type CmsPageReadPort,
+  type CustomerAccountReadPort,
+  type CustomerGroupReadPort,
+  type MegamenuAssetKind,
+  type MegamenuResolvedBlock,
+  type OrganizationDetailsPort,
+  type ProductAudience,
 } from '@endora-commerce/contracts';
+import type { MenuViewer } from './audience.js';
 
 /**
  * Everything this module reads outside itself, in one declaration
@@ -28,21 +34,33 @@ import type {
  * `lazyPort` in `backend/index.ts`, so the gate is the registration's and the
  * edges are in this module's manifest `dependencies`.
  *
- * The four functions below are the judgements that used to live inside those
- * closures — a storefront URL's shape, which category counts as live, which
- * asset kinds a menu may embed, and what an absent language means. They are
+ * The functions below are the judgements that used to live inside those
+ * closures — which asset kinds a menu may embed and what an absent language
+ * means. The other two — a category's and a page's storefront URL — moved with
+ * feature 168 to `category-tree.ts` (one catalogue read per menu) and to `cms`'
+ * `findStorefrontLinks` (a page's address in the served language). They are
  * functions of their ports rather than of a `ModuleContext`, so each is testable
  * over a stub with nothing composed.
  */
 export interface MegamenuCrossModulePorts {
-  /** `catalog` — a menu item's category target and its storefront URL. */
-  readonly categories: Pick<CatalogCategoryReadPort, 'findById'>;
-  /** `cms` — a menu item's page target and its storefront URL. */
-  readonly pages: Pick<CmsPageReadPort, 'findById'>;
+  /**
+   * `catalog` — a menu item's category target, and (feature 168) the whole
+   * live tree once per resolution, which every category link and category tree
+   * of the menu reads.
+   */
+  readonly categories: Pick<CatalogCategoryReadPort, 'findById' | 'listAll'>;
+  /**
+   * `cms` — a menu item's page target, and (feature 168) its localised name and
+   * URL in the served language.
+   */
+  readonly pages: Pick<CmsPageReadPort, 'findById' | 'findStorefrontLinks'>;
   /** `cms` — a menu item's block target, and the tree a panel inlines. */
   readonly blocks: Pick<CmsBlockReadPort, 'findById' | 'findLocalizedById'>;
-  /** `assets_library` — the stored kind, which is what an item's target declares. */
-  readonly assets: Pick<AssetReadPort, 'findById'>;
+  /**
+   * `assets_library` — the stored kind, which is what an item's target declares,
+   * and whether the caller may see the asset at all (feature 166, FR-006).
+   */
+  readonly assets: Pick<AssetReadPort, 'findById' | 'visibleToCaller'>;
   /**
    * `assets_library` again, for the URL alone.
    *
@@ -54,6 +72,39 @@ export interface MegamenuCrossModulePorts {
    * is the same two reads the roots issued.
    */
   readonly assetLibrary: Pick<AssetsLibraryPort, 'getAsset'>;
+  /** `customer_accounts` (feature 168) — the groups an audience names, checked on save. */
+  readonly customerGroups: Pick<CustomerGroupReadPort, 'findByIds'>;
+  /** `customer_accounts` (feature 168) — a signed-in buyer's own customer group. */
+  readonly customerAccounts: Pick<CustomerAccountReadPort, 'findById'>;
+  /** `organizations` (feature 168) — the buyer's organisation's customer group. */
+  readonly organizations: Pick<OrganizationDetailsPort, 'findById'>;
+}
+
+/**
+ * Who is looking at the menu (feature 168, FR-018).
+ *
+ * A signed-in **customer** is the only signed-in viewer: an API key or an admin
+ * reading the storefront API is not shopping in a session, so it sees what a
+ * guest sees — the narrowest answer for every audience but `guests`, which
+ * names nothing a key could not read on the public page anyway.
+ *
+ * The customer's group is read only when `needsGroup` — a menu that names no
+ * customer group costs a signed-in request no read. It is
+ * `effectiveCustomerGroupId`, the one rule pricing applies (plan R-5).
+ */
+export async function resolveMenuViewer(
+  ports: Pick<MegamenuCrossModulePorts, 'customerAccounts' | 'organizations'>,
+  audience: ProductAudience,
+  needsGroup: boolean,
+): Promise<MenuViewer> {
+  const customerAccountId = audience.customerAccountId ?? null;
+  if (!audience.authenticated || customerAccountId === null) return { signedIn: false, customerGroupId: null };
+  if (!needsGroup) return { signedIn: true, customerGroupId: null };
+  const [customer, organization] = await Promise.all([
+    ports.customerAccounts.findById(customerAccountId),
+    audience.organizationId ? ports.organizations.findById(audience.organizationId) : Promise.resolve(null),
+  ]);
+  return { signedIn: true, customerGroupId: effectiveCustomerGroupId({ customer, organization }) };
 }
 
 /** What a menu item renders an asset target or an icon as. */
@@ -61,51 +112,6 @@ export interface MegamenuAssetTarget {
   url: string;
   label: string | null;
   kind: MegamenuAssetKind;
-}
-
-/**
- * A category target's public storefront URL, or `null` for one a shopper may not
- * reach — which drops the item, and its children with it.
- *
- * `/c/<slug>` is the storefront's category route
- * (`storefront/app/(catalog)/c/[slug]`), and a module naming it is the tree's
- * established shape: `seo`'s sitemap builds `/c/`, `/p/` and `/<slug>` in its own
- * sources for the same three things. The composition roots disagreed about it —
- * the harness built `/catalog/<slug>`, which no route serves — and no test in the
- * tree read the value, so the harness's answer was wrong for as long as it
- * existed.
- *
- * **Deactivated and soft-deleted are both refusals**, which is production's
- * `is_active = true and deleted_at is null`. `liveOnly` is the port's word for
- * the second; `isActive` rides on the record because it is the caller's
- * judgement, and the admin-side existence check below deliberately makes the
- * opposite one.
- */
-export async function resolveCategoryUrl(
-  categories: MegamenuCrossModulePorts['categories'],
-  categoryId: string,
-): Promise<string | null> {
-  const category = await categories.findById(categoryId, { liveOnly: true });
-  if (!category || !category.isActive || !category.slug) return null;
-  return `/c/${category.slug}`;
-}
-
-/**
- * A CMS page target's public storefront URL, or `null` when the page is gone.
- *
- * **No status or `active` narrowing**, which is what both roots did and is an
- * asymmetry with the category case above rather than an oversight of this drain:
- * a draft or deactivated page keeps its menu item and answers for itself when the
- * shopper follows the link. Changing it is a product decision, and T118c moves a
- * value rather than redesigning it.
- */
-export async function resolveCmsPageUrl(
-  pages: MegamenuCrossModulePorts['pages'],
-  pageId: string,
-): Promise<string | null> {
-  const page = await pages.findById(pageId);
-  if (!page?.slug) return null;
-  return `/${page.slug}`;
 }
 
 /**

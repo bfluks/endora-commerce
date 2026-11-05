@@ -33,7 +33,7 @@ const settings = defineModuleSettingsManifest({
 /** Module-lifecycle manifest (feature 018). */
 export const manifest = defineModuleManifest({
   id: 'sales_channels',
-  name: 'Sales Channels',
+  name: 'Sales channels',
   description: 'Multi-channel storefront resolver and channel registry.',
   version: '1.0.0',
   // Rule 2 (bridge owner) — specs/065-manifest-aware-migrations/research.md §R9.
@@ -160,6 +160,11 @@ export const manifest = defineModuleManifest({
     { code: 'SALES_CHANNEL_ATTRIBUTION_IMMUTABLE' },
     { code: 'SALES_CHANNEL_CODE_IMMUTABLE' },
     { code: 'SALES_CHANNEL_HAS_ATTRIBUTIONS' },
+    // Feature 154 — the two refusals of the access rule. Raised by the kernel's
+    // access step and by the customer sign-in paths; owned here by the domain
+    // noun, as `INACTIVE_SALES_CHANNEL` is for the same platform thrower.
+    { code: 'SALES_CHANNEL_NOT_PERMITTED' },
+    { code: 'SALES_CHANNEL_SIGN_IN_REQUIRED' },
     { code: 'STALE_SALES_CHANNEL_WRITE' },
     { code: 'UNKNOWN_CURRENCY_CODE' },
     { code: 'UNKNOWN_LANGUAGE_CODE' },
@@ -183,6 +188,11 @@ export const manifest = defineModuleManifest({
      * row's; the label and description are the two strings it rendered
      * (`appShell.nav.salesChannels`, `appShell.palette.sub.storefrontChannels`),
      * moved into this module's own bundle.
+     *
+     * `keywords` are English and match in every admin language; the Polish
+     * words are under `keywordsKey` (issue #573). The plural `kanały` there is
+     * the screen's Polish name: matching is "query word ⊂ keyword", so `kanał`
+     * alone left an operator typing `kanały` with nothing.
      */
     {
       id: 'open-sales-channels',
@@ -191,7 +201,8 @@ export const manifest = defineModuleManifest({
       icon: 'Store',
       targetRoute: '/sales-channels',
       requiredPermission: 'sales_channels:read',
-      keywords: ['sales', 'channel', 'channels', 'kanał', 'sprzedaży'],
+      keywords: ['sales', 'channel', 'channels'],
+      keywordsKey: 'actions.openSalesChannels.keywords',
       weight: 160,
     },
     {
@@ -201,7 +212,8 @@ export const manifest = defineModuleManifest({
       icon: 'Layers',
       targetRoute: '/sales-channels/new',
       requiredPermission: 'sales_channels:write',
-      keywords: ['channel', 'new', 'storefront', 'kanał', 'sprzedaży'],
+      keywords: ['channel', 'new', 'storefront'],
+      keywordsKey: 'actions.newSalesChannel.keywords',
       weight: 150,
     },
   ],

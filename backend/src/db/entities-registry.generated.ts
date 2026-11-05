@@ -72,7 +72,9 @@ import { entities as emailEntities } from '@endora-commerce/mod-email/backend';
 import { entities as organizationsEntities } from '@endora-commerce/mod-organizations/backend';
 import { entities as erpConnectorEntities } from '@endora-commerce/mod-erp-connector/backend';
 import { entities as productFeedsEntities } from '@endora-commerce/mod-product-feeds/backend';
+import { entities as formsEntities } from '@endora-commerce/mod-forms/backend';
 import { entities as googleAnalyticsEntities } from '@endora-commerce/mod-google-analytics/backend';
+import { entities as importExportEntities } from '@endora-commerce/mod-import-export/backend';
 import { entities as invoicesEntities } from '@endora-commerce/mod-invoices/backend';
 import { entities as invoiceLedgerEntities } from '@endora-commerce/mod-invoice-ledger/backend';
 import { entities as languagesEntities } from '@endora-commerce/mod-languages/backend';
@@ -87,6 +89,7 @@ import { entities as paymentMethodsEntities } from '@endora-commerce/mod-payment
 import { entities as paymentsEntities } from '@endora-commerce/mod-payments/backend';
 import { entities as pimConnectorEntities } from '@endora-commerce/mod-pim-connector/backend';
 import { entities as priceListsEntities } from '@endora-commerce/mod-price-lists/backend';
+import { entities as projectsEntities } from '@endora-commerce/mod-projects/backend';
 import { entities as promptActionsEntities } from '@endora-commerce/mod-prompt-actions/backend';
 import { entities as pwaEntities } from '@endora-commerce/mod-pwa/backend';
 import { entities as quickOrderEntities } from '@endora-commerce/mod-quick-order/backend';
@@ -97,6 +100,7 @@ import { entities as seoEntities } from '@endora-commerce/mod-seo/backend';
 import { entities as authEntities } from '@endora-commerce/mod-auth/backend';
 import { entities as shipmentsEntities } from '@endora-commerce/mod-shipments/backend';
 import { entities as shoppingListsEntities } from '@endora-commerce/mod-shopping-lists/backend';
+import { entities as tasksEntities } from '@endora-commerce/mod-tasks/backend';
 import { entities as taxesEntities } from '@endora-commerce/mod-taxes/backend';
 import { entities as i18nEntities } from '@endora-commerce/mod-i18n/backend';
 import { entities as webhooksEntities } from '@endora-commerce/mod-webhooks/backend';
@@ -137,7 +141,9 @@ export const ALL_ENTITIES = [
   ...(organizationsEntities as readonly EntityClassLike[]),
   ...(erpConnectorEntities as readonly EntityClassLike[]),
   ...(productFeedsEntities as readonly EntityClassLike[]),
+  ...(formsEntities as readonly EntityClassLike[]),
   ...(googleAnalyticsEntities as readonly EntityClassLike[]),
+  ...(importExportEntities as readonly EntityClassLike[]),
   ...(invoicesEntities as readonly EntityClassLike[]),
   ...(invoiceLedgerEntities as readonly EntityClassLike[]),
   ...(languagesEntities as readonly EntityClassLike[]),
@@ -152,6 +158,7 @@ export const ALL_ENTITIES = [
   ...(paymentsEntities as readonly EntityClassLike[]),
   ...(pimConnectorEntities as readonly EntityClassLike[]),
   ...(priceListsEntities as readonly EntityClassLike[]),
+  ...(projectsEntities as readonly EntityClassLike[]),
   ...(promptActionsEntities as readonly EntityClassLike[]),
   ...(pwaEntities as readonly EntityClassLike[]),
   ...(quickOrderEntities as readonly EntityClassLike[]),
@@ -162,6 +169,7 @@ export const ALL_ENTITIES = [
   ...(authEntities as readonly EntityClassLike[]),
   ...(shipmentsEntities as readonly EntityClassLike[]),
   ...(shoppingListsEntities as readonly EntityClassLike[]),
+  ...(tasksEntities as readonly EntityClassLike[]),
   ...(taxesEntities as readonly EntityClassLike[]),
   ...(i18nEntities as readonly EntityClassLike[]),
   ...(webhooksEntities as readonly EntityClassLike[]),

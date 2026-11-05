@@ -56,11 +56,14 @@ export const transactionalEmailsSettingsManifest = defineModuleSettingsManifest(
 
 export const manifest = defineModuleManifest({
   id: 'transactional_emails',
-  name: 'Transactional Emails',
+  name: 'Transactional emails',
   description:
     'Admin-editable transactional email content and look (global + per sales channel), email-safe blocks/templates, variables, and preview.',
   version: '1.0.0',
-  dependencies: ['assets_library', 'email', 'sales_channels', 'settings'],
+  // `_i18n` owns `adminI18nService`, through which a template variable's
+  // `sampleValueKey` is read in the language being edited (issue #560); it
+  // cannot be switched off, so the edge costs no operator an activation control.
+  dependencies: ['_i18n', 'assets_library', 'email', 'sales_channels', 'settings'],
   // Feature 074 (Constitution XVII), test C2 — functional base. The second
   // half of the old ground was that `organizations` declares this module, so
   // the flip failed closed onto the tenancy root; ruling 2 withdraws that, and
@@ -101,35 +104,20 @@ export const manifest = defineModuleManifest({
    * activation is `nonDeactivatable`; the two codes are the two ends of that
    * decision and only one of them belongs to the lifecycle.
    *
-   * **No sentence moves with it.** It has none in either language anywhere in
-   * the tree; it was already on `UNTRANSLATED_ERROR_CODES` under `_i18n` and
-   * moves to this module's group there, so the bundle this module already
-   * ships gains no key. The refusal an operator reads today is the registry's
-   * own `nonDeactivatableReasonOf(code)` prose, which the raise passes as the
-   * message.
+   * **No sentence moved with it**: it had none in either language anywhere in
+   * the tree, and until issue #569 none could have been read. The raise put
+   * the email's registry code in `details.code`, which the envelope reads as a
+   * refusal token (`packages/platform/src/http/error-envelope.ts`), so it
+   * looked up `errors.TRANSACTIONAL_EMAIL_NOT_DEACTIVATABLE.<email code>` — a
+   * key per email, over an open set every module contributing an email
+   * extends — and the operator read the registry's English
+   * `nonDeactivatableReasonOf(code)` prose in every language.
    *
-   * **`tokens` is derived from the raise sites, not from the bundle**
-   * (runbook §5), and this is the case where that rule bites rather than
-   * repeats itself. The single raise
-   * (`commands/email-activation.commands.ts`) puts `{ code, reason }` in
-   * `details`, so `refusalToken` reads a token off every one of these errors
-   * (`packages/platform/src/http/error-envelope.ts`) — and the token is the
-   * **email's** registry code, an open set every module contributing an email
-   * extends, not a fixed vocabulary this manifest could enumerate. Declaring
-   * tokens would therefore be declaring a list that goes stale on the next
-   * email somebody registers. It is `VALIDATION_FAILED`'s shape one layer
-   * along: a machine-readable discriminator on the wire rather than a token
-   * choosing between sentences.
-   *
-   * Two consequences, both recorded rather than repaired here. A base sentence
-   * written at `errors.TRANSACTIONAL_EMAIL_NOT_DEACTIVATABLE` would be **dead
-   * key** — the envelope always looks up `<key>.<token>` when a token is
-   * present — so whoever drains this code's ledger entry writes
-   * `errors.TRANSACTIONAL_EMAIL_NOT_DEACTIVATABLE.<email code>` per protected
-   * email, or leaves the registry's reason to answer. And `_i18n`'s own
-   * `tokens` paragraph counted seven codes carrying a `details.code`; this was
-   * an eighth, so that count is true of the list it describes only now that
-   * this code has left it.
+   * Issue #569 moved the value to `details.emailCode`, so the error carries no
+   * token, declares none, and the one base sentence names the email through
+   * its `{emailCode}` placeholder. The registry's reason still travels as
+   * `details.reason` and as the thrower's message, which is what a client
+   * reads where no bundle answers.
    */
   errorCodes: [{ code: 'TRANSACTIONAL_EMAIL_NOT_DEACTIVATABLE' }],
   permissions: [
@@ -179,7 +167,8 @@ export const manifest = defineModuleManifest({
       icon: 'Inbox',
       targetRoute: '/transactional-emails/blocks',
       requiredPermission: 'transactional_emails:read',
-      keywords: ['email', 'blocks', 'fragments', 'bloki'],
+      keywords: ['email', 'blocks', 'fragments'],
+      keywordsKey: 'actions.openEmailBlocks.keywords',
       weight: 242,
     },
   ],

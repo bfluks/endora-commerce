@@ -15,7 +15,9 @@ export type QuickOrderRejectionReason =
   | 'malformed_row'
   | 'variant_not_resolved'
   | 'variant_ambiguous'
-  | 'row_limit_exceeded';
+  | 'row_limit_exceeded'
+  /** Feature 155 — the product's total across the file is below its pieces minimum. */
+  | 'below_minimum';
 
 export interface RecognizedQuickOrderItem {
   line: number;
@@ -31,6 +33,10 @@ export interface RejectedQuickOrderItem {
   line: number;
   raw: string;
   reason: QuickOrderRejectionReason;
+  /** Feature 155 — on `below_minimum`: the product's pieces minimum. */
+  minimum?: number;
+  /** Feature 155 — on `below_minimum`: the file total the verdict used. */
+  productTotal?: number;
 }
 
 export interface QuickOrderImportSummary {
@@ -54,6 +60,24 @@ export interface QuickOrderBuildResponse {
   checkoutUrl?: string;
   quoteRequestId?: string;
   quoteRequestBusinessId?: string;
+  /**
+   * Feature 155 — target `cart`: the lines not added because they would leave their product
+   * below a minimum. Always present for target `cart`.
+   */
+  rejected?: QuickOrderBuildRejectedLine[];
+}
+
+/** Feature 155 (FR-011 (b)) — one line a cart build left out. */
+export interface QuickOrderBuildRejectedLine {
+  productId: string;
+  variantId: string | null;
+  quantity: number;
+  productName: string;
+  reason: 'below_minimum';
+  kind: 'pieces' | 'packaging_unit';
+  minimum: number;
+  /** On a `packaging_unit` refusal: the unit's name. */
+  packagingUnitName?: string;
 }
 
 export interface QuickOrderSearchResult {
@@ -61,7 +85,7 @@ export interface QuickOrderSearchResult {
   sku: string;
   name: string;
   slug: string;
-  status: 'draft' | 'active' | 'inactive';
+  status: 'active' | 'inactive';
   matchedOn?: Array<'sku' | 'name' | 'attribute'>;
 }
 

@@ -13,7 +13,11 @@ czegokolwiek specyficznego dla encji, do której pola należą.
 ## Obsługiwane encje
 
 Pola niestandardowe są dostępne dla encji **Category, Order, Organization, CustomerAccount,
-QuoteRequest i Product**. Każda z tych encji ma dodatkowy zbiór wartości w JSONB
+QuoteRequest, Opportunity i Product**. Dwie z nich **podążają za modułem właścicielskim**:
+QuoteRequest za `quote_requests`, a Opportunity za `crm`. Gdy właściciela nie ma, typ znika z
+panelu administracyjnego i z API definicji całkowicie — nie jest wyświetlany, tworzony ani
+edytowany — a jego definicje, opcje i zapisane wartości są zachowane i wracają bez zmian razem z
+modułem. Każda z tych encji ma dodatkowy zbiór wartości w JSONB
 (`{ [definitionKey]: value }`); właścicielem tej kolumny i zapisów do niej jest moduł encji. W
 większości encji jest to kolumna `customFieldValues`; produkt korzysta zamiast tego z istniejącej
 już kolumny `products.attribute_values` (zobacz *Powiązanie sprawdzania wartości* niżej). Atrybuty
@@ -157,6 +161,150 @@ kategorii korzysta z flagi `filterable`; możliwości produktu pozostają w `pro
 temu sprawy dotyczące wyłącznie katalogu nie trafiają do ogólnego rdzenia — to dokładnie ten rozrost,
 przed którym chroni ten podział: `product_attributes` obrastało w `isVariantAxis` / `isPromoRule` /
 `filterPosition`, aż przestało nadawać się do ponownego użycia.
+
+## Filtry list (`listFilter`)
+
+`listFilter` to atrybut definicji, który ogólny rdzeń **interpretuje** — jeden z dwóch, obok
+opisanego niżej `carryTo` — dlatego jest kolumną obok `required`, a nie flagą w `config`. Definicja z włączonym atrybutem jest dostępna jako
+filtr na liście swojej encji w panelu, a to ogólna warstwa zamienia filtry żądania na SQL — inaczej
+każda lista encji miałaby własną kopię tych samych sześciu predykatów.
+
+- **To rejestr decyduje, które typy mogą go mieć.** Wpis każdego typu encji w rejestrze deklaruje
+  `listFilter`; dziś robią to `order`, `quote_request` i `opportunity`. Ustawienie go dla innego
+  typu jest odrzucane, a punkt końcowy `entity-types` publikuje tę flagę, żeby panel oferował opcję
+  tylko tam, gdzie ma ona zastosowanie. Włączenie lub wyłączenie nie zmienia żadnej zapisanej
+  wartości.
+- **Port.** `custom_fields` publikuje `CustomFieldListFilterPort`: `listFilterable(entityType)`
+  zwraca definicje oferowane przez listę, a `condition(entityType, filters)` zamienia wszystkie
+  filtry żądania na **jeden** warunek — `select t."id" from "<tabela encji>" t where …`, z każdym
+  kluczem i wartością jako parametrem — albo zgłasza błąd, wymieniając każdy klucz, który nie jest
+  oferowany. Lista encji opakowuje ten warunek jako `id in (…)` w każdej wykonywanej instrukcji
+  (wiersze, suma, liczniki), więc filtr zawęża cały wynik, a nie stronę, i działa w obrębie
+  własnego zakresu tenanta i widoczności tej encji.
+- **Korzysta z powiązania przechowywania.** Warunek sprawdza to samo powiązanie `{ table, column }`
+  encji co opisane wyżej zabezpieczenia zmian, więc encję można filtrować bez kodu specyficznego
+  dla niej w ogólnym module.
+- **Semantyka.** `contains` (bez względu na wielkość liter), `in` (którakolwiek z opcji; dla
+  wielokrotnego wyboru — którakolwiek z posiadanych), `is` oraz zakresy `min`/`max` i `from`/`to` z
+  oboma końcami. Rekord bez wartości nigdy nie pasuje. Wartości jednego pola łączy OR; pola oraz
+  własne filtry listy łączy AND. Najwyżej 10 pól i 100 wartości `in` na żądanie.
+- **Odmowa nigdy nie jest cicha.** Klucz nieznany, innego typu albo nieoferowany jest odrzucany z
+  `400` `CUSTOM_FIELD_FILTER_UNAVAILABLE` i nazwany, a nie pomijany — pominięty filtr pokazuje
+  operatorowi więcej rekordów, niż chciał, i nic o tym nie mówi. Z tego samego powodu operator,
+  który nie pasuje do typu pola (np. `contains` na polu Tak/Nie), jest odrzucany z `400`
+  `VALIDATION_FAILED`, a zakres dat lub liczb porównuje tylko zapisaną datę lub liczbę, więc
+  wartość zapisana pod wcześniejszym typem ani nie pasuje, ani nie psuje listy.
+- **Brak w sklepie.** Żaden filtr pola niestandardowego nie trafia do sklepu ani do punktów
+  końcowych dla kluczy API.
+
+### Dlaczego tablica CRM zachowuje własne predykaty
+
+Tablica szans sprzedażowych filtruje po tym, co pokazują jej **karty** — polach wbudowanych i
+niestandardowych, łącznie z osobą kontaktową — i pomija pole, którego karta już nie pokazuje, żeby
+stary link nadal się otwierał. Ta reguła należy do tablicy, nie do definicji, i obejmuje pola, o
+których ogólna warstwa nic nie wie. Dlatego tablica zachowuje własne predykaty, a `listFilter`
+stosuje tylko **lista** szans: jej odwołania `custom:` przechodzą przez port i są odrzucane, gdy
+nie są oferowane, a tablica — i żądanie listy kontynuujące jedną z jej kolumn (`cardValues=true`)
+— zachowują regułę karty.
+
+## Przenoszenie wartości (`carryTo`)
+
+`carryTo` to drugi atrybut definicji, który ogólny rdzeń interpretuje. Definicja zapytania
+ofertowego, zamówienia lub szansy sprzedażowej wymienia w nim typy encji, do których jej wartości są
+przenoszone, gdy rekord jednego z tych typów powstaje z rekordu tej encji albo zostaje z nim
+połączony — zawsze do definicji o **tym samym kluczu** w typie docelowym i tylko do pustej wartości.
+Strona operatora jest opisana na stronie modułu `custom_fields`; ta sekcja mówi, jak to zbudowano.
+
+- **Przechowywanie.** `custom_field_definitions.carry_to` — tablica `jsonb` typów encji, najwyżej
+  dwa, bez powtórzeń, domyślnie `[]` — jedna kolumna, niezależnie od tego, jakie pary rejestr
+  dopuści w przyszłości. Para jest z niej wyprowadzana i nigdy nie jest przechowywana jako osobny
+  wiersz, dlatego usunięcie definicji docelowej zostawia opcję źródła w stanie, w jakim ją
+  skonfigurowano.
+- **O tym, jakie pary istnieją, decyduje rejestr.** Każdy wpis `custom-field-registry.ts` może
+  zadeklarować `carryTargets`: `quote_request` → `order`, `opportunity`; `order` → `opportunity`;
+  `opportunity` → `quote_request`, `order`. Nic innego nie jest oferowane. `GET …/entity-types`
+  zwraca tę listę zawężoną do typów docelowych, których moduł właściciela jest obecny, a
+  `GET …/definitions` usuwa z `carryTo` każdy typ docelowy z nieobecnym właścicielem. `PATCH`
+  dołącza te ukryte elementy z powrotem, więc zapis przy wyłączonym `crm` nigdy nie gubi
+  zachowanego „przenoś do szansy sprzedażowej”.
+- **Jedna reguła zgodności, trzy miejsca użycia.** `assessCustomFieldCarry(source, target)` w
+  `@endora-commerce/contracts` jest czystą funkcją — bez operacji wejścia-wyjścia — i zwraca
+  wszystkie powody w stałej kolejności: `target_missing`, `value_type_mismatch` (bez rozszerzania
+  typów), `options_missing` (pola wyboru: **wartości** opcji źródła, których brakuje w polu
+  docelowym), `audience_mismatch` (źródło `internal` do celu `customer`). Polecenia definicji
+  używają jej, by odrzucić włączenie przenoszenia (`422 CUSTOM_FIELD_CARRY_INCOMPATIBLE`, a
+  `pair_unsupported` i `target_unavailable` dokłada samo polecenie); ekran panelu — na własnej
+  liście definicji — do oznaczenia *Niezgodne* i ostrzeżeń przed zmianą; port przenoszenia — przy
+  konwersji. Oceniany jest tylko nowo dodany typ docelowy, więc edycja nigdy nie kończy się błędem
+  dlatego, że przenoszenie rozjechało się wcześniej.
+
+### Port przenoszenia: `custom_fields` oblicza, zapisuje właściciel celu
+
+`custom_fields` udostępnia `customFieldCarryPort` (`CustomFieldCarryPort` w
+`packages/contracts/src/custom-fields.ts`). Jego jedyna metoda, `plan({ sourceType, targetType,
+sourceValues, targetValues })`, zwraca `{ values, carried, skipped }`: zbiór wartości celu z
+dołączonymi przeniesionymi wartościami, klucze, które przeniosła, oraz każdy pominięty klucz z
+powodem. Niczego nie zapisuje, niczego nie audytuje i nie emituje zdarzeń — podział
+odpowiedzialności z zasady XIV zostaje zachowany:
+
+- nieobecny moduł właściciela któregokolwiek z typów → pusty plan: nic nie jest przenoszone, nic
+  zapisywane ani odkładane na później;
+- brane są pod uwagę tylko definicje źródłowe, których `carryTo` wskazuje cel i których wartość nie
+  jest pusta; wartość uśpiona (jej definicję usunięto) jest pomijana bez wpisu;
+- niepusta wartość celu zostaje i nie jest ani liczona, ani zapisywana;
+- brak definicji docelowej, niezgodność typu lub widoczności pomija klucz z tym powodem; w
+  przeciwnym razie wartość jest sprowadzana do postaci definicji **docelowej**, a wartość, której ta
+  nie przyjmuje — między innymi opcja, której cel nie ma — jest pomijana jako `value_invalid`.
+  Opcje są więc oceniane osobno dla każdej wartości w chwili konwersji, niezależnie od tego, co
+  pokazywała tabela definicji;
+- niezwiązane definicje docelowe z `required` nigdy nie są sprawdzane, więc moduł encji nie może
+  uruchamiać `validateAndMerge` na połączonym zbiorze wartości;
+- każde pominięcie ma `label` — kopię `labelDefault` i etykiet w poszczególnych językach definicji
+  **źródłowej** z tej chwili — więc wpis historii nazywa pole w języku czytającego bez odczytu
+  definicji i bez `custom_fields:read`. Moduły zapisują pominięcie przez
+  `customFieldCarrySkipRecord`, który zachowuje `key`, `reason` i `label`, a resztę odrzuca.
+
+`custom_fields` nie da się wyłączyć, więc wywołujący pobierają port leniwie i nie muszą sprawdzać
+jego obecności.
+
+**Wywołującym jest zawsze właściciel rekordu docelowego**, z bieżącym zbiorem wartości celu, w
+zapisie, który tworzy lub łączy rekord:
+
+| Para | Wywołujący | Gdzie zapisywane są wartości i wpis o pominięciu |
+| --- | --- | --- |
+| Zapytanie ofertowe → zamówienie | `orders` | w transakcji składania zamówienia, w wierszu `Order` i w jednym komentarzu z ustawionym `system_note` |
+| Zapytanie ofertowe → szansa sprzedażowa, zamówienie → szansa sprzedażowa | `crm` | w poleceniu `crm.opportunity.create` lub `crm.opportunity.link_add`; pominięcia trafiają do jego wpisu audytu jako `after.customFieldCarry` |
+| Szansa sprzedażowa → zapytanie ofertowe | `quote_requests` | we własnym poleceniu `quote_request.custom_fields.carry`; pominięcia jako jedno zdarzenie `custom-field-carry-skipped`, widoczne tylko dla administratorów |
+| Szansa sprzedażowa → zamówienie | `orders` | we własnym poleceniu `order.custom_fields.carry`; pominięcia jako jedna notatka systemowa |
+
+Żaden moduł nie czyta więc tabel innego: wartości źródłowe przychodzą przez porty odczytu i
+zdarzenia, których wywołujący już używał, a właściciel celu zachowuje swój rekord, swój zapis i swój
+audyt.
+
+### Porty odbiorcze: szansa sprzedażowa → zamówienie / zapytanie ofertowe
+
+Zamówienie lub zapytanie ofertowe utworzone z szansy sprzedażowej jest z nią wiązane później, przez
+subskrybenta `crm`, po zatwierdzeniu utworzenia dokumentu. Gdy to powiązanie z pochodzeniem
+powstaje — i tylko wtedy, więc reguła, która decyduje o powiązaniu, decyduje też o przeniesieniu —
+`crm` przekazuje wartości szansy właścicielowi dokumentu przez
+`CustomFieldCarryReceiverPort.receiveCarriedValues`, udostępniany jako `orderCustomFieldCarryPort`
+przez `orders` i `quoteRequestCustomFieldCarryPort` przez `quote_requests`:
+
+- jedno polecenie właściciela, w systemowym kontekście `crm`, więc przeniesione wartości są
+  przypisane **systemowi**, a utworzenie dokumentu pozostaje przypisane administratorowi, który go
+  utworzył;
+- `not-found` zarówno dla rekordu, który nie istnieje, jak i dla rekordu innej organizacji — jedna
+  odpowiedź, więc nic nie wycieka; w pozostałych przypadkach `applied`, nawet gdy nic nie
+  przeniesiono;
+- zasada „tylko do pustego pola” sprawia, że drugie wywołanie niczego więcej nie przenosi;
+  wywołanie, które nic nie przenosi i niczego nie pomija, niczego nie zapisuje i nie trafia do
+  audytu;
+- `crm` sprawdza, czy `quote_requests` jest obecny, zanim pobierze jego port odbiorczy, a `orders`
+  już jest wiążącą zależnością `crm`.
+
+Ręczne powiązanie na karcie *Powiązania* szansy sprzedażowej nie przekazuje żadnego przeniesienia,
+podobnie jak zamówienie → zapytanie ofertowe (**kopia jako zapytanie ofertowe**, wykonywana przez
+klienta): żadne z nich nie jest konwersją, przy której wartości są przenoszone.
 
 ## Przechowywanie danych
 

@@ -53,7 +53,7 @@ const settings = defineModuleSettingsManifest({
 /** Module-lifecycle manifest (feature 018). */
 export const manifest = defineModuleManifest({
   id: 'comparisons',
-  name: 'Compare Products',
+  name: 'Compare products',
   description:
     'Customer-facing product comparison feature with shareable links and PDF export.',
   version: '1.0.0',
@@ -178,7 +178,8 @@ export const manifest = defineModuleManifest({
       icon: 'Scale',
       targetRoute: '/comparisons',
       requiredPermission: 'comparisons:read',
-      keywords: ['compare', 'comparison', 'comparisons', 'porównanie', 'porównania'],
+      keywords: ['compare', 'comparison', 'comparisons'],
+      keywordsKey: 'actions.openComparisons.keywords',
       weight: 600,
     },
   ],

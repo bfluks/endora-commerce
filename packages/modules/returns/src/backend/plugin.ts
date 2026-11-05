@@ -4,16 +4,19 @@ import { z } from 'zod';
 import type {
   CorrectiveInvoicePort,
   CreditTopupPort,
+  OrderReadPort,
   OrderReturnContextPort,
+  OrganizationPermissionPort,
   PaymentRefundPort,
 } from '@endora-commerce/contracts';
 import type { EventBus } from '@endora-commerce/platform/events';
-import type { SettingsReadPort } from '@endora-commerce/platform/kernel';
+import type { PlatformLogger, SettingsReadPort } from '@endora-commerce/platform/kernel';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import { RETURNS_SETTING_CODES } from '../manifest.js';
 import { ReturnStatusGraphService } from './services/return-status-graph-service.js';
 import { ReturnTransitionService } from './services/return-transition-service.js';
 import { ReturnCaseService } from './services/return-case-service.js';
+import { ReturnCaseScope } from './services/return-case-scope.js';
 import { ReturnCommentService } from './services/return-comment-service.js';
 import { ReturnSettlementService } from './services/return-settlement-service.js';
 import { ReturnDeliveryMethodService } from './services/return-delivery-method-service.js';
@@ -44,6 +47,17 @@ export interface ReturnsModuleOptions {
   resolveCustomerAccountId: (req: FastifyRequest) => string;
   resolveAdminUserId: (req: FastifyRequest) => string;
   orderContext: OrderReturnContextPort;
+  /**
+   * `orders`' customer-scoped order reader: the order a buyer starts a return
+   * from must be one they may read (`specs/170-organization-roles/` FR-054).
+   */
+  orderReadPort: OrderReadPort;
+  /**
+   * `organizations`' permission port, a `lazyPort` proxy resolved per call:
+   * `returns.create` gates opening a case, `returns.view_organization` widens
+   * the buyer's case list and read (`specs/170-organization-roles/` OR-11).
+   */
+  organizationPermissions: OrganizationPermissionPort;
   /** Settlement ports (US5). Money refunds, corrective invoices, credit top-up. */
   paymentRefund: PaymentRefundPort;
   correctiveInvoice: CorrectiveInvoicePort;
@@ -52,6 +66,11 @@ export interface ReturnsModuleOptions {
   auditLog: AuditPort;
   /** Best-effort customer notifications on authorize/reject. */
   notifier?: ReturnNotifier;
+  /**
+   * The module's logger. The saved-view service writes its actor-≠-owner trail
+   * through it (`specs/147-saved-views/` research R-18, S-11; #312).
+   */
+  log?: PlatformLogger;
 }
 
 /**
@@ -109,6 +128,8 @@ export function returnsModule(
     graphService,
     transitions,
     orderContext,
+    orderRead: options.orderReadPort,
+    scope: new ReturnCaseScope(options.organizationPermissions),
     resolveFreeReturnDays,
     ...(options.auditLog ? { auditLog: options.auditLog } : {}),
   });
@@ -128,7 +149,7 @@ export function returnsModule(
   const reasonService = new ReturnReasonService(emFactory, options.auditLog);
   const attachmentService = new ReturnAttachmentService(emFactory);
   const listService = new ReturnListService({ emFactory, graphService, transitions });
-  const listViewService = new ReturnListViewService(emFactory);
+  const listViewService = new ReturnListViewService(emFactory, options.log);
   const exportService = new ReturnExportService(listService);
 
   const authorizationService = new ReturnAuthorizationService({
@@ -160,6 +181,7 @@ export function returnsModule(
     attachmentService,
     requireCustomer: options.requireCustomer,
     resolveCustomerAccountId: options.resolveCustomerAccountId,
+    organizationPermissions: () => options.organizationPermissions,
   });
 
   await registerReturnsAdminRoutes(app, {

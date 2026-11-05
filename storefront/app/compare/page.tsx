@@ -4,35 +4,39 @@ import { Breadcrumbs } from '../../components/Breadcrumbs';
 import { ComparisonTable } from '../../components/ComparisonTable';
 import { tForLocale } from '../../lib/i18n/messages';
 import { getServerContext } from '../../lib/server-context';
+import { getCommerceAbilitiesAction } from '../../lib/actions/cart';
 
 /**
  * `/compare` — server-rendered shell with a client-side table that
  * fetches the live ComparisonOwnerView from the backend (feature 007 /
  * T033). The page itself is per-customer state, so it emits
  * `noindex, nofollow` (per plan.md Constitution Check VII).
+ *
+ * `specs/170-organization-roles/` (FR-057): the table's add-to-cart follows the
+ * buyer's `carts.create`, read here on the server.
  */
 export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
 export default async function ComparePage(): Promise<ReactNode> {
-  const { locale } = await getServerContext();
+  const [{ locale, ctx }, abilities] = await Promise.all([getServerContext(), getCommerceAbilitiesAction()]);
   const t = tForLocale(locale);
   return (
     <div className="mx-auto max-w-[1360px] px-[24px]" style={{ paddingTop: 24, paddingBottom: 56 }}>
-      <Breadcrumbs
+      <Breadcrumbs locale={locale}
         crumbs={[
           { href: '/', label: t('nav.home') },
-          { href: '/compare', label: 'Porównywarka' },
+          { href: '/compare', label: t('commerce.compare.title') },
         ]}
       />
       <div className="industria-catalog__title">
         <div>
-          <h1>Porównywarka parametrów technicznych</h1>
-          <p>Zestawienie wybranych produktów. Różnice są podświetlone.</p>
+          <h1>{t('commerce.compare.heading')}</h1>
+          <p>{t('commerce.compare.intro')}</p>
         </div>
       </div>
-      <ComparisonTable locale={locale} />
+      <ComparisonTable locale={locale} salesChannelCode={ctx.salesChannelCode} canAddToCart={abilities.editCart} />
     </div>
   );
 }

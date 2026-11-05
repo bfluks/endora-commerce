@@ -12,6 +12,9 @@ import { SalesChannelMembershipService } from '../../../src/kernel/sales-channel
 import { DefaultChannelReconciler } from '@endora-commerce/platform/composition';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { Product } from '../../helpers/package-entities.js';
+import { MissingTenantContextError } from '@endora-commerce/platform/tenancy';
+import { runWithoutTenantContext } from '../../../src/tenancy/tenant-context.js';
+import { transactionBoundCommandBus } from '../../helpers/sales-channels-service.js';
 
 /**
  * T048 — Audit-trail coverage (FR-019).
@@ -37,7 +40,35 @@ describe('audit trail coverage (T048)', () => {
     await db.beginTx();
   });
 
-  it('writes identity audit on create and update', async () => {
+  /** The service as the module composes it, with its Command Bus bound to the test transaction. */
+  function identityService(): SalesChannelsService {
+    const auditLogService = new AuditLogService(() => db.em());
+    const eventBus = new EventBus();
+    return new SalesChannelsService(
+      () => db.em(),
+      eventBus,
+      // Required since feature 075 (D-87). The codes this suite seeds are
+      // active, so the validator accepts exactly what the deleted raw
+      // `select` accepted — and refuses an inactive one, which it did not.
+      dictionaryValidatorFor(() => db.em()),
+      new SalesChannelAttributionRegistry(),
+      // Feature 120 (FR-015) — which table holds each entity type's
+      // memberships. This suite composes no platform, so the descriptors are
+      // the ones `setupTestDb` declared from their owning modules.
+      testChannelBridges(),
+      transactionBoundCommandBus(() => db.em(), auditLogService, eventBus),
+      auditLogService,
+    );
+  }
+
+  /**
+   * Identity writes are Commands (Principle XIII, raised by issue #467), so the row is
+   * the Command Bus's: one per write, `stateBefore` / `stateAfter` holding the
+   * channel snapshots (`stateBefore` null on create), the actor taken from the
+   * ambient TenantContext, written in the write's own transaction. Until then
+   * the service wrote it by hand as `stateAfter: { action, before, after }`.
+   */
+  it('writes one identity audit row per create and update, with before/after snapshots', async () => {
     try {
       const em = db.em();
       // Ensure language + currency seeds the create-validate path needs.
@@ -63,22 +94,7 @@ describe('audit trail coverage (T048)', () => {
         ),
       );
 
-      const auditLogService = new AuditLogService(() => db.em());
-      const eventBus = new EventBus();
-      const svc = new SalesChannelsService(
-        () => db.em(),
-        eventBus,
-        // Required since feature 075 (D-87). The codes this suite seeds are
-        // active, so the validator accepts exactly what the deleted raw
-        // `select` accepted — and refuses an inactive one, which it did not.
-        dictionaryValidatorFor(() => db.em()),
-        new SalesChannelAttributionRegistry(),
-        // Feature 120 (FR-015) — which table holds each entity type's
-        // memberships. This suite composes no platform, so the descriptors are
-        // the ones `setupTestDb` declared from their owning modules.
-        testChannelBridges(),
-        auditLogService,
-      );
+      const svc = identityService();
 
       const created = await svc.create({
         code: 't048-channel',
@@ -91,20 +107,84 @@ describe('audit trail coverage (T048)', () => {
       });
       expect(created.code).toBe('t048-channel');
 
-      const createAudit = await em.find(AuditLogEntry, {
-        action: SALES_CHANNEL_AUDIT_ACTIONS.IDENTITY_CHANGED,
-        objectId: created.id,
-      });
-      expect(createAudit.length).toBe(1);
+      const identityRows = () =>
+        em.find(
+          AuditLogEntry,
+          { action: SALES_CHANNEL_AUDIT_ACTIONS.IDENTITY_CHANGED, objectId: created.id },
+          { orderBy: { actedAt: 'asc' }, refresh: true },
+        );
 
-      await svc.update('t048-channel', { name: { en: 'Renamed' } }, 1);
-
-      const allIdentity = await em.find(AuditLogEntry, {
-        action: SALES_CHANNEL_AUDIT_ACTIONS.IDENTITY_CHANGED,
-        objectId: created.id,
+      const [createRow] = await identityRows();
+      expect(createRow?.objectType).toBe('sales_channel');
+      // No state before a create.
+      expect(createRow?.stateBefore ?? null).toBeNull();
+      expect(createRow?.stateAfter).toMatchObject({
+        id: created.id,
+        code: 't048-channel',
+        name: { en: 'T048' },
+        anonymousAccess: true,
+        version: 1,
       });
+
+      await svc.update('t048-channel', { name: { en: 'Renamed' }, anonymousAccess: false }, 1);
+
+      const rows = await identityRows();
       // Create + update = 2 audit rows.
-      expect(allIdentity.length).toBe(2);
+      expect(rows.length).toBe(2);
+      expect(rows[1]!.stateBefore).toMatchObject({
+        name: { en: 'T048' },
+        anonymousAccess: true,
+        version: 1,
+      });
+      expect(rows[1]!.stateAfter).toMatchObject({
+        name: { en: 'Renamed' },
+        anonymousAccess: false,
+        version: 2,
+      });
+
+      // A refused write audits nothing: the stale version is refused before
+      // the Command runs, and a duplicate code rolls the Command back.
+      await expect(svc.update('t048-channel', { name: { en: 'Stale' } }, 1)).rejects.toMatchObject({ statusCode: 412 });
+      await expect(
+        svc.create({
+          code: 't048-channel',
+          name: { en: 'Duplicate' },
+          languages: ['en-T048'],
+          defaultLanguage: 'en-T048',
+          currencies: ['XEU'],
+          defaultCurrency: 'XEU',
+        }),
+      ).rejects.toMatchObject({ statusCode: 409 });
+      expect((await identityRows()).length).toBe(2);
+    } finally {
+      await db.rollbackTx();
+    }
+  });
+
+  it('refuses an identity write with no ambient TenantContext, and writes nothing', async () => {
+    try {
+      const em = db.em();
+      const svc = identityService();
+      const before = await em.count(AuditLogEntry, {
+        action: SALES_CHANNEL_AUDIT_ACTIONS.IDENTITY_CHANGED,
+      });
+      const def = await em.findOneOrFail(SalesChannel, { systemDefault: true });
+
+      // The harness enters a system TenantContext for every test
+      // (`test/tenancy-setup.ts`); this write runs with none, as a caller
+      // outside any request would.
+      await expect(
+        runWithoutTenantContext(() =>
+          svc.update(def.code, { anonymousAccess: !def.anonymousAccess }, def.version),
+        ),
+      ).rejects.toBeInstanceOf(MissingTenantContextError);
+
+      expect(
+        await em.count(AuditLogEntry, { action: SALES_CHANNEL_AUDIT_ACTIONS.IDENTITY_CHANGED }),
+      ).toBe(before);
+      expect((await em.findOneOrFail(SalesChannel, { id: def.id }, { refresh: true })).version).toBe(
+        def.version,
+      );
     } finally {
       await db.rollbackTx();
     }
@@ -129,6 +209,7 @@ describe('audit trail coverage (T048)', () => {
         // memberships. This suite composes no platform, so the descriptors are
         // the ones `setupTestDb` declared from their owning modules.
         testChannelBridges(),
+        transactionBoundCommandBus(() => db.em(), auditLogService, eventBus),
         auditLogService,
       );
 
@@ -138,8 +219,8 @@ describe('audit trail coverage (T048)', () => {
       const chanId = await em
         .getConnection()
         .execute<Array<{ id: string }>>(
-          `insert into "sales_channels" ("id","code","name","is_public","default_language","default_currency","status","languages","currencies","active","system_default","version","created_at","updated_at") ` +
-            `values (gen_random_uuid(), 't048-life', '{"en":"L"}'::jsonb, false, 'en', 'EUR', 'active', '["en"]'::jsonb, '["EUR"]'::jsonb, true, false, 1, now(), now()) returning "id"`,
+          `insert into "sales_channels" ("id","code","name","default_language","default_currency","status","languages","currencies","active","system_default","version","created_at","updated_at") ` +
+            `values (gen_random_uuid(), 't048-life', '{"en":"L"}'::jsonb, 'en', 'EUR', 'active', '["en"]'::jsonb, '["EUR"]'::jsonb, true, false, 1, now(), now()) returning "id"`,
           [],
           'all',
           em.getTransactionContext(),
@@ -176,9 +257,9 @@ describe('audit trail coverage (T048)', () => {
         sku: 'T048-AUDIT',
         slug: 't048-audit',
         type: 'simple',
-        status: 'draft',
-        name: { en: 'T048' },
-        description: { en: 'fixture' },
+        status: 'inactive',
+        name: 'T048',
+        description: 'fixture',
         visibility: 'public',
         attributeValues: {},
         allowedOrganizationIds: [],
@@ -192,7 +273,6 @@ describe('audit trail coverage (T048)', () => {
         defaultCurrency: 'EUR',
         languages: ['en'],
         currencies: ['EUR'],
-        isPublic: false,
         active: true,
         systemDefault: false,
         version: 1,

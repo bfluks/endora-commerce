@@ -138,11 +138,14 @@ const modules = [
       'modules/catalog/attributes',
       'modules/catalog/category-content',
       'modules/catalog/composite-products',
+      'modules/catalog/editing-a-product-at-a-scope',
       'modules/catalog/packaging-units',
-      'modules/catalog/per-channel-per-language-overrides',
       'modules/catalog/attachments',
+      'modules/catalog/product-content',
       'modules/catalog/gallery-and-labels',
       'modules/catalog/product-links',
+      'modules/catalog/per-channel-per-language-overrides',
+      'modules/catalog/url-keys-and-redirects',
       'module-reference/catalog',
     ],
   },
@@ -151,7 +154,10 @@ const modules = [
     label: 'CMS', key: 'cms',
     link: { type: 'doc', id: 'modules/cms/index' },
     items: [
+      'modules/cms/brand',
       'modules/cms/extending-page-builder',
+      'modules/cms/page-navigation',
+      'modules/cms/contact-form',
       'module-reference/cms',
     ],
   },
@@ -195,7 +201,14 @@ const modules = [
       'module-reference/currencies',
     ],
   },
-  { type: 'doc', id: 'module-reference/custom-fields', label: 'custom_fields', key: 'custom_fields' },
+  {
+    type: 'category',
+    label: 'custom_fields', key: 'custom_fields',
+    link: { type: 'doc', id: 'modules/custom_fields' },
+    items: [
+      'module-reference/custom-fields',
+    ],
+  },
   {
     type: 'category',
     label: 'customer_accounts', key: 'customer_accounts',
@@ -237,6 +250,22 @@ const modules = [
     ],
   },
   { type: 'doc', id: 'module-reference/email', label: 'email', key: 'email' },
+  {
+    type: 'category',
+    label: 'Feedback', key: 'admin_feedback',
+    link: { type: 'doc', id: 'modules/admin-feedback' },
+    items: [
+      'module-reference/admin-feedback',
+    ],
+  },
+  {
+    type: 'category',
+    label: 'Forms', key: 'forms',
+    link: { type: 'doc', id: 'modules/forms' },
+    items: [
+      'module-reference/forms',
+    ],
+  },
   {
     type: 'category',
     label: 'Google Analytics', key: 'google_analytics',
@@ -367,12 +396,21 @@ const modules = [
       'module-reference/payments',
     ],
   },
-  { type: 'doc', id: 'module-reference/pim-connector', label: 'pim_connector', key: 'pim_connector' },
   {
     type: 'category',
-    label: 'price_lists', key: 'price_lists',
+    label: 'PIM connector shared layer', key: 'pim_connector',
+    link: { type: 'doc', id: 'modules/pim_connector' },
+    items: [
+      'module-reference/pim-connector',
+    ],
+  },
+  {
+    type: 'category',
+    label: 'Price books', key: 'price_lists',
     link: { type: 'doc', id: 'modules/price_lists' },
     items: [
+      'modules/price_lists/price-book-editor',
+      'modules/price_lists/developer-guide',
       'module-reference/price-lists',
     ],
   },
@@ -382,6 +420,14 @@ const modules = [
     link: { type: 'doc', id: 'modules/product_feeds' },
     items: [
       'module-reference/product-feeds',
+    ],
+  },
+  {
+    type: 'category',
+    label: 'projects', key: 'projects',
+    link: { type: 'doc', id: 'modules/projects' },
+    items: [
+      'module-reference/projects',
     ],
   },
   {
@@ -480,6 +526,14 @@ const modules = [
     link: { type: 'doc', id: 'modules/shopping_lists' },
     items: [
       'module-reference/shopping-lists',
+    ],
+  },
+  {
+    type: 'category',
+    label: 'tasks', key: 'tasks',
+    link: { type: 'doc', id: 'modules/tasks' },
+    items: [
+      'module-reference/tasks',
     ],
   },
   {

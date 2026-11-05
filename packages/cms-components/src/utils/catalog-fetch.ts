@@ -1,5 +1,6 @@
+import type { CmsBlogPostCard } from '../schema/blog-types.js';
 import type { CmsCategoryNode, CmsProductSummary } from '../schema/catalog-types.js';
-import { getCatalogPreviewApi } from './catalog-preview-bridge.js';
+import { getCatalogPreviewApi, type FormBlockData } from './catalog-preview-bridge.js';
 
 function apiBase(): string {
   if (typeof window !== 'undefined') {
@@ -67,6 +68,30 @@ export async function fetchCategoryTree(): Promise<CmsCategoryNode[]> {
   if (preview) return preview.fetchCategoryTree();
 
   const res = await fetchJson<{ data: CmsCategoryNode[] }>('/api/v1/catalog/categories');
+  return res.data;
+}
+
+/** The newest published blog posts (feature 163), through the editor's reader when one is registered. */
+export async function fetchBlogPosts(query: { limit: number; categorySlug?: string }): Promise<CmsBlogPostCard[]> {
+  const preview = getCatalogPreviewApi();
+  if (preview?.fetchBlogPosts) return preview.fetchBlogPosts(query);
+
+  const params = new URLSearchParams();
+  params.set('limit', String(query.limit));
+  if (query.categorySlug) params.set('categorySlug', query.categorySlug);
+  const res = await fetchJson<{ data: CmsBlogPostCard[] }>(`/api/v1/blog/posts?${params.toString()}`);
+  return res.data;
+}
+
+/**
+ * A form's read for a `forms.Form` block (`specs/170-forms-module/`), through the editor's reader
+ * when one is registered — which adds the canvas note — else the public read of the request's
+ * channel, which is a `200` for every well-formed id.
+ */
+export async function fetchForm(formId: string): Promise<FormBlockData> {
+  const preview = getCatalogPreviewApi();
+  if (preview?.fetchForm) return preview.fetchForm(formId);
+  const res = await fetchJson<{ data: FormBlockData }>(`/api/v1/storefront/forms/${encodeURIComponent(formId)}`);
   return res.data;
 }
 

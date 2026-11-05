@@ -65,6 +65,7 @@ describe('megamenu writes are atomic with their transaction (issue #200)', () =>
         items: [
           {
             parentId: null,
+            presentation: 'mega',
             position: 0,
             kind: 'external-link',
             labels: { 'en-US': 'Kept' },
@@ -99,6 +100,7 @@ describe('megamenu writes are atomic with their transaction (issue #200)', () =>
           {
             id: parentId,
             parentId: null,
+            presentation: 'mega',
             position: 0,
             kind: 'external-link',
             labels: { 'en-US': 'Parent second' },

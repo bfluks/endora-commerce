@@ -37,6 +37,7 @@ import {
   PaymentMethod,
   StockAllocation,
 } from '../../helpers/package-entities.js';
+import { predefinedRoleIdOf } from '../../helpers/seed-organization-roles.js';
 
 /**
  * An Organization's payment- and delivery-method allow-lists bind order
@@ -149,7 +150,12 @@ describe('order placement honours the Organization method allow-lists', () => {
   ): void => {
     expect(res.statusCode, res.body).toBe(400);
     const { error } = res.json() as ErrorBody;
-    expect(error.code).toBe(ERROR_CODES.VALIDATION_FAILED);
+    // Issue #86 — the method's own code; the token in `details.code` is unchanged.
+    expect(error.code).toBe(
+      detailsCode.startsWith('delivery_')
+        ? ERROR_CODES.ORDER_DELIVERY_METHOD_UNAVAILABLE
+        : ERROR_CODES.ORDER_PAYMENT_METHOD_UNAVAILABLE,
+    );
     expect(error.details?.code).toBe(detailsCode);
   };
 
@@ -214,6 +220,8 @@ describe('order placement honours the Organization method allow-lists', () => {
       customerAccountId: BUYER_B_ID,
       organizationId: OTHER_TEST_ORGANIZATION_ID,
       status: 'active',
+      // The basket of the channel buyer B places on — the system default.
+      salesChannelId: await systemDefaultSalesChannelId(em),
     });
     await em.persistAndFlush(cart);
     await em.persistAndFlush(
@@ -341,7 +349,7 @@ describe('order placement honours the Organization method allow-lists', () => {
       passwordHash: await hashPassword(STUB_CUSTOMER_PASSWORD),
       firstName: 'Buyer',
       lastName: 'B',
-      role: 'organization_admin',
+      organizationRoleId: await predefinedRoleIdOf(em, OTHER_TEST_ORGANIZATION_ID, 'administrator'),
       emailVerifiedAt: new Date(),
     });
     for (const [id, kind] of [
@@ -372,7 +380,6 @@ describe('order placement honours the Organization method allow-lists', () => {
       currencies: ['PLN'],
       defaultCurrency: 'PLN',
       active: true,
-      isPublic: true,
     });
     await em.persistAndFlush(channel);
     await h.salesChannels.cache.invalidate('allow-list-intake');

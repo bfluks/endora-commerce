@@ -11,12 +11,13 @@ import type { EntityManager } from '@mikro-orm/postgresql';
  */
 export const manifest = defineModuleManifest({
   id: 'custom_fields',
-  name: 'Custom Fields',
+  name: 'Custom fields',
   description: 'Entity-agnostic runtime custom fields for core entities.',
   version: '1.0.0',
   // `auth` owns the `requireAdmin` port the admin routes are gated by.
   dependencies: ['auth'],
   i18n: { bundlesDir: 'i18n' },
+  docs: { dir: 'docs' },
   /**
    * The `CUSTOM_FIELD_*` family — D-129's remaining sweep, Tier A
    * (`specs/090-module-owned-error-codes/d129-sweep.md` §5.2, Appendix A;
@@ -55,13 +56,54 @@ export const manifest = defineModuleManifest({
    * `{ path, issue }[]` array, which `refusalToken` reads as no token at all
    * (`packages/platform/src/http/error-envelope.ts`); the other four are bare
    * `HttpError(status, code, message)`.
+   *
+   * **`CUSTOM_FIELD_FILTER_UNAVAILABLE`** (feature 157) is the family's sixth
+   * and the first with a sentence: an admin list refuses a filter on a custom
+   * field this module's list-filter port does not offer. `orders`,
+   * `quote_requests` and `crm` raise it from the port's answer, so it is
+   * declared here for the same reason `CUSTOM_FIELD_VALUE_INVALID` is. Its
+   * `details` are `{ key, keys }` with no `code`, so it declares no tokens.
+   *
+   * **`CUSTOM_FIELD_OPTION_IN_USE`, `CUSTOM_FIELD_VALUE_TYPE_LOCKED` and
+   * `CUSTOM_FIELD_STORED_VALUES_EXIST`** (feature 157) are the three 409
+   * refusals of a definition change that shared `CUSTOM_FIELD_DEFINITION_INVALID`
+   * and an English message; each now has a sentence naming what it refuses
+   * (`details.label` / `details.value`, or `details.key`) and no tokens.
+   * The route passes the service error's `details` on by spread, which a
+   * static read cannot see into, so each says so with `tokens: []`
+   * (`check:error-translations`, issue #83): every
+   * `CustomFieldDefinitionError` raised under those three reasons carries
+   * `key`, or `value` and `label`, and never a `code`.
+   *
+   * **`CUSTOM_FIELD_CARRY_INCOMPATIBLE`** (feature 162) is the family's tenth
+   * and the first with tokens: the definition Commands refuse turning on a
+   * carry towards a target that cannot take the values, and `details.code`
+   * names why — one sentence per token, filled from `details.key`,
+   * `details.targetEntityType` and the type or option members.
    */
   errorCodes: [
-    { code: 'CUSTOM_FIELD_DEFINITION_INVALID' },
+    {
+      code: 'CUSTOM_FIELD_CARRY_INCOMPATIBLE',
+      tokens: [
+        'target_missing',
+        'value_type_mismatch',
+        'options_missing',
+        'audience_mismatch',
+        'pair_unsupported',
+        'target_unavailable',
+      ],
+    },
+    // Feature 172 — a value type the entity type does not offer (`page_builder`
+    // off `product`) is the one refusal of this code that names its reason.
+    { code: 'CUSTOM_FIELD_DEFINITION_INVALID', tokens: ['value_type_unsupported'] },
+    { code: 'CUSTOM_FIELD_FILTER_UNAVAILABLE' },
     { code: 'CUSTOM_FIELD_HOST_MANAGED' },
     { code: 'CUSTOM_FIELD_KEY_CONFLICT' },
     { code: 'CUSTOM_FIELD_NOT_FOUND' },
+    { code: 'CUSTOM_FIELD_OPTION_IN_USE', tokens: [] },
+    { code: 'CUSTOM_FIELD_STORED_VALUES_EXIST', tokens: [] },
     { code: 'CUSTOM_FIELD_VALUE_INVALID' },
+    { code: 'CUSTOM_FIELD_VALUE_TYPE_LOCKED', tokens: [] },
   ],
   permissions: [
     { code: 'custom_fields:read', label: 'View custom fields' },
@@ -75,7 +117,8 @@ export const manifest = defineModuleManifest({
       icon: 'Layers',
       targetRoute: '/custom-fields',
       requiredPermission: 'custom_fields:read',
-      keywords: ['custom fields', 'attributes', 'pola', 'niestandardowe'],
+      keywords: ['custom fields', 'attributes'],
+      keywordsKey: 'actions.openCustomFields.keywords',
       weight: 240,
     },
   ],

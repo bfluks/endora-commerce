@@ -31,5 +31,18 @@
   // emitted before, and `lint` names its files on the command line. Measured
   // when it landed: adding the directory surfaced **one** error, in that same
   // unchecked file.
-  "include": ["src/**/*", "test/**/*", "scripts/**/*"]
+  "include": ["src/**/*", "test/**/*", "scripts/**/*", "vitest*.ts"],
+  // **Two programs, not one, since 2026-10-24 (issue #421).** One program over all
+  // of the above needed ~2.8 GB of heap and had outgrown its CI cap twice, so
+  // `test/contract`, `test/integration` and `test/perf` are type-checked by
+  // `test/tsconfig.json` instead — the same compiler options, a separate program.
+  // This one keeps `src`, `scripts`, `test/unit` and every shared test helper,
+  // and the `vitest*.ts` configurations, which no program read before #421.
+  // Both are named in `package.json`'s `typecheck`, and each sits where an
+  // editor's nearest-`tsconfig.json` lookup finds it for its own files. The
+  // measurements and the choice of two over three are in `.gitlab-ci.yml`'s
+  // `quality` job; `workspace-resolution.test.ts` holds every TypeScript file
+  // under `backend/` to exactly one of the two, so a directory that falls
+  // between them is a red run rather than a file nobody compiles.
+  "exclude": ["test/contract/**/*", "test/integration/**/*", "test/perf/**/*"]
 }

@@ -14,15 +14,16 @@ dowiadują się o całym sklepie danego kanału sprzedaży.
 | --- | --- | --- |
 | `GET /api/v1/catalog/sitemap.xml` | roboty wyszukiwarek | Mapa witryny XML z pamięci podręcznej; gdy jest nieaktualna, jest generowana od razu w trakcie żądania |
 | `GET /api/v1/storefront/seo/robots-policy` | sklep | Domyślna polityka robots kanału sprzedaży, którego dotyczy żądanie, w postaci `{ index, follow }` |
-| `GET /api/v1/storefront/seo/crawler-files` | sklep | To, z czego powstają pliki `robots.txt` i `llms.txt` kanału sprzedaży, którego dotyczy żądanie: jego własne instrukcje i dodatkowa treść wraz z polityką i nazwą sklepu |
+| `GET /api/v1/storefront/seo/crawler-files` | sklep | To, z czego powstają pliki `robots.txt` i `llms.txt` kanału sprzedaży, którego dotyczy żądanie: jego własne instrukcje i dodatkowa treść wraz z polityką, nazwą sklepu i informacją, czy sklep jest otwarty dla anonimowych odwiedzających. Odpowiada także w sklepie dla nich zamkniętym |
 | `GET /api/v1/admin/seo/crawler-files/preview` | administrator (`settings:read`) | Podgląd pliku `robots.txt` albo `llms.txt` kanału sprzedaży — domyślnego kanału systemowego, gdy żaden nie został wskazany: część generowana przez jego sklep, pobrana z tego sklepu, obok zapisanego tekstu |
 | `GET /api/v1/admin/seo/sitemap` | administrator (`catalog:write`) | Jeden wiersz na kanał sprzedaży: adres sklepu, czas ostatniego wygenerowania, rozmiar, liczba adresów URL |
 | `POST /api/v1/admin/seo/sitemap/:channelCode/regenerate` | administrator (`catalog:write`) | Wymuszenie ponownego wygenerowania dla tego kanału |
 | `GET /api/v1/admin/seo/sitemap/:channelCode/status` | administrator (`catalog:write`) | Czas ostatniego wygenerowania, rozmiar i liczba adresów URL dla tego kanału |
 | `GET /api/v1/admin/seo/sitemap/:channelCode/xml` | administrator (`catalog:write`) | Zapisany XML tego kanału, do podglądu lub pobrania (`?download=1`) |
-| `GET /api/v1/admin/seo/meta/:entityType/:entityId` | administrator (`catalog:write`) | Wyznaczone meta tagi i wiersz nadpisania dla (encja, język) |
-| `PUT /api/v1/admin/seo/meta/:entityType/:entityId` | administrator (`catalog:write`) | Utworzenie lub aktualizacja nadpisania (dla danego języka) |
-| `DELETE /api/v1/admin/seo/meta/:entityType/:entityId` | administrator (`catalog:write`) | Usunięcie nadpisania (wracają wartości wyznaczane z reguły) |
+| `GET /api/v1/admin/seo/meta/product/:id` | administrator (`catalog:read`) | Metadane produktu w danym zakresie (`?channelId=`, `?languageCode=`): własna albo dziedziczona wartość każdego pola, wyznaczone metadane i źródło każdej wartości |
+| `GET /api/v1/admin/seo/meta/:entityType/:entityId` | administrator (`catalog:write`) | Wyznaczone meta tagi kategorii lub strony CMS w danym języku (`?locale=`) i wiersz nadpisania w tym języku |
+| `PUT /api/v1/admin/seo/meta/:entityType/:entityId` | administrator (`catalog:write`) | Utworzenie lub aktualizacja nadpisania kategorii lub strony CMS w danym języku (`locale` w treści żądania); dla produktu odpowiedź to `422 VALIDATION_FAILED` |
+| `DELETE /api/v1/admin/seo/meta/:entityType/:entityId` | administrator (`catalog:write`) | Usunięcie nadpisania kategorii lub strony CMS w danym języku (`?locale=`); dla produktu odpowiedź to `422 VALIDATION_FAILED` |
 
 ## Roboty wyszukiwarek
 
@@ -350,7 +351,8 @@ serwuje same reguły generowane z kodem `200` — to są odpowiedzi, a nie błę
     "follow": true,
     "robotsTxtCustom": "User-agent: GPTBot\nDisallow: /\n",
     "llmsTxtAdditional": "## About\n\nWe sell bolts.\n",
-    "shop": { "name": "Endora Demo" }
+    "shop": { "name": "Endora Demo" },
+    "anonymousAccess": true
   }
 }
 ```
@@ -358,6 +360,10 @@ serwuje same reguły generowane z kodem `200` — to są odpowiedzi, a nie błę
 `robotsTxtCustom` i `llmsTxtAdditional` to teksty ustalone dla kanału, dokładnie w zapisanej
 postaci — backend nie zmienia w nich żadnego znaku, także końców wierszy. `index` i `follow`
 powtarzają politykę kanału, a `shop.name` to skonfigurowana nazwa sklepu albo pusty ciąg znaków.
+`anonymousAccess` ma wartość `false` w sklepie zamkniętym dla anonimowych odwiedzających — zob.
+[w sklepie zamkniętym dla anonimowych odwiedzających](#w-sklepie-zamkniętym-dla-anonimowych-odwiedzających);
+backend sprzed tego ustawienia go nie wysyła, a jego brak oznacza `true`. W odróżnieniu od
+wszystkich innych anonimowych odczytów takiego sklepu na ten odczyt jest udzielana odpowiedź.
 Schemat to `storefrontCrawlerFilesResponseSchema` w `@endora-commerce/contracts`; pakiet
 eksportuje też `composeCrawlerFile(base, extra)` — funkcję, którą referencyjny sklep łączy to, co
 generuje, z tekstem — oraz `CRAWLER_TEXT_MAX_BYTES`.
@@ -503,47 +509,154 @@ niedostępny. Sklep, który jej nie odczytał, odpowiada na `/llms.txt` kodem `5
 `Retry-After: 120` aż do pierwszego udanego odczytu — nigdy plikiem bez Twojego tekstu i nigdy
 plikiem w kanale, który mógł zostać ustawiony na `NOINDEX`.
 
+## W sklepie zamkniętym dla anonimowych odwiedzających
+
+Kanał sprzedaży z wyłączonym przełącznikiem *otwarty dla anonimowych odwiedzających* każdemu
+anonimowemu odwiedzającemu — a robot nim jest — pokazuje stronę logowania. Nie ma w nim niczego do
+pobrania, umieszczenia w wynikach ani przeczytania, a jego mapa witryny jest pusta. Pliki
+`robots.txt` i `llms.txt` są mimo to serwowane i mówią dokładnie to:
+
+- **`robots.txt`** zamyka cały sklep dla wszystkich robotów i nie wskazuje mapy witryny:
+
+  ```text
+  User-Agent: *
+  Disallow: /
+  ```
+
+- **`llms.txt`** podaje nazwę sklepu, tak jak część generowana, i informuje, że jego treść jest
+  dostępna tylko dla zalogowanych klientów. Nie wymienia żadnej strony ani mapy witryny:
+
+  ```text
+  # Endora Trade
+
+  > The content of this store is available to signed-in customers only.
+  ```
+
+**Zamknięty sklep ma pierwszeństwo przed ustawieniami.** W zamkniętym sklepie nie są serwowane ani
+własne instrukcje `robots.txt`, ani dodatkowa treść `llms.txt`: grupa napisana dla jednego robota
+zastąpiłaby dla niego `Disallow: /` i otworzyła mu sklep, a dodatkowa treść wskazywałaby strony,
+których nikt anonimowo nie przeczyta. Oba teksty są zachowywane i wracają do plików, gdy tylko
+sklep zostanie otwarty dla anonimowych odwiedzających. Z tego samego powodu *Domyślne robots* nie
+ma tu wpływu na żaden z plików: zamknięty sklep ustawiony na `NOINDEX` nadal ma swój `llms.txt`,
+bo ten plik nikogo do niczego nie zaprasza.
+
+Zmiana przełącznika dociera do plików na tych samych zasadach co każda inna zmiana — w ciągu
+około dwóch minut. Sklep otwarty dla anonimowych odwiedzających serwuje oba pliki dokładnie tak,
+jak opisano wyżej. Gdy moduł `seo` jest wyłączony, sklep nie odróżnia sklepu zamkniętego od
+otwartego i — jak w każdym sklepie — serwuje generowany `robots.txt` i nie serwuje `llms.txt`.
+
+Podglądy na ekranie Ustawień nie uwzględniają jeszcze zamkniętego sklepu: pokazują Twój tekst
+połączony z częścią generowaną, a zamknięty sklep serwuje powyższy plik bez niego.
+
 ## Wyznaczanie meta tagów
 
-`MetaTagResolverService.resolve({ entityType, entityId, locale })` zwraca
-`{ title, description, openGraph, source, locale }`. Kolejność:
+### Produkty: zakres globalny, kanału, kanału × języka
 
-1. Wyszukanie wiersza nadpisania dla pary (encja, język).
-2. Jeśli pole jest ustawione w nadpisaniu, zostaje użyte dosłownie.
-3. W przeciwnym razie używana jest reguła wyprowadzona z encji (nazwa i opis produktu, nazwa
-   kategorii i automatyczne podsumowanie).
-4. Wartość zastępcza języka dla każdego pola: gdy produkt nie ma tekstu w `pl-PL`, reguła używa
-   `en-US`, a potem dowolnego dostępnego języka.
+Metadane produktu — tytuł, opis, tytuł, opis i obraz Open Graph — podlegają zakresom produktu:
+
+| Zakres | Wskazywany przez | Obowiązuje |
+| --- | --- | --- |
+| Globalny | żadne z nich | we wszystkich kanałach sprzedaży i językach |
+| Kanał sprzedaży | `channelId` | we wszystkich językach tego kanału |
+| Kanał sprzedaży × język | `channelId` i `languageCode` | w tym języku w tym kanale |
+
+Nie ma zakresu produktu dla samego języka; aktualizacja usuwa nadpisania produktów zapisane
+wyłącznie dla języka (zob. *Aktualizacja* niżej). Każde pole jest wyznaczane osobno, z
+najwęższego zakresu, który je zawiera: kanał × język, potem kanał, potem zakres globalny, a na
+końcu wartość wyprowadzona z produktu — jego obowiązująca nazwa i opis w tym kanale i języku. Pole
+zapisane w zakresie jako celowo puste zatrzymuje tam łańcuch, a strona używa wtedy wartości
+wyprowadzonej.
+
+**Edycja w edytorze produktu.** Sekcja SEO edytora produktu pokazuje każde pole w zakresie
+edytora, z „Użyj wartości z *zakresu nadrzędnego*”, i zapisuje je razem z resztą produktu jednym
+poleceniem (`product.scoped_values.save`) — jednym wpisem w dzienniku zdarzeń, którego komórki
+mają nazwy `seo:<pole>@<zakres>`. Tytuł i tytuł Open Graph mają najwyżej 160 znaków, opisy 400, a
+adres obrazu 2 048; adres obrazu to adres `http(s)` bez danych użytkownika. Odrzucone pole odrzuca
+cały zapis. Ogólne `PUT` i `DELETE /api/v1/admin/seo/meta/product/:id` odpowiadają
+`422 VALIDATION_FAILED` (`reason: product_seo_saved_with_product`); edytor na ekranie SEO prowadzi
+w przypadku produktu do edytora produktu. Gdy moduł `seo` jest wyłączony, zapis produktu, który
+zawiera pola SEO, jest odrzucany z kodem `503 MODULE_DISABLED`; zapis bez nich działa bez zmian.
+Duplikowanie produktu kopiuje jego metadane we wszystkich zakresach.
+
+**Odczyt.** `GET /api/v1/admin/seo/meta/product/:id` (`catalog:read`) zwraca w zakresie
+wskazanym przez `channelId` i `languageCode` własną wartość albo dziedziczenie każdego pola,
+wyznaczone metadane i źródło każdej wartości. Język bez kanału jest odrzucany z kodem
+`422 VALIDATION_FAILED`; kanał, do którego produkt nie należy, albo język, którego kanał nie
+oferuje — z kodem `422 SCOPE_INVALID`.
+
+**Dla innych modułów.** `seoProductMetaWritePort` odczytuje i zapisuje metadane produktu w
+dowolnym zakresie, w transakcji wywołującego, bez własnego wpisu w dzienniku zdarzeń; wywołują go
+zapis i duplikowanie z modułu `catalog`, które najpierw sprawdzają zakres.
+
+**Strona produktu je wyświetla.** Strona produktu w sklepie bierze tytuł, opis i znaczniki Open
+Graph z tego wyznaczania, dla kanału sprzedaży i języka żądania. Gdy moduł `seo` jest wyłączony,
+strona pokazuje metadane wyprowadzone z produktu, a po ponownym włączeniu modułu wszystkie
+nadpisania wracają.
+
+### Kategorie i strony CMS
+
+Nadpisanie kategorii lub strony CMS należy do języka (`locale`) i obowiązuje we wszystkich
+kanałach sprzedaży; żądanie bez języka dotyczy nadpisania `en-US`. `channelId` dla kategorii lub
+strony CMS jest odrzucany z kodem `422 VALIDATION_FAILED`. Każde pole jest wyznaczane z nadpisania
+dla języka, a potem z wartości wyprowadzonej z encji (nazwa kategorii i automatyczne
+podsumowanie). Nadpisanie nigdy nie obowiązuje w innym języku.
+
+**W panelu.** Edytor meta tagów na ekranie SEO wczytuje język kategorii lub strony od razu po jego
+wybraniu (**Załaduj** odczytuje go ponownie). Opuszczenie języka z niezapisanymi zmianami wymaga
+potwierdzenia, a **Użyj dziedziczonego** pyta przed usunięciem pokazanego nadpisania.
+
+**Każda zmiana trafia do dziennika zdarzeń.** Zapis nadpisania to jeden wpis
+`seo_meta_override.upsert`, usunięcie — jeden wpis `seo_meta_override.delete`, każdy z pełnym
+nadpisaniem przed zmianą i po niej. Aby przywrócić wcześniejszą wersję, zapisz wartości ze stanu
+*przed* tego wpisu. Usunięcie nieistniejącego nadpisania niczego nie zmienia i nie tworzy wpisu.
+
+### Aktualizacja
+
+Aktualizacja usuwa każde nadpisanie produktu zapisane dla języka bez kanału sprzedaży — takiego
+zakresu już nie ma. Nadpisania kategorii i stron CMS pozostają bez zmian. Metadane produktu, które
+były tylko w nadpisaniu dla języka, należy wprowadzić ponownie w kanale i języku albo w zakresie
+globalnym.
 
 Tytuł i opis są skracane do 60 / 160 znaków z wielokropkiem. Skracanie odbywa się w jednej funkcji
 pomocniczej, więc zmiany limitów SEO wprowadza się w jednym miejscu.
 
 ## Mapa witryny
 
-`SitemapGeneratorService.regenerate()` przechodzi przez aktywne produkty z publiczną widocznością
-oraz niezarchiwizowane i nieusunięte kategorie, buduje bezwzględne adresy URL względem
-`STOREFRONT_BASE_URL` i zapisuje treść XML w jednym wierszu `sitemap_cache`.
+`SitemapGeneratorService.regenerate()` przechodzi przez produkty, kategorie i strony CMS kanału,
+buduje bezwzględne adresy URL względem adresu sklepu kanału i zapisuje treść XML w wierszu
+`sitemap_cache` kanału. Produkt pojawia się raz dla każdego języka, w którym jest dostępny
+w kanale, a każdy adres URL używa obowiązującego tam klucza URL produktu — klucza kanału × języka,
+w przeciwnym razie klucza kanału, a w ostatniej kolejności klucza globalnego — z prefiksem ścieżki
+danego języka.
 
 Trasa publiczna (`GET /catalog/sitemap.xml`) zwraca treść z pamięci podręcznej; gdy wiersz jest
-starszy niż `staleAfterMs` (domyślnie 6 h), mapa jest generowana od razu w trakcie żądania.
-Odpowiedź ma nagłówek `Cache-Control: public, max-age=3600`, więc poprawnie działające CDN
+starszy niż `staleAfterMs` (domyślnie 6 h), mapa jest generowana od razu w trakcie żądania. Zmiana
+produktu, która wpływa na zawartość mapy — jego status (globalny, w kanale lub w kanale i języku),
+archiwizacja, okres publikacji (również chwila, w której ten okres się zaczyna lub kończy), grupa
+odbiorców (globalna lub kanału) albo klucze URL — oznacza
+mapy wszystkich kanałów w pamięci podręcznej jako nieaktualne, więc następne żądanie buduje je od
+nowa. Odpowiedź ma nagłówek `Cache-Control: public, max-age=3600`, więc poprawnie działające CDN
 przechowują ją przez godzinę.
 
 ## Tylko to, co widzi anonimowy użytkownik
 
-Mapa witryny pomija:
-- produkty ze `status != 'active'`
-- produkty z `visibility != 'public'`
-- wiersze zarchiwizowane (`archivedAt`) i usunięte miękko (`deletedAt`)
-- kategorie usunięte miękko
+Produkt trafia do mapy witryny kanału tylko tam, gdzie w chwili generowania jest w tym kanale
+dostępny dla anonimowego odwiedzającego: należy do kanału, nie jest zarchiwizowany ani usunięty,
+jest włączony w danym języku kanału, mieści się w okresie publikacji i obejmuje go obowiązujący zakres
+odbiorców (kanału, a gdy go nie ma — globalny). Produkt wyłączony globalnie, ale włączony w kanale,
+trafia do mapy; produkt wyłączony w kanale — nie. Pomijane są też kategorie usunięte miękko.
 
 Zasada jest prosta: robotom wyszukiwarek udostępnia się wyłącznie to, co może zobaczyć anonimowy
 klient.
 
 ## Encje
 
-`SeoMetaOverride` (entityType, entityId, locale, title?, description?, ogTitle?, ogDescription?,
-ogImageUrl?), `SitemapCache` (pojedynczy klucz, treść, urlCount, byteSize, generatedAt).
+`SeoMetaOverride` (entityType, entityId, salesChannelId?, locale?, title?, description?, ogTitle?,
+ogDescription?, ogImageUrl?). Wiersz produktu nie ma ani `salesChannelId`, ani `locale` (zakres
+globalny), ma `salesChannelId` (kanał) albo oba (kanał × język); wiersz kategorii lub strony CMS ma
+`locale`. W wierszu produktu pole `null` dziedziczy, a `''` jest celowo puste. `SitemapCache` (pojedynczy klucz, treść, urlCount, byteSize, generatedAt).
+`ogImageUrl` nadpisania to adres `http(s)` albo ścieżka zaczynająca się od pojedynczego `/`; każda
+inna wartość jest odrzucana z `400 VALIDATION_FAILED`.
 
 ## Punkty rozszerzenia
 

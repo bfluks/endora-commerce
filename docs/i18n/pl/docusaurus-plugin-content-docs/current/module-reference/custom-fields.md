@@ -11,12 +11,12 @@ description: "Wszystko, co manifest modułu `custom_fields` deklaruje: uprawnien
 
 # `custom_fields` — referencja modułu
 
-Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Nikt jeszcze nie napisał strony o tym, co ten moduł *robi*; [mapa modułów](../modules/module-map.generated.md) wymienia wszystkie moduły, z których składa się platforma.
+Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł *robi*, opisuje [jego własna strona](../modules/custom_fields.md).
 
 | | |
 | --- | --- |
 | Identyfikator modułu | `custom_fields` |
-| Nazwa | Custom Fields |
+| Nazwa | Custom fields |
 | Wersja | `1.0.0` |
 | Pakiet | `@endora-commerce/mod-custom-fields` |
 | Licencja | `MIT` |

@@ -1,26 +1,34 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
-import type { FulfilmentStrategy, Warehouse } from '@endora-commerce/contracts';
-import { ApiError, apiClient, useUnsavedChangesPrompt, formatDateTime } from '@endora-commerce/admin-kit/lib';
+import type { FulfilmentStrategy, OrganizationRoleRef, OrganizationRoleView, Warehouse } from '@endora-commerce/contracts';
+import { ApiError, apiClient, useSurfaceVisibility, useUnsavedChangesPrompt, formatDateTime } from '@endora-commerce/admin-kit/lib';
 import { FulfilmentStrategyPanel } from '../panels/FulfilmentStrategyPanel.js';
 import { OrganizationSalesRepsTab } from '../components/OrganizationSalesRepsTab.js';
+import { OrganizationRolesTab } from '../components/OrganizationRolesTab.js';
+import { organizationRolesClient } from '../api/roles.js';
 import { ModerationActionsPanel } from '../panels/ModerationActionsPanel.js';
 import { ApplicablePriceListsPanel } from '../panels/ApplicablePriceListsPanel.js';
 import { HierarchyPanel } from '../panels/HierarchyPanel.js';
 import { VatValidationPanel } from '../panels/VatValidationPanel.js';
+import { newestRegistrationRow } from '../panels/vat-validation-view.js';
 import { RestrictionsPanel } from '../panels/RestrictionsPanel.js';
+import { SalesChannelsPanel } from '../panels/SalesChannelsPanel.js';
 import { CustomFieldValuesPanel } from '@endora-commerce/admin-kit/components';
 import { AdminZone } from '@endora-commerce/admin-kit/zones';
 import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, PageHeader, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+
+/** The VAT validation panel's heading — where the moderation notice's link lands. */
+const VAT_VALIDATION_HEADING_ID = 'organization-vat-validation';
 
 interface OrgMember {
   id: string;
   email: string;
   firstName: string;
   lastName: string;
-  role: string;
+  /** The member's role (`specs/170-organization-roles/` FR-073): translated name for a predefined role. */
+  organizationRole: OrganizationRoleRef;
   emailVerifiedAt: string | null;
   twoFactorEnabled: boolean;
   lastLoginAt?: string | null;
@@ -34,6 +42,8 @@ interface OrgDetail {
   taxId: string;
   status: 'pending_verification' | 'active' | 'blocked' | 'rejected';
   vatStatus: 'vat_payer' | 'vat_exempt' | 'reverse_charge';
+  /** A B2C customer's own Organization: no role management there (PR-3). */
+  isPersonal?: boolean;
   registeredAddress: { street: string; city: string; postalCode: string; country: string };
   orderConfirmationEmails?: string[];
   fulfilmentStrategy?: FulfilmentStrategy | null;
@@ -51,7 +61,7 @@ interface OrgDetail {
   approvedByAdminUserId?: string | null;
   vatValidation?: {
     outcome: 'validated' | 'failed' | 'deferred' | 'unverified' | null;
-    provider: 'vies' | 'mf_pl' | 'format_only' | null;
+    provider: 'vies' | 'mf_pl' | 'format_only' | 'gus_pl' | null;
     validatedAt: string | null;
   };
   updatedAt?: string;
@@ -59,32 +69,52 @@ interface OrgDetail {
 
 const STATUSES = ['pending_verification', 'active', 'blocked', 'rejected'] as const;
 const VAT_STATUSES = ['vat_payer', 'vat_exempt', 'reverse_charge'] as const;
-const ROLES = ['organization_admin', 'regular_user'] as const;
+
+/** Either code reads an Organization's roles (`contracts/operator-api.md` §2). */
+const READ_ROLES: [string, string] = ['organizations:read-roles', 'organizations:manage-roles'];
+
+const KIND_ORDER: Record<OrganizationRoleRef['kind'], number> = { administrator: 0, member: 1, custom: 2 };
+
+/** Administrator, Member, then custom roles by name — the order the role list answers in. */
+function byKindThenName(a: OrganizationRoleRef, b: OrganizationRoleRef): number {
+  return KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || a.name.localeCompare(b.name);
+}
 
 export function OrganizationDetail(): ReactNode {
   const t = useTranslation('core');
+  const own = useTranslation('organizations');
+  const isVisible = useSurfaceVisibility();
+  const canReadRoles = isVisible({ module: 'organizations', requiredPermission: READ_ROLES });
   const { id = '' } = useParams<{ id: string }>();
   const [org, setOrg] = useState<OrgDetail | null>(null);
+  // Feature 173 — the newest registration-time lookup's differing fields, as
+  // the VAT validation panel loaded them, for the moderation notice.
+  const [registryDivergenceCount, setRegistryDivergenceCount] = useState(0);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
   const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteRole, setInviteRole] = useState<(typeof ROLES)[number]>('regular_user');
+  // `null` = the form's default (Member) has not been changed.
+  const [inviteRole, setInviteRole] = useState<string | null>(null);
   const [directEmail, setDirectEmail] = useState('');
   const [directFirst, setDirectFirst] = useState('');
   const [directLast, setDirectLast] = useState('');
   const [directPassword, setDirectPassword] = useState('');
-  const [directRole, setDirectRole] = useState<(typeof ROLES)[number]>('regular_user');
+  const [directRole, setDirectRole] = useState<string | null>(null);
+  const [roleList, setRoleList] = useState<OrganizationRoleView[] | null>(null);
 
   const [editMember, setEditMember] = useState<OrgMember | null>(null);
   const [editFirst, setEditFirst] = useState('');
   const [editLast, setEditLast] = useState('');
   const [editEmail, setEditEmail] = useState('');
 
-  const refresh = useCallback(async (): Promise<void> => {
-    setLoading(true);
+  // `quiet` re-reads without the full-screen loading state, which would unmount
+  // the panels below — the Roles tab re-reads the members after a role change
+  // and must keep its own confirmation on screen.
+  const refresh = useCallback(async (options?: { quiet?: boolean }): Promise<void> => {
+    if (!options?.quiet) setLoading(true);
     setError(null);
     try {
       const res = await apiClient.get<{ data: OrgDetail }>(`/api/v1/admin/organizations/${id}`);
@@ -103,6 +133,47 @@ export function OrganizationDetail(): ReactNode {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // FR-062: assigning a role needs `customers:manage` alone, so the role list
+  // is read only when the operator may read it; otherwise the selects offer the
+  // roles the members hold. A personal Organization's role routes answer 404.
+  const orgLoaded = org !== null;
+  const isPersonal = org?.isPersonal === true;
+  const refreshRoles = useCallback(async (): Promise<void> => {
+    if (!canReadRoles || !orgLoaded || isPersonal) {
+      setRoleList(null);
+      return;
+    }
+    try {
+      const res = await organizationRolesClient.list(id);
+      setRoleList(res.data);
+    } catch {
+      setRoleList(null);
+    }
+  }, [canReadRoles, orgLoaded, isPersonal, id]);
+
+  useEffect(() => {
+    void refreshRoles();
+  }, [refreshRoles]);
+
+  const roleOptions = useMemo((): OrganizationRoleRef[] => {
+    if (roleList) return roleList.map((r) => ({ id: r.id, name: r.name, kind: r.kind }));
+    const held = new Map<string, OrganizationRoleRef>();
+    for (const m of org?.members ?? []) held.set(m.organizationRole.id, m.organizationRole);
+    return [...held.values()].sort(byKindThenName);
+  }, [roleList, org]);
+
+  // The invite and direct-create forms default to Member. Without the role list
+  // its id may be unknown; the default is then `''`, sent as no `roleId`, which
+  // the server resolves to the Organization's Member role.
+  const formRoleOptions = useMemo((): { value: string; label: string }[] => {
+    const options = roleOptions.map((r) => ({ value: r.id, label: r.name }));
+    if (roleOptions.some((r) => r.kind === 'member')) return options;
+    return [{ value: '', label: own('organizationRoles.member.name') }, ...options];
+  }, [roleOptions, own]);
+  const defaultFormRole = roleOptions.find((r) => r.kind === 'member')?.id ?? '';
+  const inviteRoleValue = inviteRole ?? defaultFormRole;
+  const directRoleValue = directRole ?? defaultFormRole;
 
   // Active warehouses feed the org-level fulfilment-strategy picker's
   // defined-order list. Best-effort; failure leaves the list empty.
@@ -173,7 +244,7 @@ export function OrganizationDetail(): ReactNode {
     try {
       await apiClient.post(`/api/v1/admin/organizations/${id}/members/invite`, {
         email: inviteEmail.trim(),
-        role: inviteRole,
+        ...(inviteRoleValue ? { roleId: inviteRoleValue } : {}),
       });
       setInfo(t('organizations.detail.info.invited'));
       setInviteEmail('');
@@ -181,7 +252,7 @@ export function OrganizationDetail(): ReactNode {
     } catch (err) {
       setError(err instanceof ApiError ? err.envelope.error.message : t('organizations.detail.error.invite'));
     }
-  }, [id, inviteEmail, inviteRole, refresh, t]);
+  }, [id, inviteEmail, inviteRoleValue, refresh, t]);
 
   const directAdd = useCallback(async (): Promise<void> => {
     setError(null);
@@ -191,7 +262,7 @@ export function OrganizationDetail(): ReactNode {
         firstName: directFirst.trim(),
         lastName: directLast.trim(),
         password: directPassword,
-        role: directRole,
+        ...(directRoleValue ? { roleId: directRoleValue } : {}),
       });
       setInfo(t('organizations.detail.info.memberCreated'));
       setDirectEmail('');
@@ -202,14 +273,14 @@ export function OrganizationDetail(): ReactNode {
     } catch (err) {
       setError(err instanceof ApiError ? err.envelope.error.message : t('organizations.detail.error.create'));
     }
-  }, [id, directEmail, directFirst, directLast, directPassword, directRole, refresh, t]);
+  }, [id, directEmail, directFirst, directLast, directPassword, directRoleValue, refresh, t]);
 
   const changeMemberRole = useCallback(
-    async (memberId: string, role: string, expectedUpdatedAt?: string): Promise<void> => {
+    async (memberId: string, roleId: string, expectedUpdatedAt?: string): Promise<void> => {
       setError(null);
       try {
         await apiClient.patch(`/api/v1/admin/organizations/${id}/members/${memberId}/role`, {
-          role,
+          roleId,
           ...(expectedUpdatedAt ? { expectedUpdatedAt } : {}),
         });
         setInfo(t('organizations.detail.info.memberUpdated'));
@@ -273,7 +344,8 @@ export function OrganizationDetail(): ReactNode {
       </Alert>
     );
 
-  const adminCount = org.members.filter((m) => m.role === 'organization_admin').length;
+  // Last-administrator protection keys off the role's kind, never its name.
+  const adminCount = org.members.filter((m) => m.organizationRole.kind === 'administrator').length;
 
   return (
     <>
@@ -281,7 +353,14 @@ export function OrganizationDetail(): ReactNode {
         title={org.name}
         description={
           <span>
-            {t('organizations.detail.taxIdLabel')} <code className="font-mono text-xs">{org.taxId}</code>
+            {/* A personal Organization's tax id is an internal placeholder (#767). */}
+            {org.isPersonal ? (
+              <span>{t('organizations.personalAccount')}</span>
+            ) : (
+              <>
+                {t('organizations.detail.taxIdLabel')} <code className="font-mono text-xs">{org.taxId}</code>
+              </>
+            )}
             {org.updatedAt ? (
               <>
                 {' '}
@@ -320,6 +399,8 @@ export function OrganizationDetail(): ReactNode {
           blockedReason={org.blockedReason ?? null}
           rejectedReason={org.rejectedReason ?? null}
           approvedAt={org.approvedAt ?? null}
+          registryDivergenceCount={registryDivergenceCount}
+          vatValidationAnchorId={VAT_VALIDATION_HEADING_ID}
           onChanged={refresh}
         />
       </div>
@@ -431,12 +512,12 @@ export function OrganizationDetail(): ReactNode {
             <Label htmlFor="invite-role">{t('organizations.detail.role')}</Label>
             <Select
               id="invite-role"
-              value={inviteRole}
-              onChange={(e) => setInviteRole(e.target.value as (typeof ROLES)[number])}
+              value={inviteRoleValue}
+              onChange={(e) => setInviteRole(e.target.value)}
             >
-              {ROLES.map((r) => (
-                <option key={r} value={r}>
-                  {r}
+              {formRoleOptions.map((r) => (
+                <option key={r.value} value={r.value}>
+                  {r.label}
                 </option>
               ))}
             </Select>
@@ -483,12 +564,12 @@ export function OrganizationDetail(): ReactNode {
             <Label htmlFor="d-role">{t('organizations.detail.role')}</Label>
             <Select
               id="d-role"
-              value={directRole}
-              onChange={(e) => setDirectRole(e.target.value as (typeof ROLES)[number])}
+              value={directRoleValue}
+              onChange={(e) => setDirectRole(e.target.value)}
             >
-              {ROLES.map((r) => (
-                <option key={r} value={r}>
-                  {r}
+              {formRoleOptions.map((r) => (
+                <option key={r.value} value={r.value}>
+                  {r.label}
                 </option>
               ))}
             </Select>
@@ -572,7 +653,7 @@ export function OrganizationDetail(): ReactNode {
                   <TableCell>
                     <Select
                       aria-label={t('organizations.detail.roleForLabel', { email: m.email })}
-                      value={m.role}
+                      value={m.organizationRole.id}
                       onChange={(e): void =>
                         void changeMemberRole(
                           m.id,
@@ -582,9 +663,9 @@ export function OrganizationDetail(): ReactNode {
                       }
                       className="max-w-[14rem]"
                     >
-                      {ROLES.map((r) => (
-                        <option key={r} value={r}>
-                          {r}
+                      {roleOptions.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.name}
                         </option>
                       ))}
                     </Select>
@@ -610,7 +691,7 @@ export function OrganizationDetail(): ReactNode {
                       variant="outline"
                       size="sm"
                       disabled={
-                        m.role === 'organization_admin' && adminCount <= 1
+                        m.organizationRole.kind === 'administrator' && adminCount <= 1
                       }
                       onClick={() => void removeMember(m.id)}
                     >
@@ -624,23 +705,39 @@ export function OrganizationDetail(): ReactNode {
         </CardContent>
       </Card>
 
+      {/* Feature 170 — the Organization's roles (US 7). Mounted for a company
+          Organization and an operator holding a role code; it hides itself
+          otherwise and requests nothing. */}
+      <OrganizationRolesTab
+        organizationId={org.id}
+        isPersonal={org.isPersonal === true}
+        onRolesChanged={(): void => {
+          void refreshRoles();
+          void refresh({ quiet: true });
+        }}
+      />
+
       {/* Feature 091 / P7b — the place at the end of this screen, where a module
           that has something to say about an organization says it. **One mount,
           and that is a rule rather than a layout choice**: this member carries
           no prop that could tell two mounts apart, so a second one would render
           every contribution twice.
 
-          Four contributions arrive here, ordered by their declared weight:
-          `sales_channels`' channel membership (100), `price_lists`' display-mode
-          override (200), `quick_order`'s ordering defaults (300) and `carts`'
-          approval policy (400). The first three were three separate imports
-          scattered through this file at three different depths; the weights are
-          the order the operator already saw, and the panels are contiguous now
-          because a zone is one place.
+          Contributions arrive here ordered by their declared weight:
+          `price_lists`' display-mode override (200), `quick_order`'s ordering
+          defaults (300) and `carts`' approval policy (400). `sales_channels`'
+          channel membership (100) is gone since feature 154 — the panel just
+          above is this module's own editor of the same assignment, and two
+          editors of it on one page would disagree about who may change it.
 
           No chrome around it, unlike `catalog`'s category editor: every
           contribution here renders its own card, so a wrapper would nest one
           card inside another and an empty zone renders nothing at all. */}
+      {/* Feature 154 — the stores this Organization's members may use, first
+          among the panels below the members because it decides whether they can
+          sign in at all. */}
+      <SalesChannelsPanel organizationId={org.id} />
+
       <AdminZone name="organization.detail.after" props={{ organizationId: org.id }} />
 
       {/* Feature 056 US1 — organization hierarchy (parent picker + subtree view). */}
@@ -668,6 +765,10 @@ export function OrganizationDetail(): ReactNode {
             provider: org.vatValidation?.provider ?? null,
             validatedAt: org.vatValidation?.validatedAt ?? null,
           }}
+          headingId={VAT_VALIDATION_HEADING_ID}
+          onHistoryLoaded={(items) =>
+            setRegistryDivergenceCount(newestRegistrationRow(items)?.divergence?.length ?? 0)
+          }
           onChanged={refresh}
         />
       </div>

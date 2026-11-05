@@ -1,6 +1,4 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import {
   CART_UNAVAILABLE,
   getCart,
@@ -33,10 +31,29 @@ import { CartCouponInput } from '../../../components/CartCouponInput';
 import { CartConvertButtons } from '../../../components/CartConvertButtons';
 import { CartDroppedLinesBanner } from '../../../components/CartDroppedLinesBanner';
 import { CartApprovalBanner } from '../../../components/CartApprovalBanner';
+import { CartPrimaryCta } from '../../../components/CartPrimaryCta';
 import { getMe } from '../../../lib/api/account';
+import { commerceAbilities, memberSession } from '../../../lib/commerce-permissions';
 import { getProductDisplayMode, PRICING_UNAVAILABLE } from '../../../lib/api/pricing';
-import type { DisplayMode } from '@endora-commerce/contracts';
+import { lineAmountHalfUp, type DisplayMode } from '@endora-commerce/contracts';
 import type { Metadata } from 'next';
+import {
+  cartBlocksCheckout,
+  cartLineDisplayName,
+  cartLineEditError,
+  cartLineEditErrorHref,
+  parseCartQuantityEdit,
+} from '../../../lib/cartMinimum';
+import { droppedBelowMinimumReason } from '../../../lib/batchReport';
+import { tForLocale } from '../../../lib/i18n/messages';
+import { format } from '../../../lib/i18n/format';
+import { pluralKey } from '../../../lib/i18n/plural';
+import { shoppingListDisplayName } from '../../../lib/shopping-list-name';
+import { formatMoney } from '../../../lib/i18n/money';
+import { formatCount } from '../../../lib/orderMinimum';
+import { cartActionFailure } from '../../../lib/cart-action-failure';
+import { localeRedirect } from '../../../lib/i18n/navigation';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -63,6 +80,10 @@ export default async function CartPage({
 }: {
   searchParams: Promise<{
     error?: string;
+    /** U4 — the line whose quantity edit `error` refuses; the sentence renders beside it. */
+    errorItem?: string;
+    /** U4 — what the buyer typed into that line, kept in its field. */
+    typed?: string;
     couponError?: string;
     couponShortfall?: string;
     couponShortfallCurrency?: string;
@@ -94,9 +115,9 @@ export default async function CartPage({
           <p className="m-0 mb-[18px] text-[14px] text-muted">
             {absentStrings.unavailable.body}
           </p>
-          <Link href="/catalog" className="btn btn--dark">
+          <LocalizedLink href="/catalog" className="btn btn--dark">
             {absentStrings.browseCatalog}
-          </Link>
+          </LocalizedLink>
         </div>
       </div>
     );
@@ -109,11 +130,12 @@ export default async function CartPage({
     ? await getMe(session).catch(() => null)
     : null;
   const canTransact = me?.organization?.canTransact ?? true;
-  // Heuristic until the backend `/me` payload exposes
-  // `requiresCartApproval`: any non-`not_required` approval state on
-  // the cart means the policy was on at submission time.
-  const requiresApproval =
-    cart.approvalStatus !== undefined && cart.approvalStatus !== 'not_required';
+  // `specs/170-organization-roles/` (FR-030, FR-047, FR-057) — what the
+  // member's role lets them do here. A signed-out visitor (`me === null`)
+  // keeps editing the guest basket (owner ruling PR-4). Whether the basket
+  // must be sent for approval is not judged here at all: the backend answers
+  // it in `primaryCta` from the role (issue #619, FR-031).
+  const abilities = commerceAbilities(memberSession(me));
 
   const { locale, ctx } = await getServerContext();
 
@@ -146,23 +168,45 @@ export default async function CartPage({
 
   const strings = STRINGS(locale);
 
+  // Issue #650 — the rejection of the buyer's previous basket. The rejection
+  // closed that basket, so this one — empty or refilled since — cannot say it
+  // itself; the answer carries it until the buyer sends a basket again.
+  // Issue #755 — the rejected basket's lines are restored into this one: the
+  // notice says so, and names the lines that could not be.
+  const restored = (cart.previousRejection?.restoredLineCount ?? 0) > 0;
+  const previousRejection = cart.previousRejection ? (
+    <>
+      <CartApprovalBanner
+        approvalStatus="rejected_by_org_admin"
+        primaryCta={cart.primaryCta}
+        rejectedReason={cart.previousRejection.reason}
+        submitForApprovalAction={submitForApprovalAction}
+        strings={{
+          ...strings.approvalBanner,
+          rejected: (reason) => strings.previousRejection(reason, restored),
+        }}
+      />
+      <CartDroppedLinesBanner droppedLines={cart.previousRejection.skippedLines ?? []} strings={strings.dropped} />
+    </>
+  ) : null;
+
   if (cart.items.length === 0) {
     return (
       <div className="mx-auto max-w-[1360px] px-[24px]">
         <Breadcrumbs strings={strings.breadcrumbs} />
+        {previousRejection}
         <div className="rounded-md border border-line bg-surface px-[24px] py-[48px] text-center">
           <h1 className="m-0 mb-2 text-[22px] font-semibold text-fg">{strings.heading}</h1>
           <p className="m-0 mb-[18px] text-[14px] text-muted">{strings.empty}</p>
-          <Link href="/catalog" className="btn btn--dark">
+          <LocalizedLink href="/catalog" className="btn btn--dark">
             {strings.browseCatalog}
-          </Link>
+          </LocalizedLink>
         </div>
       </div>
     );
   }
 
   const primaryCta = cart.primaryCta ?? (canTransact ? 'checkout' : 'blocked_by_organization');
-  const submitForApprovalNeeded = requiresApproval && cart.approvalStatus === 'not_required';
 
   return (
     <div className="mx-auto max-w-[1360px] px-[24px] pt-[8px] pb-[64px]">
@@ -170,22 +214,26 @@ export default async function CartPage({
       <header className="mb-4 flex items-end justify-between gap-4">
         <div>
           <h1 className="m-0 text-[24px] font-semibold tracking-[-0.02em] text-fg">{strings.heading}</h1>
-          <p className="mt-1 text-[13px] text-muted">{strings.subheading(cart.items.length)}</p>
+          <p className="mt-1 text-[13px] text-muted">{strings.subheading(cart.items.length, primaryCta)}</p>
         </div>
       </header>
 
       <OrganizationModerationBanner
         status={me?.organization?.status}
         message={me?.organization?.moderationMessage ?? null}
+        locale={locale}
       />
+
+      {previousRejection}
 
       {/* Feature 027 — approval-state banner (US4). */}
       {cart.approvalStatus ? (
         <CartApprovalBanner
           approvalStatus={cart.approvalStatus}
-          policyOn={requiresApproval}
+          primaryCta={cart.primaryCta}
           rejectedReason={null}
           submitForApprovalAction={submitForApprovalAction}
+          linesBlockedNote={cartBlocksCheckout(cart) ? tForLocale(locale)('cart.approvalBlocked') : null}
           strings={strings.approvalBanner}
         />
       ) : null}
@@ -207,12 +255,21 @@ export default async function CartPage({
             productId: d.productId,
             productName: d.productName,
             reason: d.reason,
+            minimum: d.minimum,
           }))}
           strings={strings.dropped}
         />
       ) : null}
 
-      {params.error ? (
+      {!abilities.editCart ? (
+        // R-12 — the member would look for the stepper and the remove button; say why they are
+        // not there, once, rather than leave the lines silently inert.
+        <div className="mb-3 rounded-md border border-line bg-surface-alt px-[14px] py-[10px] text-[13px] text-fg-soft" role="note">
+          {strings.readOnlyNote}
+        </div>
+      ) : null}
+
+      {params.error && !cart.items.some((it) => cartLineEditError(params, it.id) !== null) ? (
         <div className="mb-3 rounded-md border border-[#fecaca] bg-[#fef2f2] px-[14px] py-[10px] text-[13px] text-[#b91c1c]" role="alert">
           {params.error}
         </div>
@@ -231,26 +288,31 @@ export default async function CartPage({
             {cart.items.map((it) => (
               <CartLine
                 key={it.id}
-                line={toViewModel(it)}
+                line={toViewModel(it, locale)}
                 updateAction={updateAction}
                 removeAction={removeAction}
                 saveToListAction={saveToListAction}
                 locale={locale}
                 displayMode={displayMode}
+                editError={cartLineEditError(params, it.id)}
+                editable={abilities.editCart}
+                canSaveToList={abilities.editShoppingLists}
                 strings={strings.line}
               />
             ))}
 
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-[22px] py-[18px]">
-              <Link href="/catalog" className="btn btn--ghost">
+              <LocalizedLink href="/catalog" className="btn btn--ghost">
                 ← {strings.continueShopping}
-              </Link>
-              <CartConvertButtons
-                disabled={cart.items.length === 0}
-                disabledReason={null}
-                convertToQrAction={convertToQrAction}
-                strings={strings.convertButtons}
-              />
+              </LocalizedLink>
+              {abilities.requestQuote ? (
+                <CartConvertButtons
+                  disabled={cart.items.length === 0}
+                  disabledReason={null}
+                  convertToQrAction={convertToQrAction}
+                  strings={strings.convertButtons}
+                />
+              ) : null}
             </div>
           </div>
 
@@ -270,44 +332,48 @@ export default async function CartPage({
             strings={strings.totals}
           />
 
-          <CartCouponInput
-            appliedCode={cart.discount?.code ?? null}
-            droppedOnRead={cart.couponDroppedThisRead ?? null}
-            applyError={
-              params.couponError
-                ? {
-                    reason: params.couponError as
-                      | 'invalid_code'
-                      | 'expired'
-                      | 'below_min_spend'
-                      | 'wrong_channel'
-                      | 'wrong_customer_group'
-                      | 'wrong_organization'
-                      | 'coupon_format_invalid',
-                    ...(params.couponShortfall && params.couponShortfallCurrency
-                      ? {
-                          shortfall: {
-                            amount: Number(params.couponShortfall),
-                            currency: params.couponShortfallCurrency,
-                          },
-                        }
-                      : {}),
-                  }
-                : null
-            }
-            applyAction={applyCouponAction}
-            clearAction={clearCouponAction}
-            strings={strings.coupon}
-          />
+          {abilities.editCart ? (
+            <CartCouponInput
+              appliedCode={cart.discount?.code ?? null}
+              droppedOnRead={cart.couponDroppedThisRead ?? null}
+              applyError={
+                params.couponError
+                  ? {
+                      reason: params.couponError as
+                        | 'invalid_code'
+                        | 'expired'
+                        | 'below_min_spend'
+                        | 'wrong_channel'
+                        | 'wrong_customer_group'
+                        | 'wrong_organization'
+                        | 'coupon_format_invalid',
+                      ...(params.couponShortfall && params.couponShortfallCurrency
+                        ? {
+                            shortfall: {
+                              amount: Number(params.couponShortfall),
+                              currency: params.couponShortfallCurrency,
+                            },
+                          }
+                        : {}),
+                    }
+                  : null
+              }
+              applyAction={applyCouponAction}
+              clearAction={clearCouponAction}
+              strings={strings.coupon}
+            />
+          ) : null}
 
           <div className="mt-4">
-            <PrimaryCtaButton
+            <CartPrimaryCta
               cta={primaryCta}
               authenticated={me !== null}
-              submitForApprovalNeeded={submitForApprovalNeeded}
               canTransact={canTransact}
               moderationMessage={me?.organization?.moderationMessage ?? null}
               submitAction={submitForApprovalAction}
+              linesBlockCheckout={cartBlocksCheckout(cart)}
+              linesBlockedNote={tForLocale(locale)('cart.checkoutBlocked')}
+              approvalBlockedNote={tForLocale(locale)('cart.approvalBlocked')}
               strings={strings.cta}
             />
           </div>
@@ -328,11 +394,11 @@ export default async function CartPage({
 function Breadcrumbs({
   strings,
 }: {
-  strings: { home: string; cart: string };
+  strings: { label: string; home: string; cart: string };
 }): ReactNode {
   return (
     <nav
-      aria-label="Breadcrumb"
+      aria-label={strings.label}
       style={{
         fontSize: 13,
         color: 'var(--ink-500)',
@@ -341,9 +407,9 @@ function Breadcrumbs({
         gap: 6,
       }}
     >
-      <Link href="/" style={{ color: 'inherit' }}>
+      <LocalizedLink href="/" style={{ color: 'inherit' }}>
         {strings.home}
-      </Link>
+      </LocalizedLink>
       <span aria-hidden="true">/</span>
       <span style={{ color: 'var(--ink-900)' }}>{strings.cart}</span>
     </nav>
@@ -351,7 +417,7 @@ function Breadcrumbs({
 }
 
 /** Maps a CartItem to the view-model the CartLine component expects. */
-function toViewModel(it: CartItem): CartLineViewModel {
+function toViewModel(it: CartItem, locale: string): CartLineViewModel {
   return {
     id: it.id,
     productId: it.productId,
@@ -359,96 +425,24 @@ function toViewModel(it: CartItem): CartLineViewModel {
     // Backend resolves `productName` from Product.name against the
     // request's Accept-Language. Feature 043 — prefer `displayName`, which
     // already appends the packaging-unit name (e.g. "… (Paleta)"). When
-    // unknown (race with a deleted product) fall back to SKU then productId.
-    productName: it.displayName || it.productName || it.productSku || it.productId,
+    // unknown (a deleted product, FR-037) fall back to the SKU, then to a
+    // sentence — never to the raw product id.
+    productName: cartLineDisplayName(it, locale),
     sku: it.productSku ?? null,
     productSlug: it.productSlug ?? null,
     quantity: it.quantity,
     unitPrice: it.unitPrice,
     lineTotal: it.lineTotal ?? {
-      amount: it.unitPrice.amount * it.quantity,
+      amount: Number(lineAmountHalfUp(it.unitPrice.amount, it.quantity)),
       currency: it.unitPrice.currency,
     },
     ...(it.unavailable !== undefined ? { unavailable: it.unavailable } : {}),
     ...(it.unavailableReason !== undefined ? { unavailableReason: it.unavailableReason } : {}),
+    // Feature 155 — the input floor and the server's below-minimum verdict.
+    packagingUnitName: it.packagingUnitName ?? null,
+    minOrderQuantity: it.minOrderQuantity ?? null,
+    belowMinimum: it.belowMinimum ?? null,
   };
-}
-
-/**
- * Renders the page's primary CTA. Source of truth is the backend's
- * `cart.primaryCta` field; the fallback covers anonymous carts (the
- * backend can't compute primaryCta without an org context). Feature
- * 027 T096.
- */
-function PrimaryCtaButton({
-  cta,
-  authenticated,
-  submitForApprovalNeeded,
-  canTransact,
-  moderationMessage,
-  submitAction,
-  strings,
-}: {
-  cta: NonNullable<CartSummary['primaryCta']>;
-  /** Whether the buyer has a valid customer session (resolved `/me`). */
-  authenticated: boolean;
-  submitForApprovalNeeded: boolean;
-  canTransact: boolean;
-  moderationMessage: string | null;
-  submitAction: (formData: FormData) => Promise<void>;
-  strings: {
-    checkout: string;
-    submitForApproval: string;
-    awaitingApproval: string;
-    blockedByOrganization: string;
-  };
-}): ReactNode {
-  if (!canTransact || cta === 'blocked_by_organization') {
-    return (
-      <button
-        type="button"
-        className="btn btn--dark btn--lg btn--block"
-        disabled
-        aria-disabled
-        title={moderationMessage ?? strings.blockedByOrganization}
-        style={{ opacity: 0.55, cursor: 'not-allowed' }}
-      >
-        {strings.blockedByOrganization}
-      </button>
-    );
-  }
-  if (cta === 'awaiting_approval') {
-    return (
-      <button
-        type="button"
-        className="btn btn--ghost btn--lg btn--block"
-        disabled
-        aria-disabled
-      >
-        {strings.awaitingApproval}
-      </button>
-    );
-  }
-  if (submitForApprovalNeeded || cta === 'submit_for_approval') {
-    return (
-      <form action={submitAction}>
-        <button type="submit" className="btn btn--dark btn--lg btn--block">
-          {strings.submitForApproval}
-        </button>
-      </form>
-    );
-  }
-  // cta === 'checkout'. /checkout requires a valid customer session, so when
-  // the buyer isn't authenticated (no session, or a stale/expired session that
-  // `/me` rejected) route them through login first — preserving the cart and
-  // returning to checkout via `?next` — instead of letting /checkout bounce
-  // them to login unexpectedly.
-  const checkoutHref = authenticated ? '/checkout' : '/login?next=/checkout';
-  return (
-    <Link href={checkoutHref} className="btn btn--dark btn--lg btn--block">
-      {strings.checkout} →
-    </Link>
-  );
 }
 
 async function readJar(): Promise<CartCookieJar> {
@@ -463,64 +457,76 @@ async function readJar(): Promise<CartCookieJar> {
 async function updateAction(formData: FormData): Promise<void> {
   'use server';
   const itemId = (formData.get('itemId') as string) ?? '';
-  const quantity = Number(formData.get('quantity') ?? '0');
-  if (!Number.isFinite(quantity) || quantity < 1) redirect('/cart?error=invalid-quantity');
+  // A stepper button posts `step`; the typed input and the one-step fix post `quantity`.
+  const step = formData.get('step');
+  const typed = formData.get('quantity');
+  const edit = parseCartQuantityEdit({
+    step: typeof step === 'string' ? step : null,
+    quantity: typeof typed === 'string' ? typed : null,
+  });
+  const typedValue = step === null && typeof typed === 'string' ? typed : null;
+  // The backend words its refusal (the minimum sentence) in the language it is asked in.
+  const { locale, ctx } = await getServerContext();
+  const t = tForLocale(locale);
+  if (edit.kind === 'invalid') return await localeRedirect(cartLineEditErrorHref(itemId, t('cart.line.quantityInvalid'), typedValue));
   try {
-    const result = await updateCartItem(await readJar(), itemId, quantity);
+    // `quantity: 0` removes the line (FR-007, contract §2), whatever its minimum.
+    const quantity = edit.kind === 'remove' ? 0 : edit.quantity;
+    const result = await updateCartItem(await readJar(), itemId, quantity, ctx);
     if (result.newAnonCookie) await setAnonCartCookie(result.newAnonCookie);
   } catch (err) {
-    const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not update item.';
-    redirect(`/cart?error=${encodeURIComponent(message)}`);
+    const message = err instanceof StorefrontApiError ? err.detail : t('cart.line.updateFailed');
+    return await localeRedirect(cartLineEditErrorHref(itemId, message, typedValue));
   }
-  redirect('/cart');
+  return await localeRedirect('/cart');
 }
 
 async function removeAction(formData: FormData): Promise<void> {
   'use server';
   const itemId = (formData.get('itemId') as string) ?? '';
+  const { locale, ctx } = await getServerContext();
   try {
-    const result = await removeCartItem(await readJar(), itemId);
+    const result = await removeCartItem(await readJar(), itemId, ctx);
     if (result.newAnonCookie) await setAnonCartCookie(result.newAnonCookie);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not remove item.';
-    redirect(`/cart?error=${encodeURIComponent(message)}`);
+      err instanceof StorefrontApiError ? err.detail : tForLocale(locale)('cart.line.removeFailed');
+    return await localeRedirect(`/cart?error=${encodeURIComponent(message)}`);
   }
-  redirect('/cart');
+  return await localeRedirect('/cart');
 }
 
 async function saveToListAction(formData: FormData): Promise<void> {
   'use server';
   const itemId = (formData.get('itemId') as string) ?? '';
   const jar = await readJar();
+  const t = tForLocale((await getServerContext()).locale);
   if (!jar.session) {
-    redirect('/cart?error=' + encodeURIComponent('Sign in to save to a list.'));
+    return await localeRedirect('/cart?error=' + encodeURIComponent(t('commerce.cart.error.signInToSave')));
   }
   try {
     const lists = await listShoppingLists(jar.session ?? '').catch(() => []);
     if (lists.length === 0) {
-      redirect(
+      return await localeRedirect(
         '/cart?error=' +
-          encodeURIComponent(
-            'You have no shopping list yet. Create one from the account menu.',
-          ),
+          encodeURIComponent(t('commerce.cart.error.noShoppingList')),
       );
     }
     const target = lists[0]!;
     await saveCartItemToShoppingList(jar, itemId, target.id);
-    redirect(`/cart?listAdded=${encodeURIComponent(target.name)}`);
+    return await localeRedirect(`/cart?listAdded=${encodeURIComponent(shoppingListDisplayName(target, t))}`);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not save line to list.';
-    redirect(`/cart?error=${encodeURIComponent(message)}`);
+      err instanceof StorefrontApiError ? err.detail : t('commerce.cart.error.saveToListFailed');
+    return await localeRedirect(`/cart?error=${encodeURIComponent(message)}`);
   }
 }
 
 async function applyCouponAction(formData: FormData): Promise<void> {
   'use server';
   const code = ((formData.get('code') as string) ?? '').trim().toUpperCase();
-  if (!code) redirect('/cart?couponError=coupon_format_invalid');
+  const t = tForLocale((await getServerContext()).locale);
+  if (!code) return await localeRedirect('/cart?couponError=coupon_format_invalid');
   try {
     const result = await applyCartCoupon(await readJar(), code);
     if (result.outcome === 'rejected') {
@@ -529,14 +535,14 @@ async function applyCouponAction(formData: FormData): Promise<void> {
         qs.set('couponShortfall', String(result.shortfall.amount));
         qs.set('couponShortfallCurrency', result.shortfall.currency);
       }
-      redirect(`/cart?${qs.toString()}`);
+      return await localeRedirect(`/cart?${qs.toString()}`);
     }
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError ? err.message : 'Could not apply coupon.';
-    redirect(`/cart?error=${encodeURIComponent(message)}`);
+      err instanceof StorefrontApiError ? err.detail : t('commerce.cart.error.applyCouponFailed');
+    return await localeRedirect(`/cart?error=${encodeURIComponent(message)}`);
   }
-  redirect('/cart');
+  return await localeRedirect('/cart');
 }
 
 async function clearCouponAction(): Promise<void> {
@@ -546,43 +552,54 @@ async function clearCouponAction(): Promise<void> {
   } catch {
     // Idempotent — silent fall-through is the spec.
   }
-  redirect('/cart');
+  return await localeRedirect('/cart');
 }
 
 async function convertToQrAction(formData: FormData): Promise<void> {
   'use server';
   const note = ((formData.get('note') as string) ?? '').trim() || null;
+  const t = tForLocale((await getServerContext()).locale);
   try {
     const result = await convertCartToQuoteRequest(await readJar(), note);
-    redirect(`/quote-requests/${result.quoteRequestSlug}?from=cart`);
+    return await localeRedirect(`/quote-requests/${result.quoteRequestSlug}?from=cart`);
   } catch (err) {
     const message =
-      err instanceof StorefrontApiError
-        ? err.message
-        : 'Could not convert cart to a quote request.';
-    redirect(`/cart?error=${encodeURIComponent(message)}`);
+      err instanceof StorefrontApiError ? err.detail : t('commerce.cart.error.convertFailed');
+    return await localeRedirect(`/cart?error=${encodeURIComponent(message)}`);
   }
 }
 
 async function submitForApprovalAction(): Promise<void> {
   'use server';
+  // `ctx` carries the storefront's language: without it the backend worded its refusal
+  // in its own default, whatever language the page was in (U4).
+  const { locale, ctx } = await getServerContext();
   try {
-    await submitCartForApproval(await readJar());
+    await submitCartForApproval(await readJar(), ctx);
   } catch (err) {
-    const message =
-      err instanceof StorefrontApiError
-        ? err.message
-        : 'Could not submit cart for approval.';
-    redirect(`/cart?error=${encodeURIComponent(message)}`);
+    // A refusal the backend worded (FR-039's minimum refusal, in the request's
+    // language) passes through; anything else is the catalogue's sentence.
+    const message = cartActionFailure(err, locale, 'cart.submitForApprovalFailed');
+    return await localeRedirect(`/cart?error=${encodeURIComponent(message)}`);
   }
-  redirect('/cart');
+  return await localeRedirect('/cart');
 }
 
 /* === Inline locale string catalogue =================================== */
 
+type CartPrimaryCtaState = NonNullable<CartSummary['primaryCta']>;
+
+/** Issue #751 — the cart subheading's plural base, per what the buyer can do next. */
+const SUBHEADING_BY_CTA = {
+  checkout: 'commerce.cart.subheading',
+  submit_for_approval: 'commerce.cart.subheadingSubmit',
+  awaiting_approval: 'commerce.cart.subheadingAwaiting',
+  blocked_by_organization: 'commerce.cart.subheadingBlocked',
+} as const satisfies Record<CartPrimaryCtaState, string>;
+
 function STRINGS(locale: string): {
   heading: string;
-  subheading: (n: number) => string;
+  subheading: (n: number, primaryCta: CartPrimaryCtaState) => string;
   empty: string;
   /** Issue #132 — the `carts` module is absent; distinct from an empty cart. */
   unavailable: { heading: string; body: string };
@@ -591,7 +608,7 @@ function STRINGS(locale: string): {
   itemCount: (n: number) => string;
   continueShopping: string;
   taxesNote: string;
-  breadcrumbs: { home: string; cart: string };
+  breadcrumbs: { label: string; home: string; cart: string };
   summary: { heading: string };
   line: Parameters<typeof CartLine>[0]['strings'];
   totals: Parameters<typeof CartTotals>[0]['strings'];
@@ -599,6 +616,8 @@ function STRINGS(locale: string): {
   convertButtons: Parameters<typeof CartConvertButtons>[0]['strings'];
   dropped: Parameters<typeof CartDroppedLinesBanner>[0]['strings'];
   approvalBanner: Parameters<typeof CartApprovalBanner>[0]['strings'];
+  previousRejection: (reason: string | null, restored: boolean) => string;
+  readOnlyNote: string;
   upsells: Parameters<typeof UpsellStrip>[0]['strings'];
   banner: { qrCreated: string; listAdded: (listName: string) => string };
   cta: {
@@ -608,210 +627,120 @@ function STRINGS(locale: string): {
     blockedByOrganization: string;
   };
 } {
-  const pl = locale.startsWith('pl');
-  if (pl) {
-    return {
-      heading: 'Twój koszyk',
-      subheading: (n: number) =>
-        n === 1 ? '1 pozycja gotowa do kasy.' : `${n} pozycji gotowych do kasy.`,
-      empty: 'Twój koszyk jest pusty.',
-      unavailable: {
-        heading: 'Koszyk jest niedostępny',
-        body: 'Zakupy online są w tej chwili wyłączone w tym sklepie. Katalog produktów pozostaje dostępny.',
-      },
-      browseCatalog: 'Przejdź do katalogu',
-      cardHeading: 'Koszyk',
-      itemCount: (n: number) => (n === 1 ? '1 pozycja' : `${n} pozycji`),
-      continueShopping: 'Kontynuuj zakupy',
-      taxesNote: 'Podatki i koszty dostawy zostaną naliczone w następnym kroku.',
-      breadcrumbs: { home: 'Strona główna', cart: 'Koszyk' },
-      summary: { heading: 'Podsumowanie' },
-      line: {
-        qtyLabel: 'Ilość',
-        unitPriceLabel: 'Cena jednostkowa',
-        lineTotalLabel: 'Wartość pozycji',
-        removeLabel: 'Usuń',
-        saveToListLabel: 'Zapisz na listę',
-        updateLabel: 'Zaktualizuj',
-        netSuffix: 'netto',
-        grossSuffix: 'brutto',
-        unavailable: {
-          out_of_stock: 'Brak na stanie.',
-          not_purchasable: 'Niedostępny.',
-          no_price_in_customer_list: 'Brak ceny dla Twojego konta.',
-        },
-      },
-      totals: {
-        subtotalLabel: (n: number) =>
-          n === 1 ? 'Suma (1 pozycja)' : `Suma (${n} pozycji)`,
-        discountLabel: (code: string | null) => (code ? `Rabat (${code})` : 'Rabat'),
-        grandTotalLabel: 'Razem',
-        deliveryLabel: 'Dostawa',
-        deliveryValue: 'naliczana w kasie',
-        netSuffix: 'netto',
-        grossSuffix: 'brutto',
-      },
-      coupon: {
-        label: 'Kupon rabatowy',
-        placeholder: 'KOD-KUPONU',
-        applyButton: 'Zastosuj',
-        clearButton: 'Usuń',
-        activeCode: () => 'aktywny',
-        autoDropped: (code: string) =>
-          `Kupon ${code} nie obowiązuje już dla tego koszyka i został usunięty.`,
-        rejectedReason: (reason: string, shortfall?: { amount: number; currency: string }) => {
-          const labels: Record<string, string> = {
-            invalid_code: 'Nieprawidłowy kod kuponu.',
-            expired: 'Kod kuponu wygasł.',
-            below_min_spend: shortfall
-              ? `Dodaj jeszcze ${shortfall.amount.toFixed(2)} ${shortfall.currency}, aby odblokować ten kupon.`
-              : 'Dodaj więcej produktów, aby odblokować ten kupon.',
-            wrong_channel: 'Ten kupon nie obowiązuje w tym kanale sprzedaży.',
-            wrong_customer_group: 'Ten kupon nie jest dostępny dla Twojej grupy klientów.',
-            wrong_organization: 'Ten kupon nie jest dostępny dla Twojej organizacji.',
-            coupon_format_invalid: "Kupony mogą zawierać tylko duże litery, cyfry, '-' i '_'.",
-          };
-          return labels[reason] ?? 'Nie udało się zastosować kuponu.';
-        },
-      },
-      convertButtons: {
-        convertToQrLabel: 'Zamień na zapytanie ofertowe',
-        convertToQrHint: 'Wyślij ten koszyk do działu sprzedaży jako zapytanie ofertowe.',
-      },
-      dropped: {
-        heading: 'Niektóre pozycje zostały pominięte',
-        intro: 'Następujące produkty nie zostały dodane, ponieważ:',
-        reasonNotPurchasable: 'produkt jest niedostępny',
-        reasonOutOfStock: 'brak na stanie',
-        reasonNoPriceInCustomerList: 'brak ceny dla Twojego konta',
-        reasonRemovedByConversion: 'pominięto podczas konwersji',
-      },
-      approvalBanner: {
-        pending: 'Twój koszyk oczekuje na akceptację administratora organizacji.',
-        approved: 'Twój koszyk został zaakceptowany i jest gotowy do realizacji.',
-        rejected: (reason: string | null) =>
-          reason
-            ? `Twój koszyk został odrzucony przez administratora organizacji. Powód: ${reason}`
-            : 'Twój koszyk został odrzucony przez administratora organizacji.',
-        policyOn: 'Twoja organizacja wymaga akceptacji koszyka przed realizacją.',
-        submitButton: 'Zgłoś do akceptacji',
-      },
-      upsells: {
-        heading: 'Możesz też potrzebować',
-        noPriceLabel: 'Cena na zapytanie',
-      },
-      banner: {
-        qrCreated: 'Twój koszyk został wysłany do działu sprzedaży jako nowe zapytanie ofertowe.',
-        listAdded: (listName: string) =>
-          `Pozycja została zapisana na liście „${listName}".`,
-      },
-      cta: {
-        checkout: 'Przejdź do kasy',
-        submitForApproval: 'Zgłoś do akceptacji',
-        awaitingApproval: 'Oczekuje na akceptację',
-        blockedByOrganization: 'Kasa niedostępna',
-      },
-    };
-  }
+  const t = tForLocale(locale);
   return {
-    heading: 'Your cart',
-    subheading: (n: number) =>
-      n === 1 ? '1 item ready for checkout.' : `${n} items ready for checkout.`,
-    empty: 'Your cart is empty.',
+    heading: t('commerce.cart.heading'),
+    // Issue #751 — "ready for checkout" only when it is: the subheading
+    // follows the state `primaryCta` answers.
+    subheading: (n: number, primaryCta: CartPrimaryCtaState) =>
+      format(t(pluralKey(SUBHEADING_BY_CTA[primaryCta], n, locale)), { count: formatCount(n, locale) }),
+    empty: t('commerce.cart.empty'),
     unavailable: {
-      heading: 'The cart is unavailable',
-      body: 'Online ordering is switched off in this shop right now. The product catalogue is still available.',
+      heading: t('commerce.cart.unavailable.heading'),
+      body: t('commerce.cart.unavailable.body'),
     },
-    browseCatalog: 'Browse the catalog',
-    cardHeading: 'Cart',
-    itemCount: (n: number) => (n === 1 ? '1 item' : `${n} items`),
-    continueShopping: 'Continue shopping',
-    taxesNote: 'Taxes and delivery are calculated at checkout.',
-    breadcrumbs: { home: 'Home', cart: 'Cart' },
-    summary: { heading: 'Summary' },
+    browseCatalog: t('commerce.common.browseCatalog'),
+    cardHeading: t('nav.cart'),
+    itemCount: (n: number) =>
+      format(t(pluralKey('lineGroups.summary.items', n, locale)), { count: formatCount(n, locale) }),
+    continueShopping: t('commerce.common.continueShopping'),
+    taxesNote: t('commerce.cart.taxesNote'),
+    breadcrumbs: { label: t('commerce.common.breadcrumb'), home: t('nav.home'), cart: t('nav.cart') },
+    summary: { heading: t('commerce.common.summary') },
     line: {
-      qtyLabel: 'Quantity',
-      unitPriceLabel: 'Unit price',
-      lineTotalLabel: 'Line total',
-      removeLabel: 'Remove',
-      saveToListLabel: 'Save to list',
-      updateLabel: 'Update',
-      netSuffix: 'net',
-      grossSuffix: 'gross',
+      qtyLabel: t('common.quantity'),
+      unitPriceLabel: t('commerce.cart.line.unitPrice'),
+      lineTotalLabel: t('commerce.common.lineTotal'),
+      removeLabel: t('commerce.common.remove'),
+      saveToListLabel: t('commerce.cart.line.saveToList'),
+      updateLabel: t('commerce.cart.line.update'),
+      netSuffix: t('commerce.common.net'),
+      grossSuffix: t('commerce.common.gross'),
       unavailable: {
-        out_of_stock: 'Out of stock.',
-        not_purchasable: 'No longer available.',
-        no_price_in_customer_list: 'Pricing unavailable for your account.',
+        out_of_stock: t('commerce.cart.line.unavailable.outOfStock'),
+        not_purchasable: t('commerce.cart.line.unavailable.notPurchasable'),
+        no_price_in_customer_list: t('commerce.cart.line.unavailable.noPriceInCustomerList'),
       },
     },
     totals: {
       subtotalLabel: (n: number) =>
-        n === 1 ? 'Subtotal (1 item)' : `Subtotal (${n} items)`,
-      discountLabel: (code: string | null) => (code ? `Discount (${code})` : 'Discount'),
-      grandTotalLabel: 'Total',
-      deliveryLabel: 'Delivery',
-      deliveryValue: 'calculated at checkout',
-      netSuffix: 'net',
-      grossSuffix: 'gross',
+        format(t(pluralKey('commerce.cart.totals.subtotal', n, locale)), { count: formatCount(n, locale) }),
+      discountLabel: (code: string | null) =>
+        code ? format(t('commerce.common.discountWithCode'), { code }) : t('commerce.common.discount'),
+      grandTotalLabel: t('commerce.common.total'),
+      deliveryLabel: t('commerce.cart.totals.delivery'),
+      deliveryValue: t('commerce.cart.totals.deliveryValue'),
+      netSuffix: t('commerce.common.net'),
+      grossSuffix: t('commerce.common.gross'),
     },
     coupon: {
-      label: 'Coupon code',
-      placeholder: 'COUPON-CODE',
-      applyButton: 'Apply',
-      clearButton: 'Remove',
-      activeCode: () => 'active',
-      autoDropped: (code: string) =>
-        `The coupon ${code} is no longer valid for this cart and has been removed.`,
+      label: t('commerce.cart.coupon.label'),
+      placeholder: t('commerce.cart.coupon.placeholder'),
+      applyButton: t('checkout.coupon.apply'),
+      clearButton: t('commerce.common.remove'),
+      activeCode: () => t('commerce.cart.coupon.active'),
+      autoDropped: (code: string) => format(t('commerce.cart.coupon.autoDropped'), { code }),
       rejectedReason: (reason: string, shortfall?: { amount: number; currency: string }) => {
         const labels: Record<string, string> = {
-          invalid_code: 'This coupon code is invalid.',
-          expired: 'This coupon code has expired.',
+          invalid_code: t('commerce.cart.coupon.rejected.invalidCode'),
+          expired: t('commerce.cart.coupon.rejected.expired'),
           below_min_spend: shortfall
-            ? `Add ${shortfall.amount.toFixed(2)} ${shortfall.currency} more to unlock this coupon.`
-            : 'Add more to your cart to unlock this coupon.',
-          wrong_channel: 'This coupon does not apply in this sales channel.',
-          wrong_customer_group: 'This coupon is not available for your customer group.',
-          wrong_organization: 'This coupon is not available for your organization.',
-          coupon_format_invalid: "Coupon codes use only uppercase letters, digits, '-' and '_'.",
+            ? format(t('commerce.cart.coupon.rejected.belowMinSpendAmount'), {
+                amount: formatMoney(shortfall.amount, shortfall.currency, locale),
+              })
+            : t('commerce.cart.coupon.rejected.belowMinSpend'),
+          wrong_channel: t('commerce.cart.coupon.rejected.wrongChannel'),
+          wrong_customer_group: t('commerce.cart.coupon.rejected.wrongCustomerGroup'),
+          wrong_organization: t('commerce.cart.coupon.rejected.wrongOrganization'),
+          coupon_format_invalid: t('commerce.cart.coupon.rejected.formatInvalid'),
         };
-        return labels[reason] ?? 'This coupon code could not be applied.';
+        return labels[reason] ?? t('commerce.cart.coupon.rejected.generic');
       },
     },
     convertButtons: {
-      convertToQrLabel: 'Convert to quote request',
-      convertToQrHint: 'Send this cart to sales as a quote request.',
+      convertToQrLabel: t('commerce.cart.convert.label'),
+      convertToQrHint: t('commerce.cart.convert.hint'),
     },
     dropped: {
-      heading: 'Some lines were skipped',
-      intro: 'These products were not added because:',
-      reasonNotPurchasable: 'no longer available',
-      reasonOutOfStock: 'out of stock',
-      reasonNoPriceInCustomerList: 'no price available',
-      reasonRemovedByConversion: 'skipped during conversion',
+      heading: t('commerce.cart.dropped.heading'),
+      intro: t('commerce.cart.dropped.intro'),
+      reasonNotPurchasable: t('commerce.cart.dropped.reason.notPurchasable'),
+      reasonOutOfStock: t('commerce.cart.dropped.reason.outOfStock'),
+      reasonNoPriceInCustomerList: t('commerce.cart.dropped.reason.noPriceInCustomerList'),
+      reasonRemovedByConversion: t('commerce.cart.dropped.reason.removedByConversion'),
+      reasonBelowMinimum: (minimum: number | undefined) => droppedBelowMinimumReason(minimum, locale),
     },
     approvalBanner: {
-      pending: 'Your cart is awaiting approval by an organization administrator.',
-      approved: 'Your cart has been approved and is ready for checkout.',
+      pending: t('commerce.cart.approval.pending'),
+      approved: t('commerce.cart.approval.approved'),
       rejected: (reason: string | null) =>
         reason
-          ? `Your cart was rejected by an organization administrator. Reason: ${reason}`
-          : 'Your cart was rejected by an organization administrator.',
-      policyOn: 'Your organization requires cart approval before checkout.',
-      submitButton: 'Submit for approval',
+          ? format(t('commerce.cart.approval.rejectedWithReason'), { reason })
+          : t('commerce.cart.approval.rejected'),
+      submissionRequired: t('commerce.cart.approval.submissionRequired'),
+      submitButton: t('commerce.common.submitForApproval'),
     },
+    previousRejection: (reason: string | null, restored: boolean) =>
+      [
+        reason
+          ? format(t('commerce.cart.approval.previousRejectedWithReason'), { reason })
+          : t('commerce.cart.approval.previousRejected'),
+        ...(restored ? [t('commerce.cart.approval.previousRejectedRestored')] : []),
+      ].join(' '),
+    readOnlyNote: t('commerce.cart.readOnlyNote'),
     upsells: {
-      heading: 'You might also need',
-      noPriceLabel: 'Price on request',
+      heading: t('commerce.cart.upsells.heading'),
+      noPriceLabel: t('commerce.common.priceOnRequest'),
     },
     banner: {
-      qrCreated: "We've sent your cart to sales as a new quote request.",
-      listAdded: (listName: string) => `Saved line to your "${listName}" list.`,
+      qrCreated: t('commerce.cart.banner.qrCreated'),
+      listAdded: (listName: string) => format(t('commerce.cart.banner.listAdded'), { list: listName }),
     },
     cta: {
-      checkout: 'Proceed to checkout',
-      submitForApproval: 'Submit for approval',
-      awaitingApproval: 'Awaiting approval',
-      blockedByOrganization: 'Checkout unavailable',
+      checkout: t('commerce.cart.cta.checkout'),
+      submitForApproval: t('commerce.common.submitForApproval'),
+      awaitingApproval: t('commerce.cart.cta.awaitingApproval'),
+      blockedByOrganization: t('commerce.cart.cta.blockedByOrganization'),
     },
   };
 }

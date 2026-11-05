@@ -88,10 +88,18 @@ export class OrderCommentService {
     return em.find(OrderComment, { orderId }, { orderBy: { createdAt: 'asc' } });
   }
 
-  /** Only customer-visible comments (FR-031). */
+  /**
+   * Only customer-visible comments (FR-031) — and never a system note
+   * (feature 162), whatever its visibility flag says: two filters, so one
+   * mistaken flag cannot show the buyer an internal note.
+   */
   async listForCustomer(orderId: string): Promise<OrderComment[]> {
     const em = this.emFactory();
-    return em.find(OrderComment, { orderId, isCustomerVisible: true }, { orderBy: { createdAt: 'asc' } });
+    return em.find(
+      OrderComment,
+      { orderId, isCustomerVisible: true, systemNote: null },
+      { orderBy: { createdAt: 'asc' } },
+    );
   }
 
   private async loadNonTerminalOrder(em: EntityManager, orderId: string): Promise<Order> {
@@ -101,8 +109,11 @@ export class OrderCommentService {
     if (graph.isTerminal(order.status)) {
       throw new HttpError(
         409,
-        ERROR_CODES.VALIDATION_FAILED,
+        // Issue #86 — its own code: under `VALIDATION_FAILED` this sentence
+        // was answered in English whatever the reader asked for.
+        ERROR_CODES.ORDER_COMMENTS_CLOSED,
         'Commenting is closed for completed or cancelled orders.',
+        { orderId },
       );
     }
     return order;

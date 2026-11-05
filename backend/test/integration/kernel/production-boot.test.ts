@@ -14,6 +14,8 @@ import {
   CustomerAccount,
   Organization,
 } from '../../helpers/package-entities.js';
+import { bindOrganizationsToFixtureChannelsSql } from '../../helpers/sales-channel-access.js';
+import { predefinedRoleIdOf } from '../../helpers/seed-organization-roles.js';
 
 /**
  * The production root actually boots (feature 072, D-40).
@@ -349,6 +351,8 @@ describe('the production composition root boots', () => {
             organization(OWN_ORGANIZATION_ID, 'A'),
             organization(OTHER_ORGANIZATION_ID, 'B'),
           ]);
+          // Feature 154 — both tenants shop on the default store.
+          await bindOrganizationsToFixtureChannelsSql(em, [OWN_ORGANIZATION_ID, OTHER_ORGANIZATION_ID]);
           await em.persistAndFlush(
             em.create(CustomerAccount, {
               id: CUSTOMER_ID,
@@ -357,7 +361,7 @@ describe('the production composition root boots', () => {
               passwordHash: 'x'.repeat(60),
               firstName: 'Two',
               lastName: 'Sessions',
-              role: 'organization_admin',
+              organizationRoleId: await predefinedRoleIdOf(em, OWN_ORGANIZATION_ID, 'administrator'),
               emailVerifiedAt: new Date(),
             }),
           );

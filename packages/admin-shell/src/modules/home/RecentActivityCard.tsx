@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { useTranslation } from '../../i18n/useTranslation.js';
-import { useTranslationContext } from '../../i18n/TranslationProvider.js';
+import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import {
   useRecentActivity,
   type RecentActivityItem,
@@ -132,7 +131,12 @@ function ActivityRow({
         <Icon size={13} />
       </div>
       <div style={{ flex: 1, minWidth: 0, fontSize: 13 }}>
-        <b>{row.actorDisplayName}</b> {verb}{' '}
+        <b>
+          {row.actorKind === 'customer'
+            ? t('home.activity.actor.customer', { name: row.actorDisplayName })
+            : row.actorDisplayName}
+        </b>{' '}
+        {verb}{' '}
         <span className="b2b-mono">{row.targetDisplayName}</span>
       </div>
       <span className="b2b-muted" style={{ fontSize: 11, flexShrink: 0 }}>

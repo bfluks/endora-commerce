@@ -5,8 +5,12 @@ import {
   createShoppingListRequestSchema,
   renameShoppingListRequestSchema,
   updateShoppingListItemRequestSchema,
+  firstLanguageTag,
+  organizationPermissionPreHandler,
+  type OrganizationPermissionPort,
 } from '@endora-commerce/contracts';
 import type { EntityManager } from '@mikro-orm/postgresql';
+import { getResolvedChannel } from '@endora-commerce/platform/kernel';
 import type { ShoppingListService } from './services/shopping-list-service.js';
 import type { ShoppingList } from './entities/shopping-list.entity.js';
 import { ShoppingListItem } from './entities/shopping-list-item.entity.js';
@@ -15,6 +19,15 @@ import { ShoppingListItem } from './entities/shopping-list-item.entity.js';
  * Shopping list routes (T204). All endpoints require an authenticated
  * customer session; ownership is enforced by the service via
  * (organization_id, customer_account_id).
+ *
+ * **By organization permission (`specs/170-organization-roles/`, FR-047,
+ * FR-048; `contracts/storefront-api.md` §5).** Every write — a list, its lines,
+ * the default — needs `shopping_lists.create`; converting needs
+ * `shopping_lists.convert` and then the target's create permission, as two
+ * guards in that order, so the refusal names the first one missing. Reads stay
+ * open, the lazily provisioned default list included: it is the platform's
+ * anchor, not the member's write. Each guard follows `requireCustomer`, so a
+ * refused member is answered before the body or the list is looked at.
  */
 
 export interface ShoppingListsRoutesDeps {
@@ -25,13 +38,28 @@ export interface ShoppingListsRoutesDeps {
     customerAccountId: string;
     organizationId: string;
   };
+  /** `organizations`' port, resolved per request (`module-composition.md` item 4a). */
+  organizationPermissions: () => OrganizationPermissionPort;
 }
 
 export async function registerShoppingListRoutes(
   app: FastifyInstance,
   deps: ShoppingListsRoutesDeps,
 ): Promise<void> {
-  const { service, emFactory, requireCustomer, resolveCustomerContext } = deps;
+  const { service, emFactory, requireCustomer, resolveCustomerContext, organizationPermissions } = deps;
+  // Shared guard lists: the platform's `onRoute` hook moves them to
+  // `preValidation` by assigning new arrays, never by mutating these.
+  const canEdit = [requireCustomer, organizationPermissionPreHandler(organizationPermissions, 'shopping_lists.create')];
+  const canConvertToCart = [
+    requireCustomer,
+    organizationPermissionPreHandler(organizationPermissions, 'shopping_lists.convert'),
+    organizationPermissionPreHandler(organizationPermissions, 'carts.create'),
+  ];
+  const canConvertToQuoteRequest = [
+    requireCustomer,
+    organizationPermissionPreHandler(organizationPermissions, 'shopping_lists.convert'),
+    organizationPermissionPreHandler(organizationPermissions, 'quote_requests.create'),
+  ];
 
   app.get('/api/v1/shopping-lists', { preHandler: requireCustomer }, async (request) => {
     const ctx = resolveCustomerContext(request);
@@ -48,7 +76,7 @@ export async function registerShoppingListRoutes(
 
   app.post(
     '/api/v1/shopping-lists',
-    { preHandler: requireCustomer, schema: { body: createShoppingListRequestSchema } },
+    { preHandler: canEdit, schema: { body: createShoppingListRequestSchema } },
     async (request, reply) => {
       const ctx = resolveCustomerContext(request);
       const body = createShoppingListRequestSchema.parse(request.body);
@@ -71,7 +99,7 @@ export async function registerShoppingListRoutes(
 
   app.post(
     '/api/v1/shopping-lists/default/items',
-    { preHandler: requireCustomer, schema: { body: addShoppingListItemRequestSchema } },
+    { preHandler: canEdit, schema: { body: addShoppingListItemRequestSchema } },
     async (request, reply) => {
       const ctx = resolveCustomerContext(request);
       const body = addShoppingListItemRequestSchema.parse(request.body);
@@ -98,7 +126,7 @@ export async function registerShoppingListRoutes(
 
   app.post<{ Params: { id: string } }>(
     '/api/v1/shopping-lists/:id/set-default',
-    { preHandler: requireCustomer },
+    { preHandler: canEdit },
     async (request) => {
       const ctx = resolveCustomerContext(request);
       const list = await service.setDefault(ctx, request.params.id);
@@ -110,7 +138,7 @@ export async function registerShoppingListRoutes(
 
   app.patch<{ Params: { id: string } }>(
     '/api/v1/shopping-lists/:id',
-    { preHandler: requireCustomer, schema: { body: renameShoppingListRequestSchema } },
+    { preHandler: canEdit, schema: { body: renameShoppingListRequestSchema } },
     async (request) => {
       const ctx = resolveCustomerContext(request);
       const body = renameShoppingListRequestSchema.parse(request.body);
@@ -123,7 +151,7 @@ export async function registerShoppingListRoutes(
 
   app.delete<{ Params: { id: string } }>(
     '/api/v1/shopping-lists/:id',
-    { preHandler: requireCustomer },
+    { preHandler: canEdit },
     async (request, reply) => {
       const ctx = resolveCustomerContext(request);
       await service.remove(ctx, request.params.id);
@@ -133,7 +161,7 @@ export async function registerShoppingListRoutes(
 
   app.post<{ Params: { id: string } }>(
     '/api/v1/shopping-lists/:id/items',
-    { preHandler: requireCustomer, schema: { body: addShoppingListItemRequestSchema } },
+    { preHandler: canEdit, schema: { body: addShoppingListItemRequestSchema } },
     async (request, reply) => {
       const ctx = resolveCustomerContext(request);
       const body = addShoppingListItemRequestSchema.parse(request.body);
@@ -142,6 +170,7 @@ export async function registerShoppingListRoutes(
         ...(body.variantId ? { variantId: body.variantId } : {}),
         quantity: body.quantity,
         ...(body.note ? { note: body.note } : {}),
+        ...languageTagOf(request),
       });
       const { list, items } = await service.getByIdWithItems(ctx, request.params.id);
       reply.status(201);
@@ -151,7 +180,7 @@ export async function registerShoppingListRoutes(
 
   app.patch<{ Params: { id: string; itemId: string } }>(
     '/api/v1/shopping-lists/:id/items/:itemId',
-    { preHandler: requireCustomer, schema: { body: updateShoppingListItemRequestSchema } },
+    { preHandler: canEdit, schema: { body: updateShoppingListItemRequestSchema } },
     async (request) => {
       const ctx = resolveCustomerContext(request);
       const body = updateShoppingListItemRequestSchema.parse(request.body);
@@ -166,7 +195,7 @@ export async function registerShoppingListRoutes(
 
   app.delete<{ Params: { id: string } }>(
     '/api/v1/shopping-lists/:id/items',
-    { preHandler: requireCustomer },
+    { preHandler: canEdit },
     async (request, reply) => {
       const ctx = resolveCustomerContext(request);
       await service.clearItems(ctx, request.params.id);
@@ -176,7 +205,7 @@ export async function registerShoppingListRoutes(
 
   app.delete<{ Params: { id: string; itemId: string } }>(
     '/api/v1/shopping-lists/:id/items/:itemId',
-    { preHandler: requireCustomer },
+    { preHandler: canEdit },
     async (request, reply) => {
       const ctx = resolveCustomerContext(request);
       await service.removeItem(ctx, request.params.id, request.params.itemId);
@@ -186,22 +215,33 @@ export async function registerShoppingListRoutes(
 
   app.post<{ Params: { id: string } }>(
     '/api/v1/shopping-lists/:id/convert-to-cart',
-    { preHandler: requireCustomer, schema: { body: convertShoppingListRequestSchema.optional() } },
+    { preHandler: canConvertToCart, schema: { body: convertShoppingListRequestSchema.optional() } },
     async (request) => {
       const ctx = resolveCustomerContext(request);
       const body = convertShoppingListRequestSchema.parse(request.body ?? {});
-      const result = await service.convertToCart(ctx, request.params.id, body.itemIds);
+      // Into the basket of the storefront the buyer is on (`specs/154-sales-channel-access/`).
+      const result = await service.convertToCart(
+        ctx,
+        request.params.id,
+        body.itemIds,
+        getResolvedChannel(request).id,
+      );
       return { data: result };
     },
   );
 
   app.post<{ Params: { id: string } }>(
     '/api/v1/shopping-lists/:id/convert-to-rfq',
-    { preHandler: requireCustomer, schema: { body: convertShoppingListRequestSchema.optional() } },
+    { preHandler: canConvertToQuoteRequest, schema: { body: convertShoppingListRequestSchema.optional() } },
     async (request) => {
       const ctx = resolveCustomerContext(request);
       const body = convertShoppingListRequestSchema.parse(request.body ?? {});
-      const result = await service.convertToRfq(ctx, request.params.id, body.itemIds);
+      // Feature 163 — the lines are judged at the request's channel and scope language.
+      const result = await service.convertToRfq(ctx, request.params.id, body.itemIds, {
+        language: await request.responseLanguage(),
+        ...languageTagOf(request),
+        salesChannelId: getResolvedChannel(request).id,
+      });
       return { data: result };
     },
   );
@@ -227,4 +267,10 @@ function serializeWithItems(list: ShoppingList, items: ShoppingListItem[]): Reco
     createdAt: list.createdAt.toISOString(),
     updatedAt: list.updatedAt.toISOString(),
   };
+}
+
+/** Feature 163 — the request's first `Accept-Language` tag, as `{ languageTag }` when present. */
+function languageTagOf(request: FastifyRequest): { languageTag?: string } {
+  const tag = firstLanguageTag(request.headers['accept-language']);
+  return tag ? { languageTag: tag } : {};
 }

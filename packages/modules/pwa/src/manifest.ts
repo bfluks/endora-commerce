@@ -158,7 +158,7 @@ export const pwaSettingsManifest = settings;
 
 export const manifest = defineModuleManifest({
   id: 'pwa',
-  name: 'Progressive Web App',
+  name: 'Progressive web app',
   description:
     'Installability, static-asset caching, controlled service-worker updates, and provider-agnostic push notifications for the storefront and admin.',
   version: '1.0.0',
@@ -264,7 +264,8 @@ export const manifest = defineModuleManifest({
       icon: 'Smartphone',
       targetRoute: '/settings/pwa',
       requiredPermission: PWA_PERMISSIONS.READ,
-      keywords: ['pwa', 'push', 'notifications', 'app', 'powiadomienia', 'aplikacja'],
+      keywords: ['pwa', 'push', 'notifications', 'app'],
+      keywordsKey: 'actions.openSettings.keywords',
       weight: 1400,
     },
   ],

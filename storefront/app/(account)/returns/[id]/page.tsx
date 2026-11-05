@@ -1,11 +1,18 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { addReturnComment, getMyReturn } from '../../../../lib/api/returns';
 import { getSessionCookie } from '../../../../lib/session';
 import { StorefrontApiError } from '../../../../lib/api/client';
+import { isRecordId } from '../../../../lib/record-id';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
+import { LocalizedLink } from '../../../../lib/i18n/localized-link';
+import { getServerContext } from '../../../../lib/server-context';
+import { tForLocale } from '../../../../lib/i18n/messages';
+import { format } from '../../../../lib/i18n/format';
+import { codeLabel, richText } from '../../../../lib/account/labels';
+import { getMe } from '../../../../lib/api/account';
+import { filedByColleague } from '../../../../lib/returns/returnForm';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -16,6 +23,12 @@ export const metadata: Metadata = { robots: { index: false, follow: false } };
 
 /**
  * Return / RMA case detail + conversation (feature 046, US1/US4).
+ *
+ * Feature 170 (FR-053, Q-R2 = A): a holder of `returns.view_organization` also
+ * opens a colleague's case. It is read-only — the follow-up actions stay the
+ * filer's and the API answers them `404` to anyone else — so the page offers
+ * none of them and says why in one line, and the filer's messages are not
+ * credited to the reader.
  */
 export default async function ReturnDetailPage({
   params,
@@ -24,20 +37,23 @@ export default async function ReturnDetailPage({
 }): Promise<ReactNode> {
   const session = await getSessionCookie();
   const { id } = await params;
-  if (!session) redirect(`/login?next=/returns/${id}`);
+  if (!session) return await localeRedirect(`/login?next=/returns/${id}`);
+  // Issue #749 — an id that cannot name a case goes where an unknown one does, unasked.
+  if (!isRecordId(id)) return await localeRedirect('/returns');
 
   let detail;
+  let me;
   try {
-    detail = await getMyReturn(session, id);
+    [detail, me] = await Promise.all([getMyReturn(session, id), getMe(session).catch(() => null)]);
   } catch (err) {
-    if (err instanceof StorefrontApiError && err.status === 404) redirect('/returns');
+    if (err instanceof StorefrontApiError && err.status === 404) return await localeRedirect('/returns');
     throw err;
   }
 
   async function addComment(formData: FormData): Promise<void> {
     'use server';
     const s = await getSessionCookie();
-    if (!s) redirect(`/login?next=/returns/${id}`);
+    if (!s) return await localeRedirect(`/login?next=/returns/${id}`);
     const body = String(formData.get('body') ?? '').trim();
     if (body) {
       await addReturnComment(s, id, body);
@@ -46,25 +62,31 @@ export default async function ReturnDetailPage({
   }
 
   const isTerminal = ['rejected', 'closed', 'cancelled'].includes(detail.statusCode);
+  const isColleaguesCase = filedByColleague(detail.customerAccountId, me?.customerAccount.id);
+  const { locale } = await getServerContext();
+  const t = tForLocale(locale);
 
   return (
     <div className="b2b-auth max-w-[720px]">
       <p>
-        <Link href="/returns">← Back to returns</Link>
+        <LocalizedLink href="/returns">{t('returns.new.backToReturns')}</LocalizedLink>
       </p>
-      <h1>{detail.rmaNumber ?? 'Return case'}</h1>
+      <h1>{detail.rmaNumber ?? t('account.return.fallbackTitle')}</h1>
       <p>
-        Status: <strong>{detail.statusLabel}</strong> · {detail.kind}
+        {richText(t('account.return.status'), { status: <strong>{detail.statusLabel}</strong> })} ·{' '}
+        {codeLabel(t, 'returns.new.kind', detail.kind)}
       </p>
-      {detail.rejectionReason ? <p className="muted">Rejection reason: {detail.rejectionReason}</p> : null}
+      {detail.rejectionReason ? (
+        <p className="muted">{format(t('account.return.rejectionReason'), { reason: detail.rejectionReason })}</p>
+      ) : null}
 
-      <h2>Items</h2>
+      <h2>{t('account.common.items')}</h2>
       <table className="b2b-account__table">
         <thead>
           <tr>
-            <th>Product</th>
-            <th>Qty</th>
-            <th className="text-right">Refund</th>
+            <th>{t('account.common.product')}</th>
+            <th>{t('account.common.quantity')}</th>
+            <th className="text-right">{t('account.returns.col.refund')}</th>
           </tr>
         </thead>
         <tbody>
@@ -78,15 +100,19 @@ export default async function ReturnDetailPage({
         </tbody>
       </table>
 
-      <h2>Conversation</h2>
+      <h2>{t('account.return.conversation')}</h2>
       {detail.comments.length === 0 ? (
-        <p>No messages yet.</p>
+        <p>{t('account.return.noMessages')}</p>
       ) : (
         <ul className="b2b-account__comments">
           {detail.comments.map((c) => (
             <li key={c.id}>
               <span className="muted">
-                {c.authorKind} · {new Date(c.createdAt).toLocaleString()}
+                {codeLabel(
+                  t,
+                  'account.returnAuthor',
+                  isColleaguesCase && c.authorKind === 'customer' ? 'colleague' : c.authorKind,
+                )} · {new Date(c.createdAt).toLocaleString(locale)}
               </span>
               <div>{c.body}</div>
             </li>
@@ -94,14 +120,16 @@ export default async function ReturnDetailPage({
         </ul>
       )}
 
-      {!isTerminal ? (
-        <form action={addComment} className="b2b-auth__form">
-          <label htmlFor="body">Add a message</label>
-          <textarea id="body" name="body" required maxLength={2000} />
-          <button type="submit">Send</button>
-        </form>
+      {isTerminal ? (
+        <p className="muted">{t('account.return.closed')}</p>
+      ) : isColleaguesCase ? (
+        <p role="note" className="muted">{t('account.return.colleagueReadOnly')}</p>
       ) : (
-        <p className="muted">This case is closed.</p>
+        <form action={addComment} className="b2b-auth__form">
+          <label htmlFor="body">{t('account.return.addMessage')}</label>
+          <textarea id="body" name="body" required maxLength={2000} />
+          <button type="submit">{t('account.return.send')}</button>
+        </form>
       )}
     </div>
   );

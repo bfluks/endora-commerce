@@ -27,6 +27,7 @@ import {
   type EmailMailerPort,
   type ImpersonationPort,
   type OrderListPort,
+  type OrganizationRoleReadPort,
   type RfqCustomerPort,
   type VatValidator,
 } from '@endora-commerce/contracts';
@@ -38,7 +39,8 @@ import type { CustomerOrgAssignmentService } from './services/customer-org-assig
 import type { CustomerDeletionService } from './services/customer-deletion-service.js';
 import type { CustomerPresenceService } from './services/customer-presence-service.js';
 import type { CustomerAddressService } from './services/customer-address-service.js';
-import type { CustomerPasswordResetPort } from '@endora-commerce/contracts';
+import type { ChannelUrlFacts, CustomerPasswordResetPort } from '@endora-commerce/contracts';
+import { storefrontPagePathFor } from '@endora-commerce/contracts';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import {
   serializeCustomerAddress,
@@ -88,6 +90,11 @@ export interface CustomersAdminDeps {
    */
   accounts: CustomerAccountReadPort;
   accountWrites: CustomerAccountLifecycleWritePort;
+  /**
+   * `specs/170-organization-roles/` WP-03 — the impersonated member's role on
+   * the impersonation answer (FR-062, spec *Impersonation*).
+   */
+  organizationRoles: Pick<OrganizationRoleReadPort, 'roleRef'>;
   requireAdmin: RequireAdminGuard;
   resolveModerationActor: ResolveModerationActor;
   moderationService: CustomerModerationService;
@@ -116,6 +123,11 @@ export interface CustomersAdminDeps {
   mailer: EmailMailerPort;
   auditLogService: AuditPort;
   storefrontBaseUrl: string;
+  /**
+   * Feature 167 (FR-034) — the channel an admin-sent storefront link is composed for:
+   * a customer belongs to no channel, so the system-default one. Absent: no prefix.
+   */
+  linkChannel?: () => Promise<ChannelUrlFacts | null>;
   /**
    * Feature 055 — validates Customer custom-field values. It no longer
    * persists them: `customer_accounts` owns the row, so its lifecycle port
@@ -320,6 +332,22 @@ export async function registerCustomersAdminRoutes(
         signed: false,
       });
 
+      // The role whose permissions the impersonation acts under — exactly the
+      // member's (spec *Impersonation*); the member route guards judge it.
+      const impersonated = await accounts.findById(result.impersonatedCustomerAccount.id);
+      const organizationRole = impersonated
+        ? await deps.organizationRoles.roleRef(
+            impersonated.organizationId,
+            impersonated.organizationRoleId,
+            await request.responseLanguage(),
+          )
+        : null;
+      if (!organizationRole) {
+        // Required on the answer (`specs/170-organization-roles/` WP-12); the
+        // account was just impersonated and its role is held by a foreign key,
+        // so this is unreachable — refuse rather than name no role.
+        throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization role not found.');
+      }
       return {
         data: {
           impersonationSessionId: result.impersonationSessionId,
@@ -328,6 +356,7 @@ export async function registerCustomersAdminRoutes(
             email: result.impersonatedCustomerAccount.email,
             firstName: result.impersonatedCustomerAccount.firstName,
             lastName: result.impersonatedCustomerAccount.lastName,
+            organizationRole,
           },
         },
       };
@@ -480,10 +509,10 @@ export async function registerCustomersAdminRoutes(
     async (request) => {
       await resolveModerationActor(request);
       const customer = await accounts.findById(request.params.id);
+      // The customer's own quote requests only — never their Organization's.
       const data = await deps.rfqService.listForCustomer({
         customerAccountId: request.params.id,
         organizationId: customer?.organizationId ?? '',
-        isOrgAdmin: false,
       });
       return { data };
     },
@@ -523,7 +552,14 @@ export async function registerCustomersAdminRoutes(
       }
       const { rawToken } = await deps.passwordResetService.requestReset(customer.email);
       if (rawToken) {
-        const link = `${deps.storefrontBaseUrl}/reset-password?token=${rawToken}`;
+        // Feature 167 — the storefront's real reset page (`/password-reset/confirm`;
+        // `/reset-password` was served by nothing), under the default language's
+        // prefix: the e-mail is written in no particular language.
+        const path = storefrontPagePathFor({
+          path: `/password-reset/confirm?token=${encodeURIComponent(rawToken)}`,
+          channel: deps.linkChannel ? await deps.linkChannel() : null,
+        });
+        const link = `${deps.storefrontBaseUrl.replace(/\/+$/, '')}${path}`;
         const outcome = await deps.mailer.send({
           messageId: `admin-pwd-reset.${customer.id}.${rawToken.slice(0, 8)}`,
           to: customer.email,

@@ -54,6 +54,16 @@ zmiany statusu płatności w panelu administracyjnym przechodzą przez
 Ponowienie płatności przez kupującego (`POST /api/v1/orders/:orderId/payments/retry`) to trasa
 klienta i jest autoryzowane przez `requireCustomer`, a nie przez uprawnienie.
 
+## Zwroty przez bramkę płatności
+
+Bramka zgłasza każdy zwrot — wykonany w jej panelu albo przy rozliczeniu zwrotu towaru — przez swój
+webhook, z łączną zwróconą kwotą, a płatność ją zapisuje. Kwota z więcej niż dwoma miejscami po
+przecinku jest **odrzucana, a nie zaokrąglana**: zwrócona kwota i status płatności pozostają bez
+zmian, odmowa trafia do logu z płatnością, zamówieniem, zgłoszoną kwotą i identyfikatorem zwrotu w
+bramce, a płatność zostaje oznaczona do ręcznego sprawdzenia (`providerDetails.refundAnomaly` w
+historii płatności). Webhook i tak zostaje potwierdzony, więc bramka nie wysyła go ponownie; operator
+sprawdza zwrot w bramce i rozlicza go ręcznie.
+
 ## Emitowane zdarzenia
 
 `payment.received.v1`, `payment.failed.v1`, `payment.refunded.v1`. Są to zdarzenia działającej w

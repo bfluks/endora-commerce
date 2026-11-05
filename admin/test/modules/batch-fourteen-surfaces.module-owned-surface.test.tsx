@@ -208,6 +208,8 @@ const SUBJECTS: readonly Subject[] = [
     section: 'customers',
     routes: [
       ['/organizations', ['customers:read', 'customers:manage']],
+      // Feature 154 — *New organization*, on the code its write enforces.
+      ['/organizations/new', 'customers:manage'],
       ['/organizations/:id', ['customers:read', 'customers:manage']],
     ],
     navTargets: ['/organizations'],
@@ -215,7 +217,10 @@ const SUBJECTS: readonly Subject[] = [
       'appShell.nav.organizations',
       'appShell.palette.sub.customerAccounts',
     ],
-    zones: [],
+    // Feature 173 — the warning beside its own Polish-sources setting on the
+    // Settings screen (`specs/173-registration-registry-lookup/`
+    // `contracts/admin-surfaces.md` §2a), matched to that one setting code.
+    zones: ['settings.setting.after'],
     mounts: [
       ['organizations/src/admin/pages/OrganizationDetail.tsx', 'organization.detail.after'],
     ],
@@ -246,8 +251,10 @@ const SUBJECTS: readonly Subject[] = [
       'appShell.palette.sub.storefrontChannels',
     ],
     // The one module in this batch that is a contributor as well as a host —
-    // P7a and P7b gave it these two while its screens were still `App.tsx`'s.
-    zones: ['product.editor.channels', 'organization.detail.after'],
+    // P7a and P7b gave it two while its screens were still `App.tsx`'s, and
+    // feature 154 withdrew P7b's when `organizations` took the Organization's
+    // channels into a panel of its own.
+    zones: ['product.editor.channels'],
     mounts: [
       ['sales_channels/src/admin/pages/SalesChannelEditPage.tsx', 'sales_channel.editor.after'],
     ],
@@ -732,12 +739,12 @@ describe('the surfaces each module does not contribute, derived from the contrib
   it.each(SUBJECTS)('$module contributes exactly the zones its declaration names', (subject) => {
     // Ruling 1: the off-state test asserts every surface the module
     // contributes, and names the ones it does not **derived from the
-    // contribution set** rather than asserted. Two of this batch contribute to
-    // no zone at all — they are hosts and nothing else — and the third
-    // contributes two, which P7a and P7b declared while its screens were still
-    // `App.tsx`'s. Asserted as an equality, so a zone silently dropped in the
-    // move fails here; `product-channels-zone.test.tsx` and
-    // `organization-channels-zone.test.tsx` drive both over the real provider.
+    // contribution set** rather than asserted. `customers` contributes to no
+    // zone at all — a host and nothing else — `organizations` to one since
+    // feature 173, and `sales_channels` to the one P7a declared while its
+    // screens were still `App.tsx`'s. Asserted as an equality, so a zone silently dropped in the
+    // move fails here; `product-channels-zone.test.tsx` drives the one that
+    // remains over the real provider.
     const contributions = CONTRIBUTIONS.get(subject.module);
     expect((contributions?.zones ?? []).map((zone) => zone.zone)).toEqual(subject.zones);
   });
@@ -870,7 +877,7 @@ describe('the moved screens take no reach the package cannot resolve', () => {
     // P7a copied the component into the package and left the `admin/src`
     // original alive because these two screens still imported it. They are the
     // package's now, so the copy is deleted and both name the sibling —
-    // `organization-channels-zone.test.tsx` holds the other half of the claim,
+    // `product-channels-zone.test.tsx` holds the other half of the claim,
     // that no file remains at the old path.
     for (const file of [
       'sales_channels/src/admin/pages/SalesChannelEditPage.tsx',

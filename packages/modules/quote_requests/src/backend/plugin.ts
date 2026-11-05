@@ -6,11 +6,14 @@ import type {
   AdminUserReadPort,
   BuyerLinePricePort,
   CartWritePort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
+  CustomFieldListFilterPort,
   CustomFieldValuePort,
   OrderReadPort,
   OrganizationDetailsPort,
+  OrganizationPermissionPort,
   SalesRepAssignmentPort,
 } from '@endora-commerce/contracts';
 import { RfqService, type RfqEventBus, type RfqServiceDeps } from './services/rfq-service.js';
@@ -87,6 +90,8 @@ export interface QuoteRequestsModuleOptions {
   auditLog?: AuditPort;
   /** Feature 055 — validates + reads RFQ custom-field values on the admin edit path. */
   customFieldValues?: CustomFieldValuePort;
+  /** Feature 157 — the admin list's custom-field filters. */
+  customFieldListFilter?: CustomFieldListFilterPort;
   /**
    * Feature 075, Phase C — the five owners this module reads, and the one it
    * writes. Each replaces an `em.find` against another module's table, which
@@ -100,6 +105,11 @@ export interface QuoteRequestsModuleOptions {
    * six module edges above.
    */
   channelMembership: SalesChannelMembershipPort;
+  /** Feature 163 — `catalog`'s availability answer for every quote-line seam. */
+  catalogAvailability: Pick<
+    CatalogProductAvailabilityPort,
+    'filterAvailable' | 'effectiveTexts' | 'effectivePackagingUnitNames' | 'effectiveOrderRules'
+  >;
   customerAccounts: CustomerAccountReadPort;
   organizations: OrganizationDetailsPort;
   adminUsers: AdminUserReadPort;
@@ -156,6 +166,12 @@ export interface QuoteRequestsModuleOptions {
    * through it (`specs/147-saved-views/` research R-18, S-11).
    */
   log?: PlatformLogger;
+  /**
+   * `organizations`' permission port, resolved per call
+   * (`specs/170-organization-roles/`): the customer routes' guards (FR-040)
+   * and the *Administrator*-only Organization-wide visibility (R-30).
+   */
+  organizationPermissions: () => OrganizationPermissionPort;
 }
 
 export interface QuoteRequestsModuleHandle {
@@ -199,6 +215,7 @@ export function quoteRequestsModule(options: QuoteRequestsModuleOptions): {
     salesRepAssignment,
     catalogProducts: options.catalogProducts,
     channelMembership: options.channelMembership,
+    catalogAvailability: options.catalogAvailability,
     customerAccounts: options.customerAccounts,
     adminUsers: options.adminUsers,
     carts: options.carts,
@@ -206,12 +223,15 @@ export function quoteRequestsModule(options: QuoteRequestsModuleOptions): {
     negotiationPolicy: options.negotiationPolicy,
     businessId: businessIdGenerator,
     resolveTaxRate: options.resolveTaxRate,
+    organizationPermissions: options.organizationPermissions,
     ...(options.auditLog ? { auditLog: options.auditLog } : {}),
     ...(options.customFieldValues ? { customFieldValues: options.customFieldValues } : {}),
+    ...(options.log ? { log: options.log } : {}),
   });
 
   const adminService = new RfqAdminService({
     emFactory: options.emFactory,
+    channelMembership: options.channelMembership,
     events: options.eventBus as RfqEventBus,
     rfqService,
     eventService,
@@ -219,11 +239,13 @@ export function quoteRequestsModule(options: QuoteRequestsModuleOptions): {
     notificationService,
     salesRepAssignment,
     catalogProducts: options.catalogProducts,
+    catalogAvailability: options.catalogAvailability,
     customerAccounts: options.customerAccounts,
     organizations: options.organizations,
     adminUsers: options.adminUsers,
     ...(options.auditLog ? { auditLog: options.auditLog } : {}),
     ...(options.customFieldValues ? { customFieldValues: options.customFieldValues } : {}),
+    ...(options.customFieldListFilter ? { customFieldListFilter: options.customFieldListFilter } : {}),
   });
 
   const expiryWorker = new RfqExpiryWorker({
@@ -253,6 +275,7 @@ export function quoteRequestsModule(options: QuoteRequestsModuleOptions): {
         rfqService,
         requireCustomer: options.requireCustomer,
         resolveCustomerContext: options.resolveCustomerContext,
+        organizationPermissions: options.organizationPermissions,
         ...(options.assertOrganizationCanTransact
           ? { assertOrganizationCanTransact: options.assertOrganizationCanTransact }
           : {}),

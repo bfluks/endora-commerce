@@ -36,6 +36,13 @@ export interface PersonalOrganizationProvisionInput {
   readonly email: string;
   readonly firstName?: string | null;
   readonly lastName?: string | null;
+  /**
+   * Feature 154 (owner decision D6) — the channel of the store the account is
+   * registering on. A newly provisioned personal organisation gets exactly this
+   * channel, in the caller's transaction; `null` — a path with no storefront
+   * channel — gets the system default. Required so a caller says which it is.
+   */
+  readonly salesChannelId: string | null;
 }
 
 export interface PersonalOrganizationProvisionApi {
@@ -51,5 +58,19 @@ export interface PersonalOrganizationProvisionApi {
   provisionFor(
     em: EntityManager,
     input: PersonalOrganizationProvisionInput,
-  ): Promise<{ id: string }>;
+  ): Promise<PersonalOrganizationProvisioned>;
+}
+
+/**
+ * What {@link PersonalOrganizationProvisionApi.provisionFor} answers: the
+ * organisation and the id of its *Administrator* role, which the account about
+ * to be written holds (`specs/170-organization-roles/`, owner ruling PR-3,
+ * research R-34). The role id is read on the caller's `EntityManager`, after the
+ * organisation's own insert trigger created the role — inside the caller's
+ * still-open transaction, where a read through the role cache on another
+ * connection would find nothing.
+ */
+export interface PersonalOrganizationProvisioned {
+  readonly id: string;
+  readonly administratorRoleId: string;
 }

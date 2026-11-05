@@ -5,8 +5,8 @@
  * **The largest surface in the drain, and a zone *host* six members over.**
  * `ProductEditor.tsx` mounts `product.editor.details.before`,
  * `product.editor.field.after` (five times, once per editable core field),
- * `product.editor.pricing.before`, `product.editor.pricing.after` and
- * `product.editor.channels`; `ProductAttributesTab.tsx` mounts a sixth
+ * `product.editor.pricing.before`, `product.editor.pricing.after`,
+ * `product.editor.channels` and `product.editor.seo` (feature 163, renamed by 174); `ProductAttributesTab.tsx` mounts a sixth
  * `product.editor.field.after`; and `CategoriesTree.tsx` mounts
  * `category.editor.after`. P4b and P7a published those members and the
  * contributors were scheduled against them in batch 13 — this is the host
@@ -104,6 +104,15 @@ export const contributions: AdminContributions = {
       requiredPermission: WRITE_PERMISSION,
     },
     {
+      // The roster on its Archived tab (feature 163, owner decision PAL-1 → B): the
+      // address the palette's "Archived products" opens. The same screen as the
+      // index, so the same read code; it reads the tab from the path. A static
+      // segment, so it outranks `:id` below — product ids are UUIDs anyway.
+      path: `${ROUTE_PATH}/archived`,
+      component: () => import('./pages/ProductsList.js'),
+      requiredPermission: READ_PERMISSION,
+    },
+    {
       // The edit form keeps the read code: opening one product is a read, and
       // every control on it that writes gates itself. Nothing about D-221
       // touches this route — the tightening is the create URL's alone, and
@@ -111,6 +120,17 @@ export const contributions: AdminContributions = {
       // code to both.
       path: `${ROUTE_PATH}/:id`,
       component: () => import('./pages/ProductEditor.js'),
+      requiredPermission: READ_PERMISSION,
+    },
+    {
+      // Feature 172 — one Page Builder content attribute of one product. A
+      // detail screen reached from the content card on the product's
+      // Attributes tab, so it takes no sidebar row and no palette action of its
+      // own (`:param` segments: no action can target it). Read-gated like the
+      // product: the screen withholds Save from anyone without
+      // `catalog:write`, which the save route enforces.
+      path: `${ROUTE_PATH}/:id/content/:attributeKey`,
+      component: () => import('./pages/ProductContentPage.js'),
       requiredPermission: READ_PERMISSION,
     },
     {

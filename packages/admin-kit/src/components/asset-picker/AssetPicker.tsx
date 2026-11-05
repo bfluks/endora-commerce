@@ -33,8 +33,13 @@ import { listAssets } from './assets-api.js';
  */
 
 export interface AssetPickerProps {
-  /** Filter the picker grid by MIME prefix — e.g. 'image/' for images-only. */
-  acceptMimePrefix?: 'image/' | 'video/' | undefined;
+  /**
+   * Filter the picker grid by MIME prefix — e.g. 'image/' for images-only.
+   * `'font/'` lists font files (feature 163, the brand screen's asset fonts);
+   * it narrows the grid only, and the inline uploader is not restricted by it,
+   * because a browser reports no reliable type for a font file.
+   */
+  acceptMimePrefix?: 'image/' | 'video/' | 'font/' | undefined;
   /** Whether to render the inline upload affordance below the grid. */
   allowUpload?: boolean;
   /** Asset chosen → caller resolves any related entity wiring. */
@@ -133,7 +138,7 @@ export function AssetPicker(props: AssetPickerProps): ReactNode {
           <div className="border-t pt-3">
             <p className="mb-1 text-sm font-medium">{t('assetPicker.uploadNew')}</p>
             <AssetUploader
-              {...(props.acceptMimePrefix !== undefined
+              {...(props.acceptMimePrefix === 'image/' || props.acceptMimePrefix === 'video/'
                 ? { acceptPrefix: props.acceptMimePrefix }
                 : {})}
               onUploaded={(a): void => {
@@ -153,6 +158,10 @@ export function AssetPicker(props: AssetPickerProps): ReactNode {
                     updatedAt: a.updatedAt,
                     deletedAt: a.deletedAt,
                     pendingCleanup: a.pendingCleanup,
+                    fileUrl: a.fileUrl,
+                    permalink: a.permalink,
+                    permalinkUrl: a.permalinkUrl,
+                    contentVersion: a.contentVersion,
                   },
                   ...prev,
                 ]);

@@ -5,37 +5,53 @@ import {
   ERROR_CODES,
   adminPatchOrganizationRequestSchema,
   adminRecoverOrgAccessRequestSchema,
-  adminDirectMemberRequestSchema,
-  adminPatchMemberRoleRequestSchema,
+  adminDirectMemberToRoleRequestSchema,
+  adminAssignMemberRoleRequestSchema,
   adminPatchMemberProfileRequestSchema,
   adminSetMemberRollupRequestSchema,
   assignOrganizationParentRequestSchema,
   setCreditInheritanceModeRequestSchema,
-  inviteMemberRequestSchema,
+  inviteMemberToRoleRequestSchema,
   isCustomFieldValidationFailure,
   type AddressServicePort,
   type CustomFieldValuePort,
   type CustomerAccountMemberWritePort,
   type CustomerAccountReadPort,
   type CustomerAccountRecord,
+  type CustomerAccountRoleCommandPort,
   type CustomerRolePort,
+  type OrganizationRoleReadPort,
+  type OrganizationRoleRef,
+  AdminOrganizationCreateBodySchema,
+  DictionaryReferenceError,
+  OrganizationSalesChannelsUpdateBodySchema,
+  type DictionaryValidator,
+  type OrganizationSalesChannelsResponse,
 } from '@endora-commerce/contracts';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
-import { getTenantContext } from '@endora-commerce/platform/tenancy';
+import { getTenantContext, isOrgInScope } from '@endora-commerce/platform/tenancy';
 import type { OrganizationTreeService } from './services/organization-tree-service.js';
 import { hasChildrenRefusal } from './services/organization-tree-service.js';
 import { makeSetParentCommand } from './commands/set-parent.command.js';
 import { makeMoveCommand } from './commands/move.command.js';
 import { makeSetCreditModeCommand } from './commands/set-credit-mode.command.js';
+import { makeCreateOrganizationCommand } from './commands/create-organization.command.js';
 import { Organization } from './entities/organization.entity.js';
+import { OrganizationRole } from './entities/organization-role.entity.js';
+import { predefinedRoleIdOn } from './services/organization-role-store.js';
+import { memberRoleRef } from './services/member-role-views.js';
 import type { RequireAdminAnyFactory } from '@endora-commerce/platform/kernel';
 import type { InvitationService } from './services/invitation-service.js';
 import {
   emitCustomerAccountCreated,
   type OrganizationEventBus,
 } from './services/registration-service.js';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import {
+  SalesChannel,
+  type AuditPort,
+  type SalesChannelMembershipPort,
+} from '@endora-commerce/platform/kernel';
 import type {
   OrganizationModerationService} from './services/organization-moderation-service.js';
 import {
@@ -50,6 +66,7 @@ import {
 } from './services/organization-restriction-service.js';
 import type { OrganizationEffectivePriceListsService } from './services/organization-effective-pricelists-service.js';
 import type { OrganizationTaxIdValidationService } from './services/organization-tax-id-validation-service.js';
+import { serializeTaxIdValidation } from './registry-lookup/validation-record.js';
 import {
   approveOrganizationSchema,
   rejectOrganizationSchema,
@@ -116,6 +133,13 @@ export interface AdminOrgsDeps {
    */
   customerAccountRead: CustomerAccountReadPort;
   customerAccountWrite: CustomerAccountMemberWritePort;
+  /**
+   * `specs/170-organization-roles/` WP-03 — the role every member answer names
+   * (FR-008, FR-073), and `customer_account.change_role`, which assigns a role
+   * under `customers:manage` alone (FR-062) on the bus below.
+   */
+  organizationRoles: Pick<OrganizationRoleReadPort, 'roleRef'>;
+  customerAccountRoles: Pick<CustomerAccountRoleCommandPort, 'changeRole'>;
   auditLogService: AuditPort;
   /**
    * Optional — when provided, the admin direct-member-create endpoint emits
@@ -140,12 +164,25 @@ export interface AdminOrgsDeps {
    */
   customFieldValues?: CustomFieldValuePort;
   /**
-   * Feature 056 — when both are provided, mounts the org-hierarchy endpoints
+   * Feature 056 — when provided, mounts the org-hierarchy endpoints
    * (assign/move parent, subtree/ancestors read, delete-with-children guard).
    * Tree mutations run through the Command Bus (Principle XIII).
    */
   treeService?: OrganizationTreeService;
-  commandBus?: CommandBus;
+  /** The Command Bus (Principle XIII): the tree, the admin create and the member role Commands. */
+  commandBus: CommandBus;
+  /**
+   * Feature 154 — the kernel's audited channel-membership writer. When provided,
+   * mounts the Organization's *Sales channels* endpoints, and — with
+   * `commandBus` — the admin create, which assigns channels in its own
+   * transaction.
+   */
+  salesChannelMembership?: Pick<
+    SalesChannelMembershipPort,
+    'replaceChannelsForEntity' | 'listChannelsForEntity'
+  >;
+  /** Feature 154 — validates the country of an Organization an operator creates. */
+  dictionaryValidator?: DictionaryValidator;
 }
 
 export async function registerOrganizationsAdminRoutes(
@@ -167,6 +204,19 @@ export async function registerOrganizationsAdminRoutes(
   const customFieldValues = deps.customFieldValues;
 
   const customersRead = requireAdminAny(['customers:read', 'customers:manage']);
+
+  /** A member as the operator's screens show it: its role, not the legacy enum (FR-008, FR-073). */
+  const memberDetail = async (member: CustomerAccountRecord, language: string): Promise<Record<string, unknown>> =>
+    serializeMemberDetail(member, await memberRoleRef(deps.organizationRoles, member, language));
+
+  /** The member as it is after a Command changed it. */
+  const reloadMember = async (organizationId: string, customerAccountId: string): Promise<CustomerAccountRecord> => {
+    const updated = await deps.customerAccountRead.findInOrganization(customerAccountId, organizationId, {
+      activeOnly: true,
+    });
+    if (!updated) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Member not found.');
+    return updated;
+  };
 
   const audit = async (
     request: FastifyRequest,
@@ -248,10 +298,25 @@ export async function registerOrganizationsAdminRoutes(
       const members = await deps.customerAccountRead.listByOrganization(org.id, {
         activeOnly: true,
       });
+      const language = await request.responseLanguage();
+      // The two predefined roles, so the member role select can offer
+      // Administrator and Member to an operator who may assign roles
+      // (`customers:manage`, FR-062) but not read the role list
+      // (`contracts/operator-api.md` §5; WP-03, additive).
+      const predefinedRoles = await Promise.all(
+        (['administrator', 'member'] as const).map(async (kind) =>
+          memberRoleRef(
+            deps.organizationRoles,
+            { organizationId: org.id, organizationRoleId: await predefinedRoleIdOn(em, org.id, kind) },
+            language,
+          ),
+        ),
+      );
       return {
         data: {
           ...serializeOrg(org),
-          members: members.map(serializeMemberDetail),
+          members: await Promise.all(members.map((member) => memberDetail(member, language))),
+          predefinedRoles,
         },
       };
     },
@@ -345,6 +410,132 @@ export async function registerOrganizationsAdminRoutes(
       return { data: serializeOrg(org) };
     },
   );
+
+  // ── Sales channels (feature 154) ───────────────────────────────────────
+  // The stores an Organization's members may sign in and shop on, managed from
+  // the Organization's own page, and the admin create that chooses them.
+  // `specs/154-sales-channel-access/contracts/admin-api-and-ui.md` §2–§3.
+
+  if (deps.salesChannelMembership) {
+    const membership = deps.salesChannelMembership;
+
+    /**
+     * The assignment and every channel it may hold — inactive ones included and
+     * flagged, since an Organization may be assigned to one and a form that
+     * could not show it would drop it on the next save. Answered here, behind
+     * this module's read codes, so the panel needs no `sales_channels:read`:
+     * the delivery-methods precedent (`/api/v1/admin/delivery-methods/sales-channels`).
+     */
+    const channelOptions = async (
+      em: EntityManager,
+    ): Promise<OrganizationSalesChannelsResponse['data']['options']> =>
+      (await em.find(SalesChannel, {}, { orderBy: { code: 'asc' } })).map((c) => ({
+        id: c.id,
+        code: c.code,
+        name: c.name,
+        active: c.active,
+        systemDefault: c.systemDefault,
+      }));
+
+    const channelAssignmentOf = async (
+      em: EntityManager,
+      organizationId: string,
+    ): Promise<OrganizationSalesChannelsResponse['data']> => {
+      const [assigned, options] = await Promise.all([
+        membership.listChannelsForEntity('organization', organizationId),
+        channelOptions(em),
+      ]);
+      return {
+        organizationId,
+        assignedSalesChannelIds: assigned.map((c) => c.id).sort(),
+        options,
+      };
+    };
+
+    /**
+     * The Organization, when it exists **and the acting administrator can see
+     * it** (issue #515). `Organization` is a global entity, so no tenant filter
+     * narrows the read: a sales representative confined to their own
+     * Organizations reached every Organization's assignment here, and with
+     * `customers:manage` could replace it. Outside the request's reach the
+     * answer is the one a nonexistent Organization gets — `404 NOT_FOUND`,
+     * decided before the row is read — so it is no existence probe either.
+     */
+    const requireOrganization = async (em: EntityManager, id: string): Promise<Organization> => {
+      if (!isOrgInScope(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
+      const org = await em.findOne(Organization, { id, deletedAt: null });
+      if (!org) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
+      return org;
+    };
+
+    app.get<{ Params: { id: string } }>(
+      '/api/v1/admin/organizations/:id/sales-channels',
+      { preHandler: customersRead },
+      async (request) => {
+        const em = emFactory();
+        await requireOrganization(em, request.params.id);
+        return { data: await channelAssignmentOf(em, request.params.id) };
+      },
+    );
+
+    /**
+     * Replace the whole set. No Command around it: the kernel's membership
+     * writer is the audited path for a bridge row — one entry per membership
+     * added or removed, with the acting admin — and wrapping it would record the
+     * same change twice under two object types (research R-10). The writer also
+     * drops the access cache, so the Organization's next request is decided on
+     * the new set; the same set again is a no-op that audits nothing.
+     */
+    app.put<{ Params: { id: string } }>(
+      '/api/v1/admin/organizations/:id/sales-channels',
+      {
+        preHandler: requireAdmin('customers:manage'),
+        schema: { body: OrganizationSalesChannelsUpdateBodySchema },
+      },
+      async (request) => {
+        const body = OrganizationSalesChannelsUpdateBodySchema.parse(request.body);
+        const em = emFactory();
+        await requireOrganization(em, request.params.id);
+        await assertSalesChannelsExist(em, body.salesChannelIds);
+        const [first, ...rest] = body.salesChannelIds as [string, ...string[]];
+        await membership.replaceChannelsForEntity('organization', request.params.id, [first, ...rest], {
+          actorAdminUserId: adminActorOf(request)?.adminUserId ?? null,
+        });
+        return { data: await channelAssignmentOf(em, request.params.id) };
+      },
+    );
+
+    if (deps.commandBus) {
+      const commandBus = deps.commandBus;
+      const dictionaryValidator = deps.dictionaryValidator;
+
+      // The options of the *New organization* form's *Sales channels* field,
+      // before there is an Organization to ask about. Gated on the create's own
+      // code: the form is its only reader. A static segment, so it is matched
+      // ahead of `/:id`.
+      app.get(
+        '/api/v1/admin/organizations/sales-channel-options',
+        { preHandler: requireAdmin('customers:manage') },
+        async () => ({ data: await channelOptions(emFactory()) }),
+      );
+
+      app.post(
+        '/api/v1/admin/organizations',
+        {
+          preHandler: requireAdmin('customers:manage'),
+          schema: { body: AdminOrganizationCreateBodySchema },
+        },
+        async (request, reply) => {
+          const body = AdminOrganizationCreateBodySchema.parse(request.body);
+          await assertCountryAvailable(dictionaryValidator, body.registeredAddress.country);
+          await assertSalesChannelsExist(emFactory(), body.salesChannelIds);
+          const org = await commandBus.run(makeCreateOrganizationCommand({ membership }, body));
+          reply.status(201);
+          return { data: serializeOrg(org) };
+        },
+      );
+    }
+  }
 
   // ── Moderation lifecycle (feature 026) ─────────────────────────────────
   // Approve / Reject / Block / Unblock. Mounted only when the moderation
@@ -524,19 +715,10 @@ export async function registerOrganizationsAdminRoutes(
       { preHandler: requireAdmin('customers:manage') },
       async (request) => {
         const items = await taxIdValidationService.listForOrganization(request.params.id);
-        return {
-          items: items.map((r) => ({
-            id: r.id,
-            provider: r.provider,
-            outcome: r.outcome,
-            taxIdValue: r.taxIdValue,
-            legalNameReturned: r.legalNameReturned ?? null,
-            addressReturned: r.addressReturned ?? null,
-            errorKind: r.errorKind ?? null,
-            requestedByAdminUserId: r.requestedByAdminUserId ?? null,
-            createdAt: r.createdAt.toISOString(),
-          })),
-        };
+        // Feature 173 — typed by `organizationTaxIdValidationRecordSchema`, with
+        // where the row came from, a registration row's registry snapshot and
+        // submitted values, and the divergence computed on read (research R-14).
+        return { items: items.map(serializeTaxIdValidation) };
       },
     );
 
@@ -554,15 +736,7 @@ export async function registerOrganizationsAdminRoutes(
           actorAdminUserId: resolveAdminUserId(request),
         });
         return {
-          id: result.record.id,
-          provider: result.record.provider,
-          outcome: result.record.outcome,
-          taxIdValue: result.record.taxIdValue,
-          legalNameReturned: result.record.legalNameReturned ?? null,
-          addressReturned: result.record.addressReturned ?? null,
-          errorKind: result.record.errorKind ?? null,
-          requestedByAdminUserId: result.record.requestedByAdminUserId ?? null,
-          createdAt: result.record.createdAt.toISOString(),
+          ...serializeTaxIdValidation(result.record),
           organization: result.organization,
         };
       },
@@ -573,21 +747,20 @@ export async function registerOrganizationsAdminRoutes(
     '/api/v1/admin/organizations/:id/members/invite',
     {
       preHandler: requireAdmin('customers:manage'),
-      schema: { body: inviteMemberRequestSchema },
+      schema: { body: inviteMemberToRoleRequestSchema },
     },
     async (request, reply) => {
-      const body = inviteMemberRequestSchema.parse(request.body);
+      const body = inviteMemberToRoleRequestSchema.parse(request.body);
+      const em = emFactory();
+      // The Organization must be one the operator can see; the invitation
+      // Command then audits against it, naming the operator (FR-065).
+      const org = await em.findOne(Organization, { id: request.params.id, deletedAt: null });
+      if (!org) {
+        throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
+      }
       const result = await invitationService.invite(
-        { organizationId: request.params.id, customerAccountId: null },
-        { email: body.email, ...(body.role ? { role: body.role } : {}) },
-      );
-      await audit(
-        request,
-        'organization.invite_sent',
-        'organization_invitation',
-        result.invitation.id,
-        null,
-        { invitationId: result.invitation.id, email: result.invitation.email },
+        { organizationId: org.id, customerAccountId: null },
+        { email: body.email, ...(body.roleId ? { roleId: body.roleId } : {}) },
       );
       reply.status(201);
       return {
@@ -603,11 +776,11 @@ export async function registerOrganizationsAdminRoutes(
     '/api/v1/admin/organizations/:id/members',
     {
       preHandler: requireAdmin('customers:manage'),
-      schema: { body: adminDirectMemberRequestSchema },
+      schema: { body: adminDirectMemberToRoleRequestSchema },
     },
     async (request, reply) => {
       const em = emFactory();
-      const body = adminDirectMemberRequestSchema.parse(request.body);
+      const body = adminDirectMemberToRoleRequestSchema.parse(request.body);
       const org = await em.findOne(Organization, { id: request.params.id, deletedAt: null });
       if (!org) {
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
@@ -620,7 +793,15 @@ export async function registerOrganizationsAdminRoutes(
           'A personal (individual) organization cannot have additional members.',
         );
       }
-      const role = body.role ?? 'regular_user';
+      // The role named — a role of this Organization, `404` for any other
+      // (FR-005) — else its *Member* role (`specs/170-organization-roles/`
+      // WP-03, FR-062).
+      const role = body.roleId
+        ? await em.findOne(OrganizationRole, { id: body.roleId, organizationId: org.id })
+        : await em.findOne(OrganizationRole, { id: await predefinedRoleIdOn(em, org.id, 'member'), organizationId: org.id });
+      if (!role) {
+        throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization role not found.');
+      }
       // The duplicate check and the argon2 hash both moved to the owner's side
       // of the port with the write; `create` raises the same 409
       // `EMAIL_ALREADY_REGISTERED`.
@@ -632,7 +813,7 @@ export async function registerOrganizationsAdminRoutes(
         password: body.password,
         firstName: body.firstName,
         lastName: body.lastName,
-        role,
+        organizationRoleId: role.id,
       });
       if (deps.eventBus) {
         emitCustomerAccountCreated(deps.eventBus, customer.id, org.id);
@@ -643,10 +824,10 @@ export async function registerOrganizationsAdminRoutes(
         'customer_account',
         customer.id,
         null,
-        { organizationId: org.id, email: customer.email, role: customer.role },
+        { organizationId: org.id, email: customer.email, organizationRoleId: customer.organizationRoleId },
       );
       reply.status(201);
-      return { data: serializeMemberDetail(customer) };
+      return { data: await memberDetail(customer, await request.responseLanguage()) };
     },
   );
 
@@ -654,10 +835,10 @@ export async function registerOrganizationsAdminRoutes(
     '/api/v1/admin/organizations/:id/members/:customerAccountId/role',
     {
       preHandler: requireAdmin('customers:manage'),
-      schema: { body: adminPatchMemberRoleRequestSchema },
+      schema: { body: adminAssignMemberRoleRequestSchema },
     },
     async (request) => {
-      const body = adminPatchMemberRoleRequestSchema.parse(request.body);
+      const body = adminAssignMemberRoleRequestSchema.parse(request.body);
       const member = await deps.customerAccountRead.findInOrganization(
         request.params.customerAccountId,
         request.params.id,
@@ -667,17 +848,19 @@ export async function registerOrganizationsAdminRoutes(
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Member not found.');
       }
       assertVersion(member.updatedAt, body.expectedUpdatedAt);
-      const before = serializeMemberDetail(member);
-      const updated = await roleService.changeRole(request.params.id, member.id, body.role);
-      await audit(
-        request,
-        'customer_account.admin_role_change',
-        'customer_account',
-        updated.id,
-        before as Record<string, unknown>,
-        serializeMemberDetail(updated) as Record<string, unknown>,
+      // `customer_account.change_role` (`specs/170-organization-roles/` WP-03,
+      // FR-062, FR-065): the role of another Organization is `404`, the last
+      // administrator's demotion `409`, and its one audit entry — against the
+      // Organization, naming the operator — is the record of this change.
+      await deps.commandBus.run(
+        deps.customerAccountRoles.changeRole({
+          organizationId: member.organizationId,
+          customerAccountId: member.id,
+          roleId: body.roleId,
+        }),
       );
-      return { data: serializeMemberDetail(updated) };
+      const updated = await reloadMember(member.organizationId, member.id);
+      return { data: await memberDetail(updated, await request.responseLanguage()) };
     },
   );
 
@@ -700,7 +883,7 @@ export async function registerOrganizationsAdminRoutes(
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Member not found.');
       }
       assertVersion(member.updatedAt, body.expectedUpdatedAt);
-      const before = serializeMemberDetail(member);
+      const before = memberAuditState(member);
       const updated = await deps.customerAccountWrite.setSubtreeRollup(
         member.id,
         body.subtreeRollupEnabled,
@@ -711,9 +894,9 @@ export async function registerOrganizationsAdminRoutes(
         'customer_account',
         updated.id,
         before as Record<string, unknown>,
-        serializeMemberDetail(updated) as Record<string, unknown>,
+        memberAuditState(updated),
       );
-      return { data: serializeMemberDetail(updated) };
+      return { data: await memberDetail(updated, await request.responseLanguage()) };
     },
   );
 
@@ -734,7 +917,7 @@ export async function registerOrganizationsAdminRoutes(
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Member not found.');
       }
       assertVersion(member.updatedAt, body.expectedUpdatedAt);
-      const before = serializeMemberDetail(member);
+      const before = memberAuditState(member);
       // The uniqueness check, the lower-casing and the "a changed address is
       // no longer verified" rule all went with the write: they are properties
       // of the column, not of this screen.
@@ -749,9 +932,9 @@ export async function registerOrganizationsAdminRoutes(
         'customer_account',
         updated.id,
         before as Record<string, unknown>,
-        serializeMemberDetail(updated) as Record<string, unknown>,
+        memberAuditState(updated),
       );
-      return { data: serializeMemberDetail(updated) };
+      return { data: await memberDetail(updated, await request.responseLanguage()) };
     },
   );
 
@@ -767,7 +950,7 @@ export async function registerOrganizationsAdminRoutes(
       if (!member) {
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Member not found.');
       }
-      const before = serializeMemberDetail(member);
+      const before = memberAuditState(member);
       await roleService.removeMember(request.params.id, member.id);
       await audit(
         request,
@@ -797,21 +980,20 @@ export async function registerOrganizationsAdminRoutes(
       if (!member) {
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Member not found.');
       }
-      const before = serializeMemberDetail(member);
-      // Deliberately not `roleService.changeRole`: this is the break-glass
-      // path an operator reaches *because* the organisation has no admin left,
-      // and that method writes its own `customer_account.change_role` audit
-      // row, which would double-count the one below.
-      const updated = await deps.customerAccountWrite.promoteToOrganizationAdmin(member.id);
-      await audit(
-        request,
-        'organization.break_glass_admin_promoted',
-        'customer_account',
-        updated.id,
-        before as Record<string, unknown>,
-        serializeMemberDetail(updated) as Record<string, unknown>,
+      // The break-glass path an operator reaches *because* the organisation
+      // has no administrator left: the administrator-kind role, assigned
+      // through `customer_account.change_role` (`contracts/operator-api.md`
+      // §3), whose audit entry is the record of the promotion. Promoting to
+      // Administrator never trips the last-administrator guard.
+      await deps.commandBus.run(
+        deps.customerAccountRoles.changeRole({
+          organizationId: member.organizationId,
+          customerAccountId: member.id,
+          roleId: await predefinedRoleIdOn(emFactory(), member.organizationId, 'administrator'),
+        }),
       );
-      return { data: serializeMemberDetail(updated) };
+      const updated = await reloadMember(member.organizationId, member.id);
+      return { data: await memberDetail(updated, await request.responseLanguage()) };
     },
   );
 
@@ -992,13 +1174,12 @@ function serializeOrg(o: Organization): Record<string, unknown> {
   };
 }
 
-function serializeMemberDetail(m: CustomerAccountRecord): Record<string, unknown> {
+function memberFields(m: CustomerAccountRecord): Record<string, unknown> {
   return {
     id: m.id,
     email: m.email,
     firstName: m.firstName,
     lastName: m.lastName,
-    role: m.role,
     subtreeRollupEnabled: m.subtreeRollupEnabled,
     emailVerifiedAt: m.emailVerifiedAt?.toISOString() ?? null,
     twoFactorEnabled: m.twoFactorEnabled,
@@ -1006,6 +1187,16 @@ function serializeMemberDetail(m: CustomerAccountRecord): Record<string, unknown
     createdAt: m.createdAt.toISOString(),
     updatedAt: m.updatedAt.toISOString(),
   };
+}
+
+/** A member as an answer shows it (`specs/170-organization-roles/` WP-03; FR-008, FR-073). */
+function serializeMemberDetail(m: CustomerAccountRecord, organizationRole: OrganizationRoleRef): Record<string, unknown> {
+  return { ...memberFields(m), organizationRole };
+}
+
+/** A member as an audit snapshot records it: the role by id, which needs no translation. */
+function memberAuditState(m: CustomerAccountRecord): Record<string, unknown> {
+  return { ...memberFields(m), organizationRoleId: m.organizationRoleId };
 }
 
 /**
@@ -1089,3 +1280,56 @@ function mapModerationError(err: unknown): HttpError {
 }
 
 void (null as FastifyRequest | null);
+
+/**
+ * Refuses a channel id that names no channel — one deleted while the form was
+ * open, or a mistyped id from an API caller — with a field error naming its
+ * position, before anything is written. An inactive channel is a channel, and
+ * an Organization may be assigned to one.
+ */
+async function assertSalesChannelsExist(
+  em: EntityManager,
+  salesChannelIds: readonly string[],
+): Promise<void> {
+  const known = new Set(
+    (
+      await em.find(SalesChannel, { id: { $in: [...new Set(salesChannelIds)] } }, { fields: ['id'] })
+    ).map((c) => c.id),
+  );
+  const unknown = salesChannelIds
+    .map((id, index) => ({ id, index }))
+    .filter(({ id }) => !known.has(id));
+  if (unknown.length === 0) return;
+  throw new HttpError(
+    422,
+    ERROR_CODES.VALIDATION_FAILED,
+    'One or more of the sales channels do not exist. Reload and choose again.',
+    unknown.map(({ id, index }) => ({ path: `salesChannelIds.${index}`, issue: id })),
+  );
+}
+
+/**
+ * The country check self-registration makes (`RegistrationService`), with the
+ * same answer: 409 and the Dictionary's code on the address field.
+ */
+async function assertCountryAvailable(
+  validator: DictionaryValidator | undefined,
+  country: string,
+): Promise<void> {
+  if (!validator) return;
+  try {
+    await validator.validateCountryCode(country, 'create-or-change');
+  } catch (err) {
+    if (err instanceof DictionaryReferenceError) {
+      throw new HttpError(
+        409,
+        err.code,
+        err.code === 'DICTIONARY_ENTRY_INACTIVE'
+          ? `Country code ${err.entryCode} is no longer available.`
+          : `Country code ${err.entryCode} is not recognised.`,
+        [{ path: 'registeredAddress.country', issue: err.code }],
+      );
+    }
+    throw err;
+  }
+}
