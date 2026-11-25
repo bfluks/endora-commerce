@@ -7,8 +7,8 @@
 architect); plan-stage owner answers OQ-A – OQ-H and I-2 – I-4 (2026-11-25) recorded under
 *Session 2026-11-25 — plan stage*, with the last three answers (Q-1 – Q-3; the plan writes them
 Q1 – Q3); clarify exhausted; plan and tasks re-aligned (`1324af947`); analyze of 2026-11-25
-(`analysis.md`) not yet clean — spec findings H3, M6, M8, M9 and LOW 1 – 4 addressed here, H2
-with the owner
+(`analysis.md`) not yet clean — spec findings H2 (owner answer), H3, M6, M8, M9 and LOW 1 – 4
+addressed here
 **Input**: Issue #1908 (product visibility for admin roles by catalogue price, and a configurable
 website rule), with the owner decisions of 2026-11-24.
 **Depends on**: `specs/192-quote-request-draft-share/` (issue #1901) for the quote-request and
@@ -300,6 +300,17 @@ recorded here in generic terms.
   keeps such a line through order placement (the product-owner proposal in FR-090 is now an owner
   decision). → FR-090, FR-091.
 
+### Session 2026-11-25 — analyze stage
+
+- **H2** — Which "channel-scoped status" counts for FR-090 – FR-093 (`analysis.md` H2) → **A**: only
+  the product's **channel status** — its general status on that channel (the channel row) — counts.
+  It alone decides whether a product is "inactive on that channel" for the sales-team paths
+  (FR-090, FR-091) and whether a move to active is a reactivation (FR-092). **Per-language
+  statuses** (channel × language) decide only storefront visibility in that language: they never
+  make a product inactive on the channel for the sales-team paths, and a per-language status change
+  is never a reactivation. Values stored before admission (FR-093) therefore have no effect on
+  FR-090 / FR-091. → FR-090 – FR-093, US4 scenarios 6, 9, 10, 12.
+
 ## User Scenarios & Testing *(mandatory)*
 
 The examples use four categories an operator might configure: **domestic** (currency A > 0),
@@ -520,7 +531,7 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
    after, and the governed channels follow within 5 minutes.
 6. **Given** a governed channel, **When** a new product that meets the rule is created, or an
    inactive product that meets it is reactivated (by a connector or anyone else — globally, or by its
-   channel-scoped status on that channel, OQ-F), **Then** it is not on the channel's listings,
+   channel status on that channel, OQ-F, H2), **Then** it is not on the channel's listings,
    search, type-ahead or URL until the rule admits it, and it is admitted within 5 minutes.
 7. **Given** a channel that already has a website rule, **When** an administrator attaches a second
    rule to it, **Then** the server refuses; **When** the same rule is attached to a second
@@ -531,21 +542,29 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 9. **Given** a governed channel and a product not yet admitted to it, **When** a connector writes the
    product's per-language or channel-scoped values (status included) for that channel, **Then** the
    values are stored and the product stays off the channel; **When** the rule admits it, **Then** it
-   appears with those values; **When** the connector's first channel-scoped status write on that
-   channel after admission arrives — even one that changes the status from inactive to active —
-   **Then** it does not count as a reactivation and the product shows at once (I-4, Q-1).
+   appears with those values; **When** the connector's first channel-status write on that
+   channel after admission arrives — even one that changes the channel status from inactive to
+   active — **Then** it does not count as a reactivation and the product shows at once (I-4, Q-1);
+   **When** the connector later changes a per-language status on that channel, **Then** it is never a
+   reactivation (H2).
 10. **Given** a product excluded from a governed channel only by its website rule, **When** a buyer
     converts an accepted quote that has a line for it into a cart on that channel, **Then** the line
     is kept and the buyer can check out and place the order with it; **When** an administrator
     creates or previews an order, reorders a past order, or clones an order into a quote on that
     channel with that product, **Then** the channel membership check does not refuse it (the
-    visibility-category check of FR-037 and FR-039 still applies to restricted users); **When** the product is absent from the channel
-    for any other reason (inactive, archived, inactive on that channel by its channel-scoped status,
-    or not a member of an ungoverned channel), **Then** the behaviour is today's (OQ-B, Q-3).
+    visibility-category check of FR-037 and FR-039 still applies to restricted users); **When** the
+    product is absent from the channel for any other reason (inactive, archived, inactive on that
+    channel by its channel status, or not a member of an ungoverned channel), **Then** the behaviour
+    is today's (OQ-B, Q-3); per-language statuses play no part in this (H2).
 11. **Given** a governed channel whose rule has a price condition on currency B, **When** B's
     designation is changed and its new evaluation is being built, **Then** the channel keeps its
     membership as evaluated before the change (no product drops and re-appears because of the
     rebuild); once the new evaluation is ready, membership follows within 5 minutes (Q-2).
+12. **Given** a sales-team-only product on a governed channel whose channel status is active but
+    whose per-language status is inactive in every language (so the storefront never shows it),
+    **When** a buyer converts an accepted quote with it and checks out, or an administrator creates,
+    previews or reorders an order with it on that channel, **Then** the line is kept and the order is
+    placed as for any available product (H2).
 ---
 
 ### Edge Cases
@@ -603,10 +622,13 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   accepted quote converts and checks out with it, and an administrator can order, preview, reorder
   or clone it into a quote on that channel (OQ-B, Q-3, FR-090, FR-091); a product absent for any
   other reason is handled as today.
-- **Channel-level re-enable on a governed channel**: a channel-scoped status moving to active on that
+- **Channel-level re-enable on a governed channel**: the channel status moving to active on that
   channel removes the membership at once; the rule re-admits the product within 5 minutes (OQ-F).
-  A write that does not move the status to active (for example a connector writing "active" again)
-  is not a reactivation.
+  A write that does not move the channel status to active (for example a connector writing "active"
+  again) is not a reactivation, and a per-language status change never is (H2).
+- **Per-language statuses and the sales-team paths**: a product inactive in some or every language
+  on a channel is hidden on the storefront in those languages only; for quote conversion, checkout
+  and the admin order paths it is inactive on the channel only when its channel status is (H2).
 - **Values written before admission**: a connector's per-language and channel-scoped values for a
   not-yet-admitted product are stored; the product appears with them on admission (I-4).
 - **Cross-references on a visible product**: links, grouped items and bundle options pointing to a
@@ -822,8 +844,8 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   reactivated by a connector or anyone else — MUST NOT be on that channel (listings, search,
   type-ahead, URL) until the rule admits it; a qualifying product MUST be admitted within the bound
   of FR-061. There MUST be no window in which such a product is exposed on the channel before the
-  rule admits it. A channel-scoped status moving to active on a governed channel is a reactivation
-  for that channel (FR-092, OQ-F); values written before admission are kept (FR-093, I-4).
+  rule admits it. The channel status moving to active on a governed channel is a reactivation for
+  that channel (FR-092, OQ-F, H2); values written before admission are kept (FR-093, I-4).
   **Zero-channel exception**: to keep this, a product MAY be on no sales channel at all — when it
   is not yet admitted to a governed channel that its writer named (for example a new product whose
   default channel is governed), or when the rule removes it from its only channel. This waives the
@@ -925,8 +947,9 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 - **FR-090**: When an accepted quote is converted into a cart, a line whose product (or variant) is
   absent from the request's channel **only** because that channel's website rule excludes it MUST be
   kept, as if the product were on that channel; a line absent for any other reason (inactive,
-  archived, deleted, inactive on that channel by its channel-scoped status, or not a member of an
-  ungoverned channel) MUST be dropped as today. Checking out such a cart MUST keep the line through
+  archived, deleted, inactive on that channel by its **channel status**, or not a member of an
+  ungoverned channel) MUST be dropped as today. Per-language statuses on that channel MUST NOT make
+  a line "absent for another reason" (H2). Checking out such a cart MUST keep the line through
   order placement: no step from conversion to the placed order MAY drop or refuse it for the same
   reason (Q-3 b). The storefront listings, search,
   type-ahead and product URL still do not show the product (FR-051). With the feature off (FR-073)
@@ -935,21 +958,23 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 - **FR-091**: Admin order create, admin order preview, admin reorder and admin clone-to-quote MUST
   accept a line whose product (or variant) is absent from the order's channel only because that
   channel's website rule excludes it, and keep refusing a product absent for any other reason as
-  today (OQ-B, Q-3 a). The visibility-category check of FR-037
+  today (OQ-B, Q-3 a). As in FR-090, only the channel status — not a per-language status — decides
+  whether the product is inactive on the channel (H2). The visibility-category check of FR-037
   and FR-039 still applies to restricted users. With the feature off (FR-073) or after a rule is
   detached (FR-058), that channel is not governed and today's channel check applies unchanged.
-- **FR-092**: A product's channel-scoped status moving to active on a governed channel MUST count as
-  a reactivation for that channel (FR-059): its membership of that channel is removed in the same
-  transaction and the rule re-admits it within 5 minutes. A write that does not move the status to
-  active is not a reactivation (OQ-F). The only exception is FR-093: the first channel-scoped status
-  write after admission (Q-1).
+- **FR-092**: A product's **channel status** moving to active on a governed channel MUST count as a
+  reactivation for that channel (FR-059): its membership of that channel is removed in the same
+  transaction and the rule re-admits it within 5 minutes. A write that does not move the channel
+  status to active is not a reactivation (OQ-F), and a per-language status change MUST NEVER be one
+  (H2). The only exception is FR-093: the first channel-status write after admission (Q-1).
 - **FR-093**: Per-language and channel-scoped values (status included) that a connector writes for
   a governed channel MUST be stored for a product that is not on that channel only because the
   rule has not admitted it yet, and MUST NOT put it on the channel; on admission the product
-  appears with those values. The first channel-scoped status write on that channel after the
-  product's admission MUST NOT count as a reactivation, even when it changes the status from
-  inactive to active: the product shows on the channel at once, since the rule has already
-  admitted it (I-4, Q-1).
+  appears with those values. The first channel-status write on that channel after the product's
+  admission MUST NOT count as a reactivation, even when it changes the channel status from inactive
+  to active: the product shows on the channel at once, since the rule has already admitted it
+  (I-4, Q-1). Values stored before admission, per-language statuses included, have no effect on
+  FR-090 and FR-091 (H2).
 
 ### Key Entities
 
@@ -963,6 +988,10 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   are never mapped and always unrestricted.
 - **Self-lifting permission**: `*`, `product_visibility:manage`, `platform.modules.activate`,
   `admin_users:manage` — a permission with which a role could undo its own restriction (OQ-G).
+- **Channel status** and **per-language status**: a product's general status on one sales channel
+  (the channel row), and its status on one channel in one language. Only the channel status decides
+  "inactive on the channel" for FR-090 / FR-091 and reactivation for FR-092; a per-language status
+  decides only storefront visibility in that language (H2).
 - **Restricted user**: a user whose role is mapped to a category or is fail-closed (FR-023); every
   other user is unrestricted. Glossary note: in this spec "restricted" **includes** fail-closed
   (no category). The plan's scope type names the two cases separately — `restricted` (mapped to a

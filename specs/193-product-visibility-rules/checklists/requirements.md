@@ -14,7 +14,7 @@
 ## Requirement Completeness
 
 - [x] No [NEEDS CLARIFICATION] markers remain — OQ-1 – OQ-12 answered 2026-11-24, RQ-1 – RQ-3
-  answered 2026-11-25, plan-stage OQ-A – OQ-H, I-2 – I-4 and Q-1 – Q-3 answered 2026-11-25 (see
+  answered 2026-11-25, plan-stage OQ-A – OQ-H, I-2 – I-4, Q-1 – Q-3 and analyze-stage H2 answered 2026-11-25 (see
   *Clarifications*); clarify exhausted
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
@@ -49,7 +49,8 @@
   (zero-channel exception in FR-059 and *Edge Cases*), M8 (spec 192 facts refreshed), M9 (bulk
   operations in FR-033, aggregate counts in FR-031, not-cacheable header in FR-036 and SC-003,
   single overview warning in FR-086) and LOW 1 – 4 addressed; FR-079 states that the rules only
-  narrow. H2 (meaning of "channel-scoped status" in FR-090, FR-092, FR-093) is with the owner.
+  narrow. H2 answered by the owner (A, 2026-11-25): only the channel status counts for FR-090 –
+  FR-093; per-language statuses decide storefront visibility only (US4 scenarios 9, 10, 12).
 - OQ-9 (module ownership) is the architect's; OQ-8's "do not preclude a later manual override"
   is recorded as a plan constraint, not an FR.
 - Public-repository check: no deployment, client, role or flag names; examples use neutral
