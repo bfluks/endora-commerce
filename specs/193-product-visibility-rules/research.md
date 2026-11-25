@@ -44,14 +44,19 @@ audit labels readable. **Rejected**: `product_visibility` (singular — refused 
 
 ## R-3 Activation default (OQ-C)
 
-**Decision**: `activation` deactivatable, **default off**. The configuration screen is reachable
-while on; the module's activation control states that switching it on applies FR-023 at once and
-switching it off lifts every restriction (FR-073 warning).
+**Decision** (owner: OQ-C A, I-3 A — FR-076, FR-077): `activation` deactivatable, **default off**.
+The configuration exists only while the module is on — nothing can be prepared before the first
+enable — so on first enable every unmapped fail-closed role (FR-023 as amended by OQ-G) sees no
+products until an administrator maps it; the owner accepted that window, and the docs say to map
+right after enabling (T094). The activation control states that switching it on applies FR-023 at
+once and switching it off lifts every restriction (FR-073 warning). **Rejected**: a configuration
+surface usable while off — contradicts FR-073 ("its screens and API are absent") and Principle XVII
+("a deactivated module's own configuration surface MUST NOT be editable").
 
 **Rationale**: every core module is composed on every instance; default on would make an upgrade
 the "first enable" of OQ-10 on every instance, and every unmapped role holding `rfqs:handle` or `*`
 would see no products the moment the release is deployed. **Rejected**: default on (OQ-10 read
-literally) — kept as the owner's alternative in OQ-C.
+literally).
 
 ## R-4 Catalogue price entry point (FR-001 – FR-007, RQ-1 A)
 
@@ -323,10 +328,22 @@ presence check on a foreign module id, and governance state would live outside i
   product whose status moves to `active` or whose archive is cleared — so a reactivation can never
   expose a stale membership; the job re-admits it within 5 min. **Channel-scoped status**
   (feature 163; written by `product.scopes.update` and the scoped-values save, which is how a
-  connector switches a product on and off per channel) is an owner question (plan.md OQ-F).
-  Planned on the recommendation: a channel-scoped status moving to active **on a governed channel**
-  is a reactivation for that channel — the same hook evicts that one membership and the job
-  re-admits it. T068 must also prove that removing and re-adding a membership keeps the product's
+  connector switches a product on and off per channel): owner OQ-F A (FR-092) — a channel-scoped
+  status moving to active **on a governed channel** is a reactivation for that channel; the same hook
+  evicts that one membership and the job re-admits it. **Exception (FR-093, I-4 A, Q1 A)**: the
+  first channel-scoped status write on that channel after the product's admission is not a
+  reactivation, even inactive → active — a connector's first sync after admission sets the
+  per-channel state it was holding. The module records each admission in `website_rule_admissions`
+  (channel, product, admitted_at, `post_admission_status_seen`); the hook consults and consumes the
+  flag in the same transaction. **Values before admission (FR-093)**: `catalog` stores per-language
+  and channel-scoped values for a **governed** channel the product is not a member of (asking
+  `productRuleGovernancePort.governedChannels()`), instead of today's `SCOPE_INVALID`; the values never
+  add a membership, and the product appears with them on admission — which removes the connector
+  warning noise noted in R-10.
+- **Designation rebuild and the rule (Q2 A)**: while a currency's new generation builds, the
+  evaluator reads the **served** (previous) generation, so no product leaves and re-joins a
+  governed channel because of the rebuild; only admin scopes drop the currency (TM-7 (4)). After the
+  swap only products whose flags changed are marked. T068 must also prove that removing and re-adding a membership keeps the product's
   channel-scoped values (the bridge delete must not cascade into them).
 - **Attribution** (FR-072): governor writes pass `source: 'website_rule:<ruleId>'` into the
   kernel's membership audit row (actor `system`); the rule name is resolvable from the id.
@@ -355,16 +372,27 @@ audit `source` already names who moved a membership. **Rejected**: a `source` co
 
 ## R-13 Role mapping and fail-closed (FR-020 – FR-024, OQ-2, OQ-10)
 
-**Decision**: `visibility_role_mappings(admin_role_id PK → visibility_category_id)`. Scope
-resolution: role code `platform_admin` ⇒ unrestricted (never mappable, refused with
-`409 ROLE_NOT_MAPPABLE`); mapped ⇒ restricted; unmapped and permissions include `rfqs:handle` or
-`*` ⇒ `no_category`; else unrestricted. The role's permissions come from the same
+**Decision** (owner: OQ-G 1, I-2 A — FR-020, FR-022, FR-023, FR-025, FR-026):
+`visibility_role_mappings(admin_role_id PK, target 'category' | 'unrestricted',
+visibility_category_id null unless target = category)`. Scope resolution, in this order:
+1. role code `platform_admin` ⇒ unrestricted;
+2. the role holds a **self-lifting permission** (`*`, `product_visibility:manage`,
+   `platform.modules.activate`, `admin_users:manage`) ⇒ unrestricted, whatever is stored (a stored
+   mapping is "without effect" and flagged on the overview);
+3. mapped to `unrestricted` ⇒ unrestricted (FR-025: sees unpriced products too, no refusal, no
+   marker);
+4. mapped to a category ⇒ restricted;
+5. unmapped and holding `rfqs:handle` ⇒ `no_category` (fail-closed);
+6. otherwise unrestricted.
+Mapping `platform_admin` or a role holding a self-lifting permission — to a category or to
+unrestricted — is refused `409 ROLE_NOT_MAPPABLE`. The role's permissions come from the same
 `permissionService.resolveRole` answer. A role deleted in `admin_roles` leaves an orphan mapping
 row that matches nothing (no cross-module FK; the configuration screen hides it and the delete
 Command of a category ignores it).
 
 **Rejected**: FK to `admin_roles`' table with cascade — a cross-module FK adds a hard migration
-edge for one cleanup; the orphan is harmless.
+edge for one cleanup; the orphan is harmless. Refusing to map only some self-lifting permissions,
+or fail-closing unmapped `*` roles (the earlier OQ-2 reading) — superseded by OQ-G 1.
 
 ## R-14 Role screens (FR-024)
 
@@ -414,9 +442,8 @@ map*.
   leak.
 - **Self-lifting roles** (TM-4): configuration writes answer `403` unless the caller's own scope is
   unrestricted; the overview flags `liftable` roles; activation/deactivation audit is verified in the
-  lifecycle ledger. **Not adopted pending the owner (OQ-G)**: refusing to map a role that holds `*`
-  or another lifting permission — it contradicts OQ-2 (an unmapped `*` role is fail-closed, so it
-  must be mappable).
+  lifecycle ledger. Owner OQ-G 1 then went further: roles holding a lifting permission are always
+  unrestricted and unmappable (R-13).
 - **Flags race hardening** (TM-7): marks are cleared only if older than the refresh's read start; a
   targeted refresh writes under the generation row lock; marks survive a build and are re-applied
   after the swap; a partial build is never swapped; a served generation built for another
@@ -426,7 +453,7 @@ map*.
   stays as last resort).
 - **SQL fragments** (TM-8): column identifiers from the caller are allow-listed by pattern; a test
   checks placeholder counts; no cache of scope or fragments.
-- **Other admin read paths** (TM-9): plan.md § *TM-9 surfaces*, pending owner sign-off (OQ-H).
+- **Other admin read paths** (TM-9): plan.md § *TM-9 surfaces*, signed off (OQ-H), FR-083 – FR-088.
 - **Governor token** (TM-10): identity-checked, boot-only, never in the container, `governs()`
   failure refuses, `source` only with the token, bridge-writer inventory test.
 - **Preview and evaluation** (TM-11): creator check against the session, caps on concurrent
@@ -436,3 +463,25 @@ map*.
   means no restriction until enabled.
 - **Client caches** (TM-14): list routes send `Cache-Control: private, no-store`; the SPA drops its
   query cache on sign-out and `401` (verified or fixed in admin-shell).
+
+## R-18 Rule-excluded products on sales-team purchase paths (FR-090, FR-091; owner OQ-B B, Q3)
+
+**Decision**: `productRuleGovernancePort.excludedOnlyByRule(channelId, refs)` answers, per product
+(or variant), whether it is absent from the channel **only** because the channel's website rule
+excludes it: the channel is governed, the product is not a member, it is active, not archived or
+deleted, and its channel-scoped status there is not inactive. Callers keep today's check and add
+this one as an allowance:
+- `carts`: quote → cart conversion keeps such lines (`cart-conversion-service.ts:239`), and
+  checkout / order placement does not drop or refuse them **when the cart line came from an accepted
+  quote** (the line's quote origin is the condition, so the storefront cart is unaffected);
+- `orders`: admin order create, preview, reorder and clone-to-quote accept them; for a restricted
+  user the visibility-category check (FR-037, FR-039) runs first and is unchanged.
+Module off or rule detached ⇒ no channel is governed ⇒ today's behaviour. The storefront listing,
+search, type-ahead and product URL still hide the product (FR-051).
+
+**Gate**: with Phase 9a, after spec 192 merges (conversion file is in 192's diff; the order paths
+share 9a's gate, which the owner kept).
+
+**Rejected**: re-adding the product to the channel for the duration of the order (a membership write
+the rule would undo, visible on the storefront meanwhile); a separate "sales channel" requirement
+(OQ-B A, not chosen).

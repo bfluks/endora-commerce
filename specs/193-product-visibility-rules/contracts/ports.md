@@ -13,7 +13,7 @@ type VisibilityThreshold = 'gt_zero' | 'gte_zero';
 /** TM-3: required on every catalog / price_lists admin read and write; never optional, never defaulted. */
 type AdminProductVisibilityScope =
   | { kind: 'system' }                                         // storefront, connectors, system jobs — explicit
-  | { kind: 'unrestricted'; roleId: string }
+  | { kind: 'unrestricted'; roleId: string; reason: 'platform_admin' | 'self_lifting' | 'mapped_unrestricted' | 'unmapped' }
   | { kind: 'no_category'; roleId: string }                   // FR-023 fail-closed
   | {
       kind: 'restricted';
@@ -76,6 +76,15 @@ interface ProductRuleGovernancePort {
   governedChannels(): Promise<ReadonlyArray<{ salesChannelId: string; productRuleId: string; productRuleName: string }>>;
   /** Whether each product meets the rule governing the channel now (status, archive, attributes, flags). `null` map ⇒ channel not governed. */
   meetsRule(salesChannelId: string, productIds: readonly string[]): Promise<ReadonlyMap<string, boolean> | null>;
+  /**
+   * FR-090, FR-091 (R-18): per ref, true when the product (or variant) is absent from the channel only
+   * because the channel's website rule excludes it — governed, not a member, active, not archived or
+   * deleted, channel-scoped status not inactive. Ungoverned channel ⇒ all false.
+   */
+  excludedOnlyByRule(
+    salesChannelId: string,
+    refs: ReadonlyArray<{ productId: string; variantId?: string | null }>,
+  ): Promise<ReadonlyArray<boolean>>;
 }
 ```
 

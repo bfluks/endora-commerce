@@ -40,7 +40,7 @@ translated pl + en.
 | --- | --- | --- | --- |
 | `CHANNEL_MEMBERSHIP_GOVERNED` | 409 | platform (kernel) | manual / bulk membership write on a governed channel (FR-054) |
 | `VISIBILITY_CATEGORY_IN_USE` | 409 | product_visibility_rules | delete of a mapped category (FR-013) |
-| `ROLE_NOT_MAPPABLE` | 409 | product_visibility_rules | mapping `platform_admin` (FR-022) |
+| `ROLE_NOT_MAPPABLE` | 409 | product_visibility_rules | mapping `platform_admin` or a role holding a self-lifting permission (FR-022, FR-026) |
 | `DESIGNATION_INVALID` | 422 | product_visibility_rules | book missing, not regular / everyone / of the currency, or not bound to the channel (FR-001, RQ-1 A); draft or out-of-window books are accepted |
 | `PRODUCT_RULE_ATTACHED` | 409 | product_visibility_rules | delete of an attached rule |
 | `WEBSITE_RULE_PREVIEW_REQUIRED` | 409 | product_visibility_rules | definition change of an attached rule without a preview (FR-053) |

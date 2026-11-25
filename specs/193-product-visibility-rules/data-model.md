@@ -34,11 +34,14 @@ Unique `(visibility_category_id, currency_code, threshold)`. A category has ≥ 
 
 | Column | Type | Notes |
 | --- | --- | --- |
-| `admin_role_id` | uuid PK | at most one category per role (FR-020) |
-| `visibility_category_id` | uuid not null FK → `visibility_categories` (restrict) | deleting a mapped category is refused naming the roles (FR-013) |
+| `admin_role_id` | uuid PK | at most one target per role (FR-020) |
+| `target` | varchar(12) not null | check in (`category`, `unrestricted`) — I-2, FR-025 |
+| `visibility_category_id` | uuid null FK → `visibility_categories` (restrict) | not null ⇔ `target = 'category'` (check constraint); deleting a mapped category is refused naming the roles (FR-013) |
 | `updated_at` | timestamptz | |
 
-The `platform_admin` role is refused (FR-022). Setting `null` deletes the row.
+`platform_admin` and every role holding a self-lifting permission are refused (FR-022, FR-026); a
+stored row of a role that later gains such a permission stays but has no effect (flagged on the
+overview). Setting no target deletes the row.
 
 ### `catalogue_price_designations`
 
@@ -158,6 +161,17 @@ currencies only:
 
 `(preview_id FK cascade, sales_channel_id, product_id, op 'join'|'leave')`, PK of the four.
 Up to channels × products rows; deleted with the preview (expired previews are swept hourly).
+
+### `website_rule_admissions` (FR-093, Q1 A)
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `sales_channel_id` | uuid | |
+| `product_id` | uuid | |
+| `admitted_at` | timestamptz | written by the apply job with each governor-token add |
+| `post_admission_status_seen` | boolean not null default false | the first channel-scoped status write after admission sets it and is exempt from the reactivation hook |
+
+PK `(sales_channel_id, product_id)`; row deleted when the rule removes the product.
 
 ### `website_rule_stale_products`
 

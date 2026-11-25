@@ -6,19 +6,19 @@ where the row has one, run one Command each (FR-070), and answer the module's er
 (contracts/events-and-errors.md §2). Permissions: `product_visibility:read` (GET),
 `product_visibility:manage` (writes; `requires: ['product_visibility:read']`). **TM-4 c**: every
 write also answers `403 FORBIDDEN` unless the caller's own scope is `unrestricted`. The overview
-marks `liftable: true` on a mapped or fail-closed role that holds `*`, `product_visibility:manage`,
-`platform.modules.activate` or `admin_users:manage`, and warns on a mapped role holding
-`import_export:*`, `inventory:read` or `audit_logs:read` (TM-9).
+reports `mapping_without_effect` for a mapped role that later gained `*`, `product_visibility:manage`,
+`platform.modules.activate` or `admin_users:manage` (always unrestricted, FR-026), and warns on a
+mapped or fail-closed role holding `audit_logs:read` (FR-086), `import_export:*` or `inventory:read`.
 
 ## 1. Configuration — `/api/v1/admin/product-visibility`
 
 | Method | Path | Body / answer |
 | --- | --- | --- |
-| GET | `/overview` | currencies (active + used-but-inactive) with designation, `designationStatus`, served generation and `building` flag; categories with conditions; roles with `{ effect: 'unrestricted' \| 'mapped' \| 'sees_no_products', categoryId? }` (FR-024, OQ-10 listing); website rules and attachments |
+| GET | `/overview` | currencies (active + used-but-inactive) with designation, `designationStatus`, served generation and `building` flag; categories with conditions; roles with `{ effect: 'unrestricted' \| 'mapped_unrestricted' \| 'mapped' \| 'unmappable_unrestricted' \| 'mapping_without_effect' \| 'sees_no_products', categoryId?, warnings: ('audit_logs_read' \| 'import_export' \| 'inventory_read')[] }` (FR-024, FR-026, FR-086); website rules and attachments |
 | POST | `/categories` | `{ name, conditions[{ currencyCode, threshold }] (≥1) }` → 201 |
 | PATCH | `/categories/:id` | same fields, partial |
 | DELETE | `/categories/:id` | 409 `VISIBILITY_CATEGORY_IN_USE` with `details[].issue = roleId` (FR-013) |
-| PUT | `/role-mappings/:roleId` | `{ categoryId: string \| null }`; 409 `ROLE_NOT_MAPPABLE` for `platform_admin` (FR-022) |
+| PUT | `/role-mappings/:roleId` | `{ target: { kind: 'category', categoryId } \| { kind: 'unrestricted' } \| null }` (I-2); 409 `ROLE_NOT_MAPPABLE` for `platform_admin` and for a role holding a self-lifting permission (FR-022, FR-026) |
 | PUT | `/designations/:currencyCode` | `{ priceListId, salesChannelId }`; 422 `DESIGNATION_INVALID` with the `designationStatus` reason when it is `not_found`, `currency_mismatch`, `not_regular`, `audience_restricted` or `not_on_channel` (RQ-1 A, US2-8); `not_active` / `outside_schedule` are accepted |
 | DELETE | `/designations/:currencyCode` | back to the base book |
 | GET | `/designations/:currencyCode/options` | `designatableBooks` |
@@ -56,7 +56,7 @@ marks `liftable: true` on a mapped or fail-closed role that holds `*`, `product_
 - OQ-D (recommended A): links / grouped items / bundle options of a visible product omit hidden
   targets; adding a hidden target ⇒ target not-found.
 
-## 3. Gated on spec 192 (Phase 8)
+## 3. Gated on spec 192 (Phases 9a, 9b)
 
 - Admin product list/variant rows gain `noFixedPrice?: true` (restricted callers only; additive).
   `ProductPicker` / product browser show the translated marker only on quote-request screens
@@ -69,3 +69,7 @@ marks `liftable: true` on a mapped or fail-closed role that holds `*`, `product_
 - Quote request admin create / modify (`RfqAdminService`, as rewritten by 192): new line or changed
   product out of category ⇒ the same refusal; an existing out-of-category line keeps quantity,
   price edits and removal (FR-042).
+- Rule-excluded products (FR-090, FR-091, Q3): quote → cart conversion and checkout / placement of a
+  cart line from an accepted quote, and admin order create / preview / reorder / clone-to-quote,
+  accept a product absent from the channel **only** because of its website rule
+  (`productRuleGovernancePort.excludedOnlyByRule`); every other out-of-channel case answers as today.

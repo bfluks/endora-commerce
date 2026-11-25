@@ -20,9 +20,12 @@ Abbreviations: `PVR/` = `packages/modules/product_visibility_rules/src/`, `CAT/`
 
 - **[P]** parallel within the phase (different files, no dependency).
 - **[A]/[B]** stream (plan.md § *Parallel builders*); no tag = foundation, single stream.
-- Owner answers that change a task: OQ-A → T027–T030, T033; OQ-D → T045; OQ-E → T048;
-  OQ-F → T049, T068; OQ-G → T019; OQ-H → Phase 5c (T051–T054), T088; OQ-B (B) adds a phase after
-  Phase 7; OQ-C → T002.
+- Owner answers are recorded in spec.md (*Session 2026-11-25 — plan stage*): OQ-A A, OQ-B B, OQ-C A,
+  OQ-D A, OQ-E A, OQ-F A, OQ-G 1, OQ-H signed off, I-2 A, I-3 A, I-4 A, plus Q1 A (first
+  channel-scoped status write after admission exempt), Q2 A (rule keeps the previous price
+  evaluation during a designation rebuild), Q3 (admin reorder / clone-to-quote and checkout of a
+  converted quote also accept rule-excluded products). No task is pending an owner answer. The
+  release of the order checks before spec 192 is **not** decided: the gate stands.
 - Threat model: `threat-model.md` (TM-1 – TM-16); mapping at the end of this file.
 
 ---
@@ -46,10 +49,12 @@ Abbreviations: `PVR/` = `packages/modules/product_visibility_rules/src/`, `CAT/`
   `CatalogueReferencePricePort`, `DesignationStatus`, `CataloguePricesChangedEventSchema`.
 - [ ] T005 Migration 1 (configuration): `pnpm --filter backend run migration:new -- --module product_visibility_rules --name visibility_configuration`
   — `visibility_categories`, `visibility_category_conditions`, `visibility_role_mappings`,
-  `catalogue_price_designations`, `product_rules`, `website_rule_attachments` (data-model.md §1).
+  `catalogue_price_designations`, `product_rules`, `website_rule_attachments` (data-model.md §1;
+  role mapping with the `target` column, I-2).
 - [ ] T006 Migration 2 (derived): `catalogue_price_generations`, `product_catalogue_prices`,
   `variant_catalogue_prices`, `catalogue_price_stale_products`, `website_rule_previews`,
-  `website_rule_preview_changes`, `website_rule_stale_products` (§2, §3) with the indexes listed.
+  `website_rule_preview_changes`, `website_rule_admissions`, `website_rule_stale_products` (§2, §3)
+  with the indexes listed.
 - [ ] T007 Entities under `PVR/backend/entities/`; classify each as platform-global in the tenancy
   classification the CI check reads (`specs/conventions/check-inventory.md`).
 - [ ] T008 Regenerate and commit: `pnpm --filter backend run composer:generate`,
@@ -98,7 +103,7 @@ migration up/down on a fresh test DB (`backend-test-suite.md` § *Which backend 
 
 ---
 
-## Phase 3 — Configuration backend (US2; FR-001, FR-010 – FR-014, FR-020 – FR-024, FR-070, FR-071; TM-4, TM-13)
+## Phase 3 — Configuration backend (US2; FR-001, FR-010 – FR-014, FR-020 – FR-026, FR-070, FR-071, FR-076, FR-077, FR-086; TM-4, TM-13)
 
 - [ ] T017 [P] Failing integration tests `BT/integration/product_visibility_rules/configuration.test.ts`:
   category CRUD, ≥1 condition, inactive currency kept and shown, delete of mapped category refused
@@ -107,26 +112,31 @@ migration up/down on a fresh test DB (`backend-test-suite.md` § *Which backend 
   scheduled book accepted and reported not in force, clear → base, ships no categories (FR-014);
   **TM-4 c**: every configuration write answers `403` to a caller whose own scope is not
   `unrestricted` (restricted or no-category), even when the role holds `product_visibility:manage`;
-  **TM-4 b**: the overview marks `liftable: true` on a mapped or fail-closed role that holds a
-  self-lifting permission (`*`, `product_visibility:manage`, `platform.modules.activate`,
-  `admin_users:manage`), re-read on every overview request (role edits in `admin_roles` do not call
-  this module).
+  **FR-020 / FR-025 (I-2)**: a role can be mapped to a category **or to `unrestricted`**;
+  **FR-026 (OQ-G 1)**: mapping a role holding a self-lifting permission (`*`,
+  `product_visibility:manage`, `platform.modules.activate`, `admin_users:manage`) to a category or to
+  unrestricted is refused (`409 ROLE_NOT_MAPPABLE`); a mapped role that later gains such a permission
+  is reported `unrestricted — mapping without effect` on the overview (re-read on every request; role
+  edits in `admin_roles` do not call this module); **FR-086**: overview warns on a mapped or
+  fail-closed role holding `audit_logs:read`.
 - [ ] T018 [P] Failing test `…/configuration-audit.test.ts`: one audit entry per write with actor,
   before, after (FR-070, `audit-state.md`); read permission sees, cannot write (US2-4).
 - [ ] T019 Commands under `PVR/backend/commands/` (category, role mapping, designation) and
   `PVR/backend/services/visibility-config.service.ts`; designation validation through
-  `catalogueReferencePricePort.designationStatus` + `designatableBooks`. **Not in this task**: refusing
-  to map a role that holds a self-lifting permission (TM-4 a) — **pending owner, OQ-G**; it conflicts
-  with OQ-2 (an unmapped `*` role is fail-closed, so it must be mappable).
+  `catalogueReferencePricePort.designationStatus` + `designatableBooks`; the role-mapping Command
+  takes a target `{ kind: 'category', id } | { kind: 'unrestricted' }` (I-2) and refuses
+  `platform_admin` and every role holding a self-lifting permission (FR-022, FR-026, OQ-G 1).
 - [ ] T020 `PVR/backend/routes.admin.ts` (admin-api.md §1 config rows) through `ctx.routes`;
   `requireAdmin('product_visibility:read' | ':manage')` as route `preHandler`; every write route
   additionally resolves the caller's own scope and answers `403 FORBIDDEN` unless `unrestricted`
   (TM-4 c).
-- [ ] T021 Overview read: role effects (`unrestricted` / `mapped` / `sees_no_products` — OQ-2, OQ-10)
-  from `permissionService` + `adminRolePort.list`; `liftable` per role (TM-4 b); TM-9 warning flag on a
-  mapped role holding `import_export:*`, `inventory:read` or `audit_logs:read`; designation statuses;
+- [ ] T021 Overview read: role effects (`unrestricted` / `mapped_unrestricted` / `mapped` /
+  `unmappable_unrestricted` / `mapping_without_effect` / `sees_no_products` — FR-023, FR-024, FR-026)
+  from `permissionService` + `adminRolePort.list` (TM-4 b: `mapping_without_effect` flags a mapped role
+  that gained a self-lifting permission); warning flag on a mapped or fail-closed role holding
+  `audit_logs:read` (FR-086), `import_export:*` or `inventory:read`; designation statuses;
   served generation; `notApplied: true` is impossible while off (screens absent) — the off-state
-  notice lives in the activation texts (T076).
+  notice lives in the activation texts (T077).
 - [ ] T022 Audit references (`auditReferenceRegistry`) and history labels pl+en.
 - [ ] T023 Scheduling hooks: a designation set/clear enqueues a whole rebuild of the currency
   (consumed in Phase 4; until then the job type exists and is a no-op test double).
@@ -134,9 +144,11 @@ migration up/down on a fresh test DB (`backend-test-suite.md` § *Which backend 
   absent while off (deactivated-while-available case), configuration kept, restored on enable
   (`module-activation.md` item 6); **TM-4 d / TM-13**: the module's activation and deactivation each
   leave an audit entry naming the actor in the existing lifecycle ledger (verify; if it does not,
-  record a defect for the platform rather than auditing from this module).
+  record a defect for the platform rather than auditing from this module); **FR-077**: no
+  configuration route answers while off (it cannot be prepared before the first enable); **FR-076**:
+  installing / deploying with the module present and off changes no read, write or membership.
 - [ ] T025 Contract tests for the config API shapes `BT/contract/product_visibility_rules/config-api.contract.test.ts`
-  (incl. `liftable`) and OpenAPI baseline update.
+  (incl. the mapping target union and role effects) and OpenAPI baseline update.
 
 **Verification**: `pnpm --filter backend exec vitest run test/integration/product_visibility_rules/configuration.test.ts test/integration/product_visibility_rules/configuration-audit.test.ts test/integration/product_visibility_rules/off-state.config.test.ts test/contract/product_visibility_rules`;
 `pnpm --filter backend run check:port-dependencies && pnpm --filter backend run check:command-coverage && pnpm --filter backend run check:error-translations && pnpm --filter backend run check:off-state-coverage`;
@@ -144,9 +156,9 @@ migration up/down on a fresh test DB (`backend-test-suite.md` § *Which backend 
 
 ---
 
-## Phase 4 — Catalogue-price flags and the admin scope (US1 core; FR-002 – FR-007, FR-060 – FR-062; TM-3, TM-7, TM-8, TM-12)
+## Phase 4 — Catalogue-price flags and the admin scope (US1 core; FR-002 – FR-007, FR-060 – FR-062, SC-008; TM-3, TM-7, TM-8, TM-12)
 
-OQ-A answer changes T027 – T030 and T033 (recommended A planned).
+OQ-A **A** (decided): ≤ 60 s targeted, ≤ 150 s catalogue-wide or designation change, line checks exact.
 
 - [ ] T026 [P] Failing integration test `BT/integration/product_visibility_rules/catalogue-price-flags.test.ts`:
   SC-001 matrix (4 categories × 5 price states + configurable product) from real price books;
@@ -154,7 +166,8 @@ OQ-A answer changes T027 – T030 and T033 (recommended A planned).
   (1) a price change landing between the refresh's engine read and its write keeps its mark;
   (2) a targeted refresh racing a swap never writes into the swapped-away generation;
   (3) marks taken while n+1 builds are applied to n+1 after the swap; (6) a crashed or partial build is
-  never swapped and restarts.
+  never swapped and restarts; **Q2 A**: during a designation rebuild the served (previous) generation
+  stays readable for the website-rule evaluator while admin scopes drop the currency.
 - [ ] T027 `PVR/backend/services/catalogue-price-flags.ts`: build generation (batches of 1 000 via
   `catalogueReferencePricePort.resolve`), swap only after a complete build, targeted refresh in one
   transaction holding the generation row lock (reads `served_generation` inside it), clear only marks
@@ -178,8 +191,9 @@ OQ-A answer changes T027 – T030 and T033 (recommended A planned).
   `catalogue_price_generations`), enqueue a build of every active currency; until a currency has a
   served generation its conditions are not met (fail-closed). Test in `…/flags-bootstrap.test.ts`.
 - [ ] T032 [P] Failing unit tests `PVR/backend/services/admin-visibility-scope.test.ts`: scope per role
-  (platform_admin, mapped, unmapped with `rfqs:handle`, unmapped with `*`, unmapped other — FR-021 –
-  FR-023); designation not in force drops its currency; inactive currency drops; **TM-7 (4)** a
+  (platform_admin; each self-lifting permission ⇒ unrestricted even when mapped — FR-026, OQ-G 1;
+  mapped to `unrestricted` — FR-025; mapped to a category; unmapped with `rfqs:handle` and no
+  self-lifting permission ⇒ `no_category`; unmapped other ⇒ unrestricted — FR-021 – FR-023); designation not in force drops its currency; inactive currency drops; **TM-7 (4)** a
   currency whose served generation was built for another designation than the current one drops;
   predicate union `none` / `sql` / `deny` (**TM-3 (3)**, no `null`); **TM-3 (4)** a role-resolution
   refusal, an unreadable mapping or designation read gives `no_category` or throws — never
@@ -197,7 +211,9 @@ OQ-A answer changes T027 – T030 and T033 (recommended A planned).
   no cross-request cache of scope or fragments — TM-8).
 - [ ] T035 Perf bench `BT/perf/product_visibility_rules/admin-list-visibility.bench.ts` (R-16; 50 000
   products, 150 000 variants, 3 currencies): rebuild time per currency, targeted refresh latency,
-  predicate cost in isolation. Record numbers in research.md R-5/R-16.
+  predicate cost in isolation; **SC-008**: at 50 000 products a targeted change is reflected in admin
+  reads ≤ 60 s and a catalogue-wide / designation change ≤ 150 s, with no product qualifying only
+  through the rebuilding currency shown meanwhile (asserted). Record numbers in research.md R-5/R-16.
 
 **Verification**: `pnpm --filter @endora-commerce/mod-product-visibility-rules exec vitest run src/backend/services/admin-visibility-scope.test.ts`;
 `pnpm --filter backend exec vitest run test/integration/product_visibility_rules/catalogue-price-flags.test.ts test/integration/product_visibility_rules/flags-change-feed.test.ts test/integration/product_visibility_rules/flags-drift.test.ts test/integration/product_visibility_rules/flags-bootstrap.test.ts`;
@@ -268,12 +284,12 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
 `pnpm --filter @endora-commerce/mod-catalog exec vitest run src/backend/admin-search-provider.test.ts src/backend/services/admin-scope-required.test.ts`;
 `pnpm --filter backend run check:port-dependencies && pnpm --filter backend run check:port-catches && pnpm --filter backend run check:module-boundary`.
 
-## Phase 5b — [A] Catalog: cross-references, error details, aggregates, assistant tools, hookable actions, off state (TM-2, TM-3, TM-6)
+## Phase 5b — [A] Catalog: cross-references, error details, aggregates, assistant tools, hookable actions, off state (FR-080 – FR-082; TM-2, TM-3, TM-6)
 
-- [ ] T045 [A] OQ-D (recommended A, pending owner): links / grouped items / bundle options omit hidden
+- [ ] T045 [A] FR-080 (OQ-D A): links / grouped items / bundle options omit hidden
   targets for restricted callers; adding a hidden target answers target-not-found. Test
   `BT/integration/catalog/visibility-cross-references.test.ts`.
-- [ ] T046 [A] **TM-2**: `URL_KEY_TAKEN` (`CAT/backend/services/url-key.service.ts:324-337`) and the
+- [ ] T046 [A] FR-082, **TM-2**: `URL_KEY_TAKEN` (`CAT/backend/services/url-key.service.ts:324-337`) and the
   integration-mode issues (`:309-316`) drop `heldByProductId` / `heldByProductName` when the holder is
   hidden from the caller (key and channel only); sweep every `HttpError` message and `details` in
   `catalog`, `price_lists` and `sales_channels` that names a product other than the addressed one
@@ -283,9 +299,10 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
   (`CAT/backend/services/catalog-category-read.service.ts:257-268`), attribute-set `productCount` and the
   `assertNotInUse` error details (`attribute-set.service.ts:118-140,319,536-545`),
   `attributes/:idOrKey/usage`, `attributes/:idOrKey/scope-change-preview`: narrowed with the same
-  predicate for a restricted caller, or listed as **accepted, pending owner** in the T088 table. Test
+  predicate for a restricted caller (narrowing chosen for every row: it follows FR-031 "no response
+  counts hidden products"; listed in the FR-088 docs table, T094). Test
   `BT/integration/catalog/visibility-aggregates.test.ts`.
-- [ ] T048 [A] OQ-E (recommended A, pending owner): assistant tools `catalog` contributes to
+- [ ] T048 [A] FR-081 (OQ-E A): assistant tools `catalog` contributes to
   `promptActionToolRegistry` resolve `resolveScope(invokingAdminUserId)` **at tool execution** (also on a
   later confirm), never from an ambient request (**TM-3 (2)**).
 - [ ] T049 [A] `CAT/manifest.ts`: declare `product.update`, `product.restore`, `product.bulk_update`
@@ -299,14 +316,18 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
 `pnpm --filter backend run check:port-dependencies && pnpm --filter backend run check:port-catches && pnpm --filter backend run check:module-boundary`;
 `PERF_RUN=true` bench of T035 extended to HTTP pages (budget R-16) — recorded.
 
-## Phase 5c — [A] Other admin product read paths (TM-9) — **PENDING OWNER sign-off of the TM-9 table (plan.md OQ-H)**
+## Phase 5c — [A] Other admin product read paths (FR-083 – FR-085, SC-009; TM-9 — OQ-H signed off)
 
-Do not start until the owner signs off plan.md § *TM-9 surfaces*; a row answered "accepted" drops its
-task and moves to the T088 docs table.
+Accepted rows of the signed-off table (inventory writes by id, price-book row writes, audit log and
+notifications, feeds, CMS / blog / CRM / tasks — FR-086, FR-087) have no task here; they go into the
+FR-088 docs table (T094).
 
 - [ ] T051 [P] [A] Failing tests `BT/integration/product_visibility_rules/other-admin-reads.test.ts`,
-  one block per row of the table: inventory admin lists and the set-stock assistant tool, price
-  history by product, import/export products adapter.
+  one block per narrowed / refused row: inventory admin lists with counts and paging (FR-083) and the
+  set-stock assistant tool (FR-081), price history by product and change lines (FR-084), products
+  export / import `403` (FR-085). **SC-009** sweep test `BT/integration/product_visibility_rules/sc-009-surfaces.test.ts`:
+  for a restricted user every surface of FR-080 – FR-085 returns or acts on zero hidden products and
+  no error answer names a hidden product (FR-082) — reuses the fixtures of T045, T046, T048.
 - [ ] T052 [A] `inventory` (`packages/modules/inventory/src/backend/routes.admin.ts:124-615`,
   `prompt-tools.ts:86-101`): admin lists narrowed through the port (product predicate on its product
   column); the set-stock tool resolves the product through the scoped lookup (hidden ⇒ not found);
@@ -319,7 +340,7 @@ task and moves to the T088 docs table.
   import of products refused `403` for a non-unrestricted scope, one check through the port, resolved
   at job execution for the requester.
 
-**Verification (5c)**: `pnpm --filter backend exec vitest run test/integration/product_visibility_rules/other-admin-reads.test.ts test/integration/inventory test/integration/import_export`;
+**Verification (5c)**: `pnpm --filter backend exec vitest run test/integration/product_visibility_rules/other-admin-reads.test.ts test/integration/product_visibility_rules/sc-009-surfaces.test.ts test/integration/inventory test/integration/import_export`;
 `pnpm --filter @endora-commerce/mod-import-export exec vitest run src/backend/services/adapters/products.adapter.test.ts`;
 `pnpm --filter backend run check:port-dependencies && pnpm --filter backend run check:port-catches`.
 
@@ -350,7 +371,11 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
 - [ ] T059 [B] Steady state: marks from `product.created.v1` / `product.updated.v1` /
   `product.archived.v1` / `product.deleted.v1` and from flag refreshes; debounced evaluation job (30 s);
   window-boundary delayed jobs from `designationStatus.window`; hourly reconcile per governed channel.
-  Test `…/website-rule-timing.test.ts` (US4-2, US4-5, SC-005) with a controllable clock.
+  **Q2 A**: while a currency's designation rebuild runs, the rule's price conditions on that currency
+  read the served (previous) generation — no product leaves and re-joins the channel because of the
+  rebuild; the swap marks only products whose flags changed.
+  Test `…/website-rule-timing.test.ts` (US4-2, US4-5, SC-005; designation change ⇒ zero transient
+  leave/join events) with a controllable clock.
 - [ ] T060 [B] `productRuleGovernancePort` (FR-055) via `ctx.di.providePort` + test.
 - [ ] T061 [B] Off-state test `…/off-state.website-rule.test.ts`: no evaluation, jobs left waiting,
   memberships as last computed; on again ⇒ reconcile enqueued.
@@ -361,7 +386,7 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
 
 ---
 
-## Phase 7 — [B] Kernel governance and admission (US4; FR-054, FR-059; TM-10)
+## Phase 7 — [B] Kernel governance and admission (US4; FR-054, FR-059, FR-092, FR-093; TM-10)
 
 - [ ] T062 [P] [B] Failing unit tests `KSC/sales-channel-membership.governor.test.ts`: per method
   (`addToChannel`, `removeFromChannel` incl. fallback, `bindToDefaultIfEmpty`, `copyMemberships`,
@@ -393,50 +418,66 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   `BT/integration/catalog/bulk-update-governed-channel.test.ts`.
 - [ ] T068 [P] [B] Failing integration test `BT/integration/product_visibility_rules/admission.test.ts`
   then the `beforeCommit` hooks (needs T049) on `product.update`, `product.restore`,
-  `product.bulk_update` (and, per OQ-F, the channel-scoped status writes): create / duplicate / import /
-  connector-shaped calls skipped on a governed channel (US4-3); transition to active / un-archive ⇒
-  governed membership removed in the same transaction with the token and the product marked; never on
-  the governed channel before admission, admitted ≤ 5 min (US4-6, FR-059, SC-005); remove + re-admit
-  keeps channel-scoped values.
+  `product.bulk_update`, `product.scopes.update`, `product.scoped_values.save`: create / duplicate /
+  import / connector-shaped calls skipped on a governed channel (US4-3); global transition to active /
+  un-archive ⇒ governed memberships removed in the same transaction with the token and the product
+  marked; a **channel-scoped** status moving to active on a governed channel ⇒ that one membership
+  removed (FR-092, OQ-F A) — **except** the first channel-scoped status write on that channel after
+  the product's admission, even inactive → active (FR-093, Q1 A; read from the admissions ledger of
+  T070); a write that does not move status to active is no reactivation; never on the governed
+  channel before admission, admitted ≤ 5 min (US4-6, FR-059, SC-005); remove + re-admit keeps
+  channel-scoped values.
 - [ ] T069 [B] Off-state test `BT/integration/product_visibility_rules/off-state.governance.test.ts`:
-  module off ⇒ no write refused or skipped, hook not run (FR-073).
+  module off ⇒ no write refused or skipped, hook not run, pending-admission scoped values refused as
+  today (FR-073).
+- [ ] T070 [A] (after T063, T066) **FR-093 (I-4)**: `CAT/backend/services/product-scopes.service.ts:243`
+  and the scoped-values save (`scoped-values-save.service.ts:390`) accept per-language and
+  channel-scoped values (status included) for a channel the product is not a member of **when that
+  channel is governed** (asked through `productRuleGovernancePort.governedChannels()`, probed for
+  presence; absent ⇒ today's `SCOPE_INVALID`); the values never add a membership. The module keeps
+  `website_rule_admissions` (data-model.md §3) — written by the apply job on every admission, its
+  `post_admission_status_seen` flag consumed by T068's exemption. Test
+  `BT/integration/product_visibility_rules/pending-admission-values.test.ts`: a connector-shaped write
+  before admission is stored, the product appears on admission with those values, a write on an
+  ungoverned non-member channel is still `SCOPE_INVALID`.
 
 **Verification**: `pnpm --filter @endora-commerce/platform exec vitest run src/kernel/sales-channels`;
-`pnpm --filter backend exec vitest run test/unit/kernel/channel-product-bridge-writers.test.ts test/contract/sales_channels/governed-membership.contract.test.ts test/integration/catalog/bulk-update-governed-channel.test.ts test/integration/product_visibility_rules/admission.test.ts test/integration/product_visibility_rules/off-state.governance.test.ts test/contract/kernel/harness-parity.test.ts`;
+`pnpm --filter backend exec vitest run test/unit/kernel/channel-product-bridge-writers.test.ts test/contract/sales_channels/governed-membership.contract.test.ts test/integration/catalog/bulk-update-governed-channel.test.ts test/integration/product_visibility_rules/admission.test.ts test/integration/product_visibility_rules/pending-admission-values.test.ts test/integration/product_visibility_rules/off-state.governance.test.ts test/contract/kernel/harness-parity.test.ts`;
 `pnpm --filter backend run check:kernel-boundary && pnpm --filter backend run check:platform-surface && pnpm --filter backend run check:port-catches && pnpm --filter backend run check:container-imports`.
 
-### ✅ Review checkpoint 1 — backend block (after Phases 1 – 7; 5c only if released)
+### ✅ Review checkpoint 1 — backend block (after Phases 1 – 7)
 
 `qa-engineer`, `code-reviewer`, `security-engineer` in parallel on a model other than the
 author's, against `threat-model.md` TM-1 – TM-14 (re-review Phases 4, 5a/5b, 7); `product-owner`
-checks FR-001 – FR-039, FR-050 – FR-075 traceability. Gate: findings closed before Phase 8.
+checks FR-001 – FR-039, FR-050 – FR-088, FR-092, FR-093 traceability. Gate: findings closed before Phase 8.
 
 ---
 
 ## Phase 8 — Admin UI (US2, US4, FR-023 banner, FR-024, FR-071, FR-074; TM-4, TM-13, TM-14)
 
-- [ ] T070 [P] Failing component tests `admin/test/modules/product_visibility_rules/ConfigurationPage.test.tsx`:
+- [ ] T071 [P] Failing component tests `admin/test/modules/product_visibility_rules/ConfigurationPage.test.tsx`:
   categories, designations (only designatable books offered; not-in-force reason shown), role mapping
-  (`platform_admin` not offered; "sees no products" listed; `liftable` and TM-9 warnings shown),
+  (target `unrestricted` offered; `platform_admin` and self-lifting roles shown "unrestricted — cannot
+  be mapped"; "sees no products" listed; `mapping_without_effect` and FR-086 warnings shown),
   read-only for `:read` and for a non-unrestricted caller (TM-4 c).
-- [ ] T071 `PVR/admin/pages/ConfigurationPage.tsx` + API client; admin-kit primitives only (IX).
-- [ ] T072 [P] Failing tests `…/WebsiteRulesPage.test.tsx`: rule editor (attribute picker limited to
+- [ ] T072 `PVR/admin/pages/ConfigurationPage.tsx` + API client; admin-kit primitives only (IX).
+- [ ] T073 [P] Failing tests `…/WebsiteRulesPage.test.tsx`: rule editor (attribute picker limited to
   boolean/choice non-scoped), attach flow with mandatory preview → confirm, stale/expired/capped
   handling, detach; the rule label rendered as text only.
-- [ ] T073 `PVR/admin/pages/WebsiteRulesPage.tsx` (+ preview polling).
-- [ ] T074 Role screens (R-14): zones `admin_users.roles.list.columns` and
+- [ ] T074 `PVR/admin/pages/WebsiteRulesPage.tsx` (+ preview polling).
+- [ ] T075 Role screens (R-14): zones `admin_users.roles.list.columns` and
   `admin_users.roles.editor.aside` in `AdminZoneNameSchema` + props map, rendered in
   `packages/modules/admin_users/src/admin/pages/AdminRolesPage.tsx`; module contributions; test
   `admin/test/modules/admin_users/AdminRolesPage.visibility-zone.test.tsx`.
-- [ ] T075 Product list banner for no-category / restricted callers from the list response's
+- [ ] T076 Product list banner for no-category / restricted callers from the list response's
   `visibility` field (catalog admin, stream A file `CAT/admin/…` — coordinate); **TM-14**: confirm the
   admin SPA query cache is dropped on sign-out and on a `401` (admin-shell; fix there if not).
-- [ ] T076 Palette actions (two), nav entry with `requiredPermission`, i18n pl+en for every string incl.
+- [ ] T077 Palette actions (two), nav entry with `requiredPermission`, i18n pl+en for every string incl.
   the FR-073 warning; **TM-13**: the module's activation description and deactivation consequence
   text on `/platform/modules` state that every restricted role becomes unrestricted while off.
-- [ ] T077 Off-state UI test: no nav, palette, zone contribution, banner while off; **TM-14** test that
+- [ ] T078 Off-state UI test: no nav, palette, zone contribution, banner while off; **TM-14** test that
   a second admin signing in on the same tab sees no list rows cached from the first.
-- [ ] T078 UX pass against `.claude/skills/ux-laws/SKILL.md` (states: loading, empty, error, refused,
+- [ ] T079 UX pass against `.claude/skills/ux-laws/SKILL.md` (states: loading, empty, error, refused,
   building generation).
 
 **Verification**: `pnpm --filter admin exec vitest run test/modules/product_visibility_rules test/modules/admin_users/AdminRolesPage.visibility-zone.test.tsx test/unit/palette-coverage.test.ts`;
@@ -450,104 +491,146 @@ checks FR-001 – FR-039, FR-050 – FR-075 traceability. Gate: findings closed 
 
 ---
 
-## Phase 9 — GATED: lines, picker, marker (US3, FR-037, FR-039 – FR-043, RQ-2 C; TM-15)
+## Phase 9a — GATED: lines, picker, marker (US3, FR-037, FR-039 – FR-043, RQ-2 C; TM-15)
 
 **Do not start until spec 192 (issue #1901) has merged to `master`.** Then rebase, re-measure
 `quote_requests/backend/services/rfq-admin-service.ts`, `RfqCreatePage.tsx`, `RfqDetail.tsx`,
 `packages/admin-kit/src/components/product-picker/ProductPicker.tsx`,
 `packages/admin-kit/src/components/product-browser/product-browser-api.ts`, and update this phase's
-paths. (The coordinator may release T079 – T080 earlier — plan.md § *Sequencing*.) **TM-15**: if 192
+paths. (Releasing T080 – T081 — and T093's create / preview part — before 192 is an option the owner
+has **not** decided; the gate stands — plan.md § *Sequencing*.) **TM-15**: if 192
 adds a SKU or paste-by-SKU line input, a hidden product's refusal there must equal that input's
 not-found answer.
 
-- [ ] T079 [P] Failing integration test `BT/integration/orders/admin-order-visibility.test.ts`: create,
+- [ ] T080 [P] Failing integration test `BT/integration/orders/admin-order-visibility.test.ts`: create,
   preview, reorder refuse an out-of-category product or variant naming the line, `details` limited to
   `items.<i>` (no category, price or flag — TM-15), nothing saved; no marker on order create; storefront
   reorder / clone untouched; unrestricted unchanged (US1-9, US1-13, FR-037, FR-039, RQ-2 C).
-- [ ] T080 `packages/modules/orders/src/backend/routes.ts` (`/api/v1/admin/orders`, `/preview`,
+- [ ] T081 `packages/modules/orders/src/backend/routes.ts` (`/api/v1/admin/orders`, `/preview`,
   `/:id/reorder`): `checkLines` behind presence probe; `orders/manifest.ts` `degrades-without` entry.
-- [ ] T081 Clone-to-quote (`orders/backend/services/order-clone-to-quote-service.ts`): same refusal.
-- [ ] T082 [P] Failing test `BT/integration/quote_requests/visibility-lines.test.ts`: create / add line /
+- [ ] T082 Clone-to-quote (`orders/backend/services/order-clone-to-quote-service.ts`): same refusal.
+- [ ] T083 [P] Failing test `BT/integration/quote_requests/visibility-lines.test.ts`: create / add line /
   change product refused naming lines (US3-1); existing out-of-category line editable and removable,
   product not changeable, not re-addable (US3-2, FR-042); per variant (US3-5).
-- [ ] T083 `quote_requests` (`RfqAdminService` create / modify as left by 192): `checkLines`;
+- [ ] T084 `quote_requests` (`RfqAdminService` create / modify as left by 192): `checkLines`;
   `quote_requests/manifest.ts` `degrades-without` entry.
-- [ ] T084 `catalog` list/variant rows: `noFixedPrice` for restricted callers (contracts additive,
+- [ ] T085 `catalog` list/variant rows: `noFixedPrice` for restricted callers (contracts additive,
   stream A file).
-- [ ] T085 [P] Failing component tests for the admin-kit picker and browser: only qualifying variants;
+- [ ] T086 [P] Failing component tests for the admin-kit picker and browser: only qualifying variants;
   marker shown only when the host passes `showNoFixedPriceMarker` (quote screens), never for
   unrestricted (US3-3, OQ-12).
-- [ ] T086 `packages/admin-kit/src/components/{product-picker,product-browser}` + quote screens pass the
+- [ ] T087 `packages/admin-kit/src/components/{product-picker,product-browser}` + quote screens pass the
   marker flag; i18n pl+en of the marker (fixed text).
-- [ ] T087 Off-state tests for orders and quote lines (module off ⇒ no refusal, no marker).
+- [ ] T088 Off-state tests for orders and quote lines (module off ⇒ no refusal, no marker).
 
 **Verification**: `pnpm --filter backend exec vitest run test/integration/orders/admin-order-visibility.test.ts test/integration/quote_requests/visibility-lines.test.ts test/integration/quote_requests test/contract/quote_requests`;
 `pnpm --filter '@endora-commerce/admin-kit' exec vitest run src/components/product-picker src/components/product-browser`;
 `pnpm --filter admin exec vitest run test/modules/quote_requests`; `check:port-dependencies`, `check:port-catches`.
 
+## Phase 9b — GATED: sales-team purchase paths for rule-excluded products (FR-090, FR-091, OQ-B B, Q3)
+
+Same gate as 9a: quote → cart conversion is in `carts/backend/services/cart-conversion-service.ts`,
+which spec 192 changes; admin order create / preview / reorder share `orders/backend/routes.ts` with
+9a's checks, whose gate the owner kept. Uses `productRuleGovernancePort.excludedOnlyByRule`
+(contracts/ports.md §2): governed channel, not a member, active, not archived or deleted, channel
+status not inactive.
+
+- [ ] T089 [P] Failing integration test `BT/integration/carts/quote-conversion-rule-excluded.test.ts`:
+  an accepted quote's line whose product (or variant) is absent from the request channel **only**
+  because of the website rule is kept on conversion and through checkout and order placement; a line
+  absent for any other reason (inactive, archived, deleted, channel status inactive, non-member of an
+  ungoverned channel) is dropped / refused as today; storefront listing, search, type-ahead and URL
+  still hide it; module off or rule detached ⇒ today's behaviour (FR-090).
+- [ ] T090 [P] Failing integration test `BT/integration/orders/admin-order-rule-excluded.test.ts`: admin
+  order create, preview, reorder and clone-to-quote accept a rule-excluded product (Q3) and still
+  refuse other out-of-channel products; for a restricted user the category check of T080 still applies
+  first (FR-091, FR-037, FR-039); module off ⇒ today.
+- [ ] T091 `productRuleGovernancePort.excludedOnlyByRule(channelId, refs)` in `PVR` (one statement over
+  attachments + the kernel's membership read + catalog read port); unit test
+  `PVR/backend/services/product-rule-governance.test.ts`.
+- [ ] T092 `carts`: conversion (`cart-conversion-service.ts:239`, re-measured after 192) and the
+  checkout / placement channel check keep lines from an accepted quote that are excluded only by the
+  rule (the line's quote origin is the condition); `carts/manifest.ts` `degrades-without` entry.
+- [ ] T093 `orders`: admin create / preview (`orders/backend/routes.ts:985-1000`), reorder and
+  clone-to-quote accept rule-excluded lines; `orders/manifest.ts` entry shared with T081.
+
+**Verification (9b)**: `pnpm --filter backend exec vitest run test/integration/carts/quote-conversion-rule-excluded.test.ts test/integration/orders/admin-order-rule-excluded.test.ts test/integration/carts/cart-read-equals-placement.test.ts test/contract/carts/cart-conversions.contract.test.ts`;
+`pnpm --filter @endora-commerce/mod-product-visibility-rules exec vitest run src/backend/services/product-rule-governance.test.ts`;
+`pnpm --filter backend run check:port-dependencies && pnpm --filter backend run check:port-catches`.
+
 ### ✅ Review checkpoint 3 — gated block
 
-Same reviewers (security-engineer re-reviews against TM-15); `product-owner` accepts US3.
+Same reviewers (security-engineer re-reviews against TM-15 and the rule-excluded acceptance of
+9b); `product-owner` accepts US3, FR-090, FR-091.
 
 ---
 
 ## Phase 10 — Documentation, release intent, final verification
 
-- [ ] T088 [P] Module documentation en + pl (`PVR`'s package-root `docs/`, `module-documentation.md`):
+- [ ] T094 [P] Module documentation en + pl (`PVR`'s package-root `docs/`, `module-documentation.md`):
   configuration, timing table (plan.md), off-state warning and "default off at upgrade: no restriction
   until enabled" (TM-13, also in the release note), connector note (R-10), accepted oracles (TM-15:
   SKU / URL-key "already taken", line refusal code, own category name), **"a `*` role is not a
-  restrictable role" and the self-lifting permissions** (TM-4 e), and the **TM-9 surfaces table** as
-  signed off by the owner (narrowed / refused / accepted, with reasons) plus any TM-6 aggregate rows
-  accepted.
-- [ ] T089 [P] `docs/docs/architecture/` note on the membership governor (kernel) en + pl.
-- [ ] T090 Changesets for every touched package (`release-intent.md`); contract-surface entries for the
+  restrictable role" and the self-lifting permissions** (TM-4 e; FR-026: such roles are always
+  unrestricted and unmappable), the **FR-088 table** of every admin surface returning product data
+  (narrowed / refused / accepted, with reasons — the signed-off OQ-H table plus the TM-6 aggregates),
+  the timing bounds of FR-060 / FR-062, "configure right after the first enable" (FR-077, I-3), and
+  the FR-076 release note ("ships off; nothing changes until an operator turns it on").
+- [ ] T095 [P] `docs/docs/architecture/` note on the membership governor (kernel) en + pl.
+- [ ] T096 Changesets for every touched package (`release-intent.md`); contract-surface entries for the
   new ports and the kernel options (`contract-surface.md`).
-- [ ] T091 Regenerate and verify generated artefacts (`composer:generate`, `manifests:generate`,
+- [ ] T097 Regenerate and verify generated artefacts (`composer:generate`, `manifests:generate`,
   lockfile); grep `backend/test/**` for anything derived from moved/added paths (AGENTS.md traps).
-- [ ] T092 Perf: run T035 bench end to end; record restricted vs unrestricted p95 and rebuild times in
+- [ ] T098 Perf: run T035 bench end to end; record restricted vs unrestricted p95 and rebuild times in
   research.md R-16 and `specs/pricing/read-paths-and-performance.md` §7 (new row).
-- [ ] T093 Walk quickstart.md on a fresh `pnpm run setup` database; record results in the PR.
+- [ ] T099 Walk quickstart.md on a fresh `pnpm run setup` database; record results in the PR.
 
 **Verification**: `pnpm -r run typecheck && pnpm -r run lint`; `pnpm --filter backend run test:unit:fast`;
 `pnpm --filter '!backend' run test` for touched packages; `pnpm --filter backend run check:module-docs && pnpm --filter backend run check:docs-translations && pnpm --filter backend run check:release-intent`;
-the targeted backend files of Phases 2 – 9; full backend suite runs on `master` after merge (D-198).
+the targeted backend files of Phases 2 – 9b; full backend suite runs on `master` after merge (D-198).
 
 ---
 
 ## FR → test map
 
-| FR | Tests |
+| FR / SC | Tests |
 | --- | --- |
 | FR-001 – FR-007 | T009 – T011, T017, T026, T032 |
 | FR-010 – FR-014 | T003, T017 |
-| FR-020 – FR-024 | T017, T032, T070, T074 |
-| FR-030 – FR-036, FR-038 | T036, T037, T042 – T047, T050, (T051 pending owner) |
-| FR-037, FR-039 | T079, T081 (gated) |
-| FR-040 – FR-043 | T082, T085 (gated) |
+| FR-020 – FR-026 | T017, T032, T071, T075 |
+| FR-030 – FR-036, FR-038 | T036, T037, T042 – T044, T047, T050 |
+| FR-037, FR-039 | T080, T082 (gated) |
+| FR-040 – FR-043 | T083, T086 (gated) |
 | FR-050 – FR-053, FR-056 – FR-058 | T055, T056 |
 | FR-054, FR-055, FR-059 | T060, T062, T064, T065, T067, T068 |
-| FR-060 – FR-062 | T026, T029, T030, T032, T059 (bounds per OQ-A) |
-| FR-070 – FR-075 | T018, T024, T050, T061, T069, T076, T077, T087 |
-| SC-001 – SC-007 | T026, T037, T056, T059, T068, T035/T092 |
+| FR-060 – FR-062 | T026, T029, T030, T032, T035, T059 |
+| FR-070 – FR-077 | T018, T024, T050, T061, T069, T077, T078, T088 |
+| FR-080 – FR-082 | T045, T046, T048, T051 |
+| FR-083 – FR-085 | T051 – T054 |
+| FR-086 – FR-088 | T017, T021, T094 (docs) |
+| FR-090, FR-091 | T089, T090 (gated) |
+| FR-092, FR-093 | T068, T070 |
+| SC-001 – SC-007 | T026, T037, T056, T059, T068, T035/T098 |
+| SC-008 | T035 (asserted at 50 000 products), T026, T032 |
+| SC-009 | T051 (`sc-009-surfaces.test.ts`) |
 
 ## Threat-model finding → task map (`threat-model.md` at `868445291`)
 
 | Finding | Tasks (each phase's Verification line runs the named tests) |
 | --- | --- |
 | TM-1 bulk operations outside the inventory | T036 (all `/api/v1/admin/catalog/**`), T042 (list/detail/undo, per-product worker check) |
-| TM-2 `heldBy*` in URL-key conflicts | T046 (redaction + details sweep), T088 (residual oracle) |
+| TM-2 `heldBy*` in URL-key conflicts | T046 (redaction + details sweep), T094 (residual oracle) |
 | TM-3 required scope, union predicate, no catch | T003, T032, T033, T034, T038, T039 (architecture test), T042, T043, T048, T050 |
-| TM-4 self-lifting roles | T017, T020 (403), T021 (`liftable`), T024 (activation audit), T070, T088; **(a) mapping refusal pending owner — OQ-G, T019** |
+| TM-4 self-lifting roles | T017, T019 (mapping refused, OQ-G 1), T020 (403), T021 (`mapping_without_effect`), T024 (activation audit), T032 (always unrestricted), T071, T094 |
 | TM-5 guard placement | T036 (spy interceptor, full envelope, HEAD/OPTIONS, non-UUID), T041 (plugin-scope hook, route's own not-found) |
-| TM-6 aggregates | T037, T039, T047 (+ accepted rows in T088, pending owner) |
+| TM-6 aggregates | T037, T039, T047 (all narrowed), T094 (docs table) |
 | TM-7 stale-visible races | T026, T027, T029, T030, T031, T032 |
 | TM-8 SQL fragment surface | T032, T033, T034 |
-| TM-9 other admin read paths | plan.md § *TM-9 surfaces*; T051 – T054 (**pending owner, OQ-H**); T021 warning; T088 table |
+| TM-9 other admin read paths | plan.md § *TM-9 surfaces* (signed off, OQ-H); T051 – T054; T021 warning; T094 table |
 | TM-10 governor token | T062, T063, T064, T066 |
 | TM-11 preview / confirm / evaluation | T055, T056, T057, T058 |
 | TM-12 event spoofing, rebuild amplification | T028, T029 |
-| TM-13 module off lifts restrictions | T024, T076, T088 |
-| TM-14 client caches | T037, T039 (`no-store`), T075, T077 |
-| TM-15 accepted oracles (note) | T079, Phase 9 gate note, T088 |
+| TM-13 module off lifts restrictions | T024, T077, T094 |
+| TM-14 client caches | T037, T039 (`no-store`), T076, T078 |
+| TM-15 accepted oracles (note) | T080, Phase 9a gate note, T094 |
 | TM-16 checked items (note) | no task |
