@@ -624,12 +624,13 @@ pending admission (FR-093) do not count.
   still hide it; module off or rule detached ⇒ today's behaviour (FR-090). **H2 A case**: a
   sales-team-only product whose channel-row status is active but whose per-language status is inactive
   in **every** language of the channel (and which has FR-093 pending cells) is kept through conversion,
-  checkout and placement.
+  checkout and placement (**US4-12**; spec terms: *channel status* = the channel row, *per-language
+  status* = channel × language).
 - [ ] T090 [P] Failing integration test `BT/integration/orders/admin-order-rule-excluded.test.ts`: admin
   order create, preview, reorder and clone-to-quote accept a rule-excluded product (Q3) and still
   refuse other out-of-channel products; for a restricted user the category check of T080 still applies
   first (FR-091, FR-037, FR-039); module off ⇒ today; **H2 A case**: the same product inactive in every
-  language of the channel passes admin create, preview, reorder and clone-to-quote.
+  language of the channel passes admin create, preview, reorder and clone-to-quote (US4-12).
 - [ ] T091 `productRuleGovernancePort.excludedOnlyByRule(channelId, refs)` in `PVR`: its own
   attachments table, the membership port (`filterEntityIdsInChannel`) and catalog **read ports** for
   status / archive / channel status — no SQL against another module's table (LOW 11); unit test
