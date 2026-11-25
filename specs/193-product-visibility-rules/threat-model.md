@@ -275,7 +275,9 @@ dependency added.
 > tasks were renumbered since — the current mapping is `tasks.md` § *Threat-model finding → task map*.
 > TM-4 (b)'s `liftable` flag is named `mapping_without_effect` in the plan (owner OQ-G 1 made such roles
 > always unrestricted). TM-11's per-channel admin scope check is not applicable: the platform has no
-> per-channel admin scope (recorded).
+> per-channel admin scope (recorded). TM-9's recommended overview warnings (`import_export:*`,
+> `inventory:read`, `audit_logs:read`) were replaced by FR-086: only the `audit_logs:read` warning is
+> planned (L4).
 
 | Finding | Tasks to add or amend |
 | --- | --- |

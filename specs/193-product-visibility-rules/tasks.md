@@ -8,9 +8,12 @@ description: "Tasks for spec 193 — product visibility rules"
 contracts/ (ports.md, admin-api.md, events-and-errors.md), quickstart.md.
 **Measured against**: `origin/master` `c3e8a8755`. Re-run before each phase:
 `git log --oneline c3e8a8755..origin/master -- packages/modules/{catalog,price_lists,sales_channels,admin_users,orders,quote_requests,carts,inventory,import_export} packages/contracts/src packages/platform/src/kernel/sales-channels packages/platform/src/kernel/ports packages/admin-kit/src/components/{product-picker,product-browser} backend/src/db backend/test/fixtures/openapi-baseline.json`.
-**Conflict note (M8)**: spec 192 (fork branch, not merged) also edits `packages/contracts/src/errors.ts`,
-`backend/test/fixtures/openapi-baseline.json` and the generated migrations registry
-(`backend/src/db/migrations-registry.generated.ts`) — the files of T004, T025 and T008. Whichever merges
+**Conflict note (M8, L2)**: spec 192 (fork branch at `3c740f2c0`, not merged) also edits
+`packages/contracts/src/errors.ts`, `packages/contracts/src/index.ts`,
+`backend/test/.../error-code-routing/reference-ledgers.ts`, `packages/modules/_i18n/i18n/{en,pl}.json`,
+`packages/modules/carts/docs/carts.md`, `backend/test/fixtures/openapi-baseline.json` and the generated
+migrations registry (`backend/src/db/migrations-registry.generated.ts`) — files of T003, T004, T008,
+T025, T092, T094. Whichever merges
 second regenerates the registry and the baseline (never hand-merges) and re-checks the error-code ledger.
 **Tests**: required (Principle III). Every implementation task is preceded, in the same phase, by
 its failing test task.
@@ -26,7 +29,7 @@ Abbreviations: `PVR/` = `packages/modules/product_visibility_rules/src/`, `CAT/`
 - **[A]/[B]** stream (plan.md § *Parallel builders*); no tag = foundation, single stream.
 - Owner answers are recorded in spec.md (*Session 2026-11-25 — plan stage*): OQ-A A, OQ-B B, OQ-C A,
   OQ-D A, OQ-E A, OQ-F A, OQ-G 1, OQ-H signed off, I-2 A, I-3 A, I-4 A, plus Q1 A (first
-  channel-scoped status write after admission exempt), Q2 A (rule keeps the previous price
+  channel status write after admission exempt), Q2 A (rule keeps the previous price
   evaluation during a designation rebuild), Q3 (admin reorder / clone-to-quote and checkout of a
   converted quote also accept rule-excluded products), H2 A (only the channel-row status counts). No task is pending an owner answer. The
   release of the order checks before spec 192 is **not** decided: the gate stands.
@@ -256,9 +259,11 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
   variant-derived aggregates (variant count, axis/option value lists, stock totals, price ranges,
   media) computed from visible variants only; a payload naming a hidden variant id answers as that
   route answers a non-existent id; option/axis changes never regenerate or delete hidden variants;
-  list responses carry `Cache-Control: private, no-store` with the module on **and off** (FR-036,
-  TM-14); **FR-079**: no rule ever resurfaces an inactive, archived or deleted product on any admin read
-  or governed channel (cases with each state × restricted / unrestricted / governed channel).
+  list responses carry `Cache-Control: private, no-store` with the module on, off **and absent from
+  the composition** (FR-036, L5,
+  TM-14); **FR-079** (admin side): no visibility rule ever resurfaces an inactive, archived or deleted
+  product on any admin read (each state × restricted / unrestricted). The governed-channel side of
+  FR-079 is stream B's (T055, T056, T068 — N5).
 - [ ] T038 [A] `CAT/backend/index.ts`: resolve `adminProductVisibilityPort` per request behind
   `effectiveState.isPresent('product_visibility_rules')` (absent ⇒ `systemScope`-equivalent
   `unrestricted`; present and throwing ⇒ propagates, **TM-3 (4)**); `CAT/manifest.ts`
@@ -393,7 +398,9 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   attach requires preview (FR-053); counts per channel; confirm applies **exactly** the snapshot
   (SC-004); stale preview refused; second rule on a channel refused, one rule on two channels (US4-7);
   detach leaves membership and deletes the channel's `website_rule_admissions` rows (FR-058); no rule ⇒ membership unchanged on install/enable (US4-1, FR-052);
-  audit `source` names the rule (FR-072); **TM-11**: confirm by anyone but the session admin who
+  audit `source` names the rule (FR-072); **FR-079 (N5)**: attaching or changing a rule never adds an
+  inactive, archived or deleted product to a governed channel, and the preview never counts one as a
+  join; **TM-11**: confirm by anyone but the session admin who
   created the preview ⇒ not found; per-admin cap on concurrent previews (3) and a size cap on
   `website_rule_preview_changes` (2 000 000 rows) ⇒ `409 WEBSITE_RULE_PREVIEW_LIMIT`; Zod bounds on `sales_channel_ids` (≤ 50),
   conditions (≤ 20), option keys (≤ 100), string lengths, under the route `bodyLimit`.
@@ -403,9 +410,10 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
 - [ ] T058 [B] Preview job + tables (caps of T056), confirm (`attach` / `change` Commands; creator check
   against the session), apply job writing the snapshot with the governor token in transactions of 500
   (`PVR/backend/services/website-rule.service.ts`, `PVR/backend/workers/website-rule-worker.ts`);
-  **the apply job is the only writer of `website_rule_admissions`** (M4): a row per governor-token add,
-  deleted per governor-token remove, and all rows of a channel deleted on detach (LOW 17; asserted in
-  T056).
+  **`website_rule_admissions` writers (M4, N2)**: the apply job inserts a row per governor-token add,
+  deletes it per governor-token remove and deletes all rows of a channel on detach (LOW 17; asserted
+  in T056); the reactivation hook (T068) deletes the row with every token removal it makes and sets
+  `post_admission_status_seen` on the first channel-status write — no other writer.
 - [ ] T059 [B] Steady state: marks from `product.created.v1` / `product.updated.v1` /
   `product.archived.v1` / `product.deleted.v1` and from flag refreshes; debounced evaluation job (30 s);
   window-boundary delayed jobs from `designationStatus.window`; hourly reconcile per governed channel.
@@ -451,7 +459,11 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   `onGoverned: 'refuse'`; contract test `BT/contract/sales_channels/governed-membership.contract.test.ts`
   (US4-3 manual refusal, translated, membership unchanged). Also the `sales_channels` part of the
   FR-082 error-details sweep (moved here from T046, stream B owns the module): no error answer names
-  a product hidden from the caller other than the addressed one.
+  a product hidden from the caller other than the addressed one. **N8**: failing test first in
+  `BT/contract/sales_channels/error-details-visibility.contract.test.ts` for every refusal of the
+  channel-side membership routes; if the sweep finds no `details` / message naming another product,
+  the task records that evidence (the grep and its empty result) in the PR and the test asserts the
+  current shapes so a later regression fails.
 - [ ] T066 [B] `PVR/backend/services/membership-governor.ts`: `governs` reads `website_rule_attachments`
   on the passed `em`; contributed from the module's boot hook (contribution sink, filtered by
   presence); the token is held in a module-local closure of the website-rule service and **never
@@ -465,17 +477,22 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   `product.bulk_update.undo`, `product.scopes.update`, `product.scoped_values.save`,
   `product.scoped_values.import`); the connector cases are driven through
   `catalogProductScopeWritePort.applyScopes` (and the CSV import), not only the admin routes.
-  **Owner H2 A**: only the channel-row status (scope level `channel`) counts for reactivation; a
+  **Owner H2 A**: only the **channel status (scope level `channel`)** counts for reactivation; a
   per-language status (`channel_language`) never does — test case: on an admitted product, a
-  per-language status inactive → active written through `applyScopes` leaves the membership in place
-  and marks nothing. Create / duplicate /
+  per-language status inactive → active written through `applyScopes` leaves the membership in place,
+  marks nothing and leaves `post_admission_status_seen` **unset** (N3). Create / duplicate /
   import / connector-shaped calls skipped on a governed channel (US4-3); global transition to active /
   un-archive ⇒ governed memberships removed in the same transaction with the token and the product
-  marked; a **channel-scoped** status moving to active on a governed channel ⇒ that one membership
-  removed (FR-092, OQ-F A) — **except** the first channel-scoped status write on that channel after
-  the product's admission, even inactive → active (FR-093, Q1 A; read from the admissions ledger
-  written by T058; the hook sets `post_admission_status_seen`); a write that does not move status to active is no reactivation; never on the governed
-  channel before admission, admitted ≤ 5 min (US4-6, FR-059, SC-005); remove + re-admit keeps
+  marked; a **channel status** (scope level `channel`) moving to active on a governed channel ⇒ that one
+  membership removed (FR-092, OQ-F A) — **except** the first channel-status write on that channel
+  after the product's admission, even inactive → active (FR-093, Q1 A; read from the admissions
+  ledger; the hook sets `post_admission_status_seen`). **N2**: every token removal the hook makes
+  deletes that (channel, product) admissions row in the same transaction; the next admission by the
+  apply job inserts a fresh row, so the exemption applies again — test case: admit → first
+  channel-status write (exempt) → later inactive → active (evicted, row deleted) → re-admit → first
+  channel-status write after re-admission exempt again; a write that does not move status to active is no reactivation; never on the governed
+  channel before admission, admitted ≤ 5 min (US4-6, FR-059, SC-005); a product deactivated, archived
+  or deleted is never re-admitted while so (FR-079, N5); remove + re-admit keeps
   channel-scoped values.
 - [ ] T069 [B] Off-state test `BT/integration/product_visibility_rules/off-state.governance.test.ts`:
   module off ⇒ no write refused or skipped, hook not run, pending-admission scoped values refused as
@@ -483,8 +500,11 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
 - [ ] T070 [A] (after T060, T063, T066) **FR-093 (I-4)** — the refusal seam is
   `resolveRequestScope` (`CAT/backend/services/scoped-values-state.ts:181-215`, `not_a_member` at
   `:204`), shared by the save (`commands/scoped-values.commands.ts:127,284,298`), the import / connector
-  path (`services/scoped-values-import.ts:241`) and the read (`scoped-values-read.service.ts:324`), plus
-  the twin checks in `product-scopes.service.ts:243` and `url-key.service.ts:275`. Add an option
+  path (`services/scoped-values-import.ts:241`), the scope resolution of the scoped-values service
+  (`services/scoped-values.service.ts:50`, L1) and the read (`scoped-values-read.service.ts:324`), plus
+  the twin checks in `product-scopes.service.ts:243` and `url-key.service.ts:275`. **N6**: every one of
+  these writers stores pending values for a governed channel (connector `applyScopes`, CSV import,
+  admin save, copy to channels, scopes update, URL keys) — FR-093 as approved by the owner. Add an option
   `governedPending: ReadonlyMap<channelId, languages[]>` that **callers** build from
   `productRuleGovernancePort.governedChannels()` (presence-probed; absent ⇒ empty ⇒ today's
   `SCOPE_INVALID`) and the channel's own languages; `resolveRequestScope` itself stays pure. Writes
@@ -493,20 +513,22 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   governed pending channel for an unrestricted caller (shows the pending values, documented in T094);
   for a restricted caller the product is already subject to FR-033. Failing test first
   `BT/integration/product_visibility_rules/pending-admission-values.test.ts`, driven through
-  `catalogProductScopeWritePort.applyScopes`, the CSV import and the admin save: a write before
+  `catalogProductScopeWritePort.applyScopes`, the CSV import, the admin save, copy to channels, the
+  scopes update and the URL-key write: a write before
   admission is stored, readable by an unrestricted admin, the product appears on admission with those
   values, a write on an ungoverned non-member channel is still `SCOPE_INVALID`.
 
 **Verification**: `pnpm --filter @endora-commerce/platform exec vitest run src/kernel/sales-channels`;
-`pnpm --filter backend exec vitest run test/unit/kernel/channel-product-bridge-writers.test.ts test/contract/sales_channels/governed-membership.contract.test.ts test/integration/catalog/bulk-update-governed-channel.test.ts test/integration/product_visibility_rules/admission.test.ts test/integration/product_visibility_rules/pending-admission-values.test.ts test/integration/product_visibility_rules/off-state.governance.test.ts test/contract/kernel/harness-parity.test.ts`;
+`pnpm --filter backend exec vitest run test/unit/kernel/channel-product-bridge-writers.test.ts test/contract/sales_channels/governed-membership.contract.test.ts test/contract/sales_channels/error-details-visibility.contract.test.ts test/integration/catalog/bulk-update-governed-channel.test.ts test/integration/product_visibility_rules/admission.test.ts test/integration/product_visibility_rules/pending-admission-values.test.ts test/integration/product_visibility_rules/off-state.governance.test.ts test/contract/kernel/harness-parity.test.ts`;
 `pnpm --filter backend run check:kernel-boundary && pnpm --filter backend run check:platform-surface && pnpm --filter backend run check:port-catches && pnpm --filter backend run check:container-imports`.
 
 ### ✅ Review checkpoint 1 — backend block (after Phases 1 – 7)
 
 `qa-engineer`, `code-reviewer`, `security-engineer` in parallel on a model other than the
 author's, against `threat-model.md` TM-1 – TM-14 (re-review Phases 4, 5a/5b, 7); `product-owner`
-checks the **ungated** backend FRs — FR-001 – FR-036, FR-038, FR-050 – FR-062, FR-070 – FR-088,
-FR-092, FR-093 — traceability (M5). FR-037, FR-039 – FR-043, FR-090, FR-091 are gated on spec 192 and
+checks the **ungated** backend FRs — FR-001 – FR-036, FR-038, FR-050 – FR-062, FR-070 – FR-073,
+FR-075, FR-077 – FR-088, FR-092, FR-093 — traceability (M5, L6; FR-074 and FR-076 are UI strings and
+the activation text, accepted at checkpoint 2). FR-037, FR-039 – FR-043, FR-090, FR-091 are gated on spec 192 and
 are reviewed at checkpoint 3 only. Gate: findings closed before Phase 8.
 
 ---
@@ -531,15 +553,15 @@ are reviewed at checkpoint 3 only. Gate: findings closed before Phase 8.
   `visibility` field (catalog admin, stream A file `CAT/admin/…` — coordinate); test
   `admin/test/modules/catalog/ProductList.visibility-banner.test.tsx` (LOW 15); **TM-14**: confirm the
   admin SPA query cache is dropped on sign-out and on a `401` (admin-shell; fix there if not).
-- [ ] T077 Palette actions (two), nav entry with `requiredPermission`, i18n pl+en for every string incl.
+- [ ] T077 Failing test first (L3): `BT/unit/product_visibility_rules/activation-texts.test.ts` (moved
+  from T078) and the palette-coverage case for the two actions; then palette actions (two), nav entry
+  with `requiredPermission`, i18n pl+en for every string incl.
   the FR-073 warning; **TM-13**: the module's activation description and deactivation consequence
   text on `/platform/modules` state that every restricted role becomes unrestricted while off;
   **FR-076 (M10)**: the activation text states that turning it on applies FR-023 at once (unmapped
   roles holding `rfqs:handle` see no products until mapped).
 - [ ] T078 Off-state UI test: no nav, palette, zone contribution, banner while off; **TM-14** test that
-  a second admin signing in on the same tab sees no list rows cached from the first; **M10**: the
-  manifest's activation / deactivation texts (pl + en) contain the FR-076 and FR-073 sentences
-  (`BT/unit/product_visibility_rules/activation-texts.test.ts`).
+  a second admin signing in on the same tab sees no list rows cached from the first.
 - [ ] T079 UX pass against `.claude/skills/ux-laws/SKILL.md` (states: loading, empty, error, refused,
   building generation).
 
@@ -552,6 +574,7 @@ are reviewed at checkpoint 3 only. Gate: findings closed before Phase 8.
 
 `designer` + `code-reviewer` + `qa-engineer` in parallel (different model from the author);
 `product-owner` accepts US1 (except its gated scenarios US1-9, US1-13, US1-14, US1-20), US2 and US4
+(except its gated scenarios US4-10 and US4-12 — N4), plus FR-074 and FR-076,
 against quickstart.md (M5). Release before checkpoint 3 ships no gated behaviour: Phases 9a/9b do
 not start until spec 192 merges.
 
@@ -574,14 +597,16 @@ not-found answer.
   reorder / clone untouched; unrestricted unchanged (US1-9, US1-13, FR-037, FR-039, RQ-2 C);
   **clone-to-quote** refused the same way, per variant, nothing created (C1: the failing case for
   T082); **US1-20**: a base-book row removed ⇒ an admin order line for that product is refused at once,
-  before the flags refresh (line checks exact, OQ-A).
+  before the flags refresh (line checks exact, OQ-A); one case submitted from a CRM opportunity hand-off
+  (FR-087, R-19).
 - [ ] T081 `packages/modules/orders/src/backend/routes.ts` (`/api/v1/admin/orders`, `/preview`,
   `/:id/reorder`): `checkLines` behind presence probe; `orders/manifest.ts` `degrades-without` entry.
 - [ ] T082 Clone-to-quote (`orders/backend/services/order-clone-to-quote-service.ts`): same refusal
   (its failing case is in T080's file, written first).
 - [ ] T083 [P] Failing test `BT/integration/quote_requests/visibility-lines.test.ts`: create / add line /
   change product refused naming lines (US3-1); existing out-of-category line editable and removable,
-  product not changeable, not re-addable (US3-2, FR-042); per variant (US3-5).
+  product not changeable, not re-addable (US3-2, FR-042); per variant (US3-5); one case from a CRM
+  opportunity hand-off (FR-087, R-19).
 - [ ] T084 `quote_requests` (`RfqAdminService` create / modify as left by 192): `checkLines`;
   `quote_requests/manifest.ts` `degrades-without` entry.
 - [ ] T085 [A] **Failing contract test first** `BT/contract/catalog/no-fixed-price-field.contract.test.ts`
@@ -619,8 +644,12 @@ pending admission (FR-093) do not count.
 - [ ] T089 [P] Failing integration test `BT/integration/carts/quote-conversion-rule-excluded.test.ts`:
   an accepted quote's line whose product (or variant) is absent from the request channel **only**
   because of the website rule is kept on conversion and through checkout and order placement; a line
-  absent for any other reason (inactive, archived, deleted, channel-row status inactive, non-member of
-  an ungoverned channel) is dropped / refused as today; storefront listing, search, type-ahead and URL
+  absent for any other reason (inactive, archived, deleted, non-member of an ungoverned channel) is
+  dropped / refused as today; **N1 (owner)**: the setup stores a channel status for the governed
+  non-member product — `inactive` ⇒ the line is dropped / refused; `active` or inherited (no stored
+  value) ⇒ kept; the stored value counts whenever it was written (before admission, after admission or
+  left over from an earlier membership) — **US4-13**: a rule-excluded product with an inactive channel
+  status, stored pending admission or left over, is absent for another reason and is dropped; storefront listing, search, type-ahead and URL
   still hide it; module off or rule detached ⇒ today's behaviour (FR-090). **H2 A case**: a
   sales-team-only product whose channel-row status is active but whose per-language status is inactive
   in **every** language of the channel (and which has FR-093 pending cells) is kept through conversion,
@@ -631,9 +660,12 @@ pending admission (FR-093) do not count.
   refuse other out-of-channel products; for a restricted user the category check of T080 still applies
   first (FR-091, FR-037, FR-039); module off ⇒ today; **H2 A case**: the same product inactive in every
   language of the channel passes admin create, preview, reorder and clone-to-quote (US4-12).
-- [ ] T091 `productRuleGovernancePort.excludedOnlyByRule(channelId, refs)` in `PVR`: its own
-  attachments table, the membership port (`filterEntityIdsInChannel`) and catalog **read ports** for
-  status / archive / channel status — no SQL against another module's table (LOW 11); unit test
+- [ ] T091 `productRuleGovernancePort.excludedOnlyByRule(channelId, refs)` in `PVR` — a simple read
+  (N1): channel governed (own attachments table) ∧ not a member (membership port
+  `filterEntityIdsInChannel`) ∧ active, not archived, not deleted ∧ the **currently stored channel
+  status** (scope level `channel`, catalog read port) is not `inactive`; per-language statuses are never
+  read. No SQL against another module's table (LOW 11); unit test (incl. US4-13: inactive channel status
+  stored pending or left over ⇒ false)
   `PVR/backend/services/product-rule-governance.test.ts`.
 - [ ] T092 `carts`: conversion (`cart-conversion-service.ts:239`, re-measured after 192) and the
   checkout / placement channel check keep lines from an accepted quote that are excluded only by the
@@ -694,11 +726,12 @@ the targeted backend files of Phases 2 – 9b; full backend suite runs on `maste
 | FR-054, FR-055, FR-059 | T060, T062, T064, T065, T067, T068 |
 | FR-060 – FR-062 | T017 (FR-060 next-request integration case), T026, T029, T030, T032, T035, T059 |
 | FR-070 – FR-077 | T018, T024, T031, T044, T050, T051, T061, T069, T078, T088 |
-| FR-079 | T037, T055 |
+| FR-079 | T037 (admin reads), T055, T056, T068 (governed channel, stream B) |
 | FR-080 – FR-082 | T045, T046, T048 (assistant-tools test, 5b), T051 (SC-009 sweep), T065 (sales_channels details) |
 | FR-083 – FR-085 | T051 – T054 |
 | FR-086 – FR-088 | T017, T021, T094 (docs) |
-| FR-090, FR-091 | T089, T090 incl. the H2 A case (product inactive in every language still passes) (gated) |
+| FR-090, FR-091 | T089 (incl. N1 setup, US4-12, US4-13), T090, T091 (gated) |
+| FR-087 (CRM opportunity paths) | T080, T083 (one case each; R-19 verified no separate path) |
 | FR-092, FR-093 | T049 (hookable inventory test), T068 (incl. H2 A: a per-language status write never reactivates), T070 |
 | SC-001 – SC-007 | T026, T037, T056, T059, T068, T035/T098, T099 (SC-006 timing) |
 | SC-008 | T035 (asserted at 50 000 products), T026, T032 |

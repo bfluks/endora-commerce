@@ -6,10 +6,11 @@ RQ-1 **A**, RQ-2 **C**, RQ-3 **A** of 2026-11-25). Issue #1908.
 **Measured against**: `origin/master` **`c3e8a8755`** (the spec cited `67351db04`; the line
 numbers these design documents cite were read at `c3e8a8755`; the spec's own F1 – F9 citations
 were not all re-checked). Spec 192 re-measured on its fork branch
-`feat/192-quote-request-draft-share` at `bd1edae62` (not on `origin`, no PR): it touches no file under
+`feat/192-quote-request-draft-share` at `3c740f2c0` (not on `origin`, no PR): it touches no file under
 `orders/` or `packages/admin-kit/`, but does touch `carts/.../cart-conversion-service.ts`,
-`packages/contracts/src/errors.ts`, the OpenAPI baseline and the migrations registry — conflict risk
-with T004, T008, T025 (tasks.md header). Open PR #1914 (quote_requests port): re-measure before 9a.
+`packages/contracts/src/{errors,index}.ts`, the error-code reference ledgers, `_i18n` bundles,
+`carts/docs/carts.md`, the OpenAPI baseline and the migrations registry — conflict risk with T003,
+T004, T008, T025, T092, T094 (tasks.md header). Open PR #1914 (quote_requests port): re-measure before 9a.
 
 ## Summary
 
@@ -204,7 +205,7 @@ every other change is a seam in the owner of the surface it narrows.
   variant narrowing and marker, and the `orders` create / preview / reorder / clone-to-quote checks
   start only after spec 192 (issue #1901) has merged to `master` (coordinator instruction).
   Deviation recorded: the spec says FR-037 could start at once, and spec 192's branch at
-  `bd1edae62` touches no file under `packages/modules/orders/` or `packages/admin-kit/`; the
+  `3c740f2c0` touches no file under `packages/modules/orders/` or `packages/admin-kit/`; the
   coordinator may lift the gate for T080 – T081 (orders only) without re-planning. Clone-to-quote
   stays gated (it reaches `RfqAdminService.createOnBehalf`, which 192 rewrites). The owner has not
   decided the early release, so the gate stands. **Phase 9b shares the gate**: quote → cart conversion
@@ -213,6 +214,10 @@ every other change is a seam in the owner of the surface it narrows.
   if the owner releases those.
 - Before Phase 9a/9b: rebase, re-measure `cart-conversion-service.ts`, re-measure every cited line in `rfq-admin-service.ts`,
   `RfqCreatePage.tsx`, `RfqDetail.tsx`, `ProductPicker.tsx`, `product-browser-api.ts`.
+
+**External dependency (informational)**: a separate PIM-connector spec adds a setting so the
+connector stops writing an inactive channel status for products hidden in every language (relevant
+under N1, R-18). This plan does not wait for it.
 
 ## Parallel builders (max 2 after Phase 4)
 
@@ -250,6 +255,8 @@ No owner question is open (H2 answered 2026-11-25). Decisions and where the plan
 | Q2 designation rebuild and the website rule | **A**: the rule's price conditions keep the previous evaluation (no storefront drop / re-add); admin restricted reads stay fail-closed | R-11, R-17; T026, T059 |
 | H2 which channel status counts (FR-090 – FR-092) | **A**: only the channel-row status; per-language statuses decide storefront per-language visibility only, never a sales-team path or a reactivation; FR-093 pending cells do not count | R-11, R-18; T068, T089, T090 |
 | Analyze round (spec `7297a69c7`): FR-079 rules only narrow; FR-031 aggregates; FR-033 bulk operations; FR-036 `no-store` in every module state; FR-043 pinned texts; FR-086 only the `audit_logs:read` warning | recorded in spec | FR-079: T037, T055; FR-031: T037, T039, T047; FR-033: T036, T042; FR-036: T037, T039; FR-043: T085 – T087; FR-086: T021 |
+| N1 stored channel status for rule-excluded products (FR-090, FR-091) | the currently stored channel status always counts, whenever it was written; per-language never | ports §2, R-18; T089, T091 |
+| FR-093 writers and read (round 2) | every writer stores pending values; unrestricted admins read them | R-11; T070 |
 | Release of order checks before spec 192 | **not decided** — the gate stands | § *Sequencing* |
 
 ### TM-9 surfaces (signed off, OQ-H)

@@ -169,11 +169,14 @@ Up to channels × products rows; deleted with the preview (expired previews are 
 | `sales_channel_id` | uuid | |
 | `product_id` | uuid | |
 | `admitted_at` | timestamptz | written by the apply job with each governor-token add |
-| `post_admission_status_seen` | boolean not null default false | the first channel-scoped status write after admission sets it and is exempt from the reactivation hook |
+| `post_admission_status_seen` | boolean not null default false | the first channel status write (scope level `channel`) after admission sets it and is exempt from the reactivation hook |
 
-PK `(sales_channel_id, product_id)`. Written **only** by the apply job (T058): inserted with each
-governor-token add, deleted with each governor-token remove, and every row of a channel deleted on
-detach (FR-058). The reactivation hook (T068) only sets `post_admission_status_seen`.
+PK `(sales_channel_id, product_id)`. Writers (N2): the apply job (T058) inserts a row with each
+governor-token add, deletes it with each governor-token remove and deletes every row of a channel on
+detach (FR-058); the reactivation hook (T068) deletes the row with each token removal it makes (so a
+re-admission starts a fresh row and the FR-093 exemption applies again) and sets
+`post_admission_status_seen` on the first **channel status** write (scope level `channel`) after
+admission — a per-language status write never sets it (N3).
 
 ### `website_rule_stale_products`
 

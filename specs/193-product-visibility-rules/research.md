@@ -345,9 +345,9 @@ presence check on a foreign module id, and governance state would live outside i
   (feature 163; written by `product.scopes.update` and the scoped-values save, which is how a
   connector switches a product on and off per channel): owner OQ-F A (FR-092) — a channel-scoped
   status moving to active **on a governed channel** is a reactivation for that channel; the same hook
-  evicts that one membership and the job re-admits it. **Owner H2 A**: only the channel-row status (scope level `channel`) counts;
+  evicts that one membership and the job re-admits it. **Owner H2 A**: only the channel status (scope level `channel`) counts;
   per-language statuses decide only storefront per-language visibility and never reactivate. **Exception (FR-093, I-4 A, Q1 A)**: the
-  first channel-scoped status write on that channel after the product's admission is not a
+  first channel status write (scope level `channel`) on that channel after the product's admission is not a
   reactivation, even inactive → active — a connector's first sync after admission sets the
   per-channel state it was holding. The module records each admission in `website_rule_admissions`
   (channel, product, admitted_at, `post_admission_status_seen`), written only by the apply job; the
@@ -359,8 +359,8 @@ presence check on a foreign module id, and governance state would live outside i
   (presence-probed; absent ⇒ empty ⇒ today's `SCOPE_INVALID`), so the function stays pure and the
   allowance is visible at each call site. Writes are stored and never add a membership; the product
   appears with them on admission. **Read side** (`scoped-values-read.service.ts:324`): an
-  unrestricted admin may read the pending values of a governed channel (decided here; documented in
-  T094); a restricted caller is already subject to FR-033 for the product. **Rejected**: letting
+  unrestricted admin may read the pending values of a governed channel (FR-093 as amended by the owner;
+  documented in T094); every writer listed above stores pending values (N6); a restricted caller is already subject to FR-033 for the product. **Rejected**: letting
   `resolveRequestScope` call the port itself (a pure helper would acquire a cross-module dependency
   and a presence probe).
 - **Designation rebuild and the rule (Q2 A)**: while a currency's new generation builds, the
@@ -493,10 +493,16 @@ map*.
 **Decision**: `productRuleGovernancePort.excludedOnlyByRule(channelId, refs)` answers, per product
 (or variant), whether it is absent from the channel **only** because the channel's website rule
 excludes it: the channel is governed, the product is not a member, it is active, not archived or
-deleted, and its channel-scoped status there is not inactive (owner **H2 A**: the channel-row
-status only; per-language statuses and values stored pending admission do not count — a product
-inactive in every language of the channel still passes these paths).
-Built from the module's own tables, the membership port and catalog read ports only. Callers keep today's check and add
+deleted — and its **currently stored channel status** (scope level `channel`) is not `inactive`
+(owner N1: the stored value counts whenever it was written — before admission, after admission or
+left over from an earlier membership; inherited / no value counts as not inactive). Per-language
+statuses are never read (H2 A); they decide only storefront per-language visibility. Built from the
+module's own tables, the membership port and catalog read ports only.
+
+**External dependency (not this spec)**: a PIM connector under a "follow publish" policy writes an
+inactive channel status for a product hidden in every language, which under N1 makes such a product
+drop out of the sales-team paths. A separate connector spec adds a setting to stop writing that
+channel status for hidden-everywhere products; nothing in this plan depends on it. Callers keep today's check and add
 this one as an allowance:
 - `carts`: quote → cart conversion keeps such lines (`cart-conversion-service.ts:239`), and
   checkout / order placement does not drop or refuse them **when the cart line came from an accepted
@@ -512,3 +518,13 @@ share 9a's gate, which the owner kept).
 **Rejected**: re-adding the product to the channel for the duration of the order (a membership write
 the rule would undo, visible on the storefront meanwhile); a separate "sales channel" requirement
 (OQ-B A, not chosen).
+
+## R-19 CRM opportunity → order / quote (FR-087, analyze round 2)
+
+**Verified at `c3e8a8755`**: the CRM module creates no order or quote itself. "Create from
+opportunity" (`crm/src/admin/components/CreateFromOpportunity.tsx:32-39`) navigates to the admin
+screens `/orders/new` and `/quote-requests/new`, which submit `POST /api/v1/admin/orders` and
+`POST /api/v1/admin/quote-requests`; the CRM admin API only **reads** orders and quotes
+(`crm/src/admin/api.ts:275,286,594,607`), and the CRM backend has no product-line write. So FR-037 /
+FR-041 checks (T081, T084) and the FR-091 allowance (T093) already cover the opportunity paths; no
+extra task. T080 / T083 each add one case starting from an opportunity hand-off (same request body).

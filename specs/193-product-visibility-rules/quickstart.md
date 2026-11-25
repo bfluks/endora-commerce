@@ -49,7 +49,12 @@ one A-priced and one unpriced variant.
    admission it appears with them; that first channel status write after admission does not evict it
    (FR-093, Q1). A later channel-row status inactive → active on X evicts it until re-admitted
    (FR-092); a per-language status change never does (H2 A).
-5. Detach: membership stays; the channel screen accepts manual edits again.
+5. Archive a member product that meets the rule: it leaves X within 5 minutes and is never re-admitted
+   while archived; deactivate another: same (FR-079).
+6. Create a product that meets the rule while X is its only possible channel and the default channel
+   is governed: it ends on **no** channel until admitted (FR-059's zero-channel exception), and the
+   admin still finds it.
+7. Detach: membership stays; the channel screen accepts manual edits again.
 
 ## Off state
 
@@ -66,4 +71,6 @@ rebuild are queued.
    converts it to a cart on X, checks out and places the order — the line is kept throughout
    (FR-090); an administrator creates, previews, reorders and clones an order with it on X (FR-091).
    This holds even when the product is inactive in every language of X (H2 A: only the channel-row
-   status counts). A product absent from X for another reason is still dropped / refused.
+   status counts). The same product with an inactive **channel status** on X — stored before admission
+   or left over — is absent for another reason and is dropped (US4-13, N1). A product absent from X for
+   another reason is still dropped / refused.

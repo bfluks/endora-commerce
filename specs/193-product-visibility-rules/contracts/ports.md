@@ -77,12 +77,13 @@ interface ProductRuleGovernancePort {
   /** Whether each product meets the rule governing the channel now (status, archive, attributes, flags). `null` map ⇒ channel not governed. */
   meetsRule(salesChannelId: string, productIds: readonly string[]): Promise<ReadonlyMap<string, boolean> | null>;
   /**
-   * FR-090, FR-091 (R-18): per ref, true when the product (or variant) is absent from the channel only
-   * because the channel's website rule excludes it — governed, not a member, active, not archived or
-   * deleted, channel-scoped status not inactive. Ungoverned channel ⇒ all false.
-   * Owner H2 A: "channel-scoped status" is the channel-row status only (scope level `channel`);
-   * per-language statuses and values stored pending admission (FR-093) do not count.
-   * Built from own tables + the membership port + catalog read ports only (no foreign SQL).
+   * FR-090, FR-091 (R-18, owner N1): per ref, true when the product (or variant) is not a member of
+   * the governed channel only because the rule excludes it — channel governed, not a member, active,
+   * not archived or deleted — AND its currently stored channel status (scope level `channel`) is not
+   * `inactive` (inherited / no stored value counts as not inactive). The stored value counts whenever
+   * it was written (pending admission, after admission, or left over); per-language statuses are never
+   * read. Ungoverned channel ⇒ all false. Built from own tables + the membership port + catalog read
+   * ports only (no foreign SQL).
    */
   excludedOnlyByRule(
     salesChannelId: string,
