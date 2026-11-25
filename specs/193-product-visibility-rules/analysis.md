@@ -61,3 +61,19 @@ Analyzed `503f528fb` (read-only). `origin/master` `c3e8a8755`, 0 commits on wide
 LOW: L1 `scoped-values.service.ts:50` caller missing in T070; L2 192 tip/overlap files stale; L3 T077 before T078; L4 threat-model:200 warnings vs FR-086; L5 `no-store` with module absent; L6 checkpoint 1 range FR-074/076; L7 quickstart FR-079 + zero-channel walks; L8 Status line.
 
 Related client-side finding (TM analyze round 2): a PIM connector under a "follow publish" policy writes an inactive channel status for a product hidden in every language and creates it globally inactive — interacts with N1.
+
+## Round 3 — 2026-11-25
+
+Analyzed `dda1f554a` (read-only). `origin/master` `c3e8a8755`, 0 commits on widened paths (incl. `crm`, `projects`). Spec 192: issue open, no PR, fork `53db5236f` (+1 docs-only: `docs/docs/upgrading-an-instance.md` en+pl, carts docs, changeset). PR #1914 open. R-19 verified (CRM "create from opportunity" only navigates to `/orders/new`, `/quote-requests/new`; CRM/projects only read orders/quotes).
+
+**Verdict: analyze clean** — 0 CRITICAL, 0 HIGH, 2 MEDIUM, 5 LOW. Round 2: N1–N8, L1–L7 closed; L8 deferred.
+
+| ID | Severity | Location | Summary | Fix owner |
+| --- | --- | --- | --- | --- |
+| R1 | MEDIUM | tasks checkpoint 2 | Gated US4-13 not excluded | architect |
+| R2 | MEDIUM | tasks Phase 9b preamble | Still "pending values do not count" vs N1 | architect |
+| R3 | LOW | research R-11; plan OQ-F row | "written only by the apply job"; "channel-scoped" wording | architect |
+| R4 | LOW | T090 | No N1 / US4-13 case on admin order paths | architect |
+| R5 | LOW | spec US4-13 | Omits clone-to-quote | product-owner |
+| R6 | LOW | plan, spec, tasks conflict note | 192 @ `53db5236f` touches `upgrading-an-instance.md` | architect + product-owner |
+| L8 | LOW | spec Status line | Update to "analyze clean (round 3)" | product-owner |
