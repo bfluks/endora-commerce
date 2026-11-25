@@ -1,4 +1,4 @@
-import { Entity, PrimaryKey } from '@mikro-orm/core';
+import { Entity, PrimaryKey } from '@mikro-orm/decorators/legacy';
 import { GlobalEntity } from '@endora-commerce/platform/tenancy';
 
 /** One product joining or leaving one channel in a preview (data-model §3); deleted with it. */
