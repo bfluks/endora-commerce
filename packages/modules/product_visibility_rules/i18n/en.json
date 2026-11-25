@@ -3,7 +3,7 @@
   "module.description": "Limits which products an administrator role sees by the products’ catalogue prices, and lets a sales channel’s products follow a configurable rule.",
   "settingGroups.product_visibility_rules.name": "Product visibility rules",
   "settingLabels.product_visibility_rules.module_enabled.name": "Product visibility rules module enabled",
-  "settingLabels.product_visibility_rules.module_enabled.description": "On: mapped roles see only their category’s products, unmapped roles handling quote requests see none until mapped. Off: every restriction is lifted; the configuration is kept.",
+  "settingLabels.product_visibility_rules.module_enabled.description": "On: mapped roles see only their category’s products; unmapped quote handlers see none. Off: no restriction.",
   "adminRoles.permission.product_visibility:read": "View product visibility rules",
   "adminRoles.permission.product_visibility:manage": "Manage product visibility rules",
   "actions.openProductVisibility.label": "Product visibility rules",

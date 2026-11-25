@@ -126,8 +126,9 @@ export type VisibilityPredicate =
   | { kind: 'deny' };
 
 /**
- * Container name: `adminProductVisibilityPort`. Owner: `product_visibility_rules`. A
- * capability read port.
+ * Owner: `product_visibility_rules`. A capability read port, published as
+ * `adminProductVisibilityPort` when its implementation lands (spec 193 Phase 4, T031 – T033);
+ * the type is declared now so the contract is reviewed with the configuration.
  *
  * **Owner off:** consumers probe `effectiveState.isPresent('product_visibility_rules')`
  * before resolving and treat absent as unrestricted (`degrades-without`: admin product
@@ -213,8 +214,9 @@ export type ProductRuleDefinition = z.infer<typeof ProductRuleDefinitionSchema>;
 // ────────────────────────────────────────────────────────────────────────
 
 /**
- * Container name: `productRuleGovernancePort`. Owner: `product_visibility_rules`. A
- * capability read port (FR-055).
+ * Owner: `product_visibility_rules`. A capability read port (FR-055), published as
+ * `productRuleGovernancePort` when the website rule lands (spec 193 Phase 6); the type is
+ * declared now so the contract is reviewed with the configuration.
  *
  * **Owner off:** the port gate answers 503 `MODULE_DISABLED`; a connector that probes
  * presence first treats absent as "nothing governed", consistent with the kernel.
