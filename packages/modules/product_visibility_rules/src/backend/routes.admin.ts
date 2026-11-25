@@ -111,13 +111,12 @@ export async function registerProductVisibilityAdminRoutes(
       throw new HttpError(403, ERROR_CODES.FORBIDDEN, 'Only an administrator who sees every product may change product visibility.');
     }
   }
-  const WRITE = [MANAGE, unrestrictedCaller];
 
   app.get(`${BASE}/overview`, { preHandler: READ }, async () => ({ data: await config.overview() }));
 
   app.post(
     `${BASE}/categories`,
-    { preHandler: WRITE, schema: { body: productVisibilityCategoryCreateBodySchema } },
+    { preHandler: [MANAGE, unrestrictedCaller], schema: { body: productVisibilityCategoryCreateBodySchema } },
     async (request, reply) => {
       const body = productVisibilityCategoryCreateBodySchema.parse(request.body);
       const created = await config.createCategory(body);
@@ -128,7 +127,7 @@ export async function registerProductVisibilityAdminRoutes(
 
   app.patch<{ Params: { id: string } }>(
     `${BASE}/categories/:id`,
-    { preHandler: WRITE, schema: { body: productVisibilityCategoryUpdateBodySchema } },
+    { preHandler: [MANAGE, unrestrictedCaller], schema: { body: productVisibilityCategoryUpdateBodySchema } },
     async (request, reply) => {
       const body = productVisibilityCategoryUpdateBodySchema.parse(request.body);
       const updated = await config.updateCategory(categoryId(request.params.id), body, expectedVersionOf(request));
@@ -136,7 +135,7 @@ export async function registerProductVisibilityAdminRoutes(
     },
   );
 
-  app.delete<{ Params: { id: string } }>(`${BASE}/categories/:id`, { preHandler: WRITE }, async (request, reply) => {
+  app.delete<{ Params: { id: string } }>(`${BASE}/categories/:id`, { preHandler: [MANAGE, unrestrictedCaller] }, async (request, reply) => {
     await config.deleteCategory(categoryId(request.params.id), expectedVersionOf(request));
     reply.status(204);
     return null;
@@ -144,7 +143,7 @@ export async function registerProductVisibilityAdminRoutes(
 
   app.put<{ Params: { roleId: string } }>(
     `${BASE}/role-mappings/:roleId`,
-    { preHandler: WRITE, schema: { body: productVisibilityRoleMappingBodySchema } },
+    { preHandler: [MANAGE, unrestrictedCaller], schema: { body: productVisibilityRoleMappingBodySchema } },
     async (request) => {
       const body = productVisibilityRoleMappingBodySchema.parse(request.body);
       return { data: await config.setRoleMapping(roleId(request.params.roleId), body.target) };
@@ -153,14 +152,14 @@ export async function registerProductVisibilityAdminRoutes(
 
   app.put<{ Params: { currencyCode: string } }>(
     `${BASE}/designations/:currencyCode`,
-    { preHandler: WRITE, schema: { body: productVisibilityDesignationBodySchema } },
+    { preHandler: [MANAGE, unrestrictedCaller], schema: { body: productVisibilityDesignationBodySchema } },
     async (request) => {
       const body = productVisibilityDesignationBodySchema.parse(request.body);
       return { data: await config.setDesignation(currency(request.params.currencyCode), body) };
     },
   );
 
-  app.delete<{ Params: { currencyCode: string } }>(`${BASE}/designations/:currencyCode`, { preHandler: WRITE }, async (request) => ({
+  app.delete<{ Params: { currencyCode: string } }>(`${BASE}/designations/:currencyCode`, { preHandler: [MANAGE, unrestrictedCaller] }, async (request) => ({
     data: await config.clearDesignation(currency(request.params.currencyCode)),
   }));
 
