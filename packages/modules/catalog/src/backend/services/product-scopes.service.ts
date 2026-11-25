@@ -31,6 +31,7 @@ import { ProductChannelScope } from '../entities/product-channel-scope.entity.js
 import { globalScopeFields } from './product-availability.service.js';
 import type { ScopeCompletenessGate } from './scope-completeness.js';
 import { bumpScopeVersion } from './scoped-values-state.js';
+import { withProductStatusHookData } from '../commands/product-status-hook-data.js';
 
 /**
  * Feature 163 (`specs/163-product-data-scopes/`) — a product's scoped values per
@@ -817,7 +818,8 @@ export class ProductScopesService {
     request: PatchProductScopesRequest,
     options: ScopeWriteOptions = {},
   ): Promise<{ changedFields: ScopeChangedField[]; warnings: ScopeWarning[] }> {
-    const command = this.#command(productId, request, options.completeness);
+    // Spec 193 T049 — hookable (`CATALOG_HOOKABLE_ACTIONS.productScopesUpdate`).
+    const command = withProductStatusHookData(this.#command(productId, request, options.completeness), [productId]);
     let result: ScopeCommandResult;
     if (this.commandBus) {
       result = await this.commandBus.run(command);

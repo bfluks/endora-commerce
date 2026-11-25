@@ -22,6 +22,7 @@ import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kerne
 import { auditStates, ownValues, planScopedSave, withoutUnchangedCells, writeScopedSave, type ScopedSavePlan } from './scoped-values-save.service.js';
 import { bumpScopeVersion, loadScopedState, resolveRequestScope, type ScopedProductState } from './scoped-values-state.js';
 import type { UrlKeyService, UrlKeyWrite } from './url-key.service.js';
+import { withProductStatusHookData } from '../commands/product-status-hook-data.js';
 
 /**
  * Feature 174, US4 (T083, T084; `contracts/pim-locale-mapping.md` §4, R13a, R21) — the integration
@@ -366,7 +367,8 @@ export async function runScopedImport(
           },
   };
   try {
-    return await commandBus.run(command);
+    // Spec 193 T049 — hookable (`CATALOG_HOOKABLE_ACTIONS.productScopedValuesImport`).
+    return await commandBus.run(withProductStatusHookData(command, [productId]));
   } catch (error) {
     if (error instanceof NothingApplied) return error.result;
     throw error;

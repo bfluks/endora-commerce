@@ -29,6 +29,7 @@ import type {
   BulkUpdateOutcome,
 } from './catalog-bulk-update.service.js';
 import { readScopedStatuses, restoreScopedStatus, type StatusScope } from './product-scopes.service.js';
+import { withProductStatusHookData } from '../commands/product-status-hook-data.js';
 
 /**
  * BulkOperationService — queued product bulk-edit.
@@ -686,7 +687,11 @@ export class BulkOperationService {
     }));
     const restored: RestoredProduct[] = [];
     const outcome = await this.commandBus.run(
-      this.#undoCommand(operationId, records, restored, statusScopeOf(op.payload)),
+      // Spec 193 T049 — hookable (`CATALOG_HOOKABLE_ACTIONS.productBulkUpdateUndo`).
+      withProductStatusHookData(
+        this.#undoCommand(operationId, records, restored, statusScopeOf(op.payload)),
+        records.map((r) => r.recordId),
+      ),
     );
     // After commit only: `commandBus.run` has resolved, so the restores are saved.
     // The undo emits for every reverted field — a status or visibility undo used to

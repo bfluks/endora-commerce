@@ -1,5 +1,7 @@
 import {
+  CATALOG_HOOKABLE_ACTIONS,
   defineModuleManifest,
+  toHookableActionDeclaration,
   defineModuleRecentActivity,
   type CustomFieldWriteDeclaration,
   type ModuleDemoManifest,
@@ -602,6 +604,10 @@ export const manifest = defineModuleManifest({
    * its admin writes. Each arrives with a token-free sentence in both bundles —
    * their `details` carry channel ids, keys and product names, never a `code`.
    */
+  // Spec 193 T049 (research R-11) — every Command that can move a product's status (global,
+  // archive, or a channel-scoped status cell) is hookable `beforeCommit`, with
+  // `ProductStatusHookData`; `hookable-status-writers.test.ts` holds the list.
+  hookableActions: Object.values(CATALOG_HOOKABLE_ACTIONS).map(toHookableActionDeclaration),
   errorCodes: [
     { code: 'ASSET_KIND_NOT_SUPPORTED' },
     { code: 'ATTACHMENT_NOT_FOUND' },

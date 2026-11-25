@@ -36,6 +36,8 @@ export * from './returns.js';
 export * from './related-payers.js';
 // Spec 193 — product visibility rules: categories, role mappings, designations, website rule (specs/193-product-visibility-rules/).
 export * from './product-visibility.js';
+// Spec 193 T049 — catalog's hookable status writers.
+export * from './catalog-hooks.js';
 export * from './price-lists.js';
 // Feature 160 (D-287 P1) — price books: header, sets, rows, explanation, precedence.
 export * from './price-books.js';

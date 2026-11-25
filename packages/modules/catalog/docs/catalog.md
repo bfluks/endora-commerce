@@ -481,6 +481,16 @@ modules are present. The payload is sent whole; the strict schemas are
 - **Slug uniqueness** — the slug is unique across all Sales Channels by
   default; override the slugifier in `catalog-admin.service.ts` if locale
   collisions become a concern.
+- **Hookable status writes** — another module may take part, in the same transaction, in every
+  catalog write that can make a product active again, through a `beforeCommit` command hook on the
+  refs in `CATALOG_HOOKABLE_ACTIONS` (`@endora-commerce/contracts`), listing `catalog` in its
+  manifest `dependencies`: `product.update`, `product.restore`, `product.bulk_update.undo`,
+  `product.scopes.update`, `product.scoped_values.save` and `product.scoped_values.import` (the
+  connector and CSV path). A bulk edit runs one of these per product. The hook data
+  (`ProductStatusHookData`) holds, per addressed product, its global status, archive and deletion
+  flags before and after the write, and every channel-scoped status cell the write moved — the
+  channel row (`languageCode: null`) or one language — with `null` for a cell that inherits. It
+  carries ids, status codes and booleans only.
 
 ## Order rules: minimum order quantity and returnable
 

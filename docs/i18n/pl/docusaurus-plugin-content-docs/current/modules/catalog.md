@@ -465,6 +465,16 @@ w całości; ścisłe schematy to `CATALOG_WEBHOOK_EVENT_SCHEMAS` w `@endora-com
 - **Unikalność sluga** — slug jest domyślnie unikalny we wszystkich kanałach sprzedaży; jeśli kolizje
   między językami staną się problemem, nadpisz mechanizm tworzenia slugów w
   `catalog-admin.service.ts`.
+- **Zapisy statusu z hakami** — inny moduł może brać udział, w tej samej transakcji, w każdym zapisie
+  katalogu, który może ponownie aktywować produkt, przez hak polecenia `beforeCommit` na referencjach
+  z `CATALOG_HOOKABLE_ACTIONS` (`@endora-commerce/contracts`), wymieniając `catalog` w
+  `dependencies` swojego manifestu: `product.update`, `product.restore`, `product.bulk_update.undo`,
+  `product.scopes.update`, `product.scoped_values.save` i `product.scoped_values.import` (ścieżka
+  konektora i importu CSV). Edycja zbiorcza uruchamia jedno z nich dla każdego produktu. Dane haka
+  (`ProductStatusHookData`) zawierają dla każdego wskazanego produktu jego status globalny oraz flagi
+  archiwizacji i usunięcia przed zapisem i po nim, a także każdą komórkę statusu w zakresie kanału,
+  którą zapis zmienił — wiersz kanału (`languageCode: null`) albo jeden język — z `null` dla komórki,
+  która dziedziczy. Niosą wyłącznie identyfikatory, kody statusów i wartości logiczne.
 
 ## Zasady zamawiania: minimalna ilość zamówienia i zwroty
 

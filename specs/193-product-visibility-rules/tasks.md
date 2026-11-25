@@ -337,7 +337,7 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
   executed later re-resolves the scope), then: the assistant tools `catalog` contributes to
   `promptActionToolRegistry` resolve `resolveScope(invokingAdminUserId)` **at tool execution** (also on a
   later confirm), never from an ambient request (**TM-3 (2)**).
-- [ ] T049 [A] `CAT/manifest.ts`: declare hookable (`beforeCommit`), with hook data contracts carrying
+- [x] T049 [A] `CAT/manifest.ts`: declare hookable (`beforeCommit`), with hook data contracts carrying
   the before/after global status, archive flag and the channel-scoped status cells written (needed by
   T068), **every catalog Command that writes a global status, an archive flag, a channel-scoped status
   or channel-scoped values** (H1; inventory at `c3e8a8755`, research R-11 table):

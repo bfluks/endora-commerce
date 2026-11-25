@@ -22,6 +22,7 @@ import {
 } from '@endora-commerce/contracts';
 import type { Command } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
+import { withProductStatusHookData } from './product-status-hook-data.js';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 
 import { globalScopeFields } from '../services/product-availability.service.js';
@@ -115,7 +116,8 @@ export function scopedValuesSaveCommand(
   body: SaveScopedValuesRequest,
   completeness: ScopeCompletenessGateMode | undefined,
 ): Command<ScopedValuesSaveResult> {
-  return {
+  // Spec 193 T049 — hookable (`CATALOG_HOOKABLE_ACTIONS.productScopedValuesSave`).
+  return withProductStatusHookData({
     action: 'product.scoped_values.save',
     objectType: 'product',
     objectId: productId,
@@ -188,7 +190,7 @@ export function scopedValuesSaveCommand(
             eventName: 'product.updated.v1',
             payload: { eventId: randomUUID(), occurredAt: new Date().toISOString(), productId, changedFields },
           },
-  };
+  }, [productId]);
 }
 
 /** The SEO cells of a save as write ops; absent and `""` cells are no change. */

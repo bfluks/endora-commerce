@@ -199,6 +199,7 @@ import {
 } from './product-global-field-rules.js';
 import { assertNoContentAttributeValues } from './content-attribute-rules.js';
 import { readAttributeUsage } from './attribute-usage.js';
+import { withProductStatusHookData } from '../commands/product-status-hook-data.js';
 
 // Feature 061 — the API-form mapping helpers moved next to the R7 map; the
 // re-exports keep the long-standing import site (routes, tests) stable.
@@ -684,7 +685,8 @@ export class CatalogAdminService {
     // Feature 172 (FR-014) — before the transaction, as on create.
     await this.#refuseContentAttributeValues(req.attributeValues as Record<string, unknown> | undefined);
     if (!this.commandBus) return this.updateProduct(id, req, gate);
-    return this.commandBus.run(this.#updateProductCommand(id, req, gate));
+    // Spec 193 T049 — hookable (`CATALOG_HOOKABLE_ACTIONS.productUpdate`).
+    return this.commandBus.run(withProductStatusHookData(this.#updateProductCommand(id, req, gate), [id]));
   }
 
   #updateProductCommand(id: string, req: UpdateProductRequest, gate?: ProductUpdateGate): Command<Product> {
@@ -1514,7 +1516,8 @@ export class CatalogAdminService {
     // when its own scope ends, after commit. `product.archived.v1` is emitted
     // after that, into the scope opened here, so it is dispatched second.
     return this.events.run(async () => {
-      const product = await this.#runCommand(this.#archiveCommand(id, archive, outcome));
+      // Spec 193 T049 — `product.restore` is hookable; an archive carries the same data.
+      const product = await this.#runCommand(withProductStatusHookData(this.#archiveCommand(id, archive, outcome), [id]));
       if (outcome.changed && archive) this.#emitArchived(product.id);
       return { product, changed: outcome.changed };
     });
