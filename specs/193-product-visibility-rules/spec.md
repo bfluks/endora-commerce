@@ -309,7 +309,33 @@ recorded here in generic terms.
   statuses** (channel × language) decide only storefront visibility in that language: they never
   make a product inactive on the channel for the sales-team paths, and a per-language status change
   is never a reactivation. Values stored before admission (FR-093) therefore have no effect on
-  FR-090 / FR-091. → FR-090 – FR-093, US4 scenarios 6, 9, 10, 12.
+  FR-090 / FR-091. → FR-090 – FR-093, US4 scenarios 6, 9, 10, 12. *Refined by N1 below*: the
+  channel status counts whenever it was stored.
+- **N1** — A channel status stored before admission, or left over for a product the rule excludes
+  (`analysis.md` round 2, N1) → **A**: the **channel status always counts** for FR-090 / FR-091,
+  whenever and by whomever it was stored — including values stored while the product was pending
+  admission and values left over on a channel whose rule excludes the product. A product inactive
+  on that channel by its channel status is not sold through the sales-team paths. Per-language
+  statuses never count. Context: a PIM connector will get a setting so that it no longer writes an
+  inactive channel status merely because a product is hidden in every language (a separate
+  connector spec — see *Dependencies and sequencing*). → FR-090, FR-091, FR-093.
+- **N6** — Which writers may store values pending admission → approved as proposed: every writer of
+  channel-scoped values — the admin product save, copy to channels, connectors and the scoped-values
+  CSV import — stores per-language and channel-scoped values for a governed channel the product is
+  not yet admitted to, and an unrestricted admin user can read those pending values. → FR-093.
+- **Client analyze N4** — Product references in `crm`, `projects` and `tasks` (mentions, opportunity
+  links) → **accepted**: not narrowed. Creating an order or a quote from an opportunity MUST go
+  through the same order and quote create paths that carry the refusals of FR-037 and FR-041 (the
+  architect verifies). → FR-087.
+- **N7** — Owner confirmation of the remaining product-owner text (the owner: "I approve them all")
+  → each of the following is an owner decision:
+  - the Polish marker text **"brak ustalonej ceny"** beside "no fixed price" (FR-043);
+  - narrowing every catalog aggregate count for restricted users (FR-031);
+  - bulk-operation list, detail, undo and execution rules (FR-033);
+  - the not-cacheable header on the admin product list in every state (FR-036);
+  - rules only narrow, never resurface inactive, archived or deleted products (FR-079);
+  - a single overview permission warning, for `audit_logs:read` (FR-086);
+  - every item formerly listed as a product-owner proposal under *Assumptions*.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -565,6 +591,11 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
     **When** a buyer converts an accepted quote with it and checks out, or an administrator creates,
     previews or reorders an order with it on that channel, **Then** the line is kept and the order is
     placed as for any available product (H2).
+13. **Given** a product the rule excludes from a governed channel whose channel status on that
+    channel is inactive — stored while it was pending admission, or left over — **When** a buyer
+    converts an accepted quote with it, or an administrator creates, previews or reorders an order
+    with it on that channel, **Then** it is treated as absent for another reason (today's
+    behaviour), not as rule-excluded (N1).
 ---
 
 ### Edge Cases
@@ -588,7 +619,7 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 - **Saving a visible product that has non-qualifying variants**: a restricted user's write through
   the parent MUST leave the non-qualifying variants unchanged — never edited, dropped or replaced
   because the user did not see them (RQ-3). Whole-product actions on a visible parent (archive,
-  restore, duplicate) act on the product as today (product-owner proposal).
+  restore, duplicate) act on the product as today (product-owner proposal, owner-approved 2026-11-25).
 - **Base book designated**: since a base book holds only product and variant rows (F7), category,
   attribute and "all" rows only ever count when a non-base book is designated.
 - **Currency deactivated** while a category or designation uses it: conditions on it are not met
@@ -603,7 +634,7 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   feature. A mapped role that gains one is unrestricted from the next request and its stored
   mapping has no effect (the configuration screen flags it); a role that loses its last one is
   judged again from the next request — by its stored mapping if it has one, otherwise fail-closed
-  when it holds `rfqs:handle` (FR-023, FR-026; product-owner reading of "always unrestricted").
+  when it holds `rfqs:handle` (FR-023, FR-026; product-owner reading of "always unrestricted", owner-approved 2026-11-25).
 - **First enable**: the feature ships off (OQ-C) and can be configured only while on (I-3). From the
   moment it is first turned on until an administrator maps them, every unmapped role holding
   `rfqs:handle` and no self-lifting permission sees no products anywhere; the configuration screen
@@ -629,8 +660,13 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 - **Per-language statuses and the sales-team paths**: a product inactive in some or every language
   on a channel is hidden on the storefront in those languages only; for quote conversion, checkout
   and the admin order paths it is inactive on the channel only when its channel status is (H2).
-- **Values written before admission**: a connector's per-language and channel-scoped values for a
-  not-yet-admitted product are stored; the product appears with them on admission (I-4).
+- **Values written before admission**: per-language and channel-scoped values written for a
+  not-yet-admitted product by any writer (admin save, copy, connector, CSV import) are stored; an
+  unrestricted admin user can read them; the product appears with them on admission (I-4, N6).
+- **Inactive channel status on a rule-excluded product**: a product the rule excludes from a channel
+  but whose channel status there is inactive (stored before admission or left over) is not sold
+  through quote conversion, checkout or the admin order paths on that channel; per-language
+  statuses never have this effect (N1, FR-090, FR-091).
 - **Cross-references on a visible product**: links, grouped items and bundle options pointing to a
   hidden product are left out for restricted users (OQ-D).
 - **A user changes role mid-session**: the new role's category applies from the next request.
@@ -693,7 +729,8 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   audience — C MUST have no catalogue price for any product; the base book's price MUST NOT be used
   in its place, until the book is in force again or the designation is changed. The configuration
   screen MUST flag such a designation as not in force (owner decision RQ-1 for deleted, unbound and
-  re-audienced books; product-owner proposal for draft, expired and out-of-schedule ones).
+  re-audienced books; product-owner proposal, owner-approved 2026-11-25, for draft, expired and
+  out-of-schedule ones).
 
 **Visibility categories**
 
@@ -731,10 +768,10 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 - **FR-026**: A role holding any **self-lifting permission** — the wildcard `*`,
   `product_visibility:manage`, `platform.modules.activate` or `admin_users:manage` — MUST always be
   unrestricted, MUST NOT be fail-closed, and MUST NOT be mappable: the server refuses mapping it to a
-  category (OQ-G), and also to unrestricted, which would have no effect (product-owner proposal). Because role administration does not consult this feature, a
+  category (OQ-G), and also to unrestricted, which would have no effect (owner-approved 2026-11-25). Because role administration does not consult this feature, a
   mapped role that later gains such a permission MUST be unrestricted from the next request, its
-  stored mapping without effect, and the configuration screen MUST flag it (product-owner reading
-  of "always").
+  stored mapping without effect, and the configuration screen MUST flag it (owner-approved
+  2026-11-25).
 
 **Admin product reads and writes**
 
@@ -750,7 +787,7 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   attribute's usage and scope-change preview, and the variant-derived figures on a visible product's
   detail (variant count, option and axis values, stock totals, price ranges, media) MUST be derived
   from visible products and qualifying variants only (analyze M9, threat model TM-6; narrowing chosen
-  for every such count, product-owner proposal following this FR).
+  for every such count, owner-approved 2026-11-25, N7).
 - **FR-032**: Select-all (`resolve-ids`) and fetching products by a list of ids (`batch-by-id`)
   MUST return only visible products, and totals counting only those.
 - **FR-033**: Every catalog admin route addressed by a product id — the detail, its sub-resources
@@ -805,7 +842,7 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   met at price 0 — no condition of the user's category is met with a price above 0 — MUST carry the
   fixed marker in the offer product search and on the quote line in the Admin UI. The text is fixed
   and not editable: English **"no fixed price"**, Polish **"brak ustalonej ceny"** (owner decision:
-  a fixed text; the Polish wording is the owner's). Unrestricted users MUST NOT see the
+  a fixed text; the Polish wording is the owner's, confirmed 2026-11-25, N7). Unrestricted users MUST NOT see the
   marker, and it MUST NOT be shown on admin order create, order preview or reorder (RQ-2).
 
 **Website rule**
@@ -827,7 +864,7 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   applied until the administrator confirms that preview.
 - **FR-054**: On a governed channel, a manual membership change (product editor, channel screen)
   and a bulk update that adds or removes a product MUST be refused by the server with a translated
-  message (naming the website rule — product-owner proposal); automatic writers — product create's default binding,
+  message (naming the website rule — owner-approved 2026-11-25); automatic writers — product create's default binding,
   duplicate, import and connectors — MUST skip the governed channel (their other writes proceed as
   today). No writer other than the rule MAY change a governed channel's membership.
 - **FR-055**: The platform MUST expose to modules a way to ask whether a channel is governed and
@@ -937,8 +974,12 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   model's further warnings for `import_export:*` and `inventory:read` are not needed, because the
   products import and export are refused (FR-085) and the inventory lists are narrowed (FR-083) for
   restricted users.
-- **FR-087**: Product feeds and the product inputs of CMS, blog, CRM and tasks are accepted as they
-  are (FR-038; OQ-H).
+- **FR-087**: Product feeds and the product inputs and references of CMS, blog, CRM, projects and
+  tasks (for example mentions and opportunity links) are accepted as they are, not narrowed
+  (FR-038; OQ-H; client analyze N4). Creating an order or a quote from such a module (for example
+  from an opportunity) MUST go through the same order and quote create paths that carry the
+  refusals of FR-037 and FR-041, so a restricted user cannot place a hidden product on an order or
+  quote that way.
 - **FR-088**: The feature's documentation MUST list every admin surface that returns product data
   with its treatment — narrowed, refused or accepted — and the reason, including the accepted
   oracles of FR-082 and FR-086 – FR-087 (OQ-E, OQ-H).
@@ -949,7 +990,8 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   kept, as if the product were on that channel; a line absent for any other reason (inactive,
   archived, deleted, inactive on that channel by its **channel status**, or not a member of an
   ungoverned channel) MUST be dropped as today. Per-language statuses on that channel MUST NOT make
-  a line "absent for another reason" (H2). Checking out such a cart MUST keep the line through
+  a line "absent for another reason" (H2); the channel status MUST, whenever it was stored (N1,
+  FR-093). Checking out such a cart MUST keep the line through
   order placement: no step from conversion to the placed order MAY drop or refuse it for the same
   reason (Q-3 b). The storefront listings, search,
   type-ahead and product URL still do not show the product (FR-051). With the feature off (FR-073)
@@ -967,14 +1009,17 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   transaction and the rule re-admits it within 5 minutes. A write that does not move the channel
   status to active is not a reactivation (OQ-F), and a per-language status change MUST NEVER be one
   (H2). The only exception is FR-093: the first channel-status write after admission (Q-1).
-- **FR-093**: Per-language and channel-scoped values (status included) that a connector writes for
-  a governed channel MUST be stored for a product that is not on that channel only because the
-  rule has not admitted it yet, and MUST NOT put it on the channel; on admission the product
-  appears with those values. The first channel-status write on that channel after the product's
+- **FR-093**: Per-language and channel-scoped values (status included) written for a governed
+  channel by any writer — the admin product save, copy to channels, a connector or the scoped-values
+  CSV import — MUST be stored for a product that is not on that channel only because the rule has
+  not admitted it yet, and MUST NOT put it on the channel; on admission the product appears with
+  those values. An unrestricted admin user MUST be able to read such pending values (N6). The first channel-status write on that channel after the product's
   admission MUST NOT count as a reactivation, even when it changes the channel status from inactive
   to active: the product shows on the channel at once, since the rule has already admitted it
-  (I-4, Q-1). Values stored before admission, per-language statuses included, have no effect on
-  FR-090 and FR-091 (H2).
+  (I-4, Q-1). For FR-090 and FR-091, per-language statuses never count, and the **channel status
+  always counts, whenever it was stored** — including a value stored pending admission and a value
+  left over on a channel whose rule excludes the product: a product inactive on that channel by its
+  channel status is not sold through the sales-team paths (H2, N1).
 
 ### Key Entities
 
@@ -1055,7 +1100,8 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 - Two plan-stage answers were given with mild uncertainty ("probably"): OQ-B (FR-090, FR-091) and the
   OQ-H table (FR-083 – FR-087). They are recorded as decided; acceptance should confirm them with
   the owner.
-- **Product-owner proposals, not owner decisions** (the owner may strike any of them): refusing
+- **Formerly product-owner proposals, approved by the owner on 2026-11-25** (analyze stage, N7):
+  refusing
   to delete a mapped category (FR-013); shipping no categories (FR-014); the platform-administrator
   role not being mappable (FR-022); showing the mapping on the role screens (FR-024); "all of" /
   "any of" combination in rules (FR-050); detaching a rule leaves membership as it was (FR-058);
@@ -1079,11 +1125,13 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   admin-kit change of this feature **MUST NOT start until spec 192 has merged to `master`**; their
   tasks are sequenced after it. **State of spec 192 on 2026-11-25** (analyze): issue #1901 open, no
   pull request; its branch `feat/192-quote-request-draft-share` exists only on a fork, at
-  `bd1edae62`. At that commit it touches no file under `packages/modules/orders/` or
-  `packages/admin-kit/`; it does touch the quote → cart conversion in `carts`
-  (`cart-conversion-service.ts`), the shared error codes in `packages/contracts/src/errors.ts`, the
-  OpenAPI baseline and the migrations registry — so FR-090 and this feature's contract, OpenAPI and
-  migration changes may conflict with it. Everything else (FR-001 – FR-039, FR-050 – FR-093) can
+  `3c740f2c0` (analyze round 2; near done). At that commit it touches no file under
+  `packages/modules/orders/` or `packages/admin-kit/`; it does touch the quote → cart conversion in
+  `carts` (`cart-conversion-service.ts`, `carts/docs/carts.md`), the shared error codes in
+  `packages/contracts/src/errors.ts` and `packages/contracts/src/index.ts`,
+  `error-code-routing/reference-ledgers.ts`, the shared `_i18n/i18n/{en,pl}.json`, the OpenAPI
+  baseline and the migrations registry — so FR-090 and this feature's contract, error-code,
+  translation, OpenAPI and migration changes may conflict with it. Everything else (FR-001 – FR-039, FR-050 – FR-093) can
   start at once, except where the plan gates it: the plan gates the admin order create / preview /
   reorder / clone-to-quote checks (FR-037, FR-039) on spec 192 too (plan Phase 9a). FR-037 is a
   server check in the orders module and does not depend on spec 192's screens, so releasing those
@@ -1096,7 +1144,11 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   `POST /api/v1/admin/orders/:id/clone-to-quote`); whether its refusal shares the quote-request
   create path that spec 192 is changing, and so follows FR-041's sequencing, is for the architect.
 - **PIM connectors**: making a connector respect a governed channel is a separate spec per
-  connector; this feature only provides FR-054 (skip) and FR-055 (the port).
+  connector; this feature only provides FR-054 (skip) and FR-055 (the port). Because the channel
+  status always counts for the sales-team paths (N1), a connector that writes an inactive channel
+  status merely because a product is hidden in every language would stop such a product being sold
+  through the sales team; a connector setting to stop that is expected in a separate connector
+  spec.
 - **Module ownership** (a new module, or extending `catalog`, `price_lists` and `admin_roles`) is an
   architect decision (OQ-9); the product owner recommends a new module consuming the others through
   ports, detachable as a whole.
