@@ -3,8 +3,8 @@
 **Feature Branch**: `feat/193-product-visibility-rules`
 **Created**: 2026-11-24
 **Status**: Draft — owner decisions of 2026-11-24 recorded under *Owner decisions*; OQ-1 – OQ-12
-answered under *Clarifications* (OQ-9 left to the architect); further clarify round pending
-(see *Clarifications → Remaining questions*)
+(2026-11-24) and RQ-1 – RQ-3 (2026-11-25) answered under *Clarifications* (OQ-9 left to the
+architect); clarify exhausted, ready for `/speckit.plan`
 **Input**: Issue #1908 (product visibility for admin roles by catalogue price, and a configurable
 website rule), with the owner decisions of 2026-11-24.
 **Depends on**: `specs/192-quote-request-draft-share/` (issue #1901) for the quote-request and
@@ -185,36 +185,28 @@ requirements it names.
   else) — is not on that channel; a qualifying product may appear up to 5 minutes late. There is no
   window in which such a product is exposed before the rule admits it (FR-059).
 
-### Remaining questions
+### Session 2026-11-25
 
-Recommendations are the product owner's, for the owner to confirm or overrule.
-
-1. **RQ-1 — A designated book that stops being designatable** (FR-001). The designated book with its
-   channel may later stop fitting: it is deleted, unbound from the chosen channel, or its audience
-   changes from *everyone*. Also, may the chosen channel be one the book is not bound to (where the
-   engine would never apply it)? (A) Designation is refused unless the book is bound to the chosen
-   channel; a designated book that is later deleted, unbound or re-audienced counts as not in force
-   (no catalogue price, fail-closed as OQ-1 d) and the configuration screen flags it; (B) the same at
-   designation time, but price-book changes that would break a designation (delete, unbind, audience
-   change) are refused while it is designated; (C) no check — the engine's answer stands (the base
-   price applies where the book does not reach). **Recommended: A** — consistent with OQ-1 (d), keeps
-   price-book administration independent, and the screen makes the effect visible.
-2. **RQ-2 — Other admin paths that put a product on an order or quote** (FR-037, FR-041). Besides
-   order create, the admin can preview an order total for given lines, reorder a past order and
-   clone an order into a quote request; and the "no fixed price" marker is promised on the offer
-   screens only. (A) Order preview answers a hidden product as order create does; admin reorder and
-   clone-to-quote refuse lines outside the user's category with the same refusal; the marker is shown
-   in the order-create product picker too; (B) only order create and quote create/edit are checked,
-   as answered; the marker stays on offer screens only; (C) A without the marker on order create.
-   **Recommended: C** — otherwise a restricted user can bring a hidden product onto an order or quote
-   by another door; the marker explains a price on a quote, where the price is negotiated.
-3. **RQ-3 — Non-qualifying variants outside the picker** (FR-005, OQ-5). A restricted user opens a
-   visible configurable product whose variants only partly qualify. (A) The product detail, its
-   variant list and the price book grid show only the qualifying variants; a non-qualifying variant
-   addressed by id answers as absent; (B) these screens show all variants of a visible product;
-   per-variant narrowing applies only where a variant is put on a line (picker, refusal, marker).
-   **Recommended: B** — "absent" was answered per product (OQ-3); hiding variants inside the product
-   editor would also block editing a product the user may open.
+- **RQ-1** — A designated book that stops fitting (FR-001, FR-007) → **A**: designating a non-base
+  book for a channel is refused unless the book is bound to that channel (and is a regular
+  *everyone* book of that currency, OQ-1 c). If the designated book is later deleted, unbound from
+  that channel or moved off the *everyone* audience, it counts as **not in force** — no catalogue
+  price in that currency, fail-closed as OQ-1 (d), with no fallback to the base book — and the
+  configuration screen flags the designation. Price-book administration is **not** blocked by a
+  designation: deleting, unbinding or re-audiencing a designated book is allowed as today.
+- **RQ-2** — Other admin paths that put a product on an order or quote (FR-037, FR-039, FR-043) →
+  **C** (the recommendation): the admin order preview answers a line with a product or variant
+  outside a restricted user's category the way admin order create does (the same refusal, naming
+  the lines); admin reorder and admin clone-to-quote refuse such lines per variant with the same
+  refusal (naming the lines, nothing created). The "no fixed price" marker is **not** shown on order
+  create — it stays on quote screens only.
+- **RQ-3** — Non-qualifying variants outside the picker (FR-005, FR-033) → **A** (the owner
+  overruled the recommendation B: non-qualifying variants should not be displayed): for a restricted
+  user, the product detail, the variant list (`/variants`), the price book grid and every other
+  catalog admin route addressed by a product id show only the qualifying variants of a visible
+  product; a non-qualifying variant addressed by id answers exactly as an absent product does.
+  Restricted roles are not expected to edit products; if one holds `catalog:write`, its users still
+  cannot see or edit non-qualifying variants (see *Assumptions*).
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -266,6 +258,20 @@ three users mapped to domestic, export and management; call each enforced read a
 11. **Given** a role holding the wildcard `*` (not the platform-administrator role) and mapped to no
     category, **When** a user with it opens the product list, **Then** it is empty, as in
     scenario 6.
+12. **Given** a visible configurable product with one qualifying and one non-qualifying variant,
+    **When** a domestic user opens its detail, its variant list, any other catalog admin route
+    addressed by its id, or the price book grid, **Then** only the qualifying variant is shown;
+    **When** the user addresses the non-qualifying variant by its id (read or write), **Then** the
+    server answers exactly as for a product that does not exist and changes nothing; **When** the
+    user (holding `catalog:write`) saves the product, **Then** the non-qualifying variant is
+    unchanged.
+13. **Given** a domestic user, **When** they preview an order total in the Admin UI, reorder a past
+    order or clone an order into a quote request, and a line's product or variant is outside their
+    category, **Then** the server refuses with the same refusal as order create, naming the lines,
+    and nothing is created; **When** an unrestricted user does the same, **Then** the behaviour is
+    today's.
+14. **Given** a management user and a product whose only qualifying price is 0, **When** they add it
+    on admin order create, **Then** no "no fixed price" marker is shown.
 
 ---
 
@@ -305,6 +311,13 @@ a user, and observe US1's export behaviour for that user without them signing in
 9. **Given** the feature is enabled for the first time, **When** the configuration screen is
    opened, **Then** every unmapped role holding `rfqs:handle` or `*` (other than the
    platform-administrator role) is listed as "sees no products".
+10. **Given** an *everyone* book of currency B that is not bound to channel X, **When** an
+    administrator tries to designate it for B with channel X, **Then** the Admin UI does not offer
+    it, and the server refuses it.
+11. **Given** currency B designated to a book with channel X, **When** an administrator deletes the
+    book, unbinds it from channel X or changes its audience from *everyone*, **Then** the price-book
+    change is saved as today; from then on no product has a catalogue price in B (the base book is
+    not used in its place), and the configuration screen flags the designation as not in force.
 
 ---
 
@@ -392,11 +405,22 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   a product with no row that prices it has no price. They are never treated alike.
 - **Designated book in force but silent on a product**: the base book's price stands (OQ-1 b).
 - **Designated book not in force** (draft, expired, outside its schedule): no catalogue price in
-  that currency, even where the base book has one (OQ-1 d). A designated book that is deleted,
-  unbound from its channel or re-audienced: RQ-1.
+  that currency, even where the base book has one (OQ-1 d).
+- **Designated book deleted, unbound from its channel or moved off *everyone***: allowed in price-book
+  administration; the designation counts as not in force (no catalogue price in that currency, no
+  fallback to the base book) and the configuration screen flags it (RQ-1). Every restricted user
+  whose category relies on that currency loses those products at once, and a governed channel whose
+  rule has a price condition on that currency drops them within 5 minutes (FR-061) — a consequence
+  the flag makes visible, not a separate rule.
 - **Configurable products**: a parent is visible when at least one variant qualifies; on quote and
-  order lines, visibility, refusal and the marker are per variant (OQ-5). Variants on the product
-  detail, its variant list and the price grid: RQ-3.
+  order lines, visibility, refusal and the marker are per variant (OQ-5). On the product detail, its
+  variant list, every other catalog admin route addressed by the product's id and the price book
+  grid, a restricted user sees only qualifying variants; a non-qualifying variant addressed by id is
+  absent (RQ-3).
+- **Saving a visible product that has non-qualifying variants**: a restricted user's write through
+  the parent MUST leave the non-qualifying variants unchanged — never edited, dropped or replaced
+  because the user did not see them (RQ-3). Whole-product actions on a visible parent (archive,
+  restore, duplicate) act on the product as today (product-owner proposal).
 - **Base book designated**: since a base book holds only product and variant rows (F7), category,
   attribute and "all" rows only ever count when a non-base book is designated.
 - **Currency deactivated** while a category or designation uses it: conditions on it are not met
@@ -416,7 +440,8 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 - **Counts and pages**: no response tells a restricted user how many products are hidden; no page
   is short because of filtering applied after paging.
 - **Hidden product edited from another module**: price-book rows and SEO data addressed by product
-  id are not refused (OQ-3); the price book grid itself lists only visible products (FR-030).
+  or variant id are not refused (OQ-3, FR-038); the price book grid itself lists only visible
+  products and, of a visible configurable product, only its qualifying variants (FR-030, FR-005).
 - **Website rule and an inactive product**: a governed channel never gains an inactive, archived or
   deleted product because of the rule.
 - **New or reactivated product on a governed channel**: not on the channel until the rule admits it;
@@ -432,10 +457,12 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 - **FR-001**: For each currency active on the platform, an administrator MUST be able to designate
   one price book, together with one sales channel, whose resolved prices are that currency's
   **catalogue price**. Only regular books with the *everyone* audience in that currency can be
-  designated; the server MUST refuse any other. Until one is designated, the currency's base book is
-  used (channel-independent). What happens when a designated book is later deleted, unbound from
-  the chosen channel or re-audienced, and whether the chosen channel must be one the book is bound
-  to: [NEEDS CLARIFICATION: RQ-1].
+  designated, and a non-base book only together with a sales channel it is bound to; the server
+  MUST refuse any other designation. Until one is designated, the currency's base book is used
+  (channel-independent). A designation MUST NOT block price-book administration: deleting the
+  designated book, unbinding it from the designated channel or changing its audience from
+  *everyone* MUST NOT be refused because of the designation; such a designation counts as **not in
+  force** (FR-007).
 - **FR-002**: A product's catalogue price in currency C MUST be the price the pricing engine
   resolves from C's designated book, for the sales channel designated with it, for quantity 1, with
   no customer, valid at the moment of evaluation; every row kind the book can hold (product,
@@ -449,15 +476,20 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   category.
 - **FR-005**: A configurable (variant) product MUST be treated as visible to a category when at
   least one of its variants meets one of the category's conditions. Each variant's own visibility
-  decides the picker, the line refusal and the marker of FR-037, FR-040, FR-041 and FR-043.
-  Whether non-qualifying variants of a visible product are also hidden on the product detail, its
-  variant list and the price book grid: [NEEDS CLARIFICATION: RQ-3].
+  decides the picker, the line refusal and the marker of FR-037, FR-039, FR-040, FR-041 and
+  FR-043. For a restricted user, the product detail, its variant list, every other catalog admin
+  route addressed by the product's id (FR-033) and the price book grid MUST show only the qualifying
+  variants of a visible product; a non-qualifying variant addressed by its id MUST be answered
+  exactly as an absent product (FR-033), and no write by the restricted user — including an update
+  of the parent — MAY change, drop or replace a non-qualifying variant.
 - **FR-006**: The catalogue price evaluated here MUST be the same answer the pricing engine gives
   for the same inputs, never a second pricing implementation.
-- **FR-007**: When C's designated book is not in force (draft, expired, outside its schedule), C
-  MUST have no catalogue price for any product — the base book's price MUST NOT be used in its
-  place — until the book is in force again. The configuration screen shows the designation as not
-  in force (product-owner proposal).
+- **FR-007**: When C's designated book is not in force — draft, expired, outside its schedule, or
+  (RQ-1) deleted, no longer bound to the designated channel, or no longer of the *everyone*
+  audience — C MUST have no catalogue price for any product; the base book's price MUST NOT be used
+  in its place, until the book is in force again or the designation is changed. The configuration
+  screen MUST flag such a designation as not in force (owner decision RQ-1 for deleted, unbound and
+  re-audienced books; product-owner proposal for draft, expired and out-of-schedule ones).
 
 **Visibility categories**
 
@@ -479,7 +511,7 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 - **FR-021**: A user's visibility MUST be that of their single role (F4).
 - **FR-022**: The platform-administrator role MUST always be unrestricted and MUST NOT be mappable.
 - **FR-023**: A role with no mapping MUST be **fail-closed** — no product on any surface of FR-030 –
-  FR-037 or FR-040, with a message that the role has no product visibility category — when it holds
+  FR-039 or FR-040, with a message that the role has no product visibility category — when it holds
   `rfqs:handle` or the wildcard `*` and is not the platform-administrator role; every other unmapped
   role MUST be unrestricted. This applies from the moment the feature is first enabled, with no
   grace period (OQ-10).
@@ -492,7 +524,8 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 - **FR-030**: For a restricted user, every answer of the admin product list endpoint MUST contain
   only products visible to the user's category, whatever screen or caller asks — including, not
   limited to, the product list, the product browser and picker, order create, the price book grid,
-  the price explainer, the product editor, SEO and the other callers of F3.
+  the price explainer, the product editor, SEO and the other callers of F3; of a visible
+  configurable product, only its qualifying variants (FR-005).
 - **FR-031**: The list's `total`, its per-status counts and its paging MUST count only visible
   products; filtering MUST happen in the query that pages, not after it.
 - **FR-032**: Select-all (`resolve-ids`) and fetching products by a list of ids (`batch-by-id`)
@@ -502,7 +535,8 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   preference, variants) and the writes (update, archive, restore, duplicate, bulk update) — MUST
   answer a product outside the user's category exactly as it answers a product that does not exist
   (same status and error code), never as "forbidden", and MUST change nothing. A bulk update naming
-  hidden products MUST treat them as absent.
+  hidden products MUST treat them as absent. The same holds for a non-qualifying variant of a
+  visible product addressed by its id (FR-005).
 - **FR-034**: The admin global search MUST return only products visible to the searching user, and
   its "more results" indication MUST not reveal hidden ones.
 - **FR-035**: An unrestricted user MUST see on every surface exactly what they see today.
@@ -510,12 +544,16 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   alone does not satisfy any requirement of this section.
 - **FR-037**: Creating an order in the Admin UI with a line whose product (or variant, FR-005) is
   outside the restricted user's category MUST be refused by the server, naming the offending lines,
-  with the same refusal as quote lines (FR-041); nothing of the request is saved. Other admin paths
-  that put products on an order or quote (order preview, reorder, clone to quote) and the marker
-  on order create: [NEEDS CLARIFICATION: RQ-2].
-- **FR-038**: Edits addressed by product id outside the catalog admin routes — price-book rows, SEO
-  data, and other modules' product-id inputs (blog, CMS, CRM, tasks and the like) — MUST NOT be
-  narrowed or refused by this feature.
+  with the same refusal as quote lines (FR-041); nothing of the request is saved. Other admin entry
+  paths: FR-039. The "no fixed price" marker of FR-043 is not shown on order create.
+- **FR-038**: Edits addressed by product or variant id outside the catalog admin routes —
+  price-book rows, SEO data, and other modules' product-id inputs (blog, CMS, CRM, tasks and the
+  like) — MUST NOT be narrowed or refused by this feature.
+- **FR-039**: For a restricted user, the admin order preview MUST answer a line whose product or
+  variant is outside the user's category as admin order create does (FR-037: the same refusal,
+  naming the lines); admin reorder and admin clone-to-quote MUST refuse such lines, per variant,
+  with the same refusal, naming the lines, and create nothing. The storefront (buyer) reorder and
+  clone paths are not affected. Unrestricted users see today's behaviour.
 
 **Quote requests** (sequenced after spec 192 — see *Dependencies and sequencing*)
 
@@ -533,7 +571,7 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   met at price 0 — no condition of the user's category is met with a price above 0 — MUST carry the
   fixed marker "no fixed price" in the offer product search and on the quote line in the Admin UI.
   The text is translated (Polish and English) and not editable. Unrestricted users MUST NOT see the
-  marker.
+  marker, and it MUST NOT be shown on admin order create, order preview or reorder (RQ-2).
 
 **Website rule**
 
@@ -611,8 +649,8 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 ### Key Entities
 
 - **Catalogue price designation**: per active currency, a regular *everyone* price book of that
-  currency and the sales channel it is resolved for; default the currency's base book
-  (channel-independent).
+  currency and a sales channel the book is bound to, for which it is resolved; default the
+  currency's base book (channel-independent). It is *in force* or *not in force* (FR-007).
 - **Visibility category**: a name and one or more conditions (currency, "> 0" or "≥ 0"); a product
   qualifies when it meets any condition.
 - **Role mapping**: admin role → at most one visibility category. The platform-administrator role is
@@ -629,8 +667,8 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 
 - **SC-001**: For a matrix of 4 categories × 5 price states (A > 0 only, B > 0 only, both > 0, A = 0
   only, no price) plus one configurable product with one qualifying and one non-qualifying variant,
-  every enforced read (FR-030 – FR-034), the order-line check (FR-037) and the quote-line check
-  (FR-041) returns exactly the expected products and variants: zero leaked, zero missing.
+  every enforced read (FR-030 – FR-034, including variant lists and variants by id), the
+  order-line checks (FR-037, FR-039) and the quote-line check (FR-041) returns exactly the expected products and variants: zero leaked, zero missing.
 - **SC-002**: For a restricted user, the list total equals the number of products they can open,
   and every page but the last is full.
 - **SC-003**: The platform administrator's and every unrestricted user's answers are byte-identical
@@ -657,14 +695,18 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 - The offer's own currency is a separate matter; this feature filters by the user's category, not by
   the quote's currency.
 - The "no fixed price" marker is a fixed, translated text (owner decision 5).
+- Restricted roles are not expected to edit products. If a restricted role holds `catalog:write`,
+  its users still cannot see or edit non-qualifying variants (RQ-3, FR-005).
 - **Product-owner proposals, not owner decisions** (the owner may strike any of them): refusing
   to delete a mapped category (FR-013); shipping no categories (FR-014); the platform-administrator
   role not being mappable (FR-022); showing the mapping on the role screens (FR-024); "all of" /
   "any of" combination in rules (FR-050); detaching a rule leaves membership as it was (FR-058);
   attributing membership changes to the rule (FR-072); conditions on a deactivated currency not
-  being met; showing a designation as not in force (FR-007); naming the rule in the refusal of
-  FR-054; the order-line refusal being per variant (FR-037, read from "same refusal as offer
-  lines"); the figures in SC-006 (5 minutes) and SC-007 (50 000 products).
+  being met; flagging a draft, expired or out-of-schedule designation as not in force (FR-007 —
+  the flag for deleted, unbound and re-audienced books is an owner decision, RQ-1); naming the rule
+  in the refusal of FR-054; the order-line refusal being per variant (FR-037, read from "same
+  refusal as offer lines"); whole-product actions (archive, restore, duplicate) on a visible parent
+  with non-qualifying variants acting on the product as today (*Edge Cases*); the figures in SC-006 (5 minutes) and SC-007 (50 000 products).
 
 ## Dependencies and sequencing
 
@@ -672,9 +714,12 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   screens, `rfq-admin-service` and the admin-kit product browser and picker. FR-040 – FR-043 and any
   admin-kit change of this feature **MUST NOT start until spec 192 has merged to `master`**; their
   tasks are sequenced after it. Spec 192's branch was not on `origin` when this spec was written.
-  Everything else (FR-001 – FR-038, FR-050 – FR-075) can start at once — FR-037 is a server check in
+  Everything else (FR-001 – FR-039, FR-050 – FR-075) can start at once — FR-037 is a server check in
   the orders module and does not depend on spec 192's screens; FR-040 is satisfied by FR-030 alone
-  if 192 leaves the browser reading the same endpoint.
+  if 192 leaves the browser reading the same endpoint. FR-039's admin clone-to-quote lives in the
+  orders module (`orders/backend/services/order-clone-to-quote-service.ts`, route
+  `POST /api/v1/admin/orders/:id/clone-to-quote`); whether its refusal shares the quote-request
+  create path that spec 192 is changing, and so follows FR-041's sequencing, is for the architect.
 - **PIM connectors**: making a connector respect a governed channel is a separate spec per
   connector; this feature only provides FR-054 (skip) and FR-055 (the port).
 - **Module ownership** (a new module, or extending `catalog`, `price_lists` and `admin_roles`) is an
@@ -695,7 +740,9 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   constraint under *Dependencies and sequencing*).
 - Customer-specific prices as a visibility input (the catalogue price has no customer).
 - Narrowing or refusing other modules' product-id inputs (FR-038): price-book rows, SEO, price
-  explainer resolve, blog, CMS, CRM, tasks, exports, product feeds. Admin order create is in scope
-  (FR-037); other order and quote entry paths are RQ-2.
+  explainer resolve, blog, CMS, CRM, tasks, exports, product feeds. Admin order create, order
+  preview, reorder and clone-to-quote are in scope (FR-037, FR-039).
+- The storefront (buyer) reorder and clone-to-quote paths: governed by today's storefront rules and
+  the website rule, not by visibility categories.
 - Visibility of quotes, orders or organizations per role (the existing sales-rep scoping is
   unchanged).
