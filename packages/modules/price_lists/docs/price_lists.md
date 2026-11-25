@@ -283,6 +283,23 @@ and so does product visibility. The pricing context names the payer's Organizati
 pricing profile and cache keys as the payer's own sign-in; nothing new is cached, and a buyer with no
 such link costs no extra query.
 
+## The catalogue reference price {#catalogue-reference-price}
+
+The *Product visibility rules* module asks one more price question: what does a product cost **in a
+currency's catalogue**, whoever is looking? Per currency, an administrator of that module may
+designate one regular price book for everyone, bound to a sales channel. The catalogue reference
+price of a product is then the price that book gives it at quantity 1, and the base price where the
+book has no line for the product — one price per variant for a product with variants. No buyer's
+price book, no sale and no other price book for everyone takes part, and the display mode does not
+withhold it. Without a designation the base price alone is the catalogue reference price. It is
+computed by the same price engine as every other price (it equals the price an anonymous visitor
+pays on a channel whose only price book for everyone is the designated one), and while the
+designated book is not in force — a draft, out of its dates, deleted, moved to another channel or
+audience — the currency has no catalogue reference price.
+
+The platform announces every price change, without amounts, as the event
+`price_lists.catalogue_prices_changed`, so the module can refresh what it derived from these prices.
+
 ## Worked examples — the demo shop
 
 The demo shop (`pnpm run cli demo seed`) carries the three scenarios the model was designed

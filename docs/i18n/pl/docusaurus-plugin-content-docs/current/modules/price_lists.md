@@ -291,6 +291,23 @@ organizację płatnika przez ten sam profil cenowy i te same klucze pamięci pod
 logowanie płatnika; nic nowego nie trafia do pamięci podręcznej, a kupujący bez takiego powiązania nie
 kosztuje żadnego dodatkowego zapytania.
 
+## Cena katalogowa referencyjna {#catalogue-reference-price}
+
+Moduł *Reguły widoczności produktów* zadaje jeszcze jedno pytanie o cenę: ile produkt kosztuje
+**w katalogu danej waluty**, niezależnie od tego, kto patrzy? Dla każdej waluty administrator tego
+modułu może wskazać jeden zwykły cennik dla wszystkich, przypisany do kanału sprzedaży. Cena
+katalogowa referencyjna produktu to wtedy cena, jaką daje mu ten cennik przy ilości 1, a cena bazowa
+tam, gdzie cennik nie ma dla produktu pozycji — po jednej cenie na wariant dla produktu z wariantami.
+Nie biorą w tym udziału cenniki kupujących, wyprzedaże ani inne cenniki dla wszystkich, a tryb
+wyświetlania cen jej nie ukrywa. Bez wskazanego cennika ceną katalogową referencyjną jest sama cena
+bazowa. Liczy ją ten sam silnik cen co każdą inną cenę (jest równa cenie, którą płaci anonimowy gość
+w kanale, którego jedynym cennikiem dla wszystkich jest cennik wskazany), a dopóki wskazany cennik
+nie obowiązuje — jest szkicem, jest poza swoimi datami, został usunięty, przeniesiony do innego kanału
+lub innej grupy odbiorców — waluta nie ma ceny katalogowej referencyjnej.
+
+Platforma ogłasza każdą zmianę cen, bez kwot, jako zdarzenie `price_lists.catalogue_prices_changed`,
+żeby moduł mógł odświeżyć to, co wyliczył z tych cen.
+
 ## Przykłady — sklep demonstracyjny
 
 Sklep demonstracyjny (`pnpm run cli demo seed`) zawiera trzy scenariusze, na podstawie których

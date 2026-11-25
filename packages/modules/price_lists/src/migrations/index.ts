@@ -34,6 +34,7 @@ import { Migration20261022T111815PriceListsPriceBooksConversion } from './202610
 import { Migration20261022T182527PriceListsProductLines } from './20261022T182527_price_lists_product_lines.js';
 import { Migration20261023T152351PriceListsPriceSurfaceTargetedMarks } from './20261023T152351_price_lists_price_surface_targeted_marks.js';
 import { Migration20261110T073922PriceListsValueChanges } from './20261110T073922_price_lists_value_changes.js';
+import { Migration20261125T133746PriceListsCatalogueChangeWatermark } from './20261125T133746_price_lists_catalogue_change_watermark.js';
 
 export const migrations = [
   Migration20260426T075235PriceListsPricingInit,
@@ -48,6 +49,7 @@ export const migrations = [
   Migration20261022T182527PriceListsProductLines,
   Migration20261023T152351PriceListsPriceSurfaceTargetedMarks,
   Migration20261110T073922PriceListsValueChanges,
+  Migration20261125T133746PriceListsCatalogueChangeWatermark,
 ];
 
 export {
@@ -63,4 +65,5 @@ export {
   Migration20261022T182527PriceListsProductLines,
   Migration20261023T152351PriceListsPriceSurfaceTargetedMarks,
   Migration20261110T073922PriceListsValueChanges,
+  Migration20261125T133746PriceListsCatalogueChangeWatermark,
 };

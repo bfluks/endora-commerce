@@ -83,30 +83,30 @@ migration up/down on a fresh test DB (`backend-test-suite.md` § *Which backend 
 
 ## Phase 2 — `price_lists`: catalogue reference price and change event (R-4, R-6)
 
-- [ ] T009 [P] Failing unit tests `PL/backend/services/book-pricing.catalogue-reference.test.ts`:
+- [x] T009 [P] Failing unit tests `PL/backend/services/book-pricing.catalogue-reference.test.ts`:
   fixed profile [base, designated]; designated row wins; designated silent → base (OQ-1 b);
   variant lines (fixed and adjustment of base); zero vs unpriced; sale books excluded.
-- [ ] T010 [P] Failing integration test `BT/integration/price_lists/catalogue-reference-identity.test.ts`:
+- [x] T010 [P] Failing integration test `BT/integration/price_lists/catalogue-reference-identity.test.ts`:
   for a channel whose only everyone book is the designated one, `resolve` ≡ `resolveLinePrices`
   (guest, quantity 1) per line, every precedence preset; undesignated ≡ base book.
-- [ ] T011 [P] Failing test `…/catalogue-designation-status.test.ts`: every reason of
+- [x] T011 [P] Failing test `…/catalogue-designation-status.test.ts`: every reason of
   `DesignationStatus` incl. `not_regular` (sale book), deleted, unbound, re-audienced, window.
-- [ ] T012 Implement `BookPricing.catalogueReference(...)` and `designationStatuses(...)` in
+- [x] T012 Implement `BookPricing.catalogueReference(...)` and `designationStatuses(...)` in
   `PL/backend/services/book-pricing.ts` (reuse `#listingLines`, `resolve(..., fixedProfile)`, the
   `namedBookPublishability` statement + type check); `PL/backend/services/catalogue-reference-price.ts`
   (port implementation incl. `designatableBooks` and `changeWatermark()` — a durable value read from
   `price_lists`' own tables that moves on every write or status flip that emits the event of T014;
   TM-7 (5); test in T011).
-- [ ] T013 Register `catalogueReferencePricePort` with `ctx.di.providePort` in `PL/backend/index.ts`;
+- [x] T013 Register `catalogueReferencePricePort` with `ctx.di.providePort` in `PL/backend/index.ts`;
   JSDoc per composition item 2/8.
-- [ ] T014 Failing test then implementation: `price_lists.catalogue_prices_changed` emitted once
+- [x] T014 Failing test then implementation: `price_lists.catalogue_prices_changed` emitted once
   per bump by the writer from `PL/backend/services/pricing-generation.ts` `afterBump` path, payload
   mapped from `SurfaceChange` (none → not emitted); status-sweep flip emits
   (`BT/integration/price_lists/catalogue-prices-changed-event.test.ts`).
-- [ ] T015 [P] Pricing set in the same change (pricing.md): `specs/pricing/current-model.md`
+- [x] T015 [P] Pricing set in the same change (pricing.md): `specs/pricing/current-model.md`
   (consumer + entry point), `worked-examples.md` vectors for the three OQ-1 cases and their test under
   `BT/integration/price_lists/worked-examples/`, `PL` module docs en+pl.
-- [ ] T016 Changeset for `@endora-commerce/mod-price-lists` and `@endora-commerce/contracts`
+- [x] T016 Changeset for `@endora-commerce/mod-price-lists` and `@endora-commerce/contracts`
   (`release-intent.md`).
 
 **Verification**: `pnpm --filter @endora-commerce/mod-price-lists exec vitest run src/backend/services/book-pricing.catalogue-reference.test.ts`;

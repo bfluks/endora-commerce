@@ -5,6 +5,7 @@ import type {
   CatalogCategoryReadPort,
   CatalogProductReadPort,
   CatalogProductVariantRecord,
+  DesignationStatus,
   DisplayMode,
   ListingPrice,
   ListingPriceDetail,
@@ -353,9 +354,12 @@ export class BookPricing {
     lines: readonly PricingLineRequest[],
     viewer: BookPricingViewer,
     prefetchedVariants: ReadonlyMap<string, CatalogProductVariantRecord> | undefined,
-    mode: { kind: 'viewer'; fixedProfile: PricingProfile | undefined; explain: boolean } | { kind: 'surface'; profile: PricingProfile },
+    mode:
+      | { kind: 'viewer'; fixedProfile: PricingProfile | undefined; explain: boolean }
+      | { kind: 'surface'; profile: PricingProfile }
+      | { kind: 'reference'; profile: PricingProfile },
   ): Promise<{ currencyCode: string; answered: Array<{ cached: CachedBookLine; keys: string[] }> }> {
-    const fixedProfile = mode.kind === 'surface' ? mode.profile : mode.fixedProfile;
+    const fixedProfile = mode.kind === 'viewer' ? mode.fixedProfile : mode.profile;
     const explain = mode.kind === 'viewer' && mode.explain;
     const currencyCode = viewer.currencyCode.toUpperCase();
     const em = this.deps.emFactory();
@@ -369,7 +373,10 @@ export class BookPricing {
     // K3.2 — a currency the channel does not offer prices nothing (the lines
     // still carry the viewer's display mode). A channel that does not exist
     // offers nothing either.
-    const offered = await channelOffers(em, viewer.salesChannelId, currencyCode);
+    // Spec 193 — a catalogue reference profile is the currency's base book plus the
+    // designated book, chosen by the caller: no channel's offer decides it (the base
+    // book is channel-independent; a designation is validated where it is saved).
+    const offered = mode.kind === 'reference' ? true : await channelOffers(em, viewer.salesChannelId, currencyCode);
 
     const precedence = await this.precedence.active();
     const profile = !offered
@@ -426,7 +433,9 @@ export class BookPricing {
       }
       const resolver = createBookResolver({ books, rows, precedence, eligibleAttributes, explain });
       const productModes =
-        mode.kind === 'viewer' || (await this.#productStepMayWithhold())
+        mode.kind === 'reference'
+          ? new Map<string, DisplayMode | null>()
+          : mode.kind === 'viewer' || (await this.#productStepMayWithhold())
           ? await this.deps.productDisplayModes({ productIds, categoryIdsByProduct })
           : new Map<string, DisplayMode | null>();
 
@@ -646,6 +655,91 @@ export class BookPricing {
     return out;
   }
 
+  /**
+   * Spec 193 (`specs/193-product-visibility-rules/` research R-4) — the catalogue price
+   * of each product in one currency: this engine's resolver over a **fixed profile**
+   * whose books are the currency's base book and, when one is designated, the
+   * designated book for everyone — so the catalogue tier can only be that book and the
+   * base stands where it is silent (OQ-1 b). Quantity 1, no buyer, now; the lines are a
+   * listing's (the product itself, or one per variant). Sale, buyer and other everyone
+   * books are never in the profile, so the answer is the catalogue price, not a
+   * promotional one.
+   *
+   * The designation is answered **as if in force**: its status, schedule window,
+   * channel binding and audience are not read here (`designationStatuses` reports
+   * them, and the caller applies them at read time). A designated book that does not
+   * exist, is of another currency or is not a regular book contributes nothing.
+   * Uncached and reads no display mode, like every fixed-profile resolution.
+   */
+  async catalogueReference(input: {
+    currencyCode: string;
+    designation: { priceListId: string; salesChannelId: string } | null;
+    products: readonly PricedProductRef[];
+  }): Promise<Map<string, Array<{ variantId: string | null; amount: string | null }>>> {
+    const out = new Map<string, Array<{ variantId: string | null; amount: string | null }>>();
+    if (input.products.length === 0) return out;
+    const currencyCode = input.currencyCode.toUpperCase();
+    const designatedId = input.designation?.priceListId ?? null;
+    const em = this.deps.emFactory();
+    const headers = await em.execute<
+      Array<{ id: string; name: string; type: string; audience_kind: string; priority: number; is_system: boolean; currency_code: string }>
+    >(
+      `select l."id", l."name", l."type", l."audience_kind", l."priority", l."is_system", l."currency_code"
+         from "price_lists" l
+        where l."currency_code" = ? and (l."is_system" = true or l."id" = ?)`,
+      [currencyCode, designatedId],
+    );
+    const books: ResolverBook[] = [];
+    for (const h of headers) {
+      if (String(h.currency_code).trim().toUpperCase() !== currencyCode) continue;
+      const isBase = h.is_system === true;
+      const isDesignated = !isBase && designatedId !== null && h.id === designatedId && h.type === 'regular';
+      if (!isBase && !isDesignated) continue;
+      books.push({
+        id: h.id,
+        name: h.name,
+        type: 'regular',
+        isSystem: isBase,
+        priority: Number(h.priority),
+        audience: { kind: 'everyone' },
+      });
+    }
+    const precedence = await this.precedence.active();
+    const channelId = input.designation?.salesChannelId ?? '';
+    const profile: PricingProfile = {
+      key: `catalogue-reference:${currencyCode}:${designatedId ?? 'base'}`,
+      channelId,
+      currencyCode,
+      precedenceVersion: precedence.version,
+      vector: [],
+      books,
+    };
+    const { lines, records, variantsByProduct } = await this.#listingLines(input.products);
+    const viewer: BookPricingViewer = {
+      organizationId: null,
+      customerGroupId: null,
+      signedIn: false,
+      salesChannelId: channelId,
+      currencyCode,
+    };
+    const { answered } = await this.#resolveLines(lines, viewer, new Map(records.map((v) => [v.id, v])), {
+      kind: 'reference',
+      profile,
+    });
+    const amounts = new Map<string, string | null>();
+    for (const { cached, keys } of answered) for (const key of keys) amounts.set(key, cached.resolution.price?.amount ?? null);
+    for (const product of input.products) {
+      const variants = variantsByProduct.get(product.id) ?? [];
+      out.set(
+        product.id,
+        variants.length === 0
+          ? [{ variantId: null, amount: amounts.get(product.id) ?? null }]
+          : variants.map((v) => ({ variantId: v.id, amount: amounts.get(`${product.id}|${v.id}`) ?? null })),
+      );
+    }
+    return out;
+  }
+
   /** A listing's lines: one per product without variants, one per variant otherwise — one read of the variants. */
   async #listingLines(products: readonly PricedProductRef[]): Promise<{
     lines: PricingLineRequest[];
@@ -715,6 +809,90 @@ export class BookPricing {
     if (!book.on_channel || !(await channelOffers(em, input.salesChannelId, currencyCode))) return no('not_on_channel');
     if (book.audience_kind !== 'everyone') return no('audience_restricted');
     return { publishable: true };
+  }
+
+  /**
+   * Spec 193 (`specs/193-product-visibility-rules/` contracts/ports.md §3, RQ-1 A) — whether
+   * each designated book prices its currency's catalogue price now, and why not, in input
+   * order. The checks of {@link namedBookPublishability} plus the regular-type check, ordered
+   * so the reasons that refuse a designation (`not_found`, `currency_mismatch`, `not_regular`,
+   * `audience_restricted`, `not_on_channel`) come before the two that only make it "not in
+   * force" (`not_active`, `outside_schedule`): a draft book bound to the channel may be
+   * designated, an unbound one may not. The channel binding is read through the bridge's
+   * sanctioned subquery (Principle XII). One statement for the books, one for the channels.
+   */
+  async designationStatuses(
+    inputs: ReadonlyArray<{ currencyCode: string; priceListId: string; salesChannelId: string }>,
+  ): Promise<DesignationStatus[]> {
+    if (inputs.length === 0) return [];
+    const em = this.deps.emFactory();
+    const parts: string[] = [];
+    const params: unknown[] = [];
+    inputs.forEach((input, index) => {
+      const bridge = this.deps.channelBridge.entityIdsInChannelSubquery(input.salesChannelId, 'price-list');
+      parts.push(
+        `select ${index}::int as "idx", l."currency_code", l."is_system", l."type", l."status", l."audience_kind",
+                l."starts_at", l."ends_at",
+                ((l."starts_at" is null or l."starts_at" <= now()) and (l."ends_at" is null or l."ends_at" > now())) as "in_window",
+                (l."id" in (${bridge.sql})) as "on_channel"
+           from "price_lists" l where l."id" = ?`,
+      );
+      params.push(...bridge.params, input.priceListId);
+    });
+    const rows = await em.execute<
+      Array<{
+        idx: number;
+        currency_code: string;
+        is_system: boolean;
+        type: string;
+        status: string;
+        audience_kind: string;
+        starts_at: Date | string | null;
+        ends_at: Date | string | null;
+        in_window: boolean;
+        on_channel: boolean;
+      }>
+    >(parts.join('\n union all\n'), params);
+    const byIndex = new Map(rows.map((r) => [Number(r.idx), r]));
+    const channelIds = [...new Set(inputs.map((i) => i.salesChannelId))];
+    const channels = await em.find(
+      SalesChannel,
+      { id: { $in: channelIds } },
+      { fields: ['id', 'currencies', 'defaultCurrency'] },
+    );
+    const offered = new Map(
+      channels.map((c) => [
+        c.id,
+        new Set(
+          [...(c.currencies ?? []), c.defaultCurrency]
+            .filter((x): x is string => typeof x === 'string')
+            .map((x) => x.toUpperCase()),
+        ),
+      ]),
+    );
+    const iso = (value: Date | string | null): string | null =>
+      value === null ? null : (value instanceof Date ? value : new Date(value)).toISOString();
+    return inputs.map((input, index): DesignationStatus => {
+      const book = byIndex.get(index);
+      if (!book) return { inForce: false, reason: 'not_found', window: null };
+      const window = { startsAt: iso(book.starts_at), endsAt: iso(book.ends_at) };
+      const no = (reason: Extract<DesignationStatus, { inForce: false }>['reason']): DesignationStatus => ({
+        inForce: false,
+        reason,
+        window,
+      });
+      const currencyCode = input.currencyCode.toUpperCase();
+      if (String(book.currency_code).trim().toUpperCase() !== currencyCode) return no('currency_mismatch');
+      // The base book prices its currency everywhere, always.
+      if (book.is_system) return { inForce: true, window };
+      if (book.type !== 'regular') return no('not_regular');
+      if (book.audience_kind !== 'everyone') return no('audience_restricted');
+      if (!book.on_channel || !offered.get(input.salesChannelId)?.has(currencyCode)) return no('not_on_channel');
+      if (book.status === 'expired') return no('outside_schedule');
+      if (book.status !== 'active' && book.status !== 'scheduled') return no('not_active');
+      if (!book.in_window) return no('outside_schedule');
+      return { inForce: true, window };
+    });
   }
 
   /**

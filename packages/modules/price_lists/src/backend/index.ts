@@ -8,6 +8,7 @@ import type {
   CatalogCategoryReadPort,
   CatalogProductAvailabilityPort,
   CatalogProductReadPort,
+  CatalogueReferencePricePort,
   CustomerAccountReadPort,
   CustomerGroupReadPort,
   OrganizationDetailsPort,
@@ -18,6 +19,14 @@ import type {
   DictionaryReferenceRegistryPort,
   SalesRepAssignmentPort,
 } from '@endora-commerce/contracts';
+import { CATALOGUE_PRICES_CHANGED_EVENT, type CataloguePricesChangedEvent } from '@endora-commerce/contracts';
+import type { EventBus } from '@endora-commerce/platform/events';
+import { randomUUID } from 'node:crypto';
+import {
+  CatalogueReferencePriceService,
+  advanceCatalogueChangeWatermark,
+} from './services/catalogue-reference-price.js';
+import { cataloguePricesChangeOf } from './services/catalogue-prices-changed.js';
 import type { SalesChannelMembershipPort, SettingsReadPort } from '@endora-commerce/platform/kernel';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { CommandBus } from '@endora-commerce/platform/commands';
@@ -154,6 +163,8 @@ export interface PriceListsCradle {
   readonly priceListsTableMaintenance: TableMaintenanceProducer;
   readonly pricingService: PricingServiceContract;
   readonly priceListService: ReturnType<typeof priceListsModule>['handle']['priceListService'];
+  /** Spec 193 (R-6) — `price_lists.catalogue_prices_changed` is announced on it. */
+  readonly eventBus: EventBus;
 }
 
 export function registerModule(ctx: ModuleContext): void {
@@ -197,6 +208,20 @@ export function registerModule(ctx: ModuleContext): void {
               await priceListsSurfaceProducer.enqueue();
             },
             requestTableMaintenance: () => priceListsTableMaintenance.request(),
+            // Spec 193 (R-6, TM-7 (5)) — once per bump, by the writer, after commit: move
+            // the change watermark, then announce what moved, names only. A bump that moved
+            // nothing a price is read from is not announced.
+            announceCataloguePricesChanged: async (change) => {
+              const described = cataloguePricesChangeOf(change);
+              if (!described) return;
+              await advanceCatalogueChangeWatermark(emFactory());
+              const event: CataloguePricesChangedEvent = {
+                eventId: randomUUID(),
+                occurredAt: new Date().toISOString(),
+                change: described,
+              };
+              ctx.cradle<PriceListsCradle>().eventBus.emit(CATALOGUE_PRICES_CHANGED_EVENT, event);
+            },
             emFactory,
             commandBus,
             enableStatusSweeper: priceListsEnableStatusSweeper,
@@ -330,6 +355,39 @@ export function registerModule(ctx: ModuleContext): void {
         ({ priceLists }: PriceListsCradle): BuyerLinePricePort => ({
           resolveForBuyer: (query) => priceLists.handle.buyerLinePriceService.resolveForBuyer(query),
         }),
+      )
+      .singleton(),
+  );
+
+  /**
+   * Container name: `catalogueReferencePricePort`. Owner: `price_lists`. Spec 193
+   * (`specs/193-product-visibility-rules/` contracts/ports.md §3, research R-4) — the
+   * catalogue price of a product in one currency over the fixed profile `[base book,
+   * designated book]`, a designation's in-force state, the books a currency may designate
+   * and the change watermark. A capability read port beside `pricingService`: it reads the
+   * engine, writes nothing and checks no permission (the caller is the gate). Consumer:
+   * `product_visibility_rules`.
+   *
+   * **Owner off:** this module is non-deactivatable, so the gate never refuses in practice;
+   * were it off, resolving would throw `ModuleDisabledError` and a caller fails closed.
+   */
+  ctx.di.providePort<CatalogueReferencePricePort>(
+    'catalogueReferencePricePort',
+    ctx
+      .asFunction(
+        ({ priceLists, emFactory }: PriceListsCradle): CatalogueReferencePricePort =>
+          new CatalogueReferencePriceService({
+            emFactory,
+            books: () => priceLists.handle.pricingEngine.bookPricing,
+            productsByIds: (ids) => lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort').findPricingRefsByIds(ids),
+            bookChannels: async (bookId) =>
+              (
+                await lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort').listChannelsForEntity(
+                  'price-list',
+                  bookId,
+                )
+              ).map((c) => c.id),
+          }),
       )
       .singleton(),
   );

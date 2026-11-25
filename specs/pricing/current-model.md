@@ -20,7 +20,8 @@ the four-place unit-price ruling: §1.2's consumers paragraph; and on
 `fix/497-price-cursor-leak` (from `857092eab`) on 2026-10-28 for issue #497 (sealed price-walk
 cursors): §1.3's paragraph on the walk; and on
 `fix/492-retire-ispublic` on 2026-10-28 for issue #492 (the sales channel's `isPublic` retired into
-the display-mode chain): §1.2's display-mode paragraphs. The old model — the Application rule, the per-list
+the display-mode chain): §1.2's display-mode paragraphs; and on `feat/193-product-visibility-rules` (from
+`c3e8a8755`) on 2026-11-25 for spec 193's catalogue reference price: §1.2's consumers paragraph. The old model — the Application rule, the per-list
 product roster and brackets, the `Default` list, the product *default price* and the variant price
 override — is gone from the code and, after the conversion migration, from the database. How it
 worked is recorded in this file's history (`git log -- specs/pricing/current-model.md`); the
@@ -179,7 +180,17 @@ the book applies to an anonymous buyer on the feed's channel now — `active` or
 its window, bound to the channel, audience everyone; `namedListPublishability` says why not) —
 every one through the batched entry
 points; `backend/test/integration/price_lists/pricing-surfaces-agree.test.ts` holds them to the same
-amount, currency and source.
+amount, currency and source. **One consumer reads a catalogue reference price instead of a
+viewer's**: `product_visibility_rules` (`specs/193-product-visibility-rules/`) through
+`catalogueReferencePricePort` (`PL/backend/services/catalogue-reference-price.ts` over
+`BookPricing.catalogueReference`): the resolver over the fixed profile `[base book, designated
+book]` — quantity 1, no buyer, now, no sale or other everyone book, uncached, no display mode —
+with the designated book's in-force state answered separately at read time
+(`BookPricing.designationStatuses`). Every pricing-generation bump that moves something is also
+announced, names only, as `price_lists.catalogue_prices_changed` by the writer after commit, and
+moves the sequence `price_lists_catalogue_change_seq` (`changeWatermark()`); `catalogue-reference-identity.test.ts`
+holds the resolution equal to `resolveLinePrices` for a guest on a channel whose only everyone book
+is the designated one (`worked-examples.md` §10.21).
 
 **How a consumer carries the amount** (owner ruling of 2026-10-25, `worked-examples.md` §10.18). The
 resolver answers a four-place decimal string, and a consumer that stores a unit price keeps all

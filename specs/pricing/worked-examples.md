@@ -2,7 +2,7 @@
 
 The product owner's three target scenarios (E1–E3) and the cases that chose the precedence (F, S, T, Q vectors), and the cases the owner's rulings of 2026-10-21 decide (C∩, configurable precedence, H, A, K, U, V, D vectors), and the display-mode withholding of issue #491 (W vectors), each as **inputs → expected price → which row wins and why**, under the proposed model, with today's answer where it differs. They are written to become the failing-first tests of the pricing-model feature (Constitution III) and to answer "what should this cost?" without re-deriving the algorithm.
 
-**Verified against** `master` at `b1021c71b` on 2026-10-21; §10.11 re-checked for the P0 read-path hardening (branch `fix/pricing-read-path-hardening` on `fd6255339`) on 2026-10-21; §10.16 re-checked at `e3f456957` on 2026-10-24 (vectors G1–G4). §10.17 written against `2716908b3` on 2026-10-24 (issue #417) and rewritten for the owner's VAT ruling of the same day; §10.16 and §10.17 recomputed and §10.18 written for the four-place unit-price ruling of 2026-10-25 against `ad06079a4` (branch `fix/four-place-unit-prices`); §10.17 extended for issue #428 (refunds outside `payments`, the overpayment, the on-account case, section summaries) against `9e43c3412` on 2026-10-25; §10.19 written for issue #491 against `92dba80a9` on 2026-10-28 (branch `fix/491-display-mode-none-withholds-amounts`); §10.20 written for issue #492 on 2026-10-28 (branch `fix/492-retire-ispublic`); §10.17 R2 and DC1 recomputed for issue #435 on 2026-11-07 (branch `fix/435-invoice-kept-lines`); §10.17 correction rule, L0 and the K1, K2 and P1 vectors written for issues #873 and #885 on 2026-11-08 (branch `fix/873-kept-quantity-from-corrections`); §10.17 return rule, line ceiling and the O1, P2 and P3 vectors written for issues #874 and #875 on 2026-11-08 (branch `fix/874-875-returns-kept-state`); §10.17 withheld-amount rule and the R3 vector written for issue #854 on 2026-11-16 (branch `fix/854-retained-amount-vat`). File:line citations are as of `b1021c71b`; re-check them before relying on one.
+**Verified against** `master` at `b1021c71b` on 2026-10-21; §10.11 re-checked for the P0 read-path hardening (branch `fix/pricing-read-path-hardening` on `fd6255339`) on 2026-10-21; §10.16 re-checked at `e3f456957` on 2026-10-24 (vectors G1–G4). §10.17 written against `2716908b3` on 2026-10-24 (issue #417) and rewritten for the owner's VAT ruling of the same day; §10.16 and §10.17 recomputed and §10.18 written for the four-place unit-price ruling of 2026-10-25 against `ad06079a4` (branch `fix/four-place-unit-prices`); §10.17 extended for issue #428 (refunds outside `payments`, the overpayment, the on-account case, section summaries) against `9e43c3412` on 2026-10-25; §10.19 written for issue #491 against `92dba80a9` on 2026-10-28 (branch `fix/491-display-mode-none-withholds-amounts`); §10.20 written for issue #492 on 2026-10-28 (branch `fix/492-retire-ispublic`); §10.17 R2 and DC1 recomputed for issue #435 on 2026-11-07 (branch `fix/435-invoice-kept-lines`); §10.17 correction rule, L0 and the K1, K2 and P1 vectors written for issues #873 and #885 on 2026-11-08 (branch `fix/873-kept-quantity-from-corrections`); §10.17 return rule, line ceiling and the O1, P2 and P3 vectors written for issues #874 and #875 on 2026-11-08 (branch `fix/874-875-returns-kept-state`); §10.17 withheld-amount rule and the R3 vector written for issue #854 on 2026-11-16 (branch `fix/854-retained-amount-vat`). §10.21 written for spec 193 (catalogue reference price) on 2026-11-25 against `c3e8a8755` (branch `feat/193-product-visibility-rules`). File:line citations are as of `b1021c71b`; re-check them before relying on one.
 
 **The "Today" lines** under each vector record what the **pre-160** engine (the Application rule
 and the Default list) answered, as the comparison the model was decided against. Since feature 160
@@ -694,3 +694,31 @@ value is `none` (M6).
 Tests: `backend/test/integration/price_lists/worked-examples/retired-is-public.test.ts` (P1–P4),
 `backend/test/integration/sales_channels/retire-is-public-migration.test.ts` (M1–M6) and
 `backend/test/unit/sales_channels/is-public-retired.test.ts` (no code names the flag or the column).
+
+### 10.21 The catalogue reference price of a designated book (spec 193, OQ-1)
+
+`specs/193-product-visibility-rules/` designates, per currency, one regular book for everyone bound
+to a channel; a product's **catalogue reference price** in that currency is the engine's resolution
+over the fixed profile **[base book, designated book]** — quantity 1, no buyer, now, no sale book,
+no other everyone book (`catalogueReferencePricePort`, `current-model.md` §1.2 *Consumers*). The
+designated book is read **as if in force**; whether it is in force is a separate, read-time answer
+(`designationStatus`), and a book not in force gives the currency no catalogue reference price.
+Fixture: §10.1 (base P1 100.00, P2 50.00, P5 80.00 with P5r +10 % and P5b inheriting), a designated
+book **D** on CH1 for everyone.
+
+| Vector | Configuration | Line | Answer |
+| --- | --- | --- | --- |
+| CR1 | D: P1 fixed 90.00 | P1 | **90.00** — the designated row wins over the base |
+| CR2 | as CR1 | P2 | **50.00** — D is silent: the base stands (OQ-1 b) |
+| CR3 | D: P1 fixed 90.00, D's window ended yesterday | P1 | **no catalogue reference price** — `designationStatus` answers `outside_schedule`; the resolution itself still answers 90.00 for the day D is in force again |
+| CR4 | D: P5r fixed 70.00 | P5r / P5b | **70.00** / **80.00** — one line per variant; a variant D is silent on keeps its base |
+| CR5 | no designation | P1 | **100.00** — the base book alone |
+| CR6 | D as CR1; a sale for everyone on CH1 −50 % | P1 | **90.00** — a sale book is never in the profile |
+
+**Today** (before spec 193) there was no catalogue reference price: a consumer had the guest price
+of a channel (every everyone book, the sale included) or a feed's pinned book.
+
+Tests: `backend/test/integration/price_lists/worked-examples/catalogue-reference.test.ts` (CR1–CR6),
+`backend/test/integration/price_lists/catalogue-reference-identity.test.ts` (the identity with the
+guest line price under every preset), `backend/test/integration/price_lists/catalogue-designation-status.test.ts`
+(every `designationStatus` reason).

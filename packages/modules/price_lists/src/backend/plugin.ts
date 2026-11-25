@@ -27,6 +27,7 @@ import {
   PricingGeneration,
   type PricingGenerationPublisher,
 } from './services/pricing-generation.js';
+import type { SurfaceChange } from './services/surface-change.js';
 import { BuyerLinePriceService } from './services/buyer-line-price-service.js';
 import { registerPricingRoutes } from './routes.js';
 import { registerStorefrontPricingRoutes } from './routes.storefront.js';
@@ -171,6 +172,12 @@ export interface PriceListsModuleOptions {
   requestSurfaceRebuild?: () => Promise<void>;
   /** Issue #409 — ask for `VACUUM (ANALYZE)` of the row tables after a bulk row write (best effort). */
   requestTableMaintenance?: () => Promise<unknown>;
+  /**
+   * Spec 193 (R-6) — what the writer does once per bump, after commit and after the price
+   * surface's marking: announce `price_lists.catalogue_prices_changed` and move the change
+   * watermark. Best effort, like the bump.
+   */
+  announceCataloguePricesChanged?: (change: SurfaceChange) => Promise<void>;
 }
 
 export interface PriceListsModuleHandle {
@@ -225,7 +232,12 @@ export function priceListsModule(options: PriceListsModuleOptions): {
     // Feature 160 — the writer marks what its change moved on the price
     // surface after its commit (`contracts/price-surface.md` §4).
     async (change) => {
-      await pricingEngine?.priceSurface.markChanged(change);
+      try {
+        await pricingEngine?.priceSurface.markChanged(change);
+      } finally {
+        // Spec 193 (R-6) — and announces it, names only, whatever the marking did.
+        await options.announceCataloguePricesChanged?.(change);
+      }
     },
   );
   const priceListService = new PriceListService(options.emFactory, pricingGeneration, options.targetReads);
