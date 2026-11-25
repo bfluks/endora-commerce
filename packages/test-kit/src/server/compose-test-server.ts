@@ -416,6 +416,8 @@ export async function composeTestServer(
       redis,
       redisSubscriber,
       auditLogService,
+      // Spec 193 (R-10) — a governor of a switched-off module governs nothing (FR-073).
+      isModulePresent: (moduleId) => effectiveState.isPresent(moduleId),
     });
     const settings = composeSettingsKernel({
       emFactory: em,
@@ -547,6 +549,8 @@ export async function composeTestServer(
     composed.contribute({
       salesChannelsCache: salesChannels.cache,
       salesChannelBridgeRegistry: salesChannels.bridgeRegistry,
+      // Spec 193 (R-10, TM-10) — the membership-governor contribution point; sealed after boot.
+      salesChannelMembershipGovernors: salesChannels.membershipGovernors,
       salesChannelMembershipPort: salesChannels.membershipService,
       salesChannelResolutionPort: salesChannels.resolver,
       // The channel a **channel-scoped** settings read resolves against outside
@@ -599,6 +603,8 @@ export async function composeTestServer(
     // production composition root runs it (D-45). A boot hook may therefore
     // resolve anything. It is also what closes the contribution window.
     await composed.runBootHooks();
+    // Spec 193 (TM-10) — membership governors register from boot hooks only.
+    salesChannels.membershipGovernors.seal();
 
     const app = await buildServer({
       sessionCookieSecret: 'test-secret-do-not-use-in-production',

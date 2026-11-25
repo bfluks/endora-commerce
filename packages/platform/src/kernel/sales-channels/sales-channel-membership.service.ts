@@ -14,6 +14,10 @@ import {
   type ChannelBridgeRegistration,
   type ChannelBridgeRegistry,
 } from './channel-bridge-registry.js';
+import type {
+  ChannelMembershipGovernorRegistry,
+  GovernorWriteToken,
+} from './membership-governors.js';
 
 /**
  * SalesChannelMembershipService — feature 005 / T016.
@@ -57,6 +61,16 @@ import {
  * {@link AuditPort} and emits one EventBus event. Idempotent
  * no-ops (adding an existing membership / removing a missing one) are
  * NOT audited because they did not change state.
+ *
+ * **Governed channels** (`specs/193-product-visibility-rules/` research R-10): a module may
+ * contribute a membership governor (`./membership-governors.ts`). Before a (channel, entity) pair
+ * changes, the governor of that channel is asked on the mutation's own manager. A governed pair is
+ * skipped by default and listed in `skippedGovernedChannelIds`, refused with
+ * `CHANNEL_MEMBERSHIP_GOVERNED` when the caller passes `onGoverned: 'refuse'`, and applied only
+ * with the governing module's write token. The at-least-one-channel floor (FR-008) is waived for a
+ * product in exactly two cases: a token write, and a request that named a governed channel which
+ * was skipped (`bindToDefaultIfEmpty` onto a governed default; `replaceChannelsForEntity` whose
+ * desired set is only governed channels). A fallback onto a governed default is no fallback.
  */
 
 export interface MembershipMutationOptions {
@@ -74,6 +88,19 @@ export interface MembershipMutationOptions {
    * they do without it.
    */
   em?: EntityManager;
+  /**
+   * Spec 193 (R-10) — what happens to a pair on a governed channel without the governing token:
+   * `'skip'` (the default — automatic writers comply unchanged) or `'refuse'` (a manual write:
+   * `409 CHANNEL_MEMBERSHIP_GOVERNED`, nothing written).
+   */
+  onGoverned?: 'skip' | 'refuse';
+  /** The governing module's own write token (never anybody else's to hold — TM-10). */
+  governorToken?: GovernorWriteToken;
+  /**
+   * Attribution recorded in the membership audit row (e.g. `website_rule:<id>`, FR-072). Honoured
+   * only on a pair the token governs; ignored otherwise, so it cannot be forged (TM-10).
+   */
+  source?: string;
 }
 
 export interface MembershipMutationResult {
@@ -81,6 +108,15 @@ export interface MembershipMutationResult {
   changed: boolean;
   /** Set when the FR-008 fallback was applied. */
   fallbackAppliedToDefault?: boolean;
+  /** Spec 193 — governed channels whose pair this mutation skipped (absent when none). */
+  skippedGovernedChannelIds?: string[];
+}
+
+/** How one (channel, entity) pair is to be written. */
+type PairDecision = 'apply' | 'token' | 'skip';
+
+function withSkipped<T extends object>(result: T, skipped: readonly string[]): T & { skippedGovernedChannelIds?: string[] } {
+  return skipped.length > 0 ? { ...result, skippedGovernedChannelIds: [...skipped] } : result;
 }
 
 export class SalesChannelMembershipService {
@@ -102,7 +138,45 @@ export class SalesChannelMembershipService {
      * a composition with no access rule — a unit test — keeps working.
      */
     private readonly accessCache?: SalesChannelAccessCacheInvalidation,
+    /**
+     * Spec 193 — the governors composed for this platform. Optional so a composition with none —
+     * a unit test, a bare harness — keeps today's behaviour exactly.
+     */
+    private readonly governors?: ChannelMembershipGovernorRegistry,
   ) {}
+
+  /**
+   * Whether a pair on `channelId` is written, skipped, or refused (throws). A governor that throws
+   * propagates: the mutation is refused, never read as "not governed" (TM-10).
+   */
+  private async decide(
+    em: EntityManager,
+    entityType: ChannelMemberEntityType,
+    channelId: string,
+    options: MembershipMutationOptions,
+  ): Promise<PairDecision> {
+    if (!this.governors?.governsType(entityType)) return 'apply';
+    const governed = await this.governors.governing(em, entityType, channelId);
+    if (governed === null) return 'apply';
+    if (this.governors.tokenModule(options.governorToken) === governed.moduleId) return 'token';
+    if (options.onGoverned === 'refuse') {
+      throw new HttpError(
+        409,
+        ERROR_CODES.CHANNEL_MEMBERSHIP_GOVERNED,
+        `This sales channel's ${entityType} membership follows the rule "${governed.ruleLabel}"; ` +
+          'it cannot be changed by hand.',
+        // Scalar members, so the translated sentence names the rule (`{rule}`, FR-074): the
+        // envelope fills placeholders from them. `rule` is user-authored text — text only.
+        { channelId, rule: governed.ruleLabel },
+      );
+    }
+    return 'skip';
+  }
+
+  /** The audit `source` of a pair: the caller's, only on a token write. */
+  private static sourceOf(decision: PairDecision, options: MembershipMutationOptions): string | undefined {
+    return decision === 'token' ? options.source : undefined;
+  }
 
   /** The manager the statements of one mutation run on. */
   private emFor(options: MembershipMutationOptions): EntityManager {
@@ -135,7 +209,22 @@ export class SalesChannelMembershipService {
   ): Promise<MembershipMutationResult> {
     const bridge = this.bridges.require(entityType);
     const em = this.emFor(options);
+    const decision = await this.decide(em, entityType, channelId, options);
+    if (decision === 'skip') return { changed: false, skippedGovernedChannelIds: [channelId] };
+    const changed = await this.insertPair(em, bridge, channelId, entityType, entityId, options, decision);
+    return { changed };
+  }
 
+  /** One audited, announced insert of a pair; `false` when it was already there. */
+  private async insertPair(
+    em: EntityManager,
+    bridge: ChannelBridgeRegistration,
+    channelId: string,
+    entityType: ChannelMemberEntityType,
+    entityId: string,
+    options: MembershipMutationOptions,
+    decision: PairDecision,
+  ): Promise<boolean> {
     const inserted = await em
       .getConnection()
       .execute<Array<Record<string, unknown>>>(
@@ -148,14 +237,12 @@ export class SalesChannelMembershipService {
         em.getTransactionContext(),
       );
 
-    if (inserted.length === 0) {
-      return { changed: false };
-    }
+    if (inserted.length === 0) return false;
 
-    await this.auditMembership(channelId, entityType, entityId, 'add', options);
+    await this.auditMembership(channelId, entityType, entityId, 'add', options, undefined, SalesChannelMembershipService.sourceOf(decision, options));
     await this.afterChannelsChanged(entityType, entityId);
     this.emitMembershipChanged(channelId, entityType, entityId, 'add');
-    return { changed: true };
+    return true;
   }
 
   /**
@@ -177,6 +264,9 @@ export class SalesChannelMembershipService {
   ): Promise<MembershipMutationResult> {
     const bridge = this.bridges.require(entityType);
     const em = this.emFor(options);
+    const decision = await this.decide(em, entityType, channelId, options);
+    if (decision === 'skip') return { changed: false, skippedGovernedChannelIds: [channelId] };
+    const source = SalesChannelMembershipService.sourceOf(decision, options);
 
     // Step 1: check existence so the no-op path is idempotent and so FR-008
     // can be evaluated BEFORE we delete anything.
@@ -197,9 +287,15 @@ export class SalesChannelMembershipService {
     // one, FR-008 either refuses (default) or rebinds to Default (when the
     // caller opted in).
     const totalChannels = await this.countMembershipsForEntity(em, bridge, entityId);
-    const wouldOrphan = totalChannels === 1;
+    // Spec 193 — the governing module's own write is exempt from the floor (R-10): a rule removes
+    // a product from its only channel, and it stays on none until the rule admits it.
+    const wouldOrphan = totalChannels === 1 && decision !== 'token';
+    // A fallback onto a governed default is no fallback (R-10): the default's own rule decides.
+    const defaultId = wouldOrphan && options.fallbackToDefault ? await this.requireSystemDefaultId(em) : null;
+    const fallbackGoverned =
+      defaultId !== null && (await this.decide(em, entityType, defaultId, options.governorToken !== undefined ? { governorToken: options.governorToken } : {})) === 'skip';
 
-    if (wouldOrphan && !options.fallbackToDefault) {
+    if (wouldOrphan && (!options.fallbackToDefault || fallbackGoverned)) {
       throw new HttpError(
         422,
         ERROR_CODES.ENTITY_WOULD_HAVE_ZERO_CHANNELS,
@@ -222,26 +318,25 @@ export class SalesChannelMembershipService {
       );
 
     if (!wouldOrphan) {
-      await this.auditMembership(channelId, entityType, entityId, 'remove', options);
+      await this.auditMembership(channelId, entityType, entityId, 'remove', options, undefined, source);
       await this.afterChannelsChanged(entityType, entityId);
       this.emitMembershipChanged(channelId, entityType, entityId, 'remove');
       return { changed: true };
     }
 
     // wouldOrphan && fallbackToDefault — rebind in the same transaction.
-    const defaultId = await this.requireSystemDefaultId(em);
     await em
       .getConnection()
       .execute(
         `insert into "${bridge.table}" ("sales_channel_id", "${bridge.entityIdColumn}") ` +
           `values (?, ?) ` +
           `on conflict ("sales_channel_id", "${bridge.entityIdColumn}") do nothing`,
-        [defaultId, entityId],
+        [defaultId!, entityId],
         'run',
         em.getTransactionContext(),
       );
 
-    await this.auditMembership(channelId, entityType, entityId, 'remove', options, true);
+    await this.auditMembership(channelId, entityType, entityId, 'remove', options, true, source);
     await this.afterChannelsChanged(entityType, entityId);
     this.emitMembershipChanged(channelId, entityType, entityId, 'remove');
     return { changed: true, fallbackAppliedToDefault: true };
@@ -264,6 +359,10 @@ export class SalesChannelMembershipService {
     if (remaining > 0) return { changed: false };
 
     const defaultId = await this.requireSystemDefaultId(em);
+    // Spec 193 (R-10, FR-059) — a governed default binds nothing: the entity stays on no channel
+    // until the governing rule admits it.
+    const decision = await this.decide(em, entityType, defaultId, options);
+    if (decision === 'skip') return { changed: false, skippedGovernedChannelIds: [defaultId] };
 
     await em
       .getConnection()
@@ -278,7 +377,7 @@ export class SalesChannelMembershipService {
 
     // The actor when the caller has one: a create that falls back to Default is
     // still somebody's create, and its audit row should say whose.
-    await this.auditMembership(defaultId, entityType, entityId, 'add', options);
+    await this.auditMembership(defaultId, entityType, entityId, 'add', options, undefined, SalesChannelMembershipService.sourceOf(decision, options));
     await this.afterChannelsChanged(entityType, entityId);
     this.emitMembershipChanged(defaultId, entityType, entityId, 'add');
     return { changed: true };
@@ -307,7 +406,7 @@ export class SalesChannelMembershipService {
     sourceEntityId: string,
     targetEntityId: string,
     options: MembershipMutationOptions = {},
-  ): Promise<{ copied: number }> {
+  ): Promise<{ copied: number; skippedGovernedChannelIds?: string[] }> {
     const bridge = this.bridges.require(entityType);
     const em = this.emFor(options);
     const rows = await em
@@ -319,17 +418,21 @@ export class SalesChannelMembershipService {
         em.getTransactionContext(),
       );
 
-    let copied = 0;
+    // Every pair is decided before any is written, so a refusal leaves the target untouched.
+    const decisions: Array<[string, PairDecision]> = [];
     for (const row of rows) {
-      const result = await this.addToChannel(
-        row.sales_channel_id,
-        entityType,
-        targetEntityId,
-        options,
-      );
-      if (result.changed) copied += 1;
+      decisions.push([row.sales_channel_id, await this.decide(em, entityType, row.sales_channel_id, options)]);
     }
-    return { copied };
+    let copied = 0;
+    const skipped: string[] = [];
+    for (const [channelId, decision] of decisions) {
+      if (decision === 'skip') {
+        skipped.push(channelId);
+        continue;
+      }
+      if (await this.insertPair(em, bridge, channelId, entityType, targetEntityId, options, decision)) copied += 1;
+    }
+    return withSkipped({ copied }, skipped);
   }
 
   /**
@@ -360,24 +463,42 @@ export class SalesChannelMembershipService {
         em.getTransactionContext(),
       );
     const existingIds = existingRows.map((row) => row.sales_channel_id);
-    const desiredSorted = [...desiredIds].sort();
-    if (
-      existingIds.length === desiredSorted.length &&
-      existingIds.every((id, index) => id === desiredSorted[index])
-    ) {
-      return { changed: false };
+    const existingSet = new Set(existingIds);
+    const desiredSet = new Set(desiredIds);
+
+    // Spec 193 (R-10) — every pair that would change is decided first: a governed one is kept as
+    // it is (skip), refused, or follows the desired set with the governing token.
+    const final = new Set(existingIds);
+    const sources = new Map<string, string | undefined>();
+    const skipped: string[] = [];
+    for (const channelId of [...new Set([...existingIds, ...desiredIds])]) {
+      const wanted = desiredSet.has(channelId);
+      if (wanted === existingSet.has(channelId)) continue;
+      const decision = await this.decide(em, entityType, channelId, options);
+      if (decision === 'skip') {
+        skipped.push(channelId);
+        continue;
+      }
+      sources.set(channelId, SalesChannelMembershipService.sourceOf(decision, options));
+      if (wanted) final.add(channelId);
+      else final.delete(channelId);
     }
+    const removed = existingIds.filter((id) => !final.has(id));
+    const added = desiredIds.filter((id) => final.has(id) && !existingSet.has(id));
+    if (removed.length === 0 && added.length === 0) return withSkipped({ changed: false }, skipped);
 
     await em.transactional(async (tx) => {
-      await tx
-        .getConnection()
-        .execute(
-          `delete from "${bridge.table}" where "${bridge.entityIdColumn}" = ?`,
-          [entityId],
-          'run',
-          tx.getTransactionContext(),
-        );
-      for (const channelId of desiredIds) {
+      for (const channelId of removed) {
+        await tx
+          .getConnection()
+          .execute(
+            `delete from "${bridge.table}" where "sales_channel_id" = ? and "${bridge.entityIdColumn}" = ?`,
+            [channelId, entityId],
+            'run',
+            tx.getTransactionContext(),
+          );
+      }
+      for (const channelId of added) {
         await tx
           .getConnection()
           .execute(
@@ -393,20 +514,16 @@ export class SalesChannelMembershipService {
     // One drop for the whole replacement, after the statements and before any
     // of the events below — the set changed once, whatever the row count.
     await this.afterChannelsChanged(entityType, entityId);
-    const desiredSet = new Set(desiredIds);
-    const existingSet = new Set(existingIds);
-    for (const channelId of existingIds) {
-      if (desiredSet.has(channelId)) continue;
-      await this.auditMembership(channelId, entityType, entityId, 'remove', options);
+    for (const channelId of removed) {
+      await this.auditMembership(channelId, entityType, entityId, 'remove', options, undefined, sources.get(channelId));
       this.emitMembershipChanged(channelId, entityType, entityId, 'remove');
     }
-    for (const channelId of desiredIds) {
-      if (existingSet.has(channelId)) continue;
-      await this.auditMembership(channelId, entityType, entityId, 'add', options);
+    for (const channelId of added) {
+      await this.auditMembership(channelId, entityType, entityId, 'add', options, undefined, sources.get(channelId));
       this.emitMembershipChanged(channelId, entityType, entityId, 'add');
     }
 
-    return { changed: true };
+    return withSkipped({ changed: true }, skipped);
   }
 
   /**
@@ -446,6 +563,7 @@ export class SalesChannelMembershipService {
       );
     }
     const em = this.emFor(options);
+    if (this.governors?.governsType(entityType)) return this.clearGoverned(em, bridge, entityType, entityId, options);
     const removed = await em
       .getConnection()
       .execute<Array<{ sales_channel_id: string }>>(
@@ -462,6 +580,48 @@ export class SalesChannelMembershipService {
       this.emitMembershipChanged(row.sales_channel_id, entityType, entityId, 'remove');
     }
     return { changed: true };
+  }
+
+  /** {@link clearChannelsForEntity} for a type a governor declares: governed rows decided one by one. */
+  private async clearGoverned(
+    em: EntityManager,
+    bridge: ChannelBridgeRegistration,
+    entityType: ChannelMemberEntityType,
+    entityId: string,
+    options: MembershipMutationOptions,
+  ): Promise<MembershipMutationResult> {
+    const rows = await em
+      .getConnection()
+      .execute<Array<{ sales_channel_id: string }>>(
+        `select "sales_channel_id" from "${bridge.table}" where "${bridge.entityIdColumn}" = ?`,
+        [entityId],
+        'all',
+        em.getTransactionContext(),
+      );
+    const removed: Array<[string, string | undefined]> = [];
+    const skipped: string[] = [];
+    for (const { sales_channel_id: channelId } of rows) {
+      const decision = await this.decide(em, entityType, channelId, options);
+      if (decision === 'skip') skipped.push(channelId);
+      else removed.push([channelId, SalesChannelMembershipService.sourceOf(decision, options)]);
+    }
+    for (const [channelId] of removed) {
+      await em
+        .getConnection()
+        .execute(
+          `delete from "${bridge.table}" where "sales_channel_id" = ? and "${bridge.entityIdColumn}" = ?`,
+          [channelId, entityId],
+          'run',
+          em.getTransactionContext(),
+        );
+    }
+    if (removed.length === 0) return withSkipped({ changed: false }, skipped);
+    await this.afterChannelsChanged(entityType, entityId);
+    for (const [channelId, source] of removed) {
+      await this.auditMembership(channelId, entityType, entityId, 'remove', options, undefined, source);
+      this.emitMembershipChanged(channelId, entityType, entityId, 'remove');
+    }
+    return withSkipped({ changed: true }, skipped);
   }
 
   /**
@@ -710,6 +870,8 @@ export class SalesChannelMembershipService {
     op: 'add' | 'remove',
     options: MembershipMutationOptions,
     fallbackAppliedToDefault?: boolean,
+    /** Spec 193 (FR-072) — only ever a token write's, see {@link sourceOf}. */
+    source?: string,
   ): Promise<void> {
     if (!this.auditLogService) return;
     await this.auditLogService.record({
@@ -723,6 +885,7 @@ export class SalesChannelMembershipService {
         entityId,
         op,
         ...(fallbackAppliedToDefault ? { fallbackAppliedToDefault: true } : {}),
+        ...(source !== undefined ? { source } : {}),
       },
     });
   }

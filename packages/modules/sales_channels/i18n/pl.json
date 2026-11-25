@@ -83,6 +83,7 @@
   "errors.CANNOT_MODIFY_SYSTEM_DEFAULT": "To domyślny kanał sprzedaży platformy, więc nie można go dezaktywować ani usunąć.",
   "errors.SALES_CHANNEL_HAS_ATTRIBUTIONS": "Do tego kanału sprzedaży są przypisane inne rekordy, więc nie można go usunąć. Zamiast tego go dezaktywuj.",
   "errors.ENTITY_WOULD_HAVE_ZERO_CHANNELS": "Ta zmiana zostawiłaby rekord bez kanału sprzedaży, a każdy rekord musi należeć do co najmniej jednego kanału.",
+  "errors.CHANNEL_MEMBERSHIP_GOVERNED": "Produkty tego kanału sprzedaży wynikają z reguły „{rule}”, więc nie można ich dodawać ani usuwać ręcznie. Zmień regułę albo odłącz ją od kanału.",
   "errors.STALE_SALES_CHANNEL_WRITE": "Ktoś inny zmienił w międzyczasie ten kanał sprzedaży. Wczytaj go ponownie i spróbuj jeszcze raz.",
   "errors.SALES_CHANNEL_ATTRIBUTION_IMMUTABLE": "Kanału sprzedaży, w którym utworzono rekord, nie można zmienić.",
   "errors.SALES_CHANNEL_CODE_IMMUTABLE": "Kod kanału sprzedaży jest ustawiany przy tworzeniu kanału i nie może być później zmieniony. Utwórz kanał z właściwym kodem i usuń ten; nazwa wyświetlana pozostaje edytowalna.",

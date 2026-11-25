@@ -1724,6 +1724,16 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'kernel\'s access step in the channel resolver; the noun is the sales channel, so it is ' +
       'declared by `sales_channels`, as `INACTIVE_SALES_CHANNEL` is for the same thrower (D-95.2).',
   },
+  CHANNEL_MEMBERSHIP_GOVERNED: {
+    to: 'sales_channels',
+    reason:
+      'Minted by `specs/193-product-visibility-rules/` (FR-054, research R-10) for a manual membership ' +
+      'write — the channel-side routes, the catalog bulk update — on a sales channel whose membership a ' +
+      'governor (the website rule) decides; `details` carries `channelId` and the rule label as `rule`. ' +
+      'The thrower is the kernel\'s membership service; the noun is the sales channel, so it is declared ' +
+      'by `sales_channels`, as `ENTITY_WOULD_HAVE_ZERO_CHANNELS` is (D-95.2). `VALIDATION_FAILED` is not ' +
+      'reused: the request is well formed, and the sentence has to name the rule.',
+  },
   SALES_CHANNEL_NOT_PERMITTED: {
     to: 'sales_channels',
     reason:

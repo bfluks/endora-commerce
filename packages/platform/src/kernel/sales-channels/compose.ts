@@ -11,6 +11,7 @@ import {
 import { SalesChannelResolverService } from './sales-channel-resolver.service.js';
 import { SalesChannelMembershipService } from './sales-channel-membership.service.js';
 import { channelBridges, type ChannelBridgeRegistry } from './channel-bridge-registry.js';
+import { ChannelMembershipGovernorRegistry } from './membership-governors.js';
 import { registerSalesChannelResolverMiddleware } from './sales-channel-resolver.middleware.js';
 import {
   SALES_CHANNEL_ACCESS_CACHE_NAMESPACE,
@@ -58,6 +59,11 @@ export interface SalesChannelsKernelOptions {
    * keep working without `X-Sales-Channel`.
    */
   readonly strictAdmin?: boolean;
+  /**
+   * Spec 193 — whether a module is present on the effective state, asked per membership mutation
+   * by the governor registry. Defaults to always-present (a bare composition).
+   */
+  readonly isModulePresent?: (moduleId: string) => boolean;
 }
 
 export interface SalesChannelsKernel {
@@ -87,6 +93,13 @@ export interface SalesChannelsKernel {
    */
   readonly bridgeRegistry: ChannelBridgeRegistry;
   /**
+   * Spec 193 (R-10, TM-10) — the membership governors of this composition. A composition root
+   * contributes it as `salesChannelMembershipGovernors` (a module registers from a boot hook) and
+   * **seals** it after `runBootHooks()`; one per composition, so composing twice in a process —
+   * the test harness — never meets the previous composition's governors.
+   */
+  readonly membershipGovernors: ChannelMembershipGovernorRegistry;
+  /**
    * Withdraws this process's cache from the operator-facing clear. Released
    * for tests; in production it lives until process exit.
    */
@@ -104,6 +117,9 @@ export function composeSalesChannelsKernel(
   // Built before the membership service, which drops it as part of every write
   // of an Organization's channels; its loader reads through that same service,
   // late-bound, so neither has to exist first.
+  const membershipGovernors = new ChannelMembershipGovernorRegistry(
+    options.isModulePresent !== undefined ? { isPresent: options.isModulePresent } : {},
+  );
   let membershipService!: SalesChannelMembershipService;
   const accessCache = new SalesChannelAccessCache(options.redis, (organizationId) =>
     membershipService.listChannelIdsForEntity('organization', organizationId),
@@ -114,6 +130,7 @@ export function composeSalesChannelsKernel(
     options.auditLogService,
     bridgeRegistry,
     accessCache,
+    membershipGovernors,
   );
   const accessPolicy = new SalesChannelAccessPolicy(accessCache, (id) => resolver.getById(id));
   /**
@@ -141,6 +158,7 @@ export function composeSalesChannelsKernel(
     accessCache,
     accessPolicy,
     bridgeRegistry,
+    membershipGovernors,
     cacheRegistration: {
       dispose: () => {
         unregister();

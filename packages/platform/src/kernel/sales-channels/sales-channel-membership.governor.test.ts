@@ -146,7 +146,7 @@ describe('membership governor — addToChannel', () => {
     expect(error.statusCode).toBe(409);
     expect(error.code).toBe(ERROR_CODES.CHANNEL_MEMBERSHIP_GOVERNED);
     expect(error.message).toContain(RULE);
-    expect(error.details).toEqual([{ path: 'channelId', issue: G }]);
+    expect(error.details).toEqual({ channelId: G, rule: RULE });
     expect(channelsOf(h)).toEqual([DEFAULT]);
   });
 

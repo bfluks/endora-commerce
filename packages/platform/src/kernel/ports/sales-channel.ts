@@ -55,6 +55,12 @@ export interface SalesChannelResolutionPort {
  * The membership bridge tables (`sales_channel_<entity>`). Every module that
  * scopes its own rows to a channel goes through this rather than writing the
  * bridge table itself — the sanctioned bridge accessor of Constitution XII.
+ *
+ * Spec 193 (R-10): a pair on a channel a membership governor governs is skipped
+ * by default (listed in `skippedGovernedChannelIds`), refused with `409
+ * CHANNEL_MEMBERSHIP_GOVERNED` when `onGoverned: 'refuse'`, and written only
+ * with the governing module's `governorToken`. A caller that never passes
+ * either option behaves as before on every ungoverned channel.
  */
 export interface SalesChannelMembershipPort {
   addToChannel(
@@ -111,7 +117,7 @@ export interface SalesChannelMembershipPort {
     sourceEntityId: string,
     targetEntityId: string,
     options?: MembershipMutationOptions,
-  ): Promise<{ copied: number }>;
+  ): Promise<{ copied: number; skippedGovernedChannelIds?: string[] }>;
 
   /**
    * Narrow a known set of entity ids to those bound to `channelId`. The

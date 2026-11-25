@@ -807,6 +807,8 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
     redis,
     redisSubscriber,
     auditLogService,
+    // Spec 193 (R-10) — a governor of a switched-off module governs nothing (FR-073).
+    isModulePresent: (moduleId) => effectiveState.isPresent(moduleId),
   });
 
   // Feature 005 / `specs/117-instance-bring-up/` — and the invariant is this
@@ -945,6 +947,8 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
     // refuses at the membership call instead of reaching a relation an
     // instance that omits that module does not have.
     salesChannelBridgeRegistry: salesChannels.bridgeRegistry,
+    // Spec 193 (R-10, TM-10) — the membership-governor contribution point; sealed after boot.
+    salesChannelMembershipGovernors: salesChannels.membershipGovernors,
     // The kernel-reserved membership port. `payment_methods` and
     // `delivery_methods` resolve it to auto-bind a new method to the system
     // default channel; both read it when their routes register.
@@ -1444,6 +1448,8 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
   // below it throws `ContributionWindowClosedError` naming the rule, rather
   // than landing somewhere no hook will read.
   await composedModules.runBootHooks();
+  // Spec 193 (TM-10) — membership governors register from boot hooks only.
+  salesChannels.membershipGovernors.seal();
   // The bracket opened beside the writer closes here: what a plugin body,
   // a worker or a request widens from now on is not the process start.
   escapeHatchAudit.endBoot();
