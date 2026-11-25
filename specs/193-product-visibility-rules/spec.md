@@ -5,8 +5,10 @@
 **Status**: Draft — owner decisions of 2026-11-24 recorded under *Owner decisions*; OQ-1 – OQ-12
 (2026-11-24) and RQ-1 – RQ-3 (2026-11-25) answered under *Clarifications* (OQ-9 left to the
 architect); plan-stage owner answers OQ-A – OQ-H and I-2 – I-4 (2026-11-25) recorded under
-*Session 2026-11-25 — plan stage*, with the last three answers (Q-1 – Q-3); clarify exhausted;
-plan and tasks to be re-aligned by the architect
+*Session 2026-11-25 — plan stage*, with the last three answers (Q-1 – Q-3; the plan writes them
+Q1 – Q3); clarify exhausted; plan and tasks re-aligned (`1324af947`); analyze of 2026-11-25
+(`analysis.md`) not yet clean — spec findings H3, M6, M8, M9 and LOW 1 – 4 addressed here, H2
+with the owner
 **Input**: Issue #1908 (product visibility for admin roles by catalogue price, and a configurable
 website rule), with the owner decisions of 2026-11-24.
 **Depends on**: `specs/192-quote-request-draft-share/` (issue #1901) for the quote-request and
@@ -114,7 +116,8 @@ requirements it names.
    no price makes the product invisible to every restricted category; a configurable parent is
    visible when at least one variant qualifies. → FR-001 – FR-007.
 3. **Role → category mapping** in the Admin UI; an admin user has exactly one role. Unmapped roles
-   holding the offer-creation permission are fail-closed on every filtered surface; the platform
+   holding the quote-handling permission `rfqs:handle` (the offer-creation permission, F5) are
+   fail-closed on every filtered surface; the platform
    administrator is always unrestricted; other unmapped roles are unrestricted. → FR-020 – FR-026
    (amended 2026-11-25 by OQ-G and I-2: a role holding a self-lifting permission is always
    unrestricted and never mapped; a role can be mapped to "unrestricted").
@@ -329,10 +332,10 @@ three users mapped to domestic, export and management; call each enforced read a
    status counts add up to 12.
 5. **Given** the platform administrator, **When** they use any of these reads, **Then** they see
    exactly what they see today.
-6. **Given** a role holding the offer-creation permission, none of the self-lifting permissions
+6. **Given** a role holding `rfqs:handle`, none of the self-lifting permissions
    (FR-026) and mapped to nothing, **When** a user with it opens the product list, **Then** it is
    empty and the screen says the role has no product visibility category.
-7. **Given** a role without the offer-creation permission and mapped to no category, **When** a user
+7. **Given** a role without `rfqs:handle` and mapped to no category, **When** a user
    with it opens the product list, **Then** they see what they see today.
 8. **Given** a product hidden from a domestic user, **When** the user calls any catalog admin route
    addressed by its id — a sub-resource read, update, archive, restore, duplicate, or a bulk update
@@ -573,7 +576,7 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   (no price in an inactive currency); the configuration keeps the condition and shows it as
   inactive.
 - **Inactive, archived or deleted products**: the rules only narrow; they never make such a product
-  appear anywhere it does not appear today, and never put it on a storefront channel.
+  appear anywhere it does not appear today, and never put it on a storefront channel (FR-079).
 - **A custom role holding the wildcard `*`**: always unrestricted and not mappable, like every role
   holding a self-lifting permission (OQ-G, FR-026; this replaces the earlier OQ-2 reading that made
   it fail-closed while unmapped).
@@ -621,6 +624,10 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   deleted product because of the rule.
 - **New or reactivated product on a governed channel**: not on the channel until the rule admits it;
   it may appear up to 5 minutes late, never early (FR-059).
+- **A product with no channel**: a product whose only channel is governed may have no channel at all
+  — until the rule admits it, or after the rule removed it from its only channel. It is never moved
+  to a default channel instead. Outside governed channels the "at least one channel" floor holds as
+  today (FR-059).
 - **Feature off**: see FR-073.
 
 ## Requirements *(mandatory)*
@@ -715,7 +722,13 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   the price explainer, the product editor, SEO and the other callers of F3; of a visible
   configurable product, only its qualifying variants (FR-005).
 - **FR-031**: The list's `total`, its per-status counts and its paging MUST count only visible
-  products; filtering MUST happen in the query that pages, not after it.
+  products; filtering MUST happen in the query that pages, not after it. No other catalog admin
+  answer MAY count hidden products for a restricted user either: a category's product count, an
+  attribute set's product count (including the "still in use" refusal when deleting it), an
+  attribute's usage and scope-change preview, and the variant-derived figures on a visible product's
+  detail (variant count, option and axis values, stock totals, price ranges, media) MUST be derived
+  from visible products and qualifying variants only (analyze M9, threat model TM-6; narrowing chosen
+  for every such count, product-owner proposal following this FR).
 - **FR-032**: Select-all (`resolve-ids`) and fetching products by a list of ids (`batch-by-id`)
   MUST return only visible products, and totals counting only those.
 - **FR-033**: Every catalog admin route addressed by a product id — the detail, its sub-resources
@@ -724,12 +737,21 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   answer a product outside the user's category exactly as it answers a product that does not exist
   (same status and error code), never as "forbidden", and MUST change nothing. A bulk update naming
   hidden products MUST treat them as absent. The same holds for a non-qualifying variant of a
-  visible product addressed by its id (FR-005).
+  visible product addressed by its id (FR-005). **Bulk operations** (analyze M9, threat model
+  TM-1): for a restricted user, the list and the detail of bulk operations MUST show only operations
+  whose selection holds no product hidden from the user (hidden ids never appear in what is shown);
+  undoing an operation that affected a hidden product MUST answer as for an operation that does not
+  exist and change nothing; and a queued operation MUST NOT write a product hidden from the user who
+  requested it at the moment of the write.
 - **FR-034**: The admin global search MUST return only products visible to the searching user, and
   its "more results" indication MUST not reveal hidden ones.
 - **FR-035**: An unrestricted user MUST see on every surface exactly what they see today.
 - **FR-036**: The enforcement MUST be on the server for every surface above; hiding on the client
-  alone does not satisfy any requirement of this section.
+  alone does not satisfy any requirement of this section. The admin product list answers MUST be
+  sent as not cacheable (`Cache-Control: private, no-store`) **whatever the feature's state** — on,
+  off or absent — so no browser or proxy cache can serve one user's answer to another (threat model
+  TM-14); because the header does not depend on the feature, it is not a difference under FR-073 or
+  SC-003.
 - **FR-037**: Creating an order in the Admin UI with a line whose product (or variant, FR-005) is
   outside the restricted user's category MUST be refused by the server, naming the offending lines,
   with the same refusal as quote lines (FR-041); nothing of the request is saved. Other admin entry
@@ -759,8 +781,9 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   (FR-041).
 - **FR-043**: For a restricted user, a product or variant visible only because a "≥ 0" condition is
   met at price 0 — no condition of the user's category is met with a price above 0 — MUST carry the
-  fixed marker "no fixed price" in the offer product search and on the quote line in the Admin UI.
-  The text is translated (Polish and English) and not editable. Unrestricted users MUST NOT see the
+  fixed marker in the offer product search and on the quote line in the Admin UI. The text is fixed
+  and not editable: English **"no fixed price"**, Polish **"brak ustalonej ceny"** (owner decision:
+  a fixed text; the Polish wording is the owner's). Unrestricted users MUST NOT see the
   marker, and it MUST NOT be shown on admin order create, order preview or reorder (RQ-2).
 
 **Website rule**
@@ -801,6 +824,12 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   of FR-061. There MUST be no window in which such a product is exposed on the channel before the
   rule admits it. A channel-scoped status moving to active on a governed channel is a reactivation
   for that channel (FR-092, OQ-F); values written before admission are kept (FR-093, I-4).
+  **Zero-channel exception**: to keep this, a product MAY be on no sales channel at all — when it
+  is not yet admitted to a governed channel that its writer named (for example a new product whose
+  default channel is governed), or when the rule removes it from its only channel. This waives the
+  platform's "at least one channel per product" floor for those two cases on governed channels
+  only; every other membership change keeps the floor, and the product is never moved to another
+  channel in its place.
 
 **Timing**
 
@@ -852,6 +881,10 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 - **FR-077**: The feature's configuration MUST be available only while the feature is on (FR-073);
   it cannot be prepared before the first enable. The window in which unmapped fail-closed roles see
   no products after the first enable is accepted (I-3, OQ-10).
+- **FR-079**: Visibility categories, role mappings and website rules MUST only narrow: they MUST
+  NEVER make an inactive, archived or deleted product appear on any admin surface, storefront
+  channel, line check or search where it does not appear today, and a website rule MUST NEVER put
+  such a product on a channel (*Edge Cases*; FR-051 "active, non-archived").
 
 **Other admin product surfaces** (OQ-D, OQ-E, OQ-H — 2026-11-25)
 
@@ -878,7 +911,10 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   answer, so FR-033's "absent, never forbidden" does not apply to it (OQ-H).
 - **FR-086**: The audit log and admin notifications that name products are accepted as they are (not
   narrowed); the feature's configuration overview MUST warn when a role mapped to a category (or
-  fail-closed) holds `audit_logs:read` (OQ-H).
+  fail-closed) holds `audit_logs:read` (OQ-H). This is the only permission warning: the threat
+  model's further warnings for `import_export:*` and `inventory:read` are not needed, because the
+  products import and export are refused (FR-085) and the inventory lists are narrowed (FR-083) for
+  restricted users.
 - **FR-087**: Product feeds and the product inputs of CMS, blog, CRM and tasks are accepted as they
   are (FR-038; OQ-H).
 - **FR-088**: The feature's documentation MUST list every admin surface that returns product data
@@ -928,7 +964,10 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 - **Self-lifting permission**: `*`, `product_visibility:manage`, `platform.modules.activate`,
   `admin_users:manage` — a permission with which a role could undo its own restriction (OQ-G).
 - **Restricted user**: a user whose role is mapped to a category or is fail-closed (FR-023); every
-  other user is unrestricted.
+  other user is unrestricted. Glossary note: in this spec "restricted" **includes** fail-closed
+  (no category). The plan's scope type names the two cases separately — `restricted` (mapped to a
+  category) and `no_category` (fail-closed) — and every requirement that says "restricted user"
+  applies to both.
 - **Product rule**: a named, reusable condition tree over boolean and choice attribute values and
   catalogue price conditions; result "meets" / "does not meet".
 - **Website rule attachment**: a product rule attached to a storefront sales channel (at most one
@@ -945,8 +984,9 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   order-line checks (FR-037, FR-039) and the quote-line check (FR-041) returns exactly the expected products and variants: zero leaked, zero missing.
 - **SC-002**: For a restricted user, the list total equals the number of products they can open,
   and every page but the last is full.
-- **SC-003**: The platform administrator's and every unrestricted user's answers are byte-identical
-  to today's for the same data.
+- **SC-003**: The platform administrator's and every unrestricted user's answers have response
+  bodies (and status codes) byte-identical to today's for the same data; the not-cacheable header of
+  FR-036 is sent in every state and so is not a difference.
 - **SC-004**: Deploying the feature (shipped off, FR-076) changes nothing for any user or channel;
   enabling it with no website rule attached changes no channel membership; attaching a rule moves
   exactly the products the preview of FR-053 announced.
@@ -1008,15 +1048,21 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 - **Spec 192** (`specs/192-quote-request-draft-share/`, issue #1901) is rewriting the quote-request
   screens, `rfq-admin-service` and the admin-kit product browser and picker. FR-040 – FR-043 and any
   admin-kit change of this feature **MUST NOT start until spec 192 has merged to `master`**; their
-  tasks are sequenced after it. Spec 192's branch was not on `origin` when this spec was written.
-  Everything else (FR-001 – FR-039, FR-050 – FR-093) can start at once, except where the plan
-  gates it: the plan gates the admin order create / preview / reorder checks (FR-037, FR-039) on
-  spec 192 too. FR-037 is a server check in the orders module and does not depend on spec 192's
-  screens, so releasing those order checks before spec 192 merges is an option the owner has
-  **not** decided (2026-11-25); until the owner decides, the plan's gate stands. Whether FR-091's
-  admin order paths and FR-090's quote conversion share that gate is for the architect. FR-040 is
-  satisfied by FR-030 alone
-  if 192 leaves the browser reading the same endpoint. FR-039's admin clone-to-quote lives in the
+  tasks are sequenced after it. **State of spec 192 on 2026-11-25** (analyze): issue #1901 open, no
+  pull request; its branch `feat/192-quote-request-draft-share` exists only on a fork, at
+  `bd1edae62`. At that commit it touches no file under `packages/modules/orders/` or
+  `packages/admin-kit/`; it does touch the quote → cart conversion in `carts`
+  (`cart-conversion-service.ts`), the shared error codes in `packages/contracts/src/errors.ts`, the
+  OpenAPI baseline and the migrations registry — so FR-090 and this feature's contract, OpenAPI and
+  migration changes may conflict with it. Everything else (FR-001 – FR-039, FR-050 – FR-093) can
+  start at once, except where the plan gates it: the plan gates the admin order create / preview /
+  reorder / clone-to-quote checks (FR-037, FR-039) on spec 192 too (plan Phase 9a). FR-037 is a
+  server check in the orders module and does not depend on spec 192's screens, so releasing those
+  order checks before spec 192 merges is an option the owner has **not** decided (2026-11-25);
+  until the owner decides, the plan's gate stands. The plan has decided that FR-090 and FR-091 (plan
+  Phase 9b) share the gate, because the quote → cart conversion is in a file spec 192 changes; the
+  admin order paths of FR-091 could be released together with FR-037 if the owner releases those.
+  FR-040 is satisfied by FR-030 alone if 192 leaves the browser reading the same endpoint. FR-039's admin clone-to-quote lives in the
   orders module (`orders/backend/services/order-clone-to-quote-service.ts`, route
   `POST /api/v1/admin/orders/:id/clone-to-quote`); whether its refusal shares the quote-request
   create path that spec 192 is changing, and so follows FR-041's sequencing, is for the architect.

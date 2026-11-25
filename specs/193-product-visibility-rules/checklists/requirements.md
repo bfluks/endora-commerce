@@ -42,9 +42,14 @@
   design. The requirements themselves state behaviour.
 - FR-030 – FR-034 name the admin endpoints because the owner decision is stated in their terms
   ("every read that shares the product list endpoint") and a client-only filter must not satisfy it.
-- Quote-request requirements (FR-040 – FR-043) are blocked on spec 192 merging; the order-create
-  refusal (FR-037) and the other admin order paths (FR-039) are not, except that the architect
-  decides whether admin clone-to-quote shares the quote-request create path spec 192 is changing.
+- Quote-request requirements (FR-040 – FR-043) are blocked on spec 192 merging. The plan gates the
+  admin order checks (FR-037, FR-039; Phase 9a) and the purchase paths of FR-090 – FR-091 (Phase 9b)
+  on it too; releasing the order checks earlier is an option the owner has not decided.
+- Analyze of 2026-11-25 (`analysis.md`): spec findings H3 (marker texts pinned in FR-043), M6
+  (zero-channel exception in FR-059 and *Edge Cases*), M8 (spec 192 facts refreshed), M9 (bulk
+  operations in FR-033, aggregate counts in FR-031, not-cacheable header in FR-036 and SC-003,
+  single overview warning in FR-086) and LOW 1 – 4 addressed; FR-079 states that the rules only
+  narrow. H2 (meaning of "channel-scoped status" in FR-090, FR-092, FR-093) is with the owner.
 - OQ-9 (module ownership) is the architect's; OQ-8's "do not preclude a later manual override"
   is recorded as a plan constraint, not an FR.
 - Public-repository check: no deployment, client, role or flag names; examples use neutral
