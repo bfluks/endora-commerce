@@ -10,8 +10,10 @@ changeset (`specs/conventions/release-intent.md`).
 ```ts
 type VisibilityThreshold = 'gt_zero' | 'gte_zero';
 
+/** TM-3: required on every catalog / price_lists admin read and write; never optional, never defaulted. */
 type AdminProductVisibilityScope =
-  | { kind: 'unrestricted' }
+  | { kind: 'system' }                                         // storefront, connectors, system jobs — explicit
+  | { kind: 'unrestricted'; roleId: string }
   | { kind: 'no_category'; roleId: string }                   // FR-023 fail-closed
   | {
       kind: 'restricted';
@@ -23,12 +25,29 @@ type AdminProductVisibilityScope =
 
 interface SqlFragment { sql: string; params: unknown[] }        // `?` placeholders, in order
 
+/** TM-3 (3): a discriminated union — a bug can never read as "unrestricted". */
+type VisibilityPredicate =
+  | { kind: 'none' }                                           // system / unrestricted: no clause (SC-003)
+  | { kind: 'sql'; fragment: SqlFragment }
+  | { kind: 'deny' };                                          // no_category, or no condition in force: constant false
+
 interface AdminProductVisibilityPort {
-  /** Per request; never cached across requests (FR-060). */
+  /**
+   * Per request — or, off-request, at execution for the requesting admin (bulk worker, undo,
+   * assistant tool, import/export job: TM-3 (2)). Never cached across requests (FR-060).
+   * Never catches: a role refusal or an unreadable mapping / designation answers `no_category` or
+   * throws — never `unrestricted` (TM-3 (4)). A currency whose served generation was built for
+   * another designation than the current one contributes no condition (TM-7 (4)).
+   */
   resolveScope(adminUserId: string): Promise<AdminProductVisibilityScope>;
-  /** `null` for unrestricted (no clause at all — SC-003); `false`-clause for no_category. */
-  productPredicate(scope: AdminProductVisibilityScope, columns: { productId: string }): SqlFragment | null;
-  variantPredicate(scope: AdminProductVisibilityScope, columns: { variantId: string }): SqlFragment | null;
+  systemScope(): AdminProductVisibilityScope;
+  /**
+   * `columns` values must match `^"[a-z_]+"\."[a-z_]+"$` or the call throws (TM-8); the caller
+   * embeds the fragment inside parentheses with its params in order. No request text ever reaches
+   * a fragment.
+   */
+  productPredicate(scope: AdminProductVisibilityScope, columns: { productId: string }): VisibilityPredicate;
+  variantPredicate(scope: AdminProductVisibilityScope, columns: { variantId: string }): VisibilityPredicate;
   /** Non-SQL callers (price book grid's variant lines): which of these are visible, from the flags tables. */
   filterVisible(
     scope: AdminProductVisibilityScope,
@@ -94,6 +113,11 @@ interface CatalogueReferencePricePort {
   designationStatus(input: { currencyCode: string } & CatalogueDesignation): Promise<DesignationStatus>;
   /** Many at once — one statement (per-request scope resolution). */
   designationStatuses(input: ReadonlyArray<{ currencyCode: string } & CatalogueDesignation>): Promise<ReadonlyArray<DesignationStatus>>;
+  /**
+   * Durable, monotonic watermark of price changes (TM-7 (5) drift poll): moves on every write or
+   * status flip that emits `price_lists.catalogue_prices_changed`. Opaque string; compare for equality.
+   */
+  changeWatermark(): Promise<string>;
   /** Regular, everyone books of the currency in any status (draft / scheduled allowed). */
   designatableBooks(currencyCode: string): Promise<ReadonlyArray<{ priceListId: string; name: string; salesChannelIds: string[] }>>;
 }
@@ -152,3 +176,16 @@ platform's error-message catalogue (FR-054, FR-074).
 Consumer changes: `sales_channels/backend/routes.admin.ts` (channel-side PUT/DELETE pass
 `onGoverned: 'refuse'`), `catalog-bulk-update.service.ts` (`'refuse'`, plus an enqueue-time
 refusal). No other caller changes.
+
+### Governor hardening (TM-10)
+
+- `GovernorWriteToken` is an opaque object issued by `register` and checked **by identity**
+  (module-private `WeakSet` in the registry); the type is not constructible from the `./kernel`
+  barrel; it is never placed in the DI container (the module keeps it in a closure).
+- `register` is accepted only during boot, once per module id; the registry is frozen afterwards.
+- `governs()` throwing ⇒ the mutation is refused (fail closed), never treated as "not governed".
+- `source` is honoured only together with a valid token; otherwise it is ignored, so rule
+  attribution (FR-072) cannot be forged.
+- The rule label in `CHANNEL_MEMBERSHIP_GOVERNED` is user-authored text: rendered as text only.
+- A test enumerates every writer of the channel-product bridge table in `packages/**` and fails on
+  any file other than the membership service.

@@ -192,8 +192,12 @@ is the oracle question**: the platform moves a route's declared `preHandler` cha
 `preValidation` (`packages/platform/src/http/guards-before-validation.ts`;
 `module-admin-surfaces.md` item 3), so a guard declared there would answer 404 for a hidden id
 with a malformed body where a non-existent id answers 400. The guard therefore runs **after schema
-validation** (a route-level `preHandler` hook attached outside the declared chain, or the first
-statement of the handler — T040 picks the one the platform does not move, and proves it), and a
+validation** as a **plugin-scope `addHook('preHandler')`** on the plugin that mounts the catalog
+admin routes (threat-model TM-5: scope hooks run after validation and before the route-level
+`preHandler` chain, where the platform appends other modules' API pre-interceptors —
+`packages/platform/src/http/interceptors/dispatch.ts:19-98` — so no interceptor ever sees a hidden
+id; a handler-first check would let them run), keyed on `request.routeOptions.url`, and it makes the
+route answer **its own** not-found (a per-route map T036 derives and checks), not a generic 404. A
 route whose handler answers a non-existent id with something other than its not-found **before**
 looking the product up (a 422 on a semantically invalid body, say) gets its check inside its own
 lookup instead of the shared guard. Bulk update narrows its id list (and the resolved "select all" set) in the request **and**
@@ -322,7 +326,7 @@ presence check on a foreign module id, and governance state would live outside i
   connector switches a product on and off per channel) is an owner question (plan.md OQ-F).
   Planned on the recommendation: a channel-scoped status moving to active **on a governed channel**
   is a reactivation for that channel — the same hook evicts that one membership and the job
-  re-admits it. T059 must also prove that removing and re-adding a membership keeps the product's
+  re-admits it. T068 must also prove that removing and re-adding a membership keeps the product's
   channel-scoped values (the bridge delete must not cascade into them).
 - **Attribution** (FR-072): governor writes pass `source: 'website_rule:<ruleId>'` into the
   kernel's membership audit row (actor `system`); the rule name is resolvable from the id.
@@ -386,3 +390,49 @@ first page, deep page, counts, select-all, search; budget restricted p95 ≤ unr
 and ≤ 300 ms (architect-set, owner may override, recorded like D-5 in
 `specs/pricing/read-paths-and-performance.md`); flag refresh latency (targeted ≤ 60 s, rebuild ≤
 150 s).
+
+## R-17 Threat-model amendments (`threat-model.md`, TM-1 – TM-16)
+
+Decisions taken from the security review; task numbers in tasks.md § *Threat-model finding → task
+map*.
+
+- **Inventory = every catalog admin route** (TM-1, TM-5): the route-inventory test derives every
+  `/api/v1/admin/catalog/**` route, not only the product-id prefix; product-free routes are an
+  explicit allow-list in the test. Bulk operations (`catalog/backend/routes.admin.ts:479-560`) are
+  narrowed in list/detail and undo, and the worker re-checks per product at write time for the
+  requester. **Rejected**: filtering operations by requester only — another admin's operation can
+  still carry hidden ids.
+- **Error details naming another product** (TM-2) are redacted when that product is hidden
+  (`URL_KEY_TAKEN` `heldByProductId/Name`, `catalog/backend/services/url-key.service.ts:309-337`, and
+  a sweep of `catalog`, `price_lists`, `sales_channels`). The residual "already taken" oracle is
+  accepted and documented (TM-15). This replaces OQ-E's premise that the oracle "names nothing".
+- **Scope is a required, typed argument** (TM-3): `AdminProductVisibilityScope` gains an explicit
+  `system` member; the catalog admin service's reads and writes take it as a required parameter and
+  an architecture test fails on an omission; predicates are the union `none | sql | deny`;
+  `resolveScope` never catches; off-request work resolves the requester's scope at execution.
+  **Rejected**: an optional scope defaulting to unrestricted — a forgotten call site is a silent
+  leak.
+- **Self-lifting roles** (TM-4): configuration writes answer `403` unless the caller's own scope is
+  unrestricted; the overview flags `liftable` roles; activation/deactivation audit is verified in the
+  lifecycle ledger. **Not adopted pending the owner (OQ-G)**: refusing to map a role that holds `*`
+  or another lifting permission — it contradicts OQ-2 (an unmapped `*` role is fail-closed, so it
+  must be mappable).
+- **Flags race hardening** (TM-7): marks are cleared only if older than the refresh's read start; a
+  targeted refresh writes under the generation row lock; marks survive a build and are re-applied
+  after the swap; a partial build is never swapped; a served generation built for another
+  designation contributes no condition (fail closed for the ≤ 150 s rebuild — supersedes R-5's
+  "old generation keeps serving" for the designation case); a drift poll every 2 minutes on
+  `catalogueReferencePricePort.changeWatermark()` bounds a lost announcement (the nightly rebuild
+  stays as last resort).
+- **SQL fragments** (TM-8): column identifiers from the caller are allow-listed by pattern; a test
+  checks placeholder counts; no cache of scope or fragments.
+- **Other admin read paths** (TM-9): plan.md § *TM-9 surfaces*, pending owner sign-off (OQ-H).
+- **Governor token** (TM-10): identity-checked, boot-only, never in the container, `governs()`
+  failure refuses, `source` only with the token, bridge-writer inventory test.
+- **Preview and evaluation** (TM-11): creator check against the session, caps on concurrent
+  previews and snapshot size, Zod bounds, attribute keys re-validated at evaluation.
+- **Event as hint** (TM-12): validated, never a value source, capped, coalesced rebuilds.
+- **Off state** (TM-13): activation texts say restrictions lift; release note says default off
+  means no restriction until enabled.
+- **Client caches** (TM-14): list routes send `Cache-Control: private, no-store`; the SPA drops its
+  query cache on sign-out and `401` (verified or fixed in admin-shell).

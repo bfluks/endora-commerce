@@ -88,6 +88,7 @@ Read by the kernel governor inside the membership mutation's transaction (R-10).
 | `building_generation` | integer null | set while a rebuild runs |
 | `built_for_price_list_id`, `built_for_sales_channel_id` | uuid null | designation snapshot of `served_generation` (null = base book) |
 | `whole_stale` | boolean not null default false | a catalogue-wide change is pending |
+| `consumed_watermark` | text null | `price_lists` change watermark the served generation (or last refresh) consumed — drift poll (TM-7 (5)) |
 | `built_at` | timestamptz | |
 
 ### `product_catalogue_prices`
@@ -115,7 +116,7 @@ priced in C). PK `(currency_code, generation, variant_id)`.
 | --- | --- | --- |
 | `currency_code` | char(3) | |
 | `product_id` | uuid | |
-| `marked_at` | timestamptz | |
+| `marked_at` | timestamptz | a refresh clears only marks older than its read start (TM-7 (1)) |
 
 PK `(currency_code, product_id)`; `on conflict do nothing`. Cleared by the refresh in the same
 transaction that replaces the product's rows.
@@ -164,8 +165,9 @@ Up to channels × products rows; deleted with the preview (expired previews are 
 
 ## 4. State transitions
 
-- **Designation**: none → set (refused unless valid now) → changed / cleared (each schedules a
-  whole rebuild of the currency; old generation serves until swap) — in force ⇄ not in force is
+- **Designation**: none → set → changed / cleared (each schedules a whole rebuild of the currency;
+  until the swap the currency contributes **no** condition, because the served generation was built
+  for another designation — TM-7 (4)) — in force ⇄ not in force is
   read-time and needs no transition.
 - **Generation**: served n → building n+1 → swap (served n+1, rows of n deleted) → idle; a rebuild
   request while building restarts from the newer designation.

@@ -37,7 +37,7 @@ second resolver), and the **website-rule** evaluation that writes storefront cha
 - **Order/quote line refusals and the "no fixed price" marker** (FR-037, FR-040 – FR-043, RQ-2 C)
   are a separate phase **gated on spec 192 merging to `master`** (coordinator instruction).
 
-Six owner questions are open (§ *Open questions for the owner*); OQ-A (timing bounds of FR-060 /
+Eight owner questions are open (OQ-G and OQ-H from the threat model, `threat-model.md`) (§ *Open questions for the owner*); OQ-A (timing bounds of FR-060 /
 FR-062 for data-dependent changes) and OQ-B (quote conversion drops rule-excluded products) change
 what US1/US4 deliver and must be answered before Phase 4 and Phase 6 start.
 
@@ -59,14 +59,14 @@ honours channel membership — spec F8).
 narrowing), `catalog` (enforcement seam), platform kernel (membership governor), 
 `sales_channels` (manual-write intent), `admin_users` (role-screen zones); gated: `orders`,
 `quote_requests`, `packages/admin-kit`.
-**Performance Goals** (architect-set budgets, owner may override; measured by T034):
+**Performance Goals** (architect-set budgets, owner may override; measured by T035):
 restricted admin list/count page p95 ≤ **unrestricted p95 + 50 ms** and ≤ **300 ms** at 50 000
 products × 3 currencies; targeted price change → admin flags ≤ **60 s** (p95 ≤ 5 s);
 catalogue-wide change or designation change → ≤ **150 s** per currency (the SC-005 bound of the
 price surface); governed-channel membership ≤ **5 min** (FR-061); restricted admin global search
 stays under the constitution's product-search target (< 200 ms p95, *Performance & Scale Targets*).
 Scale: 50 000 products / 150 000 variants is inside the constitution's "hundreds of thousands of
-products including variants"; the rebuild bound grows linearly and is re-measured by T083.
+products including variants"; the rebuild bound grows linearly and is re-measured by T092.
 **Constraints**: hidden ≡ absent on every by-id route (FR-033); no response counts hidden
 products (FR-031, FR-034); unrestricted answers byte-identical (SC-003); module off ⇒ as never
 installed (FR-073); no window before admission (FR-059).
@@ -94,7 +94,7 @@ type, 2 module migrations. Owner of the gated phase's files: spec 192 first.
 | XIV Entity-agnostic | Pass | The kernel governor is entity-type agnostic (a governor declares which entity types it governs). |
 | XV Untouched core | Pass | No deployment names; FR-075. |
 | XVI Palette | Pass | Two palette actions (configuration, website rules). |
-| XVII Toggleable (NN) | Pass, with R-3 | Deactivatable; **activation default off** (R-3, OQ-C). Off ⇒ no narrowing, no refusal, no skip, no evaluation; memberships stay as last computed. Off-state test per surface (T024, T045, T052, T060, T068, T078). |
+| XVII Toggleable (NN) | Pass, with R-3 | Deactivatable; **activation default off** (R-3, OQ-C). Off ⇒ no narrowing, no refusal, no skip, no evaluation; memberships stay as last computed. Off-state test per surface (T024, T050, T061, T069, T077, T087). |
 
 ## Project Structure
 
@@ -104,7 +104,8 @@ type, 2 module migrations. Owner of the gated phase's files: spec 192 first.
 specs/193-product-visibility-rules/
 ├── spec.md            # product-owner
 ├── plan.md            # this file
-├── research.md        # R-1 … R-16 decisions with rejected alternatives
+├── research.md        # R-1 … R-17 decisions with rejected alternatives (R-17: threat-model amendments)
+├── threat-model.md    # security-engineer (TM-1 … TM-16); mapped to tasks at the end of tasks.md
 ├── data-model.md      # tables, derived tables, states
 ├── quickstart.md      # how to see each user story working
 ├── contracts/
@@ -189,7 +190,7 @@ every other change is a seam in the owner of the surface it narrows.
 | --- | --- | --- |
 | Category, condition, role mapping, user's role | next request (read at request) | rule's price conditions are categories-independent; n/a |
 | Designated book enters / leaves its schedule window, or is deleted / unbound / re-audienced / deactivated | next request (`designationStatus` read per request) | delayed job at the boundary; ≤ 5 min |
-| Designation changed to another book or channel | after the currency's new generation is built (≤ 150 s), then swapped atomically — **deviates from FR-060 "next request"** (OQ-A) | same generation swap, then ≤ 5 min |
+| Designation changed to another book or channel | the currency contributes **no** condition until its new generation is built (≤ 150 s, fail closed — TM-7 (4)), then swapped atomically — **deviates from FR-060 "next request"** (OQ-A) | same generation swap, then ≤ 5 min |
 | Price row on the base or designated book (product / variant row) | ≤ 60 s (p95 ≤ 5 s) — **deviates from FR-062 "next request"** (OQ-A) | ≤ 5 min |
 | Catalogue-wide row (all / category / attribute) on the designated book; category membership or attribute value that a row selects by | ≤ 150 s — deviation as above | ≤ 5 min |
 | Order / quote **line** checks (gated phase) | **live** through the engine: exact, next request (R-8) | n/a |
@@ -202,7 +203,7 @@ every other change is a seam in the owner of the surface it narrows.
   start only after spec 192 (issue #1901) has merged to `master` (coordinator instruction).
   Deviation recorded: the spec says FR-037 could start at once, and spec 192's branch at
   `6f4259f45` touches no file under `packages/modules/orders/` or `packages/admin-kit/`; the
-  coordinator may lift the gate for T070 – T071 (orders only) without re-planning. Clone-to-quote
+  coordinator may lift the gate for T079 – T080 (orders only) without re-planning. Clone-to-quote
   stays gated (it reaches `RfqAdminService.createOnBehalf`, which 192 rewrites).
 - Before Phase 9: rebase, re-measure every cited line in `rfq-admin-service.ts`,
   `RfqCreatePage.tsx`, `RfqDetail.tsx`, `ProductPicker.tsx`, `product-browser-api.ts`.
@@ -211,11 +212,11 @@ every other change is a seam in the owner of the surface it narrows.
 
 | Stream | Phases | Owns (exclusive) |
 | --- | --- | --- |
-| **A — admin reads** | 5a, 5b (+ T057, T066, T075) | `packages/modules/catalog/**` (incl. `catalog-bulk-update.service.ts`), `packages/modules/price_lists/src/backend/services/price-book-reads.ts`, `backend/test/{contract,integration}/catalog/visibility-*`, perf bench |
+| **A — admin reads** | 5a, 5b, 5c (+ T067, T075, T084) | `packages/modules/catalog/**` (incl. `catalog-bulk-update.service.ts`), `packages/modules/price_lists/src/backend/services/price-book-reads.ts`; in 5c (pending owner) `packages/modules/inventory/src/backend/{routes.admin,prompt-tools}.ts`, `price_lists/src/backend/routes.price-books.ts` (price-history routes), `import_export/src/backend/services/adapters/products.adapter.ts`; `backend/test/{contract,integration}/catalog/visibility-*`, perf bench |
 | **B — website rule** | 6, 7 | `packages/platform/src/kernel/sales-channels/**`, `packages/platform/src/kernel/ports/sales-channel.ts`, `packages/modules/sales_channels/**`, `product_visibility_rules/src/backend/{services/{product-rule-evaluator,website-rule.service,membership-governor}.ts,workers/website-rule-worker.ts}`, `backend/test/integration/product_visibility_rules/{website-*,admission,off-state.website-rule,off-state.governance}.test.ts`, `backend/test/contract/sales_channels/governed-membership.contract.test.ts` |
 
-Phases 1 – 4 are one stream (foundation). Cross-stream edge: T057 (catalog bulk update passes
-`onGoverned: 'refuse'`) is owned by stream A and starts after T054 (kernel option) is merged into
+Phases 1 – 4 are one stream (foundation). Cross-stream edge: T067 (catalog bulk update passes
+`onGoverned: 'refuse'`) is owned by stream A and starts after T063 (kernel option) is merged into
 the shared branch. `product_visibility_rules/src/manifest.ts`, `src/backend/index.ts`,
 `i18n/*.json` and the generated registries are touched by both streams: each stream appends its
 own block; the second to merge regenerates (`composer:generate`, `manifests:generate`) rather than
@@ -236,7 +237,7 @@ that change if the answer differs.
   (B) Fail closed while a mark is pending: a restricted user does not see a marked product until it
   is refreshed (never early, sometimes late; a catalogue-wide change hides the currency's products
   for up to 150 s). (C) Live evaluation per request — rejected as infeasible (seconds per page).
-  Tasks affected: T028 – T031.
+  Tasks affected: T027 – T030, T033.
 - **OQ-B — Rule-excluded products and the storefront paths that need channel membership.** Quote →
   cart conversion drops every line whose product is not published in the request channel
   (`carts/backend/services/cart-conversion-service.ts:239`), and admin order create / preview refuse
@@ -257,20 +258,51 @@ that change if the answer differs.
   bundle options of a visible product name their targets by id and name
   (`catalog/backend/routes.admin.ts:1765-2032`). (A) For restricted users, strip hidden targets from
   those reads and answer a write that names one as absent — **recommended**. (B) Show them as today
-  (FR-033 is per addressed product). Tasks affected: T042.
+  (FR-033 is per addressed product). Tasks affected: T045.
 - **OQ-E — Other admin read paths that do not use the product list.** The assistant tools `catalog`
   contributes to `promptActionToolRegistry` and the existence oracles of unique keys (a SKU or URL
-  key "already taken" on create/update names nothing but confirms a hidden product exists).
+  key "already taken" on create/update). *Correction from the threat model (TM-2)*: today the URL-key
+  conflict names the holder's id and name; T046 redacts that regardless of this answer, so only the
+  bare "already taken" remains to accept.
   (A) Narrow the assistant tools' product reads by the invoking admin's scope; accept the
   unique-key oracle (masking it would break create) and document it — **recommended**.
-  (B) Leave both out of scope. Tasks affected: T043.
+  (B) Leave both out of scope. Tasks affected: T048 (the unique-key half is reshaped by TM-2, T046).
 - **OQ-F — Channel-scoped status as "reactivation" (FR-059).** A product's status can also be set
   per channel (feature 163), and an external connector switches products on and off per channel
   that way. (A) A channel-scoped status moving to active on a governed channel counts as a
   reactivation for that channel: the membership is removed in the same transaction and the rule
   re-admits within 5 min — **recommended** (never early). (B) Only the product's global status and
   restore count; a channel-level re-enable of an admitted product shows at once. Tasks affected:
-  T044, T059.
+  T049, T068.
+- **OQ-G — May a restricted role hold a permission that lifts its own restriction? (threat model
+  TM-4 a).** A role holding `*`, `product_visibility:manage`, `platform.modules.activate` or
+  `admin_users:manage` can undo its restriction (edit its mapping, switch the module off, change its
+  own role). The threat model asks the mapping Command to refuse such roles; that conflicts with
+  OQ-2 / FR-023 (an unmapped `*` role is fail-closed, so it must be mappable to see anything).
+  Planned regardless of the answer: configuration writes refused (`403`) for any non-unrestricted
+  caller, `liftable` flag on the overview, activation audited (T017, T020, T021, T024).
+  (A) Keep mapping allowed; flag `liftable` roles on the overview and in the docs ("a `*` role is
+  not a restrictable role") — **recommended**: it keeps OQ-2 and the remaining gap needs a
+  deliberate act by someone who already holds administrator-grade permissions. (B) Refuse to map a
+  role holding a lifting permission other than `*` (`product_visibility:manage`,
+  `platform.modules.activate`, `admin_users:manage`), keep `*` mappable. (C) Refuse all four,
+  including `*` — amends OQ-2: an unmapped `*` role would then be unmappable and permanently see
+  nothing. Tasks affected: T019, T070.
+- **OQ-H — Other admin read paths that return product data (threat model TM-9).** Sign-off of the
+  table below; rows answered "accepted" drop their task in Phase 5c (pending) and go into the docs
+  table (T088). Measured at `c3e8a8755`.
+
+  | Surface | Recommendation | Reason | Task |
+  | --- | --- | --- | --- |
+  | Inventory admin lists — `/api/v1/admin/inventory`, `/levels`, `/low-stock`, `/legacy` (SKU, name, stock), `/availability-notifications` (`inventory/backend/routes.admin.ts:124-615`) | **Narrowed** (product predicate on their product column) | They list products by id, SKU and name: the same disclosure as the product list | T052 |
+  | Inventory assistant "set stock" tool (`inventory/backend/prompt-tools.ts:86-101`) | **Narrowed** (scoped product lookup; hidden ⇒ not found, no write) | Reads a name and writes for any id; same class as the catalog tools (OQ-E) | T052 |
+  | Inventory writes by product id (`/levels` PUT, thresholds, import) | **Accepted** | Stock is not price or assortment; FR-038's reasoning for other modules' product-id inputs | — |
+  | Price history by product (`price_lists/backend/routes.price-books.ts:536-550`) | **Refused as absent** for a hidden product | A read keyed by product id, with amounts; FR-038 covers edits, not reads | T053 |
+  | Price history change lines (`…/price-history/:changeId/lines`, `:552-567`) | **Narrowed** (hidden products' lines dropped) | Lists products of a change | T053 |
+  | Price book rows (`…/rows`, read and write) | **Accepted** for writes (FR-038); reads covered by the grid narrowing (T043, T044) | Owner ruling OQ-3: price-book edits by id are not refused | — |
+  | `import_export` products export / import (`import_export/.../adapters/products.adapter.ts`) | **Refused (403)** for a non-unrestricted scope | An export lists the whole catalogue; an import by SKU writes a hidden product and its result is an oracle; narrowing a file format is out of scope | T054 |
+  | Audit log and admin notifications naming products | **Accepted**, documented; overview warns when a mapped role holds `audit_logs:read` | Narrowing audit history needs its own spec; audit is an investigation surface | — |
+  | Product feeds, CMS / blog / CRM / tasks product inputs | **Accepted** (FR-038, spec Out of Scope) | Already decided | — |
 
 ## Complexity Tracking
 

@@ -25,7 +25,11 @@ const CataloguePricesChangedEventSchema = z.object({
 ```
 
 `{ kind: 'none' }` changes are not emitted. Consumer: `product_visibility_rules` (marks /
-rebuilds — research R-6).
+rebuilds — research R-6). **The event is a hint only (TM-12)**: the in-process bus does not check
+who emits, so the consumer validates the payload, never copies a value from it (flags come only
+from `catalogueReferencePricePort.resolve`), degrades arrays over 1 000 ids to a whole-currency
+rebuild, and coalesces rebuilds per currency. A lost event is caught by the drift poll on
+`changeWatermark()` (TM-7 (5)).
 
 ## 2. Error codes
 

@@ -4,7 +4,11 @@ Zod schemas in `packages/contracts/src/product-visibility.ts`. All routes regist
 `ctx.routes` (gated by the module's effective presence). Writes take `If-Match` (row `version`)
 where the row has one, run one Command each (FR-070), and answer the module's error codes
 (contracts/events-and-errors.md §2). Permissions: `product_visibility:read` (GET),
-`product_visibility:manage` (writes; `requires: ['product_visibility:read']`).
+`product_visibility:manage` (writes; `requires: ['product_visibility:read']`). **TM-4 c**: every
+write also answers `403 FORBIDDEN` unless the caller's own scope is `unrestricted`. The overview
+marks `liftable: true` on a mapped or fail-closed role that holds `*`, `product_visibility:manage`,
+`platform.modules.activate` or `admin_users:manage`, and warns on a mapped role holding
+`import_export:*`, `inventory:read` or `audit_logs:read` (TM-9).
 
 ## 1. Configuration — `/api/v1/admin/product-visibility`
 
@@ -39,6 +43,12 @@ where the row has one, run one Command each (FR-070), and answer the module's er
 - Every route under `…/products/:id` / `…/products/:productId` (≈ 60): hidden ⇒ the same answer as a
   non-existent id (`404 PRODUCT_NOT_FOUND`, or the route's own not-found), nothing written
   (FR-033); a hidden variant under `…/variants/:variantId` ⇒ that route's variant not-found.
+- `GET …/bulk-operations`, `GET …/bulk-operations/:id`, `POST …/bulk-operations/:id/undo` (TM-1): a
+  restricted caller sees only operations with no hidden product in their selection; undo of one
+  touching a hidden product answers not-found.
+- `URL_KEY_TAKEN` and every other error naming another product drop that product's id and name
+  when it is hidden from the caller (TM-2).
+- List routes send `Cache-Control: private, no-store` (TM-14).
 - `POST …/products/bulk-update`: hidden ids treated as absent; a patch naming a governed channel
   ⇒ 409 `CHANNEL_MEMBERSHIP_GOVERNED` before enqueue (FR-054).
 - Admin global search (`admin_search` host, catalog provider): visible products only, `hasMore`
