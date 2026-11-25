@@ -250,6 +250,16 @@ const PUBLISHED_KERNEL_SURFACE: Readonly<Record<string, readonly string[]>> = {
     'MembershipMutationOptions',
     'MembershipMutationResult',
   ],
+  /**
+   * Spec 193 (R-10, TM-10) — the governor contribution, types only: the registry class is the
+   * host's and the write token is opaque, so nothing published constructs one.
+   */
+  'sales-channels/membership-governors.js': [
+    'ChannelMembershipGovernance',
+    'ChannelMembershipGovernor',
+    'ChannelMembershipGovernorRegistryPort',
+    'GovernorWriteToken',
+  ],
   /** Row 14. */
   'sales-channels/sales-channel-resolver.middleware.js': [
     'getResolvedChannel',

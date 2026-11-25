@@ -176,6 +176,9 @@ const PLATFORM_CONTRIBUTIONS: readonly string[] = [
   'salesChannelAccessCache',
   'salesChannelAccessPort',
   'salesChannelBridgeRegistry',
+  // Spec 193 (R-10) — the membership-governor contribution point, a sub-kernel object like the
+  // bridge registry above.
+  'salesChannelMembershipGovernors',
   'salesChannelCodeIdPort',
   'salesChannelMembershipPort',
   'salesChannelResolutionPort',
@@ -375,7 +378,11 @@ describe('T118 — the contribution wiring is the platform’s and the values ar
     // composed off `composeSalesChannelsKernel` and contributed by the platform,
     // so the whole of the change falls on `PLATFORM_CONTRIBUTIONS`' side, as
     // feature 120's registry did.
-    expect(deployment.size + PLATFORM_CONTRIBUTIONS.length).toBe(45);
+    //
+    // **45 -> 46, measured on this tree by `specs/193-product-visibility-rules/` T063.**
+    // `salesChannelMembershipGovernors` arrived, composed off `composeSalesChannelsKernel` and
+    // contributed by the platform, so the change falls on `PLATFORM_CONTRIBUTIONS`' side.
+    expect(deployment.size + PLATFORM_CONTRIBUTIONS.length).toBe(46);
   });
 
   it('contributes before the caller’s callback, so a deployment can still override', () => {
