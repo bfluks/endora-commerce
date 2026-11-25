@@ -40,3 +40,24 @@ Plan/contracts/tasks (architect): 8 admin-api §2 heading/OQ-D wording; 9 table 
 67 FRs all tasked (partial: FR-039 C1, FR-043 M7, FR-076 M10, FR-092/093 H1); 9 SCs (SC-006 unmeasured); 99 tasks; TM-1..16 mapped (gaps TM-11, TM-4c); all phases ≤ 10 tasks with Verification lines; pl+en covered except H3. Owner answers given with uncertainty (OQ-B, OQ-H) to confirm at acceptance.
 
 **Next:** close C1, H1, H2, H3 (+ MEDIUM), re-run analyze; implementation blocked until clean.
+
+## Round 2 — 2026-11-25
+
+Analyzed `503f528fb` (read-only). `origin/master` `c3e8a8755`, 0 commits on widened drift paths. Spec 192: issue #1901 open, no PR, fork branch `3c740f2c0` (+14 since `bd1edae62`, near done); overlap now also `contracts/src/index.ts`, `error-code-routing/reference-ledgers.ts`, `_i18n/i18n/{en,pl}.json`, `carts/docs/carts.md`. PR #1914 open.
+
+**Verdict: not clean** — 0 CRITICAL, 1 HIGH, 7 MEDIUM, 8 LOW (new). Round 1: all closed (H1 code-verified) except M5 partly (→ N4).
+
+| ID | Severity | Location | Summary | Fix owner |
+| --- | --- | --- | --- | --- |
+| N1 | HIGH | ports §2 `excludedOnlyByRule`; R-18; T089, T091; FR-090 vs FR-093 | For a rule-excluded (non-member) product every stored channel status is pending or left over; FR-093 says pending ones don't count, FR-090 drops "inactive by channel status"; plan can't tell them apart. T091 unbuildable as specified; T089 setup undefined | architect / owner |
+| N2 | MEDIUM | data-model `website_rule_admissions`; T058, T068 | Hook token removals vs "only apply job writes": FR-093 exemption lost after re-admission | architect |
+| N3 | MEDIUM | data-model flag note; T068; R-11 | "channel-scoped" wording: per-language write could consume exemption | architect |
+| N4 | MEDIUM | checkpoint 2 | Accepts US4-10/12 which are gated (9b) | architect |
+| N5 | MEDIUM | T037 | FR-079 governed-channel case needs stream B; undeclared edge | architect |
+| N6 | MEDIUM | T070; R-11 read side; FR-093 | Pending values accepted from admin save/copy/read without FR | product-owner / architect |
+| N7 | MEDIUM | FR-043 pl text; FR-031/033/036/079/086 | No clarification entry for these; proposals list incomplete | product-owner + owner |
+| N8 | MEDIUM | T065 | `sales_channels` FR-082 sweep has no failing test | architect |
+
+LOW: L1 `scoped-values.service.ts:50` caller missing in T070; L2 192 tip/overlap files stale; L3 T077 before T078; L4 threat-model:200 warnings vs FR-086; L5 `no-store` with module absent; L6 checkpoint 1 range FR-074/076; L7 quickstart FR-079 + zero-channel walks; L8 Status line.
+
+Related client-side finding (TM analyze round 2): a PIM connector under a "follow publish" policy writes an inactive channel status for a product hidden in every language and creates it globally inactive — interacts with N1.
