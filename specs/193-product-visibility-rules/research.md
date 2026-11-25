@@ -142,6 +142,14 @@ category a pure predicate; (c) `x_product_visibility_rules_*` extension columns 
 extension column is written only inside a Command of the host (catalog), and the price facts change
 on price-book writes, not catalog writes.
 
+**Measured (T035, 2026-11-25, on `26a40f13a` + Phase 4, MikroORM 7; WSL2 dev box, Postgres 16 test
+container with fsync off; `backend/test/perf/product_visibility_rules/admin-list-visibility.bench.ts`,
+`PERF_RUN=true`):** 50 000 products, 150 000 variants, 3 currencies — whole rebuild per currency
+**8.0 – 8.8 s** (bound 150 s); targeted base-price change → flags reflect it in **65 ms** after the mark
+(bound 60 s, the worker's pickup latency excluded). The rebuild ends with `analyze` of the two flag
+tables: without it the restricted deep page measured 185 ms p95 against 47 ms with it (stale planner
+statistics after a whole generation is written).
+
 ## R-6 Price change feed from `price_lists`
 
 **Decision**: `price_lists` emits one EventBus event **`price_lists.catalogue_prices_changed`**
@@ -443,6 +451,11 @@ first page, deep page, counts, select-all, search; budget restricted p95 ≤ unr
 and ≤ 300 ms (architect-set, owner may override, recorded like D-5 in
 `specs/pricing/read-paths-and-performance.md`); flag refresh latency (targeted ≤ 60 s, rebuild ≤
 150 s).
+
+**Measured (T035, same run as R-5):** the predicate in isolation over `products` — count p95
+**6.1 ms → 23.4 ms** restricted, deep page (offset 20 000) p95 **7.8 ms → 46.6 ms**: inside restricted ≤
+unrestricted + 50 ms and ≤ 300 ms. The budget against the real catalog list endpoint is asserted when
+the catalog seam lands (Phase 5a).
 
 ## R-17 Threat-model amendments (`threat-model.md`, TM-1 – TM-16)
 

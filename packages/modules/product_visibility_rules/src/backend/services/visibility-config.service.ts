@@ -2,12 +2,10 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   ERROR_CODES,
   PRODUCT_VISIBILITY_AUDIT_READ_PERMISSION,
-  type AdminProductVisibilityScope,
   type AdminRolePort,
   type CatalogueReferencePricePort,
   type CurrencyReadPort,
   type DesignationNotInForceReason,
-  type PermissionReadPort,
   type ProductVisibilityCategory,
   type ProductVisibilityCategoryCreateBody,
   type ProductVisibilityCategoryUpdateBody,
@@ -38,7 +36,7 @@ import { VisibilityCategory } from '../entities/visibility-category.entity.js';
 import { VisibilityRoleMapping } from '../entities/visibility-role-mapping.entity.js';
 import { WebsiteRuleAttachment } from '../entities/website-rule-attachment.entity.js';
 import type { CataloguePriceFlagsScheduler } from './catalogue-price-flags-scheduler.js';
-import { isRoleMappable, roleEffect, roleScopeKind } from './role-visibility.js';
+import { isRoleMappable, roleEffect } from './role-visibility.js';
 
 /** RQ-1 A — the reasons a designation is refused; `not_active` and `outside_schedule` are accepted. */
 const REFUSING_REASONS: ReadonlySet<DesignationNotInForceReason> = new Set([
@@ -55,7 +53,6 @@ export interface VisibilityConfigDeps {
   /** Ports of other modules, resolved per call (`lazyPort`), never captured. */
   readonly currencies: () => CurrencyReadPort;
   readonly roles: () => Pick<AdminRolePort, 'list' | 'getById'>;
-  readonly permissions: () => Pick<PermissionReadPort, 'resolveRole'>;
   readonly prices: () => Pick<CatalogueReferencePricePort, 'designationStatus' | 'designationStatuses' | 'designatableBooks'>;
   readonly flagsScheduler: CataloguePriceFlagsScheduler;
 }
@@ -74,17 +71,6 @@ function toTarget(row: VisibilityRoleMapping): ProductVisibilityMappingTarget {
  */
 export class VisibilityConfigService {
   constructor(private readonly deps: VisibilityConfigDeps) {}
-
-  /**
-   * TM-4 c — the kind of scope an administrator acts under, from their one role (FR-021) and
-   * its stored mapping (R-13). A role refusal is never read as unrestricted (TM-3 (4)).
-   */
-  async scopeKindOf(adminUserId: string): Promise<AdminProductVisibilityScope['kind']> {
-    const resolution = await this.deps.permissions().resolveRole(adminUserId);
-    if (!resolution.role) return 'no_category';
-    const row = await this.deps.emFactory().findOne(VisibilityRoleMapping, { adminRoleId: resolution.role.id });
-    return roleScopeKind(resolution.role, row ? toTarget(row) : null).kind;
-  }
 
   async overview(): Promise<ProductVisibilityOverviewResponse> {
     const em = this.deps.emFactory();

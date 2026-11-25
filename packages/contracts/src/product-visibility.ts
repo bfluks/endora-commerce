@@ -126,9 +126,8 @@ export type VisibilityPredicate =
   | { kind: 'deny' };
 
 /**
- * Owner: `product_visibility_rules`. A capability read port, published as
- * `adminProductVisibilityPort` when its implementation lands (spec 193 Phase 4, T031 – T033);
- * the type is declared now so the contract is reviewed with the configuration.
+ * Container name: `adminProductVisibilityPort`. Owner: `product_visibility_rules`. A
+ * capability read port (spec 193 research R-7, R-8).
  *
  * **Owner off:** consumers probe `effectiveState.isPresent('product_visibility_rules')`
  * before resolving and treat absent as unrestricted (`degrades-without`: admin product

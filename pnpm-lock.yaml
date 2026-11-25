@@ -3758,9 +3758,15 @@ importers:
       '@types/node':
         specifier: ^22.9.0
         version: 22.19.17
+      bullmq:
+        specifier: ^5.76.1
+        version: 5.76.1
       fastify:
         specifier: ^5.12.8
         version: 5.12.8
+      ioredis:
+        specifier: ^5.10.1
+        version: 5.10.1
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

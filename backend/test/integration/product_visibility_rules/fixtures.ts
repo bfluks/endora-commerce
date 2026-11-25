@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { ProductVisibilityOverviewResponse } from '@endora-commerce/contracts';
+import type {
+  AdminProductVisibilityPort,
+  AdminProductVisibilityScope,
+  CatalogueReferencePricePort,
+  ProductVisibilityOverviewResponse,
+  VisibilityPredicate,
+} from '@endora-commerce/contracts';
+import type { CataloguePriceFlags } from '../../../../packages/modules/product_visibility_rules/src/backend/services/catalogue-price-flags.js';
 import type { BackendServerHandle } from '../../helpers/test-server.js';
 import { ensureAdminWithRole } from '../../helpers/admin-search-fixtures.js';
 import { ADMIN_COOKIES } from '../../helpers/test-actors.js';
@@ -83,4 +90,78 @@ export async function clearConfiguration(h: BackendServerHandle): Promise<void> 
   await sql(`delete from "visibility_role_mappings"`);
   await sql(`delete from "visibility_categories"`);
   await sql(`delete from "catalogue_price_designations"`);
+}
+
+// ── Phase 4: the catalogue-price flags and the admin scope ─────────────────────────────────
+
+/** The module's flags service and admin scope port, as composed. */
+export function flagsOf(h: BackendServerHandle): CataloguePriceFlags {
+  return (h.container as unknown as { resolve<T>(n: string): T }).resolve<CataloguePriceFlags>('productVisibilityFlags');
+}
+
+export function scopePort(h: BackendServerHandle): AdminProductVisibilityPort {
+  return (h.container as unknown as { resolve<T>(n: string): T }).resolve<AdminProductVisibilityPort>('adminProductVisibilityPort');
+}
+
+export function pricePort(h: BackendServerHandle): CatalogueReferencePricePort {
+  return (h.container as unknown as { resolve<T>(n: string): T }).resolve<CatalogueReferencePricePort>('catalogueReferencePricePort');
+}
+
+/** Run the flags work to rest, as the worker would — the shared test server runs no worker. */
+export async function settleFlags(h: BackendServerHandle): Promise<void> {
+  for (let i = 0; i < 5 && (await flagsOf(h).hasPendingWork()); i += 1) await flagsOf(h).runPass();
+}
+
+/** Delete every flag row, generation and mark — between test files sharing a database. */
+export async function clearFlags(h: BackendServerHandle): Promise<void> {
+  const sql = (s: string) => h.em().getConnection().execute(s);
+  for (const table of ['catalogue_price_stale_products', 'variant_catalogue_prices', 'product_catalogue_prices', 'catalogue_price_generations']) {
+    await sql(`delete from "${table}"`);
+  }
+}
+
+/**
+ * What a scope lets through, read four ways that must agree: `filterVisible`, the product
+ * predicate embedded in a statement over `products`, the variant predicate over
+ * `product_variants`, and the live line check.
+ */
+export async function visibleTo(
+  h: BackendServerHandle,
+  scope: AdminProductVisibilityScope,
+  productIds: readonly string[],
+  variantIds: readonly string[],
+): Promise<{ products: string[]; variants: string[]; viaPredicate: string[]; variantsViaPredicate: string[]; lines: string[] }> {
+  const port = scopePort(h);
+  const filtered = await port.filterVisible(scope, { productIds, variantIds });
+  const run = async (table: string, predicate: VisibilityPredicate, ids: readonly string[]): Promise<string[]> => {
+    if (predicate.kind === 'deny') return [];
+    const clause = predicate.kind === 'sql' ? ` and (${predicate.fragment.sql})` : '';
+    const params = predicate.kind === 'sql' ? predicate.fragment.params : [];
+    const rows = await h
+      .em()
+      .getConnection()
+      .execute<Array<{ id: string }>>(`select t."id" from "${table}" t where t."id" = any(?::uuid[])${clause}`, [`{${ids.join(',')}}`, ...params]);
+    return rows.map((r) => r.id).sort();
+  };
+  const lines = await port.checkLines(scope, productIds.map((productId) => ({ productId })));
+  return {
+    products: [...filtered.productIds].sort(),
+    variants: [...filtered.variantIds].sort(),
+    viaPredicate: await run('products', port.productPredicate(scope, { productId: '"t"."id"' }), productIds),
+    variantsViaPredicate: await run('product_variants', port.variantPredicate(scope, { variantId: '"t"."id"' }), variantIds),
+    lines: productIds.filter((_, i) => lines[i]!.visible).sort(),
+  };
+}
+
+/** The change feed's subscriber runs after the write returns; wait for its mark (≤ 5 s). */
+export async function waitForMark(h: BackendServerHandle, productId: string): Promise<void> {
+  for (let i = 0; i < 100; i += 1) {
+    const [row] = await h
+      .em()
+      .getConnection()
+      .execute<Array<{ n: number }>>(`select count(*)::int as n from "catalogue_price_stale_products" where "product_id" = ?`, [productId]);
+    if (row!.n > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`no catalogue-price mark for ${productId} within 5 s`);
 }

@@ -15,7 +15,6 @@ describe('designation writes schedule a flag rebuild (T023)', () => {
       commandBus: { run: async () => ({ changed }) as never },
       currencies: () => ({ listActive: async () => [{ code: 'PLN' }] }) as never,
       roles: () => ({}) as never,
-      permissions: () => ({}) as never,
       prices: () => ({ designationStatus: async () => status }) as never,
       flagsScheduler: {
         requestCurrencyRebuild: async (code) => {

@@ -181,7 +181,7 @@ migration up/down on a fresh test DB (`backend-test-suite.md` § *Which backend 
 
 OQ-A **A** (decided): ≤ 60 s targeted, ≤ 150 s catalogue-wide or designation change, line checks exact.
 
-- [ ] T026 [P] Failing integration test `BT/integration/product_visibility_rules/catalogue-price-flags.test.ts`:
+- [x] T026 [P] Failing integration test `BT/integration/product_visibility_rules/catalogue-price-flags.test.ts`:
   SC-001 matrix (4 categories × 5 price states + configurable product) from real price books;
   generation swap on designation change; targeted refresh after a row write; zero vs none; **TM-7**:
   (1) a price change landing between the refresh's engine read and its write keeps its mark;
@@ -189,31 +189,31 @@ OQ-A **A** (decided): ≤ 60 s targeted, ≤ 150 s catalogue-wide or designation
   (3) marks taken while n+1 builds are applied to n+1 after the swap; (6) a crashed or partial build is
   never swapped and restarts; **Q2 A**: during a designation rebuild the served (previous) generation
   stays readable for the website-rule evaluator while admin scopes drop the currency.
-- [ ] T027 `PVR/backend/services/catalogue-price-flags.ts`: build generation (batches of 1 000 via
+- [x] T027 `PVR/backend/services/catalogue-price-flags.ts`: build generation (batches of 1 000 via
   `catalogueReferencePricePort.resolve`), swap only after a complete build, targeted refresh in one
   transaction holding the generation row lock (reads `served_generation` inside it), clear only marks
   with `marked_at` earlier than the refresh's read start, keep marks across a build and re-apply after
   the swap, delete of the old generation (data-model.md §2, R-5, R-17).
-- [ ] T028 `PVR/backend/workers/catalogue-price-flags-worker.ts` via `ctx.worker` (BullMQ, idempotent,
+- [x] T028 `PVR/backend/workers/catalogue-price-flags-worker.ts` via `ctx.worker` (BullMQ, idempotent,
   `enterSystemScope`); **TM-12** coalescing: one running + one queued rebuild per currency
   (deduplicated job ids), mark batches deduplicated.
-- [ ] T029 Subscriber (`ctx.subscribe('price_lists.catalogue_prices_changed', …)`) → marks / whole
+- [x] T029 Subscriber (`ctx.subscribe('price_lists.catalogue_prices_changed', …)`) → marks / whole
   rebuild per R-6. **TM-12**: payload parsed with `CataloguePricesChangedEventSchema`, treated as a
   **hint** only (no amount or flag ever copied from it), arrays over the cap (1 000 ids) degrade to a
   whole-currency rebuild. **TM-7 (5)**: the mark is written durably before the handler returns. Test
   `BT/integration/product_visibility_rules/flags-change-feed.test.ts` (targeted ≤ 60 s; catalogue-wide →
   rebuild; malformed / oversized / spoofed payload ⇒ only a rebuild, never a flag value).
-- [ ] T030 Drift poll (**TM-7 (5)**): each build and refresh records the `price_lists` change
+- [x] T030 Drift poll (**TM-7 (5)**): each build and refresh records the `price_lists` change
   watermark it consumed; a repeatable job every 2 minutes compares it with the current one
   (`catalogueReferencePricePort.changeWatermark()`, T012 — contracts/ports.md §3) and enqueues a whole
   rebuild of the designated currencies when it moved without a matching mark; nightly rebuild stays the last
   resort. Test `…/flags-drift.test.ts` (an announcement dropped ⇒ corrected ≤ 2 min + build time).
-- [ ] T031 First-enable / re-enable bootstrap: on presence change to on (boot-time check of
+- [x] T031 First-enable / re-enable bootstrap: on presence change to on (boot-time check of
   `catalogue_price_generations`), enqueue a build of every active currency; until a currency has a
   served generation its conditions are not met (fail-closed). Test in `…/flags-bootstrap.test.ts`;
   **off state (M3)** in `…/off-state.flags.test.ts`: module off ⇒ subscriber, drift poll and flags
   worker do not run (jobs left waiting), tables kept; on again ⇒ build enqueued.
-- [ ] T032 [P] Failing unit tests `PVR/backend/services/admin-visibility-scope.test.ts`: scope per role
+- [x] T032 [P] Failing unit tests `PVR/backend/services/admin-visibility-scope.test.ts`: scope per role
   (platform_admin; each self-lifting permission ⇒ unrestricted even when mapped — FR-026, OQ-G 1;
   mapped to `unrestricted` — FR-025; mapped to a category; unmapped with `rfqs:handle` and no
   self-lifting permission ⇒ `no_category`; unmapped other ⇒ unrestricted — FR-021 – FR-023); designation not in force drops its currency; inactive currency drops; **TM-7 (4)** a
@@ -223,16 +223,16 @@ OQ-A **A** (decided): ≤ 60 s targeted, ≤ 150 s catalogue-wide or designation
   `unrestricted`; **TM-8** identifier allow-list (`"alias"."column"` only, anything else throws),
   every fragment's `?` count equals `params.length`, no literal but constants; `checkLines` +
   `noFixedPrice` truth table (FR-043).
-- [ ] T033 `PVR/backend/services/admin-visibility-scope.ts`: `resolveScope` per request (role via
+- [x] T033 `PVR/backend/services/admin-visibility-scope.ts`: `resolveScope` per request (role via
   `permissionService.resolveRole`, mapping, `designationStatuses`, active currencies via
   `currencyReadPort`, served-generation snapshot check), never catches; `productPredicate`,
   `variantPredicate`, `filterVisible`, `checkLines` (live, R-8); `systemScope()` constant for
   storefront / connector / system callers (**TM-3 (1)**). Every consumer applies `designationStatuses`
   at read time — flags and `resolve` answer the designation as if in force (R-4).
-- [ ] T034 Register `adminProductVisibilityPort` with `ctx.di.providePort` (JSDoc: owner-off sentence
+- [x] T034 Register `adminProductVisibilityPort` with `ctx.di.providePort` (JSDoc: owner-off sentence
   for `degrades-without` consumers; "embed the fragment inside parentheses with its params in order";
   no cross-request cache of scope or fragments — TM-8).
-- [ ] T035 Perf bench `BT/perf/product_visibility_rules/admin-list-visibility.bench.ts` (R-16; 50 000
+- [x] T035 Perf bench `BT/perf/product_visibility_rules/admin-list-visibility.bench.ts` (R-16; 50 000
   products, 150 000 variants, 3 currencies): rebuild time per currency, targeted refresh latency,
   predicate cost in isolation; **SC-008**: at 50 000 products a targeted change is reflected in admin
   reads ≤ 60 s and a catalogue-wide / designation change ≤ 150 s, with no product qualifying only
