@@ -2,13 +2,9 @@
 
 **Feature Branch**: `feat/193-product-visibility-rules`
 **Created**: 2026-11-24
-**Status**: Draft — owner decisions of 2026-11-24 recorded under *Owner decisions*; OQ-1 – OQ-12
-(2026-11-24) and RQ-1 – RQ-3 (2026-11-25) answered under *Clarifications* (OQ-9 left to the
-architect); plan-stage owner answers OQ-A – OQ-H and I-2 – I-4 (2026-11-25) recorded under
-*Session 2026-11-25 — plan stage*, with the last three answers (Q-1 – Q-3; the plan writes them
-Q1 – Q3); clarify exhausted; plan and tasks re-aligned (`1324af947`); analyze of 2026-11-25
-(`analysis.md`) not yet clean — spec findings H2 (owner answer), H3, M6, M8, M9 and LOW 1 – 4
-addressed here
+**Status**: Draft — owner decisions of 2026-11-24 recorded under *Owner decisions*; all
+clarifications answered under *Clarifications* (OQ-9 left to the architect); clarify exhausted;
+plan and tasks done; analyze clean (round 3, 2026-11-25); build waits for owner go
 **Input**: Issue #1908 (product visibility for admin roles by catalogue price, and a configurable
 website rule), with the owner decisions of 2026-11-24.
 **Depends on**: `specs/192-quote-request-draft-share/` (issue #1901) for the quote-request and
@@ -593,8 +589,9 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
     placed as for any available product (H2).
 13. **Given** a product the rule excludes from a governed channel whose channel status on that
     channel is inactive — stored while it was pending admission, or left over — **When** a buyer
-    converts an accepted quote with it, or an administrator creates, previews or reorders an order
-    with it on that channel, **Then** it is treated as absent for another reason (today's
+    converts an accepted quote with it, or an administrator creates, previews or reorders an order,
+    or clones an order into a quote, with it on that channel, **Then** it is treated as absent for
+    another reason (today's
     behaviour), not as rule-excluded (N1).
 ---
 
@@ -1125,7 +1122,8 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   admin-kit change of this feature **MUST NOT start until spec 192 has merged to `master`**; their
   tasks are sequenced after it. **State of spec 192 on 2026-11-25** (analyze): issue #1901 open, no
   pull request; its branch `feat/192-quote-request-draft-share` exists only on a fork, at
-  `3c740f2c0` (analyze round 2; near done). At that commit it touches no file under
+  `53db5236f` (analyze round 3; near done — the last commit since `3c740f2c0` is docs-only,
+  touching `docs/docs/upgrading-an-instance.md` in English and Polish). At that commit it touches no file under
   `packages/modules/orders/` or `packages/admin-kit/`; it does touch the quote → cart conversion in
   `carts` (`cart-conversion-service.ts`, `carts/docs/carts.md`), the shared error codes in
   `packages/contracts/src/errors.ts` and `packages/contracts/src/index.ts`,
