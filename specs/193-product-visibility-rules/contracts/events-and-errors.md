@@ -44,6 +44,7 @@ translated pl + en.
 | `DESIGNATION_INVALID` | 422 | product_visibility_rules | book missing, not regular / everyone / of the currency, or not bound to the channel (FR-001, RQ-1 A); draft or out-of-window books are accepted |
 | `PRODUCT_RULE_ATTACHED` | 409 | product_visibility_rules | delete of an attached rule |
 | `WEBSITE_RULE_PREVIEW_REQUIRED` | 409 | product_visibility_rules | definition change of an attached rule without a preview (FR-053) |
+| `WEBSITE_RULE_PREVIEW_LIMIT` | 409 | product_visibility_rules | per-admin concurrent preview cap or preview snapshot size cap reached (TM-11) |
 | `WEBSITE_RULE_PREVIEW_STALE` | 409 | product_visibility_rules | expired preview, rule version moved, channel taken |
 | `CHANNEL_ALREADY_GOVERNED` | 409 | product_visibility_rules | second rule on a channel (FR-051) |
 | `PRODUCT_NOT_IN_VISIBILITY_CATEGORY` | 422 | product_visibility_rules | order / quote line out of category (gated phase) |

@@ -5,9 +5,11 @@
 RQ-1 **A**, RQ-2 **C**, RQ-3 **A** of 2026-11-25). Issue #1908.
 **Measured against**: `origin/master` **`c3e8a8755`** (the spec cited `67351db04`; the line
 numbers these design documents cite were read at `c3e8a8755`; the spec's own F1 – F9 citations
-were not all re-checked). Spec 192 measured on its branch
-`feat/192-quote-request-draft-share` at `6f4259f45` (not on `origin`; it does not touch `orders/`
-or `packages/admin-kit/` at that commit, see § *Sequencing*).
+were not all re-checked). Spec 192 re-measured on its fork branch
+`feat/192-quote-request-draft-share` at `bd1edae62` (not on `origin`, no PR): it touches no file under
+`orders/` or `packages/admin-kit/`, but does touch `carts/.../cart-conversion-service.ts`,
+`packages/contracts/src/errors.ts`, the OpenAPI baseline and the migrations registry — conflict risk
+with T004, T008, T025 (tasks.md header). Open PR #1914 (quote_requests port): re-measure before 9a.
 
 ## Summary
 
@@ -47,8 +49,8 @@ order checks before spec 192 merges, and the gate stands.
 **Primary Dependencies**: existing only — Fastify, MikroORM (PostgreSQL), Zod, BullMQ, ioredis,
 the platform Command Bus and command hooks (`@endora-commerce/platform/commands`), React 19 admin
 with `@endora-commerce/admin-kit`. **No new runtime dependency.**
-**Storage**: PostgreSQL. New module tables (data-model.md): 6 configuration tables, 3 derived
-price-flag tables, 3 website-rule work tables. No column added to another module's table.
+**Storage**: PostgreSQL. New module tables (data-model.md): 6 configuration tables, 4 derived
+price-flag tables, 4 website-rule work tables. No column added to another module's table.
 **Testing**: Vitest — co-located module tests (`packages/modules/product_visibility_rules/src/**/*.test.ts`),
 backend contract/integration suites (`backend/test/{contract,integration}/product_visibility_rules/`,
 `…/catalog/`, `…/price_lists/`, `…/sales_channels/`), one perf bench
@@ -202,7 +204,7 @@ every other change is a seam in the owner of the surface it narrows.
   variant narrowing and marker, and the `orders` create / preview / reorder / clone-to-quote checks
   start only after spec 192 (issue #1901) has merged to `master` (coordinator instruction).
   Deviation recorded: the spec says FR-037 could start at once, and spec 192's branch at
-  `6f4259f45` touches no file under `packages/modules/orders/` or `packages/admin-kit/`; the
+  `bd1edae62` touches no file under `packages/modules/orders/` or `packages/admin-kit/`; the
   coordinator may lift the gate for T080 – T081 (orders only) without re-planning. Clone-to-quote
   stays gated (it reaches `RfqAdminService.createOnBehalf`, which 192 rewrites). The owner has not
   decided the early release, so the gate stands. **Phase 9b shares the gate**: quote → cart conversion
@@ -216,10 +218,12 @@ every other change is a seam in the owner of the surface it narrows.
 
 | Stream | Phases | Owns (exclusive) |
 | --- | --- | --- |
-| **A — admin reads** | 5a, 5b, 5c (+ T067, T070, T076, T085) | `packages/modules/catalog/**` (incl. `catalog-bulk-update.service.ts`), `packages/modules/price_lists/src/backend/services/price-book-reads.ts`; in 5c `packages/modules/inventory/src/backend/{routes.admin,prompt-tools}.ts`, `price_lists/src/backend/routes.price-books.ts` (price-history routes), `import_export/src/backend/services/adapters/products.adapter.ts`; `backend/test/{contract,integration}/catalog/visibility-*`, perf bench |
-| **B — website rule** | 6, 7 | `packages/platform/src/kernel/sales-channels/**`, `packages/platform/src/kernel/ports/sales-channel.ts`, `packages/modules/sales_channels/**`, `product_visibility_rules/src/backend/{services/{product-rule-evaluator,website-rule.service,membership-governor}.ts,workers/website-rule-worker.ts}`, `backend/test/integration/product_visibility_rules/{website-*,admission,off-state.website-rule,off-state.governance}.test.ts`, `backend/test/contract/sales_channels/governed-membership.contract.test.ts` |
+| **A — admin reads** | 5a, 5b, 5c (+ T067, T070, T076, T085) | `packages/modules/catalog/**` (incl. `catalog-bulk-update.service.ts`), `packages/modules/price_lists/src/backend/services/price-book-reads.ts`, `packages/modules/price_lists/src/manifest.ts`; in 5c `packages/modules/inventory/src/backend/{routes.admin,prompt-tools}.ts`, `price_lists/src/backend/routes.price-books.ts` (price-history routes), `import_export/src/backend/services/adapters/products.adapter.ts`; `backend/test/{contract,integration}/catalog/visibility-*`, perf bench |
+| **B — website rule** | 6, 7 | `packages/platform/src/kernel/sales-channels/**`, `packages/platform/src/kernel/ports/sales-channel.ts`, `packages/modules/sales_channels/**`, `product_visibility_rules/src/backend/{services/{product-rule-evaluator,website-rule.service,membership-governor,product-rule-governance}.ts,workers/website-rule-worker.ts}` (incl. the only writer of `website_rule_admissions`, T058), the `sales_channels` part of the FR-082 sweep (T065), `backend/test/integration/product_visibility_rules/{website-*,admission,off-state.website-rule,off-state.governance}.test.ts`, `backend/test/contract/sales_channels/governed-membership.contract.test.ts` |
 
-Phases 1 – 4 are one stream (foundation). Cross-stream edge: T067 (catalog bulk update passes
+Phases 1 – 4 are one stream (foundation). Cross-stream edges (M4): T067 [A] after T063 [B];
+T070 [A] after T060, T063, T066 [B]; T068 [B] after T049 [A], T058 and T070 [A] (T068's tests drive
+the connector path that T070 opens). T067 (catalog bulk update passes
 `onGoverned: 'refuse'`) is owned by stream A and starts after T063 (kernel option) is merged into
 the shared branch. `product_visibility_rules/src/manifest.ts`, `src/backend/index.ts`,
 `i18n/*.json` and the generated registries are touched by both streams: each stream appends its

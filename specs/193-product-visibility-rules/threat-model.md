@@ -271,6 +271,12 @@ dependency added.
 
 ## 3. Task changes requested (summary)
 
+> **Pointer (architect, analyze round)**: the task ids below are the ids of `tasks.md` at `9eb9e8eb1`;
+> tasks were renumbered since — the current mapping is `tasks.md` § *Threat-model finding → task map*.
+> TM-4 (b)'s `liftable` flag is named `mapping_without_effect` in the plan (owner OQ-G 1 made such roles
+> always unrestricted). TM-11's per-channel admin scope check is not applicable: the platform has no
+> per-channel admin scope (recorded).
+
 | Finding | Tasks to add or amend |
 | --- | --- |
 | TM-1 | T035 (inventory = all catalog admin routes), T041 (operations list/detail/undo, per-product worker check) |

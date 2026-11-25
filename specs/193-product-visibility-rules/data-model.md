@@ -171,7 +171,9 @@ Up to channels × products rows; deleted with the preview (expired previews are 
 | `admitted_at` | timestamptz | written by the apply job with each governor-token add |
 | `post_admission_status_seen` | boolean not null default false | the first channel-scoped status write after admission sets it and is exempt from the reactivation hook |
 
-PK `(sales_channel_id, product_id)`; row deleted when the rule removes the product.
+PK `(sales_channel_id, product_id)`. Written **only** by the apply job (T058): inserted with each
+governor-token add, deleted with each governor-token remove, and every row of a channel deleted on
+detach (FR-058). The reactivation hook (T068) only sets `post_admission_status_seen`.
 
 ### `website_rule_stale_products`
 

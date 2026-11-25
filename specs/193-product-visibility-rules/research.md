@@ -289,14 +289,14 @@ module in this repository writes `product` memberships (`import_export` creates 
 `pim_connector`, `erp_connector` have no membership call). External connector packages call the
 platform's `salesChannelMembershipPort` (`replaceChannelsForEntity` on create, `addToChannel`
 otherwise), so the kernel governor intercepts them with no connector change. **Known side effect**:
-such a connector also writes channel-scoped values; for a product not admitted to the governed
-channel those cells are refused with `SCOPE_INVALID` (`catalog/backend/services/product-scopes.service.ts:243`),
-so the connector reports a scope issue per product per sync until the rule admits it, and the
-channel-scoped values land on the first sync after admission. Measured on a built connector
-package: those issues are recorded as run **warnings** (counted, not transient), the record still
-applies and is not put on a retry list — so the sync completes; the cost is warning noise and
-channel-scoped content that lags admission by one sync. A connector change that asks
-`productRuleGovernancePort` first is the separate spec FR-055 anticipates.
+such a connector also writes channel-scoped values through `catalogProductScopeWritePort.applyScopes`,
+which runs the `product.scoped_values.import` Command (`catalog/backend/services/scoped-values-import.ts:241,304`).
+**Today** a product not admitted to the governed channel has those cells refused with `SCOPE_INVALID`
+by `resolveRequestScope` (`catalog/backend/services/scoped-values-state.ts:204`) — reported by the
+connector as run warnings (counted, not transient, the record still applies and is not retried).
+**With FR-093 (R-11)** they are stored for a governed channel while admission is pending, so the
+warnings disappear and the product appears with its values on admission. A connector change that asks
+`productRuleGovernancePort` first stays optional (FR-055).
 
 **Rejected**: (a) refusing in each caller — misses connectors and the generic channel routes;
 (b) a `sales_channels`-owned "governed" column written by the module — the kernel would then need a
@@ -322,24 +322,47 @@ presence check on a foreign module id, and governance state would live outside i
   delayed job at `starts_at` / `ends_at` (from `designationStatus.window`). A whole-currency flag
   swap marks every product. A reconcile of each governed channel runs hourly (bounded drift).
 - **Admission** (FR-059): automatic writers skip (R-10), so a created or duplicated product is on
-  no governed channel until a job admits it. A `beforeCommit` command hook on `catalog`'s
-  `product.update`, `product.restore` and `product.bulk_update` (declared hookable by `catalog`)
+  no governed channel until a job admits it (FR-059's zero-channel exception for governed channels).
+  A `beforeCommit` command hook on **every** catalog Command that writes a global status, an archive
+  flag, a channel-scoped status or channel-scoped values — measured at `c3e8a8755` (H1):
+
+  | Command action | Where | Writes |
+  | --- | --- | --- |
+  | `product.update` | `catalog-admin.service.ts:693` | global status (and channel cells through the editor save) |
+  | `product.restore` | `catalog-admin.service.ts:1525` | archive cleared |
+  | `product.bulk_update` | `catalog-bulk-update.service.ts:599` | global status |
+  | `product.bulk_update.undo` | `bulk-operation.service.ts:727` | restores pre-state, may re-activate |
+  | `product.scopes.update` | `product-scopes.service.ts:862` | channel / channel × language status |
+  | `product.scoped_values.save` | `commands/scoped-values.commands.ts:119` | channel-scoped values incl. status |
+  | `product.scoped_values.import` | `services/scoped-values-import.ts:304` | connector `applyScopes` and the CSV import: channel-scoped values incl. status |
+  | `product.scoped_values.copy_to_channels` | `commands/scoped-values.commands.ts:324` | channel-scoped values (status: verify in T049; hooked either way) |
+
+  (all declared hookable by `catalog`, T049, with a test that fails on an undeclared status writer)
   removes, **in the same transaction** and with the governor token, every governed membership of a
   product whose status moves to `active` or whose archive is cleared — so a reactivation can never
   expose a stale membership; the job re-admits it within 5 min. **Channel-scoped status**
   (feature 163; written by `product.scopes.update` and the scoped-values save, which is how a
   connector switches a product on and off per channel): owner OQ-F A (FR-092) — a channel-scoped
   status moving to active **on a governed channel** is a reactivation for that channel; the same hook
-  evicts that one membership and the job re-admits it. **Exception (FR-093, I-4 A, Q1 A)**: the
+  evicts that one membership and the job re-admits it. **Pending owner H2**: which status counts —
+  planned on the recommended reading, *only the channel-row status (scope level `channel`)*;
+  per-language statuses never reactivate. **Exception (FR-093, I-4 A, Q1 A)**: the
   first channel-scoped status write on that channel after the product's admission is not a
   reactivation, even inactive → active — a connector's first sync after admission sets the
   per-channel state it was holding. The module records each admission in `website_rule_admissions`
-  (channel, product, admitted_at, `post_admission_status_seen`); the hook consults and consumes the
-  flag in the same transaction. **Values before admission (FR-093)**: `catalog` stores per-language
-  and channel-scoped values for a **governed** channel the product is not a member of (asking
-  `productRuleGovernancePort.governedChannels()`), instead of today's `SCOPE_INVALID`; the values never
-  add a membership, and the product appears with them on admission — which removes the connector
-  warning noise noted in R-10.
+  (channel, product, admitted_at, `post_admission_status_seen`), written only by the apply job; the
+  hook consults and sets the flag in the same transaction. **Values before admission (FR-093)**: the
+  refusal seam is `resolveRequestScope` (`scoped-values-state.ts:181-215`), shared by the admin save,
+  the copy, the import / connector path and the read, plus the twin checks in
+  `product-scopes.service.ts:243` and `url-key.service.ts:275`. It gains a `governedPending` option
+  (channel → languages) that **callers** build from `productRuleGovernancePort.governedChannels()`
+  (presence-probed; absent ⇒ empty ⇒ today's `SCOPE_INVALID`), so the function stays pure and the
+  allowance is visible at each call site. Writes are stored and never add a membership; the product
+  appears with them on admission. **Read side** (`scoped-values-read.service.ts:324`): an
+  unrestricted admin may read the pending values of a governed channel (decided here; documented in
+  T094); a restricted caller is already subject to FR-033 for the product. **Rejected**: letting
+  `resolveRequestScope` call the port itself (a pure helper would acquire a cross-module dependency
+  and a presence probe).
 - **Designation rebuild and the rule (Q2 A)**: while a currency's new generation builds, the
   evaluator reads the **served** (previous) generation, so no product leaves and re-joins a
   governed channel because of the rebuild; only admin scopes drop the currency (TM-7 (4)). After the
@@ -469,7 +492,9 @@ map*.
 **Decision**: `productRuleGovernancePort.excludedOnlyByRule(channelId, refs)` answers, per product
 (or variant), whether it is absent from the channel **only** because the channel's website rule
 excludes it: the channel is governed, the product is not a member, it is active, not archived or
-deleted, and its channel-scoped status there is not inactive. Callers keep today's check and add
+deleted, and its channel-scoped status there is not inactive (**pending owner H2** — planned as the
+channel-row status only; per-language statuses and values stored pending admission do not count).
+Built from the module's own tables, the membership port and catalog read ports only. Callers keep today's check and add
 this one as an allowance:
 - `carts`: quote → cart conversion keeps such lines (`cart-conversion-service.ts:239`), and
   checkout / order placement does not drop or refuse them **when the cart line came from an accepted
