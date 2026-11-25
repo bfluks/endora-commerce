@@ -8,6 +8,7 @@ description: "Tasks for spec 193 — product visibility rules"
 contracts/ (ports.md, admin-api.md, events-and-errors.md), quickstart.md.
 **Measured against**: `origin/master` `c3e8a8755`. Re-run before each phase:
 `git log --oneline c3e8a8755..origin/master -- packages/modules/{catalog,price_lists,sales_channels,admin_users,orders,quote_requests,carts,inventory,import_export} packages/contracts/src packages/platform/src/kernel/sales-channels packages/platform/src/kernel/ports packages/admin-kit/src/components/{product-picker,product-browser} backend/src/db backend/test/fixtures/openapi-baseline.json`.
+**Rebased (2026-11-25, after Phase 3)** onto `origin/master` **`26a40f13a`** (#1910, MikroORM 7.2.11 with legacy decorators): entity decorators come from `@mikro-orm/decorators/legacy`; no file this plan cites by line changed in that drift except entity imports (`price_lists` entities, catalog ordering). Phase 4 on is built on MikroORM 7; earlier line citations stay as measured at `c3e8a8755`.
 **Conflict note (M8, L2)**: spec 192 (fork branch at `53db5236f`, not merged) also edits
 `packages/contracts/src/errors.ts`, `packages/contracts/src/index.ts`,
 `backend/test/.../error-code-routing/reference-ledgers.ts`, `packages/modules/_i18n/i18n/{en,pl}.json`,

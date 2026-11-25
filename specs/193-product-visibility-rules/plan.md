@@ -12,6 +12,8 @@ were not all re-checked). Spec 192 re-measured on its fork branch
 `carts/docs/carts.md`, `docs/docs/upgrading-an-instance.md` (en + pl; T094 merges there), the OpenAPI baseline and the migrations registry — conflict risk with T003,
 T004, T008, T025, T092, T094 (tasks.md header). Open PR #1914 (quote_requests port): re-measure before 9a.
 
+**Rebased (2026-11-25, after Phase 3)** onto `origin/master` **`26a40f13a`** (#1910, MikroORM 7.2.11 with legacy decorators): entity decorators come from `@mikro-orm/decorators/legacy`; no file this plan cites by line changed in that drift except entity imports (`price_lists` entities, catalog ordering). Phase 4 on is built on MikroORM 7; earlier line citations stay as measured at `c3e8a8755`.
+
 ## Summary
 
 A new detachable module **`product_visibility_rules`** owns the configuration (visibility
