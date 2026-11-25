@@ -431,6 +431,14 @@ const modules = [
   },
   {
     type: 'category',
+    label: 'Product visibility rules', key: 'product_visibility_rules',
+    link: { type: 'doc', id: 'modules/product-visibility-rules' },
+    items: [
+      'module-reference/product-visibility-rules',
+    ],
+  },
+  {
+    type: 'category',
     label: 'Projects', key: 'projects',
     link: { type: 'doc', id: 'modules/projects' },
     items: [

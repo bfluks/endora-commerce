@@ -388,6 +388,10 @@ import { Migration20261023T195611ProductFeedsRunWithdrawalReason } from '@endora
 import { Migration20261023T234605ProductFeedsPriceListFkDropped } from '@endora-commerce/mod-product-feeds/migrations';
 import { Migration20261025T145041ProductFeedsGoogleTemplatePackFields } from '@endora-commerce/mod-product-feeds/migrations';
 
+// ── product_visibility_rules ────────────────────────────────────────────────
+import { Migration20261125T131915ProductVisibilityRulesVisibilityConfiguration } from '@endora-commerce/mod-product-visibility-rules/migrations';
+import { Migration20261125T131918ProductVisibilityRulesCataloguePriceFlagsAndWebsiteRule } from '@endora-commerce/mod-product-visibility-rules/migrations';
+
 // ── projects ────────────────────────────────────────────────────────────────
 import { Migration20261026T144350ProjectsInit } from '@endora-commerce/mod-projects/migrations';
 import { Migration20261026T231555ProjectsLinkOrganization } from '@endora-commerce/mod-projects/migrations';
@@ -845,6 +849,10 @@ export const MIGRATION_REGISTRY: readonly MigrationRegistryEntry[] = [
   migration('product_feeds', Migration20261023T195611ProductFeedsRunWithdrawalReason),
   migration('product_feeds', Migration20261023T234605ProductFeedsPriceListFkDropped),
   migration('product_feeds', Migration20261025T145041ProductFeedsGoogleTemplatePackFields),
+
+  // ── product_visibility_rules ────────────────────────────────────────────────
+  migration('product_visibility_rules', Migration20261125T131915ProductVisibilityRulesVisibilityConfiguration),
+  migration('product_visibility_rules', Migration20261125T131918ProductVisibilityRulesCataloguePriceFlagsAndWebsiteRule),
 
   // ── projects ────────────────────────────────────────────────────────────────
   migration('projects', Migration20261026T144350ProjectsInit),

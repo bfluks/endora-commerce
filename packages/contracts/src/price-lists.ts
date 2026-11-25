@@ -944,3 +944,134 @@ export interface OrganizationPriceBookRecord {
   /** Chain depth of the nearest member; `null` for a customer-group book. */
   depth: number | null;
 }
+
+// --- Catalogue reference price (spec 193, contracts/ports.md §3) -------------
+
+/**
+ * The book a currency's catalogue price is read from (`specs/193-product-visibility-rules/`
+ * FR-001, RQ-1 A): a regular, everyone book of the currency, bound to the named channel.
+ * No designation ⇒ the currency's base book.
+ */
+export interface CatalogueDesignation {
+  priceListId: string;
+  salesChannelId: string;
+}
+
+const designationWindowSchema = z.object({
+  startsAt: isoDateTimeSchema.nullable(),
+  endsAt: isoDateTimeSchema.nullable(),
+});
+
+/**
+ * Why a designated book does or does not price the currency now. `not_active` and
+ * `outside_schedule` are accepted at designation and only make the book "not in force";
+ * the other reasons refuse the designation (RQ-1 A). Not in force ⇒ the currency has no
+ * catalogue price (FR-007), applied by the caller at read time.
+ */
+export const designationNotInForceReasonSchema = z.enum([
+  'not_found',
+  'currency_mismatch',
+  'not_regular',
+  'audience_restricted',
+  'not_on_channel',
+  'not_active',
+  'outside_schedule',
+]);
+export type DesignationNotInForceReason = z.infer<typeof designationNotInForceReasonSchema>;
+
+export const designationStatusSchema = z.discriminatedUnion('inForce', [
+  z.object({ inForce: z.literal(true), window: designationWindowSchema }),
+  z.object({
+    inForce: z.literal(false),
+    reason: designationNotInForceReasonSchema,
+    window: designationWindowSchema.nullable(),
+  }),
+]);
+export type DesignationStatus = z.infer<typeof designationStatusSchema>;
+
+/** One priced line of a product at its catalogue price: the product itself, or one variant. */
+export interface CatalogueReferenceLine {
+  variantId: string | null;
+  /** The engine's four-place decimal string; `null` = unpriced (0 is a price). */
+  amount: string | null;
+}
+
+/**
+ * Container name: `catalogueReferencePricePort`. Owner: `price_lists`. A capability
+ * port beside `pricingService` (`specs/193-product-visibility-rules/` research R-4).
+ *
+ * The catalogue price of a product in one currency: the pricing engine's own resolver run
+ * over a **fixed profile** `[base book, designated book]` — quantity 1, no buyer, now. The
+ * designated book stands where it has a row; the base book where it is silent (OQ-1 b).
+ * Sale books are never in the profile. There is no second resolver (FR-006).
+ *
+ * **Owner off:** `price_lists` is non-deactivatable, so the gate never refuses in
+ * practice; were it off, resolving the port would throw `ModuleDisabledError` and a caller
+ * must fail closed (no catalogue price), never read "priced".
+ */
+export interface CatalogueReferencePricePort {
+  /**
+   * One entry per requested product; `lines` is the product itself when it has no variants,
+   * else one per variant. Answers the designation **as if in force** — its status and window
+   * are not read; the caller applies {@link CatalogueReferencePricePort.designationStatus}.
+   * A deleted book contributes no rows (base stands). A product that does not exist is absent
+   * from the map.
+   */
+  resolve(input: {
+    currencyCode: string;
+    designation: CatalogueDesignation | null;
+    productIds: readonly string[];
+  }): Promise<ReadonlyMap<string, ReadonlyArray<CatalogueReferenceLine>>>;
+  designationStatus(input: { currencyCode: string } & CatalogueDesignation): Promise<DesignationStatus>;
+  /** Many at once, in one statement — same order as the input. */
+  designationStatuses(
+    input: ReadonlyArray<{ currencyCode: string } & CatalogueDesignation>,
+  ): Promise<ReadonlyArray<DesignationStatus>>;
+  /**
+   * Durable watermark of price changes (TM-7 (5)): moves on every write or status flip that
+   * emits {@link CATALOGUE_PRICES_CHANGED_EVENT}. Opaque; compare for equality only.
+   */
+  changeWatermark(): Promise<string>;
+  /** Regular, everyone books of the currency in any status (draft / scheduled included). */
+  designatableBooks(
+    currencyCode: string,
+  ): Promise<ReadonlyArray<{ priceListId: string; name: string; salesChannelIds: string[] }>>;
+}
+
+/** EventBus name of {@link CataloguePricesChangedEventSchema}. */
+export const CATALOGUE_PRICES_CHANGED_EVENT = 'price_lists.catalogue_prices_changed';
+
+/**
+ * Emitted once per pricing-generation bump by the writing process, after commit
+ * (`specs/193-product-visibility-rules/` contracts/events-and-errors.md §1). Names only — no
+ * amounts. **A hint only** (TM-12): a consumer validates it, never copies a value from it, and
+ * re-reads prices through {@link CatalogueReferencePricePort}.
+ */
+export const CataloguePricesChangedEventSchema = z.object({
+  eventId: z.string().min(1),
+  occurredAt: isoDateTimeSchema,
+  change: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('all') }),
+    z.object({ kind: z.literal('channels'), channelIds: z.array(uuidSchema) }),
+    z.object({
+      kind: z.literal('books'),
+      books: z.array(
+        z.object({
+          bookId: uuidSchema,
+          currencyCodes: z.array(CURRENCY),
+          isSystem: z.boolean(),
+          /** `null` = every row of the book, or rows selecting by category / attribute. */
+          productIds: z.array(uuidSchema).nullable(),
+        }),
+      ),
+    }),
+    z.object({
+      kind: z.literal('products'),
+      productIds: z.array(uuidSchema),
+      currencyCodes: z.array(CURRENCY).optional(),
+    }),
+    z.object({ kind: z.literal('categories'), categoryIds: z.array(uuidSchema) }),
+    z.object({ kind: z.literal('attributes'), attributeKeys: z.array(z.string()) }),
+  ]),
+});
+export type CataloguePricesChangedEvent = z.infer<typeof CataloguePricesChangedEventSchema>;

@@ -40,7 +40,7 @@ Abbreviations: `PVR/` = `packages/modules/product_visibility_rules/src/`, `CAT/`
 
 ## Phase 1 — Foundation: module, contracts, schema (no behaviour)
 
-- [ ] T001 Scaffold `packages/modules/product_visibility_rules/` (package.json, tsconfig, `src/backend/index.ts`
+- [x] T001 Scaffold `packages/modules/product_visibility_rules/` (package.json, tsconfig, `src/backend/index.ts`
   with empty `registerModule`, `i18n/{en,pl}.json`, `docs/`), mirroring a recent module package
   (`packages/modules/related_payers/`). Register in `pnpm-workspace` globs if needed.
 - [ ] T002 `PVR/manifest.ts`: id, `activation` deactivatable **default off** (R-3, OQ-C), permissions
@@ -48,24 +48,30 @@ Abbreviations: `PVR/` = `packages/modules/product_visibility_rules/src/`, `CAT/`
   [`catalog`, `price_lists`, `admin_roles`, `currencies`, `sales_channels`, `audit_logs`], palette
   action stubs, `errorCodes` (events-and-errors.md §2). Permission labels pl+en in the module's own
   bundle (`module-admin-surfaces.md` item 4).
-- [ ] T003 [P] `CON/product-visibility.ts` (new) + export from `CON/index.ts`: scope (with an explicit
+  *Build note (Phase 1)*: id, activation (default off), dependencies and the settings group landed in
+  Phase 1; the permissions, palette actions and `errorCodes` land with the routes that enforce and
+  raise them (T020) — the permission inventory refuses a grantable code no gate enforces.
+- [x] T003 [P] `CON/product-visibility.ts` (new) + export from `CON/index.ts`: scope (with an explicit
   `system` member — TM-3), predicate as the union `none | sql | deny` (no `null` — TM-3), rule
   definition with Zod bounds (TM-11), admin API request/response schemas (contracts/ports.md §1, §2, §4;
   admin-api.md §1). Tests first: `CON/product-visibility.test.ts` (rule definition limits, nesting,
   threshold enum, overview shape).
 - [ ] T004 [P] `CON/errors.ts`: the ten codes of events-and-errors.md §2; `CON/price-lists.ts`:
   `CatalogueReferencePricePort`, `DesignationStatus`, `CataloguePricesChangedEventSchema`.
-- [ ] T005 Migration 1 (configuration): `pnpm --filter backend run migration:new -- --module product_visibility_rules --name visibility_configuration`
+  *Build note (Phase 1)*: the `price-lists.ts` half and the spellings (`PRODUCT_VISIBILITY_ERROR_CODES`)
+  landed in Phase 1; each code joins `ERROR_CODES`, the manifest and the minted-codes ledger with its
+  first raise site (repo convention), and `CHANNEL_MEMBERSHIP_GOVERNED` with the kernel governor (T063).
+- [x] T005 Migration 1 (configuration): `pnpm --filter backend run migration:new -- --module product_visibility_rules --name visibility_configuration`
   — `visibility_categories`, `visibility_category_conditions`, `visibility_role_mappings`,
   `catalogue_price_designations`, `product_rules`, `website_rule_attachments` (data-model.md §1;
   role mapping with the `target` column, I-2).
-- [ ] T006 Migration 2 (derived): `catalogue_price_generations`, `product_catalogue_prices`,
+- [x] T006 Migration 2 (derived): `catalogue_price_generations`, `product_catalogue_prices`,
   `variant_catalogue_prices`, `catalogue_price_stale_products`, `website_rule_previews`,
   `website_rule_preview_changes`, `website_rule_admissions`, `website_rule_stale_products` (§2, §3)
   with the indexes listed.
-- [ ] T007 Entities under `PVR/backend/entities/`; classify each as platform-global in the tenancy
+- [x] T007 Entities under `PVR/backend/entities/`; classify each as platform-global in the tenancy
   classification the CI check reads (`specs/conventions/check-inventory.md`).
-- [ ] T008 Regenerate and commit: `pnpm --filter backend run composer:generate`,
+- [x] T008 Regenerate and commit: `pnpm --filter backend run composer:generate`,
   `manifests:generate`, `pnpm install --lockfile-only`.
 
 **Verification**: `pnpm --filter @endora-commerce/contracts exec vitest run src/product-visibility.test.ts`;

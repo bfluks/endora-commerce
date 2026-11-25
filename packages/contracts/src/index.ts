@@ -34,6 +34,8 @@ export * from './saved-list-views.js';
 export * from './returns.js';
 // Feature 182 — related payers: the payer link, its requests and its ports (specs/182-related-payers/).
 export * from './related-payers.js';
+// Spec 193 — product visibility rules: categories, role mappings, designations, website rule (specs/193-product-visibility-rules/).
+export * from './product-visibility.js';
 export * from './price-lists.js';
 // Feature 160 (D-287 P1) — price books: header, sets, rows, explanation, precedence.
 export * from './price-books.js';

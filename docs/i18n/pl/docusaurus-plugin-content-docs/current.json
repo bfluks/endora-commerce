@@ -179,6 +179,9 @@
   "sidebar.main.category.product_feeds": {
     "message": "Feedy produktowe"
   },
+  "sidebar.main.category.product_visibility_rules": {
+    "message": "Reguły widoczności produktów"
+  },
   "sidebar.main.category.projects": {
     "message": "Projekty"
   },

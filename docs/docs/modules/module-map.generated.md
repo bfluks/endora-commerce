@@ -70,6 +70,7 @@ of the platform, not of what happens to be written.
 | [PIM connector shared layer](./pim_connector.md) | The locale-mapping contract, the whole-field protection grammar and the scoped write rules every PIM connector writes products through. | @endora-commerce/mod-pim-connector |
 | [Price books](./price_lists.md) | Price books — base prices per currency, catalogue, buyer and sale prices on sales channels, and the rules that decide what each buyer pays. | @endora-commerce/mod-price-lists |
 | [Product feeds](./product_feeds.md) | Provider-shaped product feeds per sales channel — scheduled generation, tokenised pull URLs and SFTP/FTP/HTTP push | @endora-commerce/mod-product-feeds |
+| [Product visibility rules](./product-visibility-rules.md) | Limit which products an administrator role sees by catalogue price, and let a sales channel's products follow a rule | @endora-commerce/mod-product-visibility-rules |
 | [Projects](./projects.md) | Projects for zero or more Organizations, run through their own Stages by Members holding Project Roles | @endora-commerce/mod-projects |
 | [Promotions](./promotions.md) | Cart-level percentage / amount / free-delivery discounts with eligibility filters | @endora-commerce/mod-promotions |
 | [Prompt actions (AI assistant)](./prompt-actions.md) | Natural-language prompt mode for the admin command palette, with an explicit preview-and-confirm step before any change | @endora-commerce/mod-prompt-actions |

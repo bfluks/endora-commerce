@@ -1,0 +1,7 @@
+{
+  "module.name": "Reguły widoczności produktów",
+  "module.description": "Ogranicza, które produkty widzi rola administratora, według cen katalogowych produktów, i pozwala, by produkty kanału sprzedaży podążały za konfigurowalną regułą.",
+  "settingGroups.product_visibility_rules.name": "Reguły widoczności produktów",
+  "settingLabels.product_visibility_rules.module_enabled.name": "Moduł reguł widoczności produktów włączony",
+  "settingLabels.product_visibility_rules.module_enabled.description": "Włączony: zmapowane role widzą tylko produkty swojej kategorii, a niezmapowane role obsługujące zapytania ofertowe nie widzą żadnych do czasu zmapowania. Wyłączony: wszystkie ograniczenia znikają, konfiguracja zostaje."
+}

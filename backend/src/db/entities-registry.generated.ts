@@ -56,6 +56,7 @@ import { entities as catalogEntities } from '@endora-commerce/mod-catalog/backen
 import { entities as inventoryEntities } from '@endora-commerce/mod-inventory/backend';
 import { entities as blogEntities } from '@endora-commerce/mod-blog/backend';
 import { entities as cartsEntities } from '@endora-commerce/mod-carts/backend';
+import { entities as productVisibilityRulesEntities } from '@endora-commerce/mod-product-visibility-rules/backend';
 import { entities as cmsEntities } from '@endora-commerce/mod-cms/backend';
 import { entities as comparisonsEntities } from '@endora-commerce/mod-comparisons/backend';
 import { entities as dictionariesEntities } from '@endora-commerce/mod-dictionaries/backend';
@@ -129,6 +130,7 @@ export const ALL_ENTITIES = [
   ...(inventoryEntities as readonly EntityClassLike[]),
   ...(blogEntities as readonly EntityClassLike[]),
   ...(cartsEntities as readonly EntityClassLike[]),
+  ...(productVisibilityRulesEntities as readonly EntityClassLike[]),
   ...(cmsEntities as readonly EntityClassLike[]),
   ...(comparisonsEntities as readonly EntityClassLike[]),
   ...(dictionariesEntities as readonly EntityClassLike[]),
