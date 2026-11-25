@@ -491,7 +491,12 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   deletes that (channel, product) admissions row in the same transaction; the next admission by the
   apply job inserts a fresh row, so the exemption applies again — test case: admit → first
   channel-status write (exempt) → later inactive → active (evicted, row deleted) → re-admit → first
-  channel-status write after re-admission exempt again; a write that does not move status to active is no reactivation; never on the governed
+  channel-status write after re-admission exempt again;
+  **inherit cases (FR-092 as worded at `35b32350d`)**: (1) on a governed channel, a stored channel
+  status `inactive` cleared to inherit while the global status is active ⇒ a reactivation: membership
+  removed in the same transaction, re-admitted ≤ 5 min; (2) the same clear while the global status is
+  inactive ⇒ not a reactivation (nothing removed, nothing marked); (3) the first channel-status write
+  after admission that writes inherit is still exempt (FR-093); a write that does not move status to active is no reactivation; never on the governed
   channel before admission, admitted ≤ 5 min (US4-6, FR-059, SC-005); a product deactivated, archived
   or deleted is never re-admitted while so (FR-079, N5); remove + re-admit keeps
   channel-scoped values.
