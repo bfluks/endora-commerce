@@ -5,7 +5,8 @@
 **Status**: Draft — owner decisions of 2026-11-24 recorded under *Owner decisions*; OQ-1 – OQ-12
 (2026-11-24) and RQ-1 – RQ-3 (2026-11-25) answered under *Clarifications* (OQ-9 left to the
 architect); plan-stage owner answers OQ-A – OQ-H and I-2 – I-4 (2026-11-25) recorded under
-*Session 2026-11-25 — plan stage*; plan and tasks to be re-aligned by the architect
+*Session 2026-11-25 — plan stage*, with the last three answers (Q-1 – Q-3); clarify exhausted;
+plan and tasks to be re-aligned by the architect
 **Input**: Issue #1908 (product visibility for admin roles by catalogue price, and a configurable
 website rule), with the owner decisions of 2026-11-24.
 **Depends on**: `specs/192-quote-request-draft-share/` (issue #1901) for the quote-request and
@@ -282,6 +283,19 @@ recorded here in generic terms.
 - **Release of the order checks before spec 192** — not decided by the owner. The plan's gate
   stands (the order create / preview / reorder checks start after spec 192 merges); releasing them
   earlier remains an option for the owner (see *Dependencies and sequencing*).
+- **Q-1** — Is the first channel-scoped status write after admission exempt even when it really
+  changes inactive → active? → **A**: yes. The rule has already admitted the product, so it shows on
+  the channel at once; every other channel-scoped move to active follows the ordinary reactivation
+  path (FR-092). → FR-092, FR-093.
+- **Q-2** — A website rule's price condition during a designation rebuild → **A**: it keeps using the
+  previous evaluation of that currency until the new one is ready, so a governed channel never drops
+  and re-adds products because of the rebuild. Restricted admin users stay fail-closed for that
+  currency during the rebuild (OQ-A). → FR-060, FR-061.
+- **Q-3** — How far OQ-B reaches → (a) **yes**: admin reorder and admin clone-to-quote also accept a
+  product absent from the channel only because of the website rule (the category check still
+  applies to restricted users); (b) **yes**: checkout of a cart converted from an accepted quote
+  keeps such a line through order placement (the product-owner proposal in FR-090 is now an owner
+  decision). → FR-090, FR-091.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -515,14 +529,20 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
    product's per-language or channel-scoped values (status included) for that channel, **Then** the
    values are stored and the product stays off the channel; **When** the rule admits it, **Then** it
    appears with those values; **When** the connector's first channel-scoped status write on that
-   channel after admission arrives, **Then** it does not count as a reactivation (I-4).
+   channel after admission arrives — even one that changes the status from inactive to active —
+   **Then** it does not count as a reactivation and the product shows at once (I-4, Q-1).
 10. **Given** a product excluded from a governed channel only by its website rule, **When** a buyer
     converts an accepted quote that has a line for it into a cart on that channel, **Then** the line
-    is kept; **When** an administrator creates or previews an order on that channel with that
-    product, **Then** the channel membership check does not refuse it (the visibility-category check
-    of FR-037 still applies to restricted users); **When** the product is absent from the channel
+    is kept and the buyer can check out and place the order with it; **When** an administrator
+    creates or previews an order, reorders a past order, or clones an order into a quote on that
+    channel with that product, **Then** the channel membership check does not refuse it (the
+    visibility-category check of FR-037 and FR-039 still applies to restricted users); **When** the product is absent from the channel
     for any other reason (inactive, archived, inactive on that channel by its channel-scoped status,
-    or not a member of an ungoverned channel), **Then** the behaviour is today's (OQ-B).
+    or not a member of an ungoverned channel), **Then** the behaviour is today's (OQ-B, Q-3).
+11. **Given** a governed channel whose rule has a price condition on currency B, **When** B's
+    designation is changed and its new evaluation is being built, **Then** the channel keeps its
+    membership as evaluated before the change (no product drops and re-appears because of the
+    rebuild); once the new evaluation is ready, membership follows within 5 minutes (Q-2).
 ---
 
 ### Edge Cases
@@ -573,10 +593,13 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   checks never lag (OQ-A, FR-062).
 - **Designation change in progress**: the currency contributes nothing to any category until the new
   designation is in effect (≤ 150 s), so restricted users relying on it briefly see fewer products,
-  never more (OQ-A).
+  never more (OQ-A). A website rule's price condition on that currency keeps the previous
+  evaluation until the new one is ready, so the storefront does not drop and re-add products
+  because of the rebuild (Q-2).
 - **Rule-excluded product bought through the sales team**: the storefront never lists it, but an
-  accepted quote converts with it and an administrator can order it on that channel (OQ-B,
-  FR-090, FR-091); a product absent for any other reason is handled as today.
+  accepted quote converts and checks out with it, and an administrator can order, preview, reorder
+  or clone it into a quote on that channel (OQ-B, Q-3, FR-090, FR-091); a product absent for any
+  other reason is handled as today.
 - **Channel-level re-enable on a governed channel**: a channel-scoped status moving to active on that
   channel removes the membership at once; the rule re-admits the product within 5 minutes (OQ-F).
   A write that does not move the status to active (for example a connector writing "active" again)
@@ -789,7 +812,10 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   (fail-closed, OQ-A).
 - **FR-061**: A governed channel's membership MUST follow a change of an attribute value, a
   catalogue price, a price book's schedule starting or ending, or the rule itself, within 5
-  minutes, including the storefront search index.
+  minutes, including the storefront search index. While a currency's designation change is being
+  applied, a rule's price condition on that currency MUST keep the previous evaluation until the new
+  one is ready; the rebuild alone MUST NOT drop and re-add products on a governed channel (Q-2). The
+  fail-closed treatment of FR-060 applies to admin reads only.
 - **FR-062**: A catalogue price change MUST apply to admin read filtering (lists, counts, search,
   by-id answers) within **60 s** when it is a product or variant row on the base or designated book,
   and within **150 s** when it is catalogue-wide (a category, attribute or "all" row, or a category
@@ -864,27 +890,30 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   absent from the request's channel **only** because that channel's website rule excludes it MUST be
   kept, as if the product were on that channel; a line absent for any other reason (inactive,
   archived, deleted, inactive on that channel by its channel-scoped status, or not a member of an
-  ungoverned channel) MUST be dropped as today. Checking out such a cart MUST NOT drop or refuse the
-  line for the same reason (product-owner proposal: without it the conversion alone does not keep
-  the product "sellable through the sales team", owner decision 6). The storefront listings, search,
+  ungoverned channel) MUST be dropped as today. Checking out such a cart MUST keep the line through
+  order placement: no step from conversion to the placed order MAY drop or refuse it for the same
+  reason (Q-3 b). The storefront listings, search,
   type-ahead and product URL still do not show the product (FR-051). With the feature off (FR-073)
   or after the rule is detached (FR-058), the channel is not governed and conversion behaves as
   today (OQ-B).
-- **FR-091**: Admin order create and admin order preview MUST accept a line whose product (or variant)
-  is absent from the order's channel only because that channel's website rule excludes it, and keep
-  refusing a product absent for any other reason as today. The visibility-category check of FR-037
+- **FR-091**: Admin order create, admin order preview, admin reorder and admin clone-to-quote MUST
+  accept a line whose product (or variant) is absent from the order's channel only because that
+  channel's website rule excludes it, and keep refusing a product absent for any other reason as
+  today (OQ-B, Q-3 a). The visibility-category check of FR-037
   and FR-039 still applies to restricted users. With the feature off (FR-073) or after a rule is
-  detached (FR-058), no channel is governed and today's channel check applies unchanged (OQ-B).
+  detached (FR-058), that channel is not governed and today's channel check applies unchanged.
 - **FR-092**: A product's channel-scoped status moving to active on a governed channel MUST count as
   a reactivation for that channel (FR-059): its membership of that channel is removed in the same
   transaction and the rule re-admits it within 5 minutes. A write that does not move the status to
-  active is not a reactivation (OQ-F). Exception: FR-093 (the first channel-scoped status write
-  after admission).
+  active is not a reactivation (OQ-F). The only exception is FR-093: the first channel-scoped status
+  write after admission (Q-1).
 - **FR-093**: Per-language and channel-scoped values (status included) that a connector writes for
   a governed channel MUST be stored for a product that is not on that channel only because the
-  rule has not admitted it yet, and MUST NOT put it on the channel; on admission
-  the product appears with those values. The first channel-scoped status write on that channel after
-  the product's admission MUST NOT count as a reactivation (I-4).
+  rule has not admitted it yet, and MUST NOT put it on the channel; on admission the product
+  appears with those values. The first channel-scoped status write on that channel after the
+  product's admission MUST NOT count as a reactivation, even when it changes the status from
+  inactive to active: the product shows on the channel at once, since the rule has already
+  admitted it (I-4, Q-1).
 
 ### Key Entities
 
@@ -969,13 +998,10 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   with non-qualifying variants acting on the product as today (*Edge Cases*); the figures in SC-006 (5 minutes) and SC-007 (50 000 products);
   a mapped role that gains a self-lifting permission keeping its stored mapping without effect and
   being flagged, and a role that loses one being judged by its stored mapping again (FR-026,
-  *Edge Cases*); checkout of a converted cart not dropping a rule-excluded line (FR-090); the
+  *Edge Cases*); the
   general rule that no error answer names another hidden product (FR-082, from threat model TM-2);
   the overview warning applying to fail-closed roles as well as mapped ones (FR-086); refusing to map
   a self-lifting role to unrestricted (FR-026).
-- **Open, not decided** (2026-11-25): OQ-B names only quote → cart conversion and admin order
-  create / preview. Whether admin reorder and admin clone-to-quote also accept a rule-excluded
-  product is not decided; until it is, they keep today's channel check.
 
 ## Dependencies and sequencing
 
