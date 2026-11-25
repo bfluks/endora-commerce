@@ -3,5 +3,19 @@
   "module.description": "Limits which products an administrator role sees by the products’ catalogue prices, and lets a sales channel’s products follow a configurable rule.",
   "settingGroups.product_visibility_rules.name": "Product visibility rules",
   "settingLabels.product_visibility_rules.module_enabled.name": "Product visibility rules module enabled",
-  "settingLabels.product_visibility_rules.module_enabled.description": "On: mapped roles see only their category’s products, unmapped roles handling quote requests see none until mapped. Off: every restriction is lifted; the configuration is kept."
+  "settingLabels.product_visibility_rules.module_enabled.description": "On: mapped roles see only their category’s products, unmapped roles handling quote requests see none until mapped. Off: every restriction is lifted; the configuration is kept.",
+  "adminRoles.permission.product_visibility:read": "View product visibility rules",
+  "adminRoles.permission.product_visibility:manage": "Manage product visibility rules",
+  "actions.openProductVisibility.label": "Product visibility rules",
+  "actions.openProductVisibility.description": "Map admin roles to visibility categories and choose each currency's catalogue price book",
+  "actions.openProductVisibility.keywords": "visibility, categories, catalogue price, role mapping",
+  "errors.VISIBILITY_CATEGORY_IN_USE": "Roles are mapped to this visibility category. Map them elsewhere before deleting it.",
+  "errors.ROLE_NOT_MAPPABLE": "This role always sees every product, so it cannot be mapped.",
+  "errors.DESIGNATION_INVALID": "This price book cannot set the currency's catalogue price: it must be a regular price book for everyone, in this currency, assigned to the chosen sales channel.",
+  "auditLog.product_visibility.category.create": "Visibility category created",
+  "auditLog.product_visibility.category.update": "Visibility category changed",
+  "auditLog.product_visibility.category.delete": "Visibility category deleted",
+  "auditLog.product_visibility.role_mapping.set": "Role visibility mapping changed",
+  "auditLog.product_visibility.designation.set": "Catalogue price book designated",
+  "auditLog.product_visibility.designation.clear": "Catalogue price book designation cleared"
 }

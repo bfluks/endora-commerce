@@ -1403,6 +1403,16 @@ export const ERROR_CODES = {
   /** The relay could not be reached in time, refused the message, or redirected. */
   ADMIN_FEEDBACK_DELIVERY_FAILED: 'ADMIN_FEEDBACK_DELIVERY_FAILED',
 
+  // Product visibility rules (`specs/193-product-visibility-rules/`, events-and-errors.md §2) —
+  // the spellings of `PRODUCT_VISIBILITY_ERROR_CODES`, each declared by the
+  // `product_visibility_rules` manifest and joining this block with its first raise site.
+  /** Deleting a visibility category a role is mapped to; `details[].issue` names each role id (FR-013). */
+  VISIBILITY_CATEGORY_IN_USE: 'VISIBILITY_CATEGORY_IN_USE',
+  /** Mapping `platform_admin` or a role holding a self-lifting permission (FR-022, FR-026). */
+  ROLE_NOT_MAPPABLE: 'ROLE_NOT_MAPPABLE',
+  /** A designated book that is missing, not regular / for everyone / of the currency, or not on the channel (RQ-1 A). */
+  DESIGNATION_INVALID: 'DESIGNATION_INVALID',
+
   // Forms (`specs/170-forms-module/`, research R-25) — the spellings of
   // `FORMS_ERROR_CODES`. Each is declared by the `forms` module's manifest and
   // joins this block in the change that adds its first raise site.

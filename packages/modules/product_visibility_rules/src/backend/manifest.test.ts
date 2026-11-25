@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PRODUCT_VISIBILITY_SETTING_CODES } from '@endora-commerce/contracts';
+import { PRODUCT_VISIBILITY_PERMISSIONS, PRODUCT_VISIBILITY_SETTING_CODES } from '@endora-commerce/contracts';
 import { manifest } from '../manifest.js';
 import en from '../../i18n/en.json' with { type: 'json' };
 import pl from '../../i18n/pl.json' with { type: 'json' };
@@ -21,6 +21,25 @@ describe('product_visibility_rules manifest', () => {
     expect([...(manifest.dependencies ?? [])].sort()).toEqual(
       ['admin_roles', 'audit_logs', 'catalog', 'currencies', 'price_lists', 'sales_channels'].sort(),
     );
+  });
+
+  it('declares read and manage; manage requires read', () => {
+    expect(manifest.permissions?.map((p) => p.code)).toEqual([
+      PRODUCT_VISIBILITY_PERMISSIONS.READ,
+      PRODUCT_VISIBILITY_PERMISSIONS.MANAGE,
+    ]);
+    expect(manifest.permissions?.find((p) => p.code === PRODUCT_VISIBILITY_PERMISSIONS.MANAGE)?.requires).toEqual([
+      PRODUCT_VISIBILITY_PERMISSIONS.READ,
+    ]);
+  });
+
+  it('declares the error codes it raises, each with a sentence in both languages', () => {
+    const codes = (manifest.errorCodes ?? []).map((e) => e.code).sort();
+    expect(codes).toEqual(['DESIGNATION_INVALID', 'ROLE_NOT_MAPPABLE', 'VISIBILITY_CATEGORY_IN_USE']);
+    for (const code of codes) {
+      expect((en as Record<string, string>)[`errors.${code}`], `en ${code}`).toBeTruthy();
+      expect((pl as Record<string, string>)[`errors.${code}`], `pl ${code}`).toBeTruthy();
+    }
   });
 
   it('labels every permission and setting in both shipped languages', () => {

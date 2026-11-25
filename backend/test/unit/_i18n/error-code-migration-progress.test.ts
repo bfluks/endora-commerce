@@ -236,6 +236,9 @@ const MIGRATED_MODULES: readonly string[] = [
   'payment_methods',
   'payments',
   'price_lists',
+  // Minted (`specs/193-product-visibility-rules/`): the module's codes were created after the
+  // chain was deleted, so `MINTED_ERROR_CODES` accounts for them.
+  'product_visibility_rules',
   'promotions',
   'prompt_actions',
   // Minted (issue #641): `ONE_CLICK_UNAVAILABLE` is this module's first code and

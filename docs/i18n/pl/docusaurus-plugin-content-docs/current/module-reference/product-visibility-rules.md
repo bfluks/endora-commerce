@@ -38,11 +38,16 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 
 ## Uprawnienia
 
-_Brak._
+| Kod | Etykieta | Wymaga też |
+| --- | --- | --- |
+| `product_visibility:manage` | Manage product visibility rules | `product_visibility:read` |
+| `product_visibility:read` | View product visibility rules | — |
 
 ## Paleta poleceń
 
-_Brak._
+| Akcja | Otwiera | Uprawnienie |
+| --- | --- | --- |
+| `open-product-visibility` | `/product-visibility` | `product_visibility:read` |
 
 ## Ustawienia
 

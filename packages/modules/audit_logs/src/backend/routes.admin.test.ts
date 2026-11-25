@@ -44,6 +44,9 @@ describe('the module an audited action is labelled from', () => {
     ['sales_channel.create', 'sales_channels'],
     ['crm.opportunity.transition', 'crm'],
     ['crm.tag.create', 'crm'],
+    // Spec 193 T022 — labelled from `product_visibility_rules`' own bundle.
+    ['product_visibility.category.create', 'product_visibility_rules'],
+    ['product_visibility.role_mapping.set', 'product_visibility_rules'],
   ])('%s → %s', (action, moduleId) => {
     expect(moduleIdForAuditAction(action)).toBe(moduleId);
   });

@@ -1317,6 +1317,31 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       'The request is `related_payers`\' own row. `VERSION_CONFLICT` is not reused: re-reading does ' +
       'not help, the request is closed.',
   },
+  VISIBILITY_CATEGORY_IN_USE: {
+    to: 'product_visibility_rules',
+    reason:
+      'Minted by `specs/193-product-visibility-rules/` (FR-013) for deleting a visibility category a ' +
+      'role is mapped to; `details[].issue` names each role. The category is `product_visibility_rules`\' ' +
+      'own row; raised by the `product_visibility.category.delete` Command. `VALIDATION_FAILED` is not ' +
+      'reused: the request is well formed, and the sentence has to say the roles must be moved first.',
+  },
+  ROLE_NOT_MAPPABLE: {
+    to: 'product_visibility_rules',
+    reason:
+      'Minted by `specs/193-product-visibility-rules/` (FR-022, FR-026) for mapping `platform_admin` or a ' +
+      'role holding a self-lifting permission, which always sees every product. Raised by the ' +
+      'configuration service before the `product_visibility.role_mapping.set` Command. `FORBIDDEN` is not ' +
+      'reused: the caller may map roles, this role cannot be mapped.',
+  },
+  DESIGNATION_INVALID: {
+    to: 'product_visibility_rules',
+    reason:
+      'Minted by `specs/193-product-visibility-rules/` (FR-001, RQ-1 A) for a catalogue-price designation ' +
+      'naming a book that is missing, not regular, not for everyone, of another currency or not on the ' +
+      'channel; `details[].issue` is the reason. Raised by the configuration service before the ' +
+      '`product_visibility.designation.set` Command. `VALIDATION_FAILED` is not reused: the body is well ' +
+      'formed, and the sentence has to say what the book must be.',
+  },
   RFQ_SAVED_VIEW_NAME_TAKEN: {
     to: 'quote_requests',
     reason:

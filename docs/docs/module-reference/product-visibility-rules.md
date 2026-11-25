@@ -38,11 +38,16 @@ An operator switches this module on and off on **/platform/modules**. The choice
 
 ## Permissions
 
-_None._
+| Code | Label | Also needs |
+| --- | --- | --- |
+| `product_visibility:manage` | Manage product visibility rules | `product_visibility:read` |
+| `product_visibility:read` | View product visibility rules | — |
 
 ## Command palette
 
-_None._
+| Action | Opens | Permission |
+| --- | --- | --- |
+| `open-product-visibility` | `/product-visibility` | `product_visibility:read` |
 
 ## Settings
 

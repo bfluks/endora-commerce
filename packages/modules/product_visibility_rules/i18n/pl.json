@@ -3,5 +3,19 @@
   "module.description": "Ogranicza, które produkty widzi rola administratora, według cen katalogowych produktów, i pozwala, by produkty kanału sprzedaży podążały za konfigurowalną regułą.",
   "settingGroups.product_visibility_rules.name": "Reguły widoczności produktów",
   "settingLabels.product_visibility_rules.module_enabled.name": "Moduł reguł widoczności produktów włączony",
-  "settingLabels.product_visibility_rules.module_enabled.description": "Włączony: zmapowane role widzą tylko produkty swojej kategorii, a niezmapowane role obsługujące zapytania ofertowe nie widzą żadnych do czasu zmapowania. Wyłączony: wszystkie ograniczenia znikają, konfiguracja zostaje."
+  "settingLabels.product_visibility_rules.module_enabled.description": "Włączony: zmapowane role widzą tylko produkty swojej kategorii, a niezmapowane role obsługujące zapytania ofertowe nie widzą żadnych do czasu zmapowania. Wyłączony: wszystkie ograniczenia znikają, konfiguracja zostaje.",
+  "adminRoles.permission.product_visibility:read": "Podgląd reguł widoczności produktów",
+  "adminRoles.permission.product_visibility:manage": "Zarządzanie regułami widoczności produktów",
+  "actions.openProductVisibility.label": "Reguły widoczności produktów",
+  "actions.openProductVisibility.description": "Przypisz role administratorów do kategorii widoczności i wybierz cennik ceny katalogowej każdej waluty",
+  "actions.openProductVisibility.keywords": "widoczność, kategorie, cena katalogowa, mapowanie ról",
+  "errors.VISIBILITY_CATEGORY_IN_USE": "Do tej kategorii widoczności przypisano role. Przypisz je gdzie indziej, zanim ją usuniesz.",
+  "errors.ROLE_NOT_MAPPABLE": "Ta rola zawsze widzi wszystkie produkty, więc nie można jej przypisać.",
+  "errors.DESIGNATION_INVALID": "Ten cennik nie może wyznaczać ceny katalogowej waluty: musi to być zwykły cennik dla wszystkich, w tej walucie, przypisany do wybranego kanału sprzedaży.",
+  "auditLog.product_visibility.category.create": "Utworzono kategorię widoczności",
+  "auditLog.product_visibility.category.update": "Zmieniono kategorię widoczności",
+  "auditLog.product_visibility.category.delete": "Usunięto kategorię widoczności",
+  "auditLog.product_visibility.role_mapping.set": "Zmieniono przypisanie roli do widoczności",
+  "auditLog.product_visibility.designation.set": "Wskazano cennik ceny katalogowej",
+  "auditLog.product_visibility.designation.clear": "Usunięto wskazanie cennika ceny katalogowej"
 }

@@ -1,4 +1,6 @@
 import {
+  PRODUCT_VISIBILITY_ERROR_CODES,
+  PRODUCT_VISIBILITY_PERMISSIONS,
   PRODUCT_VISIBILITY_SETTING_CODES,
   defineModuleManifest,
   defineModuleSettingsManifest,
@@ -18,6 +20,8 @@ import {
  * back on restores them (FR-073).
  */
 const C = PRODUCT_VISIBILITY_SETTING_CODES;
+const P = PRODUCT_VISIBILITY_PERMISSIONS;
+const E = PRODUCT_VISIBILITY_ERROR_CODES;
 
 export const productVisibilityRulesSettingsManifest = defineModuleSettingsManifest({
   moduleCode: 'product_visibility_rules',
@@ -51,9 +55,37 @@ export const manifest = defineModuleManifest({
   settings: productVisibilityRulesSettingsManifest,
   // R-3, OQ-C A — operator-toggleable, shipped off.
   activation: { settingCode: C.MODULE_ENABLED, default: false },
-  // The two permission codes, the palette actions and the error codes land with the
-  // configuration routes that enforce and raise them (spec 193 Phase 3): the permission
-  // inventory refuses a grantable code no gate enforces.
+  permissions: [
+    { code: P.READ, label: 'View product visibility rules' },
+    {
+      code: P.MANAGE,
+      label: 'Manage product visibility rules',
+      requires: [P.READ],
+    },
+  ],
+  // Principle XVI — the configuration screen under ⌘K. Its API entry is declared, so
+  // `check:action-route-permissions` compares the gate of the route the screen opens on.
+  actions: [
+    {
+      id: 'open-product-visibility',
+      labelKey: 'actions.openProductVisibility.label',
+      descriptionKey: 'actions.openProductVisibility.description',
+      icon: 'ShieldCheck',
+      targetRoute: '/product-visibility',
+      entryApiRoute: '/api/v1/admin/product-visibility/overview',
+      requiredPermission: P.READ,
+      keywords: ['visibility', 'catalogue', 'price', 'roles', 'categories'],
+      keywordsKey: 'actions.openProductVisibility.keywords',
+      weight: 420,
+    },
+  ],
+  // Routes the codes' sentences to this package's own bundle; each joins the platform's
+  // `ERROR_CODES` with its first raise site (events-and-errors.md §2).
+  errorCodes: [
+    { code: E.VISIBILITY_CATEGORY_IN_USE },
+    { code: E.ROLE_NOT_MAPPABLE },
+    { code: E.DESIGNATION_INVALID },
+  ],
   i18n: { bundlesDir: 'i18n' },
   docs: { dir: 'docs' },
 });

@@ -43,14 +43,15 @@ Abbreviations: `PVR/` = `packages/modules/product_visibility_rules/src/`, `CAT/`
 - [x] T001 Scaffold `packages/modules/product_visibility_rules/` (package.json, tsconfig, `src/backend/index.ts`
   with empty `registerModule`, `i18n/{en,pl}.json`, `docs/`), mirroring a recent module package
   (`packages/modules/related_payers/`). Register in `pnpm-workspace` globs if needed.
-- [ ] T002 `PVR/manifest.ts`: id, `activation` deactivatable **default off** (R-3, OQ-C), permissions
+- [x] T002 `PVR/manifest.ts`: id, `activation` deactivatable **default off** (R-3, OQ-C), permissions
   `product_visibility:read`, `product_visibility:manage` (`requires` read), `dependencies`
   [`catalog`, `price_lists`, `admin_roles`, `currencies`, `sales_channels`, `audit_logs`], palette
   action stubs, `errorCodes` (events-and-errors.md §2). Permission labels pl+en in the module's own
   bundle (`module-admin-surfaces.md` item 4).
-  *Build note (Phase 1)*: id, activation (default off), dependencies and the settings group landed in
-  Phase 1; the permissions, palette actions and `errorCodes` land with the routes that enforce and
-  raise them (T020) — the permission inventory refuses a grantable code no gate enforces.
+  *Build note*: id, activation (default off), dependencies and the settings group landed in Phase 1;
+  the permissions, the palette action and `errorCodes` landed in Phase 3 with the routes that enforce
+  and raise them — the permission inventory refuses a grantable code no gate enforces. `errorCodes`
+  grows with each later code's raise site (T004 note).
 - [x] T003 [P] `CON/product-visibility.ts` (new) + export from `CON/index.ts`: scope (with an explicit
   `system` member — TM-3), predicate as the union `none | sql | deny` (no `null` — TM-3), rule
   definition with Zod bounds (TM-11), admin API request/response schemas (contracts/ports.md §1, §2, §4;
@@ -119,7 +120,7 @@ migration up/down on a fresh test DB (`backend-test-suite.md` § *Which backend 
 
 ## Phase 3 — Configuration backend (US2; FR-001, FR-010 – FR-014, FR-020 – FR-026, FR-070, FR-071, FR-076, FR-077, FR-086; TM-4, TM-13)
 
-- [ ] T017 [P] Failing integration tests `BT/integration/product_visibility_rules/configuration.test.ts`:
+- [x] T017 [P] Failing integration tests `BT/integration/product_visibility_rules/configuration.test.ts`:
   category CRUD, ≥1 condition, inactive currency kept and shown, delete of mapped category refused
   naming roles (FR-013), `platform_admin` mapping refused (FR-022), designation refused for
   non-regular / non-everyone / unbound / wrong-currency / missing book (RQ-1 A, US2-8) but a draft or
@@ -135,37 +136,37 @@ migration up/down on a fresh test DB (`backend-test-suite.md` § *Which backend 
   is reported `unrestricted — mapping without effect` on the overview (re-read on every request; role
   edits in `admin_roles` do not call this module); **FR-086**: overview warns on a mapped or
   fail-closed role holding `audit_logs:read`.
-- [ ] T018 [P] Failing test `…/configuration-audit.test.ts`: one audit entry per write with actor,
+- [x] T018 [P] Failing test `…/configuration-audit.test.ts`: one audit entry per write with actor,
   before, after (FR-070, `audit-state.md`); read permission sees, cannot write (US2-4).
-- [ ] T019 Commands under `PVR/backend/commands/` (category, role mapping, designation) and
+- [x] T019 Commands under `PVR/backend/commands/` (category, role mapping, designation) and
   `PVR/backend/services/visibility-config.service.ts`; designation validation through
   `catalogueReferencePricePort.designationStatus` + `designatableBooks`; the role-mapping Command
   takes a target `{ kind: 'category', id } | { kind: 'unrestricted' }` (I-2) and refuses
   `platform_admin` and every role holding a self-lifting permission (FR-022, FR-026, OQ-G 1).
-- [ ] T020 `PVR/backend/routes.admin.ts` (admin-api.md §1 config rows) through `ctx.routes`;
+- [x] T020 `PVR/backend/routes.admin.ts` (admin-api.md §1 config rows) through `ctx.routes`;
   `requireAdmin('product_visibility:read' | ':manage')` as route `preHandler`; every write route
   additionally resolves the caller's own scope and answers `403 FORBIDDEN` unless `unrestricted`
   (TM-4 c, defence in depth). Unit test first: `PVR/backend/routes.admin.config-guard.test.ts` with a
   stubbed `resolveScope` answering `restricted` / `no_category` for a holder of
   `product_visibility:manage` ⇒ every write route `403`, nothing written (M2).
-- [ ] T021 Overview read: role effects (`unrestricted` / `mapped_unrestricted` / `mapped` /
+- [x] T021 Overview read: role effects (`unrestricted` / `mapped_unrestricted` / `mapped` /
   `unmappable_unrestricted` / `mapping_without_effect` / `sees_no_products` — FR-023, FR-024, FR-026)
   from `permissionService` + `adminRolePort.list` (TM-4 b: `mapping_without_effect` flags a mapped role
   that gained a self-lifting permission); warning flag on a mapped or fail-closed role holding
   `audit_logs:read` (FR-086 — the only warning); designation statuses;
   served generation; `notApplied: true` is impossible while off (screens absent) — the off-state
   notice lives in the activation texts (T077).
-- [ ] T022 Audit references (`auditReferenceRegistry`) and history labels pl+en.
-- [ ] T023 Scheduling hooks: a designation set/clear enqueues a whole rebuild of the currency
+- [x] T022 Audit references (`auditReferenceRegistry`) and history labels pl+en.
+- [x] T023 Scheduling hooks: a designation set/clear enqueues a whole rebuild of the currency
   (consumed in Phase 4; until then the job type exists and is a no-op test double).
-- [ ] T024 Off-state test `BT/integration/product_visibility_rules/off-state.config.test.ts`: routes
+- [x] T024 Off-state test `BT/integration/product_visibility_rules/off-state.config.test.ts`: routes
   absent while off (deactivated-while-available case), configuration kept, restored on enable
   (`module-activation.md` item 6); **TM-4 d / TM-13**: the module's activation and deactivation each
   leave an audit entry naming the actor in the existing lifecycle ledger (verify; if it does not,
   record a defect for the platform rather than auditing from this module); **FR-077**: no
   configuration route answers while off (it cannot be prepared before the first enable); **FR-076**:
   installing / deploying with the module present and off changes no read, write or membership.
-- [ ] T025 Contract tests for the config API shapes `BT/contract/product_visibility_rules/config-api.contract.test.ts`
+- [x] T025 Contract tests for the config API shapes `BT/contract/product_visibility_rules/config-api.contract.test.ts`
   (incl. the mapping target union and role effects) and OpenAPI baseline update.
 
 **Verification**: `pnpm --filter @endora-commerce/mod-product-visibility-rules exec vitest run src/backend/routes.admin.config-guard.test.ts`;

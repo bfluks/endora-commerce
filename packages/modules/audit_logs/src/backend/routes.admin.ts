@@ -189,5 +189,7 @@ export function moduleIdForAuditAction(action: string): string {
   if (action.startsWith('order.')) return 'core';
   if (action.startsWith('organization.')) return 'core';
   if (action.startsWith('crm.')) return 'crm';
+  // Spec 193 — the configuration Commands of `product_visibility_rules`.
+  if (action.startsWith('product_visibility.')) return 'product_visibility_rules';
   return 'core';
 }
