@@ -8,10 +8,11 @@ description: "Tasks for spec 193 — product visibility rules"
 contracts/ (ports.md, admin-api.md, events-and-errors.md), quickstart.md.
 **Measured against**: `origin/master` `c3e8a8755`. Re-run before each phase:
 `git log --oneline c3e8a8755..origin/master -- packages/modules/{catalog,price_lists,sales_channels,admin_users,orders,quote_requests,carts,inventory,import_export} packages/contracts/src packages/platform/src/kernel/sales-channels packages/platform/src/kernel/ports packages/admin-kit/src/components/{product-picker,product-browser} backend/src/db backend/test/fixtures/openapi-baseline.json`.
-**Conflict note (M8, L2)**: spec 192 (fork branch at `3c740f2c0`, not merged) also edits
+**Conflict note (M8, L2)**: spec 192 (fork branch at `53db5236f`, not merged) also edits
 `packages/contracts/src/errors.ts`, `packages/contracts/src/index.ts`,
 `backend/test/.../error-code-routing/reference-ledgers.ts`, `packages/modules/_i18n/i18n/{en,pl}.json`,
-`packages/modules/carts/docs/carts.md`, `backend/test/fixtures/openapi-baseline.json` and the generated
+`packages/modules/carts/docs/carts.md`, `docs/docs/upgrading-an-instance.md` (en + pl — T094's release
+and upgrade note must merge there, not overwrite), `backend/test/fixtures/openapi-baseline.json` and the generated
 migrations registry (`backend/src/db/migrations-registry.generated.ts`) — files of T003, T004, T008,
 T025, T092, T094. Whichever merges
 second regenerates the registry and the baseline (never hand-merges) and re-checks the error-code ledger.
@@ -574,7 +575,7 @@ are reviewed at checkpoint 3 only. Gate: findings closed before Phase 8.
 
 `designer` + `code-reviewer` + `qa-engineer` in parallel (different model from the author);
 `product-owner` accepts US1 (except its gated scenarios US1-9, US1-13, US1-14, US1-20), US2 and US4
-(except its gated scenarios US4-10 and US4-12 — N4), plus FR-074 and FR-076,
+(except its gated scenarios US4-10, US4-12 and US4-13 — N4, R1; accepted at checkpoint 3), plus FR-074 and FR-076,
 against quickstart.md (M5). Release before checkpoint 3 ships no gated behaviour: Phases 9a/9b do
 not start until spec 192 merges.
 
@@ -637,9 +638,10 @@ Same gate as 9a: quote → cart conversion is in `carts/backend/services/cart-co
 which spec 192 changes; admin order create / preview / reorder share `orders/backend/routes.ts` with
 9a's checks, whose gate the owner kept. Uses `productRuleGovernancePort.excludedOnlyByRule`
 (contracts/ports.md §2): governed channel, not a member, active, not archived or deleted, channel
-status not inactive. **Owner H2 A**: "channel status" is the channel-row status only; per-language
-statuses decide only storefront per-language visibility and never a sales-team path, and values stored
-pending admission (FR-093) do not count.
+status not inactive. **Owner N1 / H2 A**: the product's **stored channel status** (scope level
+`channel`) counts whenever it was written — before admission, after admission or left over from an
+earlier membership; no stored value counts as not inactive. Per-language statuses never count: they
+decide only storefront per-language visibility, never a sales-team path.
 
 - [ ] T089 [P] Failing integration test `BT/integration/carts/quote-conversion-rule-excluded.test.ts`:
   an accepted quote's line whose product (or variant) is absent from the request channel **only**
@@ -659,7 +661,9 @@ pending admission (FR-093) do not count.
   order create, preview, reorder and clone-to-quote accept a rule-excluded product (Q3) and still
   refuse other out-of-channel products; for a restricted user the category check of T080 still applies
   first (FR-091, FR-037, FR-039); module off ⇒ today; **H2 A case**: the same product inactive in every
-  language of the channel passes admin create, preview, reorder and clone-to-quote (US4-12).
+  language of the channel passes admin create, preview, reorder and clone-to-quote (US4-12); **R4 /
+  US4-13**: a rule-excluded product whose stored channel status is inactive (pending or left over) is
+  refused on admin order create, preview, reorder and clone-to-quote as today's out-of-channel refusal.
 - [ ] T091 `productRuleGovernancePort.excludedOnlyByRule(channelId, refs)` in `PVR` — a simple read
   (N1): channel governed (own attachments table) ∧ not a member (membership port
   `filterEntityIdsInChannel`) ∧ active, not archived, not deleted ∧ the **currently stored channel
@@ -680,7 +684,7 @@ pending admission (FR-093) do not count.
 ### ✅ Review checkpoint 3 — gated block
 
 Same reviewers (security-engineer re-reviews against TM-15 and the rule-excluded acceptance of
-9b); `product-owner` accepts US3, FR-090, FR-091.
+9b); `product-owner` accepts US3, US4-10, US4-12, US4-13, FR-090, FR-091.
 
 ---
 

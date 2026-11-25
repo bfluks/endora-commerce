@@ -350,8 +350,10 @@ presence check on a foreign module id, and governance state would live outside i
   first channel status write (scope level `channel`) on that channel after the product's admission is not a
   reactivation, even inactive → active — a connector's first sync after admission sets the
   per-channel state it was holding. The module records each admission in `website_rule_admissions`
-  (channel, product, admitted_at, `post_admission_status_seen`), written only by the apply job; the
-  hook consults and sets the flag in the same transaction. **Values before admission (FR-093)**: the
+  (channel, product, admitted_at, `post_admission_status_seen`): the apply job inserts and deletes rows
+  and clears a channel's rows on detach; the reactivation hook deletes the row with each eviction it
+  makes (so a re-admission starts a fresh row) and sets the flag in the same transaction (data-model
+  N2). **Values before admission (FR-093)**: the
   refusal seam is `resolveRequestScope` (`scoped-values-state.ts:181-215`), shared by the admin save,
   the copy, the import / connector path and the read, plus the twin checks in
   `product-scopes.service.ts:243` and `url-key.service.ts:275`. It gains a `governedPending` option

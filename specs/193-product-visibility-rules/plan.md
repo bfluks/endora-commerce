@@ -6,10 +6,10 @@ RQ-1 **A**, RQ-2 **C**, RQ-3 **A** of 2026-11-25). Issue #1908.
 **Measured against**: `origin/master` **`c3e8a8755`** (the spec cited `67351db04`; the line
 numbers these design documents cite were read at `c3e8a8755`; the spec's own F1 – F9 citations
 were not all re-checked). Spec 192 re-measured on its fork branch
-`feat/192-quote-request-draft-share` at `3c740f2c0` (not on `origin`, no PR): it touches no file under
+`feat/192-quote-request-draft-share` at `53db5236f` (not on `origin`, no PR): it touches no file under
 `orders/` or `packages/admin-kit/`, but does touch `carts/.../cart-conversion-service.ts`,
 `packages/contracts/src/{errors,index}.ts`, the error-code reference ledgers, `_i18n` bundles,
-`carts/docs/carts.md`, the OpenAPI baseline and the migrations registry — conflict risk with T003,
+`carts/docs/carts.md`, `docs/docs/upgrading-an-instance.md` (en + pl; T094 merges there), the OpenAPI baseline and the migrations registry — conflict risk with T003,
 T004, T008, T025, T092, T094 (tasks.md header). Open PR #1914 (quote_requests port): re-measure before 9a.
 
 ## Summary
@@ -205,7 +205,7 @@ every other change is a seam in the owner of the surface it narrows.
   variant narrowing and marker, and the `orders` create / preview / reorder / clone-to-quote checks
   start only after spec 192 (issue #1901) has merged to `master` (coordinator instruction).
   Deviation recorded: the spec says FR-037 could start at once, and spec 192's branch at
-  `3c740f2c0` touches no file under `packages/modules/orders/` or `packages/admin-kit/`; the
+  `53db5236f` touches no file under `packages/modules/orders/` or `packages/admin-kit/`; the
   coordinator may lift the gate for T080 – T081 (orders only) without re-planning. Clone-to-quote
   stays gated (it reaches `RfqAdminService.createOnBehalf`, which 192 rewrites). The owner has not
   decided the early release, so the gate stands. **Phase 9b shares the gate**: quote → cart conversion
@@ -246,7 +246,7 @@ No owner question is open (H2 answered 2026-11-25). Decisions and where the plan
 | OQ-C activation default (FR-076) | **A**: ships off | R-3; T002, T024 |
 | OQ-D cross-references (FR-080) | **A** | T045 |
 | OQ-E assistant tools, unique keys (FR-081, FR-082) | **A**; holder never named (TM-2) | T046, T048 |
-| OQ-F channel-scoped status (FR-092) | **A**, with **Q1 A**: the first channel-scoped status write after admission is exempt, even inactive → active (FR-093) | R-11; T068, T070 |
+| OQ-F channel status (FR-092) | **A**, with **Q1 A**: a channel status (scope level `channel`) moving to active is a reactivation; the first channel status write after admission is exempt, even inactive → active (FR-093); per-language statuses never count (H2 A) | R-11; T068, T070 |
 | OQ-G self-lifting roles (FR-026) | **1**: roles holding `*`, `product_visibility:manage`, `platform.modules.activate` or `admin_users:manage` are always unrestricted and unmappable; fail-closed = unmapped `rfqs:handle` roles with none of them (amends OQ-2) | R-13; T017, T019, T021, T032 |
 | OQ-H other admin read paths (FR-083 – FR-088) | table below signed off | Phase 5c (T051 – T054), T094 |
 | I-2 explicit "unrestricted" target (FR-020, FR-025) | **A** | R-13; T017, T019, T071 |
