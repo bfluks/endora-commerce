@@ -332,6 +332,10 @@ recorded here in generic terms.
   - rules only narrow, never resurface inactive, archived or deleted products (FR-079);
   - a single overview permission warning, for `audit_logs:read` (FR-086);
   - every item formerly listed as a product-owner proposal under *Assumptions*.
+- **Client analyze N8** — Does a channel status going from inactive to inherited count as "moving to
+  active" (FR-092)? → product-owner clarification, consistent with N1 (no stored value is not
+  inactive) and OQ-F, not a new owner question: **yes**, when the inherited global status is
+  active; no, when it is inactive. → FR-092.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -653,7 +657,8 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 - **Channel-level re-enable on a governed channel**: the channel status moving to active on that
   channel removes the membership at once; the rule re-admits the product within 5 minutes (OQ-F).
   A write that does not move the channel status to active (for example a connector writing "active"
-  again) is not a reactivation, and a per-language status change never is (H2).
+  again) is not a reactivation, and a per-language status change never is (H2). Clearing a stored
+  "inactive" so that the channel inherits an active global status is a reactivation (FR-092, N8).
 - **Per-language statuses and the sales-team paths**: a product inactive in some or every language
   on a channel is hidden on the storefront in those languages only; for quote conversion, checkout
   and the admin order paths it is inactive on the channel only when its channel status is (H2).
@@ -1005,7 +1010,12 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   reactivation for that channel (FR-059): its membership of that channel is removed in the same
   transaction and the rule re-admits it within 5 minutes. A write that does not move the channel
   status to active is not a reactivation (OQ-F), and a per-language status change MUST NEVER be one
-  (H2). The only exception is FR-093: the first channel-status write after admission (Q-1).
+  (H2). The **effective** channel status is what moves: a channel status that stops being a stored
+  "inactive" and becomes **inherited** (no stored value, so the product's global status applies)
+  moves to active when the global status is active, and so is a reactivation; it is not one when the
+  global status is inactive (product-owner clarification consistent with N1 and OQ-F — a connector
+  releases its own "inactive" by writing "inherit"). The only exception is FR-093: the first
+  channel-status write after admission (Q-1).
 - **FR-093**: Per-language and channel-scoped values (status included) written for a governed
   channel by any writer — the admin product save, copy to channels, a connector or the scoped-values
   CSV import — MUST be stored for a product that is not on that channel only because the rule has
