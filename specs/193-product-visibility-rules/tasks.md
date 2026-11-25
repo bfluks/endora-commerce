@@ -28,7 +28,7 @@ Abbreviations: `PVR/` = `packages/modules/product_visibility_rules/src/`, `CAT/`
   OQ-D A, OQ-E A, OQ-F A, OQ-G 1, OQ-H signed off, I-2 A, I-3 A, I-4 A, plus Q1 A (first
   channel-scoped status write after admission exempt), Q2 A (rule keeps the previous price
   evaluation during a designation rebuild), Q3 (admin reorder / clone-to-quote and checkout of a
-  converted quote also accept rule-excluded products). No task is pending an owner answer. The
+  converted quote also accept rule-excluded products), H2 A (only the channel-row status counts). No task is pending an owner answer. The
   release of the order checks before spec 192 is **not** decided: the gate stands.
 - Threat model: `threat-model.md` (TM-1 – TM-16); mapping at the end of this file.
 
@@ -332,8 +332,11 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
   `product.scopes.update` (`product-scopes.service.ts:862`), `product.scoped_values.save`
   (`commands/scoped-values.commands.ts:119`), `product.scoped_values.import`
   (`services/scoped-values-import.ts:304` — connector `catalogProductScopeWritePort.applyScopes` and the
-  CSV import), and `product.scoped_values.copy_to_channels` (`scoped-values.commands.ts:324`) if it
-  copies a status cell (verify; hook it either way — it writes channel-scoped values, FR-093). A test
+  CSV import). **Verified, not hooked**: `product.scoped_values.copy_to_channels`
+  (`scoped-values.commands.ts:324`) copies only text fields — `name`, `description`, gallery alt texts,
+  attachment and packaging-unit names, string attributes scoped Channel × language (`copyable`,
+  `scoped-values.commands.ts:259-266`) — never a status, so it cannot reactivate; its channel-scoped
+  writes for a governed pending channel are covered by T070 (`resolveRequestScope` at `:284`, `:298`). A test
   in `CAT/backend/hookable-status-writers.test.ts` lists every Command action whose run writes
   `status` or a channel-scoped cell and fails on one not declared hookable. Contract-surface entry +
   changeset.
@@ -460,11 +463,12 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   `BT/integration/product_visibility_rules/admission.test.ts` then the `beforeCommit` hooks on **every**
   Command T049 declares (`product.update`, `product.restore`, `product.bulk_update`,
   `product.bulk_update.undo`, `product.scopes.update`, `product.scoped_values.save`,
-  `product.scoped_values.import`, `product.scoped_values.copy_to_channels`); the connector cases are
-  driven through `catalogProductScopeWritePort.applyScopes` (and the CSV import), not only the admin
-  routes. **Pending owner H2**: which channel-scoped status counts — planned on the recommended
-  reading, *only the channel-row status (scope level `channel`) counts; per-language statuses
-  (`channel_language`) never reactivate*; adjust when H2 is answered. Create / duplicate /
+  `product.scoped_values.import`); the connector cases are driven through
+  `catalogProductScopeWritePort.applyScopes` (and the CSV import), not only the admin routes.
+  **Owner H2 A**: only the channel-row status (scope level `channel`) counts for reactivation; a
+  per-language status (`channel_language`) never does — test case: on an admitted product, a
+  per-language status inactive → active written through `applyScopes` leaves the membership in place
+  and marks nothing. Create / duplicate /
   import / connector-shaped calls skipped on a governed channel (US4-3); global transition to active /
   un-archive ⇒ governed memberships removed in the same transaction with the token and the product
   marked; a **channel-scoped** status moving to active on a governed channel ⇒ that one membership
@@ -608,20 +612,24 @@ Same gate as 9a: quote → cart conversion is in `carts/backend/services/cart-co
 which spec 192 changes; admin order create / preview / reorder share `orders/backend/routes.ts` with
 9a's checks, whose gate the owner kept. Uses `productRuleGovernancePort.excludedOnlyByRule`
 (contracts/ports.md §2): governed channel, not a member, active, not archived or deleted, channel
-status not inactive. **Pending owner H2**: "channel status" is planned as the channel-row status only
-(per-language statuses and values stored pending admission do not count); adjust when answered.
+status not inactive. **Owner H2 A**: "channel status" is the channel-row status only; per-language
+statuses decide only storefront per-language visibility and never a sales-team path, and values stored
+pending admission (FR-093) do not count.
 
 - [ ] T089 [P] Failing integration test `BT/integration/carts/quote-conversion-rule-excluded.test.ts`:
   an accepted quote's line whose product (or variant) is absent from the request channel **only**
   because of the website rule is kept on conversion and through checkout and order placement; a line
-  absent for any other reason (inactive, archived, deleted, channel-row status inactive — **pending
-  owner H2** for per-language statuses —, non-member of an
-  ungoverned channel) is dropped / refused as today; storefront listing, search, type-ahead and URL
-  still hide it; module off or rule detached ⇒ today's behaviour (FR-090).
+  absent for any other reason (inactive, archived, deleted, channel-row status inactive, non-member of
+  an ungoverned channel) is dropped / refused as today; storefront listing, search, type-ahead and URL
+  still hide it; module off or rule detached ⇒ today's behaviour (FR-090). **H2 A case**: a
+  sales-team-only product whose channel-row status is active but whose per-language status is inactive
+  in **every** language of the channel (and which has FR-093 pending cells) is kept through conversion,
+  checkout and placement.
 - [ ] T090 [P] Failing integration test `BT/integration/orders/admin-order-rule-excluded.test.ts`: admin
   order create, preview, reorder and clone-to-quote accept a rule-excluded product (Q3) and still
   refuse other out-of-channel products; for a restricted user the category check of T080 still applies
-  first (FR-091, FR-037, FR-039); module off ⇒ today.
+  first (FR-091, FR-037, FR-039); module off ⇒ today; **H2 A case**: the same product inactive in every
+  language of the channel passes admin create, preview, reorder and clone-to-quote.
 - [ ] T091 `productRuleGovernancePort.excludedOnlyByRule(channelId, refs)` in `PVR`: its own
   attachments table, the membership port (`filterEntityIdsInChannel`) and catalog **read ports** for
   status / archive / channel status — no SQL against another module's table (LOW 11); unit test
@@ -689,8 +697,8 @@ the targeted backend files of Phases 2 – 9b; full backend suite runs on `maste
 | FR-080 – FR-082 | T045, T046, T048 (assistant-tools test, 5b), T051 (SC-009 sweep), T065 (sales_channels details) |
 | FR-083 – FR-085 | T051 – T054 |
 | FR-086 – FR-088 | T017, T021, T094 (docs) |
-| FR-090, FR-091 | T089, T090 (gated) |
-| FR-092, FR-093 | T049 (hookable inventory test), T068, T070 |
+| FR-090, FR-091 | T089, T090 incl. the H2 A case (product inactive in every language still passes) (gated) |
+| FR-092, FR-093 | T049 (hookable inventory test), T068 (incl. H2 A: a per-language status write never reactivates), T070 |
 | SC-001 – SC-007 | T026, T037, T056, T059, T068, T035/T098, T099 (SC-006 timing) |
 | SC-008 | T035 (asserted at 50 000 products), T026, T032 |
 | SC-009 | T051 (`sc-009-surfaces.test.ts`) |

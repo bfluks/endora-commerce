@@ -335,18 +335,18 @@ presence check on a foreign module id, and governance state would live outside i
   | `product.scopes.update` | `product-scopes.service.ts:862` | channel / channel × language status |
   | `product.scoped_values.save` | `commands/scoped-values.commands.ts:119` | channel-scoped values incl. status |
   | `product.scoped_values.import` | `services/scoped-values-import.ts:304` | connector `applyScopes` and the CSV import: channel-scoped values incl. status |
-  | `product.scoped_values.copy_to_channels` | `commands/scoped-values.commands.ts:324` | channel-scoped values (status: verify in T049; hooked either way) |
+  | `product.scoped_values.copy_to_channels` | `commands/scoped-values.commands.ts:324` | text fields only (`copyable`, `:259-266`: name, description, alt texts, attachment / packaging names, string C×L attributes) — **no status**, so not hooked; its pending-channel writes go through T070 |
 
-  (all declared hookable by `catalog`, T049, with a test that fails on an undeclared status writer)
+  (all but `copy_to_channels` declared hookable by `catalog`, T049, with a test that fails on an
+  undeclared status writer)
   removes, **in the same transaction** and with the governor token, every governed membership of a
   product whose status moves to `active` or whose archive is cleared — so a reactivation can never
   expose a stale membership; the job re-admits it within 5 min. **Channel-scoped status**
   (feature 163; written by `product.scopes.update` and the scoped-values save, which is how a
   connector switches a product on and off per channel): owner OQ-F A (FR-092) — a channel-scoped
   status moving to active **on a governed channel** is a reactivation for that channel; the same hook
-  evicts that one membership and the job re-admits it. **Pending owner H2**: which status counts —
-  planned on the recommended reading, *only the channel-row status (scope level `channel`)*;
-  per-language statuses never reactivate. **Exception (FR-093, I-4 A, Q1 A)**: the
+  evicts that one membership and the job re-admits it. **Owner H2 A**: only the channel-row status (scope level `channel`) counts;
+  per-language statuses decide only storefront per-language visibility and never reactivate. **Exception (FR-093, I-4 A, Q1 A)**: the
   first channel-scoped status write on that channel after the product's admission is not a
   reactivation, even inactive → active — a connector's first sync after admission sets the
   per-channel state it was holding. The module records each admission in `website_rule_admissions`
@@ -463,10 +463,11 @@ map*.
   `resolveScope` never catches; off-request work resolves the requester's scope at execution.
   **Rejected**: an optional scope defaulting to unrestricted — a forgotten call site is a silent
   leak.
-- **Self-lifting roles** (TM-4): configuration writes answer `403` unless the caller's own scope is
-  unrestricted; the overview flags `liftable` roles; activation/deactivation audit is verified in the
-  lifecycle ledger. Owner OQ-G 1 then went further: roles holding a lifting permission are always
-  unrestricted and unmappable (R-13).
+- **Self-lifting roles** (TM-4): owner OQ-G 1 — roles holding a lifting permission are always
+  unrestricted and unmappable (R-13); a mapped role that later gains one is reported
+  `mapping_without_effect` on the overview; the configuration write routes keep a scope check as
+  defence in depth (unreachable end to end, unit-tested with a stubbed scope, T020); module
+  activation/deactivation audit is verified in the lifecycle ledger (T024).
 - **Flags race hardening** (TM-7): marks are cleared only if older than the refresh's read start; a
   targeted refresh writes under the generation row lock; marks survive a build and are re-applied
   after the swap; a partial build is never swapped; a served generation built for another
@@ -492,8 +493,9 @@ map*.
 **Decision**: `productRuleGovernancePort.excludedOnlyByRule(channelId, refs)` answers, per product
 (or variant), whether it is absent from the channel **only** because the channel's website rule
 excludes it: the channel is governed, the product is not a member, it is active, not archived or
-deleted, and its channel-scoped status there is not inactive (**pending owner H2** — planned as the
-channel-row status only; per-language statuses and values stored pending admission do not count).
+deleted, and its channel-scoped status there is not inactive (owner **H2 A**: the channel-row
+status only; per-language statuses and values stored pending admission do not count — a product
+inactive in every language of the channel still passes these paths).
 Built from the module's own tables, the membership port and catalog read ports only. Callers keep today's check and add
 this one as an allowance:
 - `carts`: quote → cart conversion keeps such lines (`cart-conversion-service.ts:239`), and

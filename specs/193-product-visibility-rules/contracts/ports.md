@@ -80,8 +80,8 @@ interface ProductRuleGovernancePort {
    * FR-090, FR-091 (R-18): per ref, true when the product (or variant) is absent from the channel only
    * because the channel's website rule excludes it — governed, not a member, active, not archived or
    * deleted, channel-scoped status not inactive. Ungoverned channel ⇒ all false.
-   * PENDING OWNER H2: which "channel-scoped status" — planned as the channel-row status only
-   * (scope level `channel`); per-language statuses and values stored pending admission do not count.
+   * Owner H2 A: "channel-scoped status" is the channel-row status only (scope level `channel`);
+   * per-language statuses and values stored pending admission (FR-093) do not count.
    * Built from own tables + the membership port + catalog read ports only (no foreign SQL).
    */
   excludedOnlyByRule(

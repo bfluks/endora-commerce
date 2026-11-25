@@ -232,7 +232,7 @@ hand-merging.
 
 ## Owner answers (2026-11-25, recorded in spec.md *Session 2026-11-25 — plan stage*)
 
-No owner question is open. Decisions and where the plan applies them:
+No owner question is open (H2 answered 2026-11-25). Decisions and where the plan applies them:
 
 | Question | Answer | Plan / tasks |
 | --- | --- | --- |
@@ -248,6 +248,8 @@ No owner question is open. Decisions and where the plan applies them:
 | I-3 configure only while on (FR-077) | **A**: the empty window after first enable is accepted | R-3; T024 |
 | I-4 values for not-yet-admitted products (FR-093) | **A**: stored, never add membership | R-11; T070 |
 | Q2 designation rebuild and the website rule | **A**: the rule's price conditions keep the previous evaluation (no storefront drop / re-add); admin restricted reads stay fail-closed | R-11, R-17; T026, T059 |
+| H2 which channel status counts (FR-090 – FR-092) | **A**: only the channel-row status; per-language statuses decide storefront per-language visibility only, never a sales-team path or a reactivation; FR-093 pending cells do not count | R-11, R-18; T068, T089, T090 |
+| Analyze round (spec `7297a69c7`): FR-079 rules only narrow; FR-031 aggregates; FR-033 bulk operations; FR-036 `no-store` in every module state; FR-043 pinned texts; FR-086 only the `audit_logs:read` warning | recorded in spec | FR-079: T037, T055; FR-031: T037, T039, T047; FR-033: T036, T042; FR-036: T037, T039; FR-043: T085 – T087; FR-086: T021 |
 | Release of order checks before spec 192 | **not decided** — the gate stands | § *Sequencing* |
 
 ### TM-9 surfaces (signed off, OQ-H)

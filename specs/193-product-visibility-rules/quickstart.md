@@ -47,8 +47,8 @@ one A-priced and one unpriced variant.
 4. Push a product through a connector-shaped `applyScopes` call with per-language values and a
    channel status for X before admission: the values are stored, the product is not on X; on
    admission it appears with them; that first channel status write after admission does not evict it
-   (FR-093, Q1). A later channel status inactive → active on X evicts it until re-admitted (FR-092;
-   H2 pending: channel-row status only).
+   (FR-093, Q1). A later channel-row status inactive → active on X evicts it until re-admitted
+   (FR-092); a per-language status change never does (H2 A).
 5. Detach: membership stays; the channel screen accepts manual edits again.
 
 ## Off state
@@ -65,4 +65,5 @@ rebuild are queued.
 2. A product excluded from X only by the rule (US4 step 1): a customer accepts a quote containing it,
    converts it to a cart on X, checks out and places the order — the line is kept throughout
    (FR-090); an administrator creates, previews, reorders and clones an order with it on X (FR-091).
-   A product absent from X for another reason is still dropped / refused.
+   This holds even when the product is inactive in every language of X (H2 A: only the channel-row
+   status counts). A product absent from X for another reason is still dropped / refused.
