@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import type { FastifyRequest } from 'fastify';
 import type { Redis } from 'ioredis';
 import {
+  CATALOG_HOOKABLE_ACTIONS,
   CATALOGUE_PRICES_CHANGED_EVENT,
   type AdminProductVisibilityPort,
   type AdminRolePort,
@@ -12,6 +13,7 @@ import {
   type CurrencyReadPort,
   type PermissionReadPort,
   type ProductRuleGovernancePort,
+  type ProductStatusHookData,
 } from '@endora-commerce/contracts';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import {
@@ -249,6 +251,23 @@ export function registerModule(ctx: ModuleContext): void {
       });
     });
   }
+
+  /**
+   * T068 (FR-092, FR-093, SC-005) — the reactivation hook on every catalog status writer, in the
+   * writer's transaction: a product that becomes active again on a governed channel leaves it with
+   * the governor token and is marked, so it is back only once the rule re-admits it. The bus skips
+   * the hook while this module is off (FR-073).
+   */
+  const reactivation = ({ em, data }: { em: EntityManager; data: ProductStatusHookData }) =>
+    ctx.cradle<ProductVisibilityRulesCradle>().productVisibilityWebsiteRules.applyStatusWrite(em, data);
+  ctx.commandHooks([
+    { id: 'reactivation-product-update', on: CATALOG_HOOKABLE_ACTIONS.productUpdate, phase: 'beforeCommit', handler: reactivation },
+    { id: 'reactivation-product-restore', on: CATALOG_HOOKABLE_ACTIONS.productRestore, phase: 'beforeCommit', handler: reactivation },
+    { id: 'reactivation-bulk-update-undo', on: CATALOG_HOOKABLE_ACTIONS.productBulkUpdateUndo, phase: 'beforeCommit', handler: reactivation },
+    { id: 'reactivation-scopes-update', on: CATALOG_HOOKABLE_ACTIONS.productScopesUpdate, phase: 'beforeCommit', handler: reactivation },
+    { id: 'reactivation-scoped-values-save', on: CATALOG_HOOKABLE_ACTIONS.productScopedValuesSave, phase: 'beforeCommit', handler: reactivation },
+    { id: 'reactivation-scoped-values-import', on: CATALOG_HOOKABLE_ACTIONS.productScopedValuesImport, phase: 'beforeCommit', handler: reactivation },
+  ]);
 
   /**
    * T101 — a sales channel deleted while governed leaves its attachment and admissions rows; they

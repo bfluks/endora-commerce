@@ -12,6 +12,8 @@ import {
   type ProductRuleDefinition,
   type ProductRuleUpdateBody,
   type ProductRuleView,
+  type ProductGlobalStatus,
+  type ProductStatusHookData,
   type WebsiteRulePreviewCreateBody,
   type WebsiteRulePreviewResponse,
 } from '@endora-commerce/contracts';
@@ -429,6 +431,95 @@ export class WebsiteRuleService {
        on conflict ("product_id") do update set "marked_at" = excluded."marked_at"`,
       [uuidArray(ids)],
     );
+  }
+
+  // ── Reactivation (T068; FR-092, FR-093, H2 A, Q1 A, N2, N3) ─────────────────────────
+
+  /**
+   * The `beforeCommit` hook of every catalog status writer (`CATALOG_HOOKABLE_ACTIONS`), on the
+   * writing Command's transaction. A product that becomes live again — its global status to
+   * active, or un-archived, while not deleted — leaves every governed channel; a **channel** status
+   * (scope level `channel`; a per-language status never counts) whose effective value moves to
+   * active — a stored `null` reads the global status — leaves that governed channel. Except the
+   * first channel-status write on a channel after the product's admission (Q1 A), which only sets
+   * `post_admission_status_seen`. Each removal is the governor token's, deletes the admissions row
+   * (N2) and marks the product, so the rule re-admits it on its next evaluation (SC-005).
+   */
+  async applyStatusWrite(tx: EntityManager, data: ProductStatusHookData): Promise<void> {
+    const changes = data.products.filter(
+      (p): p is typeof p & { before: ProductGlobalStatus; after: ProductGlobalStatus } => p.before !== null && p.after !== null,
+    );
+    if (changes.length === 0) return;
+    const conn = tx.getConnection();
+    const trx = tx.getTransactionContext();
+    const attached = await conn.execute<Array<{ sales_channel_id: string; product_rule_id: string }>>(
+      `select "sales_channel_id", "product_rule_id" from "website_rule_attachments"`,
+      [],
+      'all',
+      trx,
+    );
+    if (attached.length === 0) return;
+    const ruleOf = new Map(attached.map((a) => [a.sales_channel_id, a.product_rule_id]));
+    const ids = changes.map((p) => p.productId);
+    const ledger = await conn.execute<Array<{ sales_channel_id: string; product_id: string; seen: boolean }>>(
+      `select "sales_channel_id", "product_id", "post_admission_status_seen" as "seen" from "website_rule_admissions"
+        where "product_id" = any(?::uuid[]) for update`,
+      [uuidArray(ids)],
+      'all',
+      trx,
+    );
+    const key = (channelId: string, productId: string) => `${channelId}|${productId}`;
+    const seenBefore = new Map(ledger.map((r) => [key(r.sales_channel_id, r.product_id), r.seen]));
+    const live = (g: ProductGlobalStatus) => g.status === 'active' && !g.archived && !g.deleted;
+
+    const removals: Array<{ channelId: string; productId: string }> = [];
+    const firstWrites: Array<{ channelId: string; productId: string }> = [];
+    for (const p of changes) {
+      if (!live(p.before) && live(p.after)) {
+        for (const channelId of ruleOf.keys()) removals.push({ channelId, productId: p.productId });
+        continue;
+      }
+      for (const cell of p.channelStatuses) {
+        if (cell.languageCode !== null || !ruleOf.has(cell.salesChannelId)) continue;
+        if (seenBefore.get(key(cell.salesChannelId, p.productId)) === false) {
+          firstWrites.push({ channelId: cell.salesChannelId, productId: p.productId });
+          continue;
+        }
+        const wasActive = (cell.before ?? p.before.status) === 'active';
+        const isActive = (cell.after ?? p.after.status) === 'active';
+        if (!wasActive && isActive) removals.push({ channelId: cell.salesChannelId, productId: p.productId });
+      }
+    }
+
+    for (const w of firstWrites) {
+      await conn.execute(
+        `update "website_rule_admissions" set "post_admission_status_seen" = true where "sales_channel_id" = ? and "product_id" = ?`,
+        [w.channelId, w.productId],
+        'run',
+        trx,
+      );
+    }
+    for (const r of removals) {
+      const options = { em: tx, governorToken: this.deps.governor.token(), source: websiteRuleAuditSource(ruleOf.get(r.channelId)!) };
+      await this.deps.membership().removeFromChannel(r.channelId, 'product', r.productId, options);
+      await conn.execute(
+        `delete from "website_rule_admissions" where "sales_channel_id" = ? and "product_id" = ?`,
+        [r.channelId, r.productId],
+        'run',
+        trx,
+      );
+    }
+    const reactivated = [...new Set(removals.map((r) => r.productId))];
+    if (reactivated.length > 0) {
+      await conn.execute(
+        `insert into "website_rule_stale_products" ("product_id", "marked_at")
+         select p, clock_timestamp() from unnest(?::uuid[]) as t(p)
+         on conflict ("product_id") do update set "marked_at" = excluded."marked_at"`,
+        [uuidArray(reactivated)],
+        'run',
+        trx,
+      );
+    }
   }
 
   /**

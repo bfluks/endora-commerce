@@ -533,7 +533,7 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
 - [ ] T067 [A] (after T063 is on the shared branch) `CAT/backend/services/catalog-bulk-update.service.ts:562,570,576`:
   `onGoverned: 'refuse'` + enqueue-time refusal when the patch names a governed channel; test in
   `BT/integration/catalog/bulk-update-governed-channel.test.ts`.
-- [ ] T068 [B] (after T049, T058, T066 and T070 — not parallel) Failing integration test
+- [x] T068 [B] (after T049, T058, T066 and T070 — not parallel) Failing integration test
   `BT/integration/product_visibility_rules/admission.test.ts` then the `beforeCommit` hooks on **every**
   Command T049 declares (`product.update`, `product.restore`, `product.bulk_update`,
   `product.bulk_update.undo`, `product.scopes.update`, `product.scoped_values.save`,
