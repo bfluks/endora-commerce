@@ -21,7 +21,7 @@ import type { WebsiteRuleService } from './website-rule.service.js';
 export type StoredChannelStatus = 'active' | 'inactive' | null;
 
 export interface ProductRuleGovernanceDeps {
-  readonly rules: Pick<WebsiteRuleService, 'governedChannels' | 'meetsRule'>;
+  readonly rules: Pick<WebsiteRuleService, 'governedChannels' | 'governingFor' | 'meetsRule'>;
   readonly membership: () => Pick<SalesChannelMembershipPort, 'filterEntityIdsInChannel'>;
   readonly products: () => Pick<CatalogProductReadPort, 'findByIds'>;
   /** Stored channel status per product on the channel (`null` = inherit / none). Absent ⇒ fail closed. */
@@ -49,8 +49,7 @@ export class ProductRuleGovernance implements ProductRuleGovernancePort {
   ): Promise<ReadonlyArray<boolean>> {
     const none = refs.map(() => false);
     if (refs.length === 0 || this.deps.channelStatuses === undefined) return none;
-    const governed = (await this.deps.rules.governedChannels()).some((g) => g.salesChannelId === salesChannelId);
-    if (!governed) return none;
+    if ((await this.deps.rules.governingFor(salesChannelId)) === null) return none;
     const ids = [...new Set(refs.map((r) => r.productId))];
     const [products, members, statuses] = await Promise.all([
       this.deps.products().findByIds(ids),

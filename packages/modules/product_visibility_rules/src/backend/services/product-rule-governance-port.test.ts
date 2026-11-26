@@ -23,6 +23,7 @@ function deps(overrides: Partial<ProductRuleGovernanceDeps> = {}): ProductRuleGo
   return {
     rules: {
       governedChannels: async () => [{ salesChannelId: G, productRuleId: 'r1', productRuleName: 'Featured', definition: DEF }],
+      governingFor: async (channelId) => (channelId === G ? { salesChannelId: G, productRuleId: 'r1', productRuleName: 'Featured', definition: DEF } : null),
       meetsRule: async (channelId, ids) => (channelId === G ? new Map(ids.map((id) => [id, id === P1])) : null),
     },
     membership: () => ({ filterEntityIdsInChannel: async (_c, _t, ids) => ids.filter((id) => id === P1) }),

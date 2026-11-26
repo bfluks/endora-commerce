@@ -104,7 +104,7 @@ export interface WebsiteRuleServiceDeps {
   readonly commandBus: CommandBus;
   readonly eventBus: Pick<EventBus, 'run'>;
   readonly membership: () => Pick<SalesChannelMembershipPort, 'addToChannel' | 'removeFromChannel' | 'filterEntityIdsInChannel'>;
-  readonly channels: () => Pick<SalesChannelResolutionPort, 'getById'>;
+  readonly channels: () => Pick<SalesChannelResolutionPort, 'getById' | 'listAll'>;
   readonly products: () => Pick<CatalogProductReadPort, 'findByIds' | 'listPricingRefs'>;
   readonly attributes: () => Pick<CatalogAttributeReadPort, 'listAll'>;
   readonly prices: () => Pick<CatalogueReferencePricePort, 'designationStatuses'>;
@@ -121,6 +121,18 @@ export interface GovernedChannel {
   readonly productRuleId: string;
   readonly productRuleName: string;
   readonly definition: ProductRuleDefinition;
+}
+
+/** One attachment row with its rule, as the governed-channel reads select it. */
+interface GovernedRow {
+  readonly sales_channel_id: string;
+  readonly product_rule_id: string;
+  readonly name: string;
+  readonly definition: ProductRuleDefinition;
+}
+
+function toGovernedChannel(r: GovernedRow): GovernedChannel {
+  return { salesChannelId: r.sales_channel_id, productRuleId: r.product_rule_id, productRuleName: r.name, definition: r.definition };
 }
 
 /** What the facts of one evaluation read: the attribute catalogue and the usable price flags. */
@@ -593,8 +605,9 @@ export class WebsiteRuleService {
       `select "sales_channel_id" from "website_rule_attachments"
        union select "sales_channel_id" from "website_rule_admissions"`,
     );
-    const gone: string[] = [];
-    for (const { sales_channel_id: id } of rows) if ((await this.deps.channels().getById(id)) === null) gone.push(id);
+    if (rows.length === 0) return [];
+    const live = await this.#liveChannelIds();
+    const gone = rows.map((r) => r.sales_channel_id).filter((id) => !live.has(id));
     if (gone.length === 0) return [];
     await this.#em().transactional(async (tx) => {
       await tx.getConnection().execute(`delete from "website_rule_admissions" where "sales_channel_id" = any(?::uuid[])`, [uuidArray(gone)], 'run', tx.getTransactionContext());
@@ -635,25 +648,43 @@ export class WebsiteRuleService {
 
   // ── Port (T060; FR-055) ───────────────────────────────────────────────────────────────
 
-  /** Every attachment whose channel still exists, with its rule. */
+  /**
+   * Every attachment whose channel still exists, with its rule: the attachments in one statement
+   * and their channels resolved in one batch, not one lookup per attachment.
+   */
   async governedChannels(): Promise<GovernedChannel[]> {
-    const rows = await this.#em().getConnection().execute<Array<{ sales_channel_id: string; product_rule_id: string; name: string; definition: ProductRuleDefinition }>>(
+    const rows = await this.#em().getConnection().execute<GovernedRow[]>(
       `select a."sales_channel_id", a."product_rule_id", r."name", r."definition"
          from "website_rule_attachments" a join "product_rules" r on r."id" = a."product_rule_id"
         order by a."sales_channel_id"`,
     );
-    const out: GovernedChannel[] = [];
-    for (const r of rows) {
-      if ((await this.deps.channels().getById(r.sales_channel_id)) === null) continue;
-      out.push({ salesChannelId: r.sales_channel_id, productRuleId: r.product_rule_id, productRuleName: r.name, definition: r.definition });
-    }
-    return out;
+    if (rows.length === 0) return [];
+    const live = await this.#liveChannelIds();
+    return rows.filter((r) => live.has(r.sales_channel_id)).map(toGovernedChannel);
+  }
+
+  /** The rule governing `salesChannelId`, or `null` (not governed, or the channel is gone). */
+  async governingFor(salesChannelId: string): Promise<GovernedChannel | null> {
+    if (!isUuidShape(salesChannelId)) return null;
+    const [row] = await this.#em().getConnection().execute<GovernedRow[]>(
+      `select a."sales_channel_id", a."product_rule_id", r."name", r."definition"
+         from "website_rule_attachments" a join "product_rules" r on r."id" = a."product_rule_id"
+        where a."sales_channel_id" = ?`,
+      [salesChannelId],
+    );
+    if (row === undefined || (await this.deps.channels().getById(salesChannelId)) === null) return null;
+    return toGovernedChannel(row);
+  }
+
+  /** The ids of every channel that still exists, in one read. */
+  async #liveChannelIds(): Promise<ReadonlySet<string>> {
+    return new Set((await this.deps.channels().listAll()).map((c) => c.id));
   }
 
   /** Whether each product meets the rule governing the channel now; `null` ⇒ not governed. */
   async meetsRule(salesChannelId: string, productIds: readonly string[]): Promise<ReadonlyMap<string, boolean> | null> {
     if (!isUuidShape(salesChannelId)) return null;
-    const governed = (await this.governedChannels()).find((g) => g.salesChannelId === salesChannelId);
+    const governed = await this.governingFor(salesChannelId);
     if (!governed) return null;
     const ids = [...new Set(productIds)].filter(isUuidShape);
     const context = await this.#context([governed.definition]);
