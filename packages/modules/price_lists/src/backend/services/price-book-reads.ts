@@ -29,6 +29,8 @@ import { selectionKey } from './price-book-rules.js';
 import { priceBookMembership } from './price-book-membership.js';
 import { audienceKindWritable, bookVisible, bookWritable, visibleBookSql, type PriceBookScope } from './price-book-scope.js';
 import { pgArray } from './sql-array.js';
+import { narrowsProducts, type PriceBookProductVisibility } from './admin-product-visibility.js';
+import type { AdminProductVisibilityScope } from '@endora-commerce/contracts';
 
 /**
  * The admin reads of price books — feature 160 (US7,
@@ -52,6 +54,11 @@ export interface PriceBookReadsDeps {
   catalogProductRead: Pick<CatalogProductReadPort, 'findByIds' | 'listVariantsByProductIds' | 'pageProductsByAdminName'>;
   catalogCategoryRead: Pick<CatalogCategoryReadPort, 'listAll'>;
   catalogAttributeRead: Pick<CatalogAttributeReadPort, 'listAll'>;
+  /**
+   * Spec 193 (T044) — `product_visibility_rules`' scope for the grid's variant lines, presence-
+   * decided by the wiring. Without it a narrowed scope refuses, never widens.
+   */
+  productVisibility?: PriceBookProductVisibility;
 }
 
 interface BookHeaderRow {
@@ -460,7 +467,17 @@ export class PriceBookReads {
     query: PriceBookLinesQuery,
     scope: PriceBookScope,
     language: string | null,
+    /**
+     * Spec 193 (T044, FR-030) — the caller's admin product visibility: product lines are cut by
+     * it in `catalog`'s statement, and a visible product's variant lines keep its qualifying
+     * variants only. Required; a system caller passes `{ kind: 'system' }`.
+     */
+    productScope: AdminProductVisibilityScope,
   ): Promise<{ data: PriceBookLine[]; meta: { page: number; pageSize: number; totalLines: number } }> {
+    const narrowed = narrowsProducts(productScope);
+    if (narrowed && !this.deps.productVisibility) {
+      throw new Error('price_lists: a narrowed admin product scope reached a grid composed without product visibility.');
+    }
     // A visibility check only: the book read's tier starts and row count are not this read's (R14).
     await this.#visible(bookId, scope);
     const em = this.deps.emFactory();
@@ -496,12 +513,14 @@ export class PriceBookReads {
     const productLimit = query.pageSize - smallPage.length;
     const productLines = wants('product') || wants('variant');
     const productKinds = new Set([...kinds].filter((k) => k === 'product' || k === 'variant'));
-    // Without a search or a kind filter the line table counts the product lines (PK, index-only).
-    const countsLines = productLines && !query.search && kinds.size === 0;
+    // Without a search or a kind filter the line table counts the product lines (PK, index-only) —
+    // except for a narrowed caller, whose count is the catalogue's, over visible products (FR-031).
+    const countsLines = productLines && !query.search && kinds.size === 0 && !narrowed;
     const [productPage, lineCount] = productLines
       ? await Promise.all([
           this.deps.catalogProductRead.pageProductsByAdminName({
             membership: priceBookMembership(bookId, productKinds),
+            scope: productScope,
             ...(query.search ? { search: query.search } : {}),
             offset: productOffset,
             limit: productLimit,
@@ -547,6 +566,17 @@ export class PriceBookReads {
             [pgArray(productPage.ids), bookId, bookId, pgArray(smallKeys)],
           )) as MatrixRecord[]).map(storedOf);
     const productSelections = productPage.ids.map((id) => selectionRow(null, id, null, null, null));
+    // Spec 193 (RQ-3 A, US1-12) — a visible product's non-qualifying variant lines are left out.
+    const variantIdsOnPage = [...new Set(pageRows.map((r) => r.variantId).filter((id): id is string => id !== null))];
+    const visibleVariants = narrowed
+      ? await this.deps.productVisibility!.visibleVariants(productScope, variantIdsOnPage)
+      : null;
+    if (visibleVariants) {
+      for (let i = pageRows.length - 1; i >= 0; i -= 1) {
+        const variantId = pageRows[i]!.variantId;
+        if (variantId !== null && !visibleVariants.has(variantId)) pageRows.splice(i, 1);
+      }
+    }
     const labelled = await this.label([...pageRows, ...productSelections], language);
     const rows = labelled.slice(0, pageRows.length);
     const productHeads = new Map(labelled.slice(pageRows.length).map((line) => [line.selection.productId!, line]));

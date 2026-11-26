@@ -33,6 +33,7 @@ import { registerPricingRoutes } from './routes.js';
 import { registerStorefrontPricingRoutes } from './routes.storefront.js';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { RequireAdminFactory, SettingsReadPort } from '@endora-commerce/platform/kernel';
+import { SYSTEM_PRODUCT_SCOPE, type PriceBookProductVisibility } from './services/admin-product-visibility.js';
 import {
   effectiveState,
   enterSystemScope,
@@ -112,6 +113,13 @@ export interface PriceListsModuleOptions {
   pricingGenerationPublisher?: PricingGenerationPublisher;
   /** Feature 054 — audits `patch` co-transactionally when provided. */
   commandBus?: CommandBus;
+  /**
+   * Spec 193 (T044) — `product_visibility_rules`' admin scope for the price book grid, presence-
+   * decided by the wiring, and the acting administrator's id. Both or neither: without them the
+   * grid reads with the system scope (fixtures).
+   */
+  productVisibility?: PriceBookProductVisibility;
+  resolveAdminUserId?: (req: FastifyRequest) => string;
   /** Feature 024 — resolves the admin actor identity for audit entries. */
   resolveAdminAuditContext?: (req: FastifyRequest) => {
     actorAdminUserId: string;
@@ -282,6 +290,7 @@ export function priceListsModule(options: PriceListsModuleOptions): {
     catalogProductRead: options.targetReads.catalogProductRead,
     catalogCategoryRead: options.targetReads.catalogCategoryRead,
     catalogAttributeRead: options.targetReads.catalogAttributeRead,
+    ...(options.productVisibility ? { productVisibility: options.productVisibility } : {}),
   });
   const priceBookService = new PriceBookService({
     emFactory: options.emFactory,
@@ -325,6 +334,10 @@ export function priceListsModule(options: PriceListsModuleOptions): {
     plugin: async (app: FastifyInstance) => {
       await registerPricingRoutes(app, { priceListService, requireAdmin: options.requireAdmin });
       await registerPriceBookRoutes(app, {
+        productScopeOf: async (request) =>
+          options.productVisibility && options.resolveAdminUserId
+            ? options.productVisibility.scopeFor(options.resolveAdminUserId(request))
+            : SYSTEM_PRODUCT_SCOPE,
         priceBookService,
         reads: priceBookReads,
         history: priceBookHistory,

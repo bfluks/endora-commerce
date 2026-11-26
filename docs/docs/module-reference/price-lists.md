@@ -36,6 +36,7 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | `customer_accounts` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `organizations` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `settings` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
+| `product_visibility_rules` | no | degrades-without `adminProductVisibilityPort` — the price book grid is not narrowed by role: every administrator sees every product and variant line, exactly as before the feature |
 
 ## Permissions
 

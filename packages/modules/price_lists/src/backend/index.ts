@@ -32,7 +32,9 @@ import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import { PRICING_SETTING_CODES, type AuditReferenceRegistryPort, type SettingsAdminPort } from '@endora-commerce/contracts';
-import { lazyPort } from '@endora-commerce/platform/kernel';
+import { effectiveState, lazyPort } from '@endora-commerce/platform/kernel';
+import type { AdminProductVisibilityPort } from '@endora-commerce/contracts';
+import { createPriceBookProductVisibility } from './services/admin-product-visibility.js';
 import { registerPriceListAuditReferences } from './services/audit-references.js';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import { priceListsModule, type PriceListsModuleOptions } from './plugin.js';
@@ -115,6 +117,8 @@ import { PriceListRowValueChange } from './entities/price-list-row-value-change.
 /** What `price_lists` resolves from the container, and the names it owns. */
 export interface PriceListsCradle {
   readonly emFactory: () => EntityManager;
+  /** The platform's acting-admin resolver (401 for a caller that is not an administrator). */
+  readonly adminContextResolver: (request: FastifyRequest) => { adminUserId: string };
   /**
    * Feature 160 — the platform's channel-bridge registry, resolved by
    * container name (as `catalog` does): the shape is the narrow one this
@@ -168,6 +172,8 @@ export interface PriceListsCradle {
 }
 
 export function registerModule(ctx: ModuleContext): void {
+  // Spec 193 (T044) — resolved per call, never captured: its owner is deactivatable.
+  const productVisibilityPort = lazyPort<AdminProductVisibilityPort>(ctx, 'adminProductVisibilityPort');
   ctx.di.register({
     // Contribution point, defaulted to the module's own constant (T143a). A
     // root that wants the shipped behaviour now writes nothing; the harness
@@ -231,6 +237,13 @@ export function registerModule(ctx: ModuleContext): void {
               ctx.cradle<PriceListsCradle>().requireAdmin(permission)(req, reply),
             resolveAdminAuditContext: (req: FastifyRequest) =>
               ctx.cradle<PriceListsCradle>().priceListsAdminAuditContext(req),
+            // Spec 193 (T044) — `product_visibility_rules` is `degrades-without`: presence is
+            // decided here, in front of the port; absent, the grid reads with the system scope.
+            productVisibility: createPriceBookProductVisibility({
+              isPresent: () => effectiveState.isPresent('product_visibility_rules'),
+              port: () => productVisibilityPort,
+            }),
+            resolveAdminUserId: (req: FastifyRequest) => ctx.cradle<PriceListsCradle>().adminContextResolver(req).adminUserId,
             resolveOrgChain: (orgId) =>
               ctx.cradle<PriceListsCradle>().organizationInheritancePort.priceListOrgChain(orgId),
             // Feature 075 Phase C. `lazyPort` rather than a cradle read: these

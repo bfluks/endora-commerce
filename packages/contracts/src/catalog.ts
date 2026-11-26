@@ -15,6 +15,7 @@ import {
 } from './custom-fields.js';
 import type { BulkImportReport } from './import-export.js';
 import type { AttributeScope } from './product-value-resolver.js';
+import type { AdminProductVisibilityScope } from './product-visibility.js';
 import { ORDER_MINIMUM_MAX } from './order-minimums.js';
 import { lineQuantitySchema, REQUEST_LINE_ITEMS_MAX } from './line-bounds.js';
 import { productPagePathsSchema } from './product-url-keys.js';
@@ -2811,6 +2812,12 @@ export interface CatalogProductMembership {
 /** {@link CatalogProductReadPort.pageProductsByAdminName}'s query. */
 export interface CatalogAdminNamePageQuery {
   readonly membership: CatalogProductMembership;
+  /**
+   * Spec 193 (T043, TM-3) — whose products the page may name: the caller's admin visibility
+   * scope, applied inside the statement (page and total). **Required**: a system caller passes
+   * `{ kind: 'system' }` explicitly.
+   */
+  readonly scope: AdminProductVisibilityScope;
   readonly search?: string | null;
   readonly offset: number;
   readonly limit: number;

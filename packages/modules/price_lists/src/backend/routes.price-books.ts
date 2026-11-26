@@ -31,6 +31,7 @@ import {
   type SettingsAdminPort,
   isUuidShape,
 } from '@endora-commerce/contracts';
+import type { AdminProductVisibilityScope } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { orgConstraintFor } from '@endora-commerce/platform/tenancy';
 import type { CommandBus } from '@endora-commerce/platform/commands';
@@ -60,6 +61,11 @@ import { presetName, type PrecedenceConfig } from './services/precedence.js';
  */
 
 export interface PriceBookRoutesDeps {
+  /**
+   * Spec 193 (T044) — the caller's admin product visibility scope, per request (the system scope
+   * when `product_visibility_rules` is absent).
+   */
+  productScopeOf(request: FastifyRequest): Promise<AdminProductVisibilityScope>;
   priceBookService: PriceBookService;
   reads: PriceBookReads;
   /** Issue #470 stage 3 — the reader over a book's own price-change history. */
@@ -511,7 +517,13 @@ export async function registerPriceBookRoutes(app: FastifyInstance, deps: PriceB
   app.get<{ Params: { id: string } }>(`${base}/:id/lines`, { preHandler: readGate }, async (request) => {
     if (!isUuidShape(request.params.id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Price book not found.');
     const query = parseOr400(priceBookLinesQuerySchema, request.query);
-    return deps.reads.lines(request.params.id, query, await currentPriceBookScope(), await labelLanguage(request));
+    return deps.reads.lines(
+      request.params.id,
+      query,
+      await currentPriceBookScope(),
+      await labelLanguage(request),
+      await deps.productScopeOf(request),
+    );
   });
 
   // 161 (Checkpoint 5 review) — which picked products already have a line, in one read.

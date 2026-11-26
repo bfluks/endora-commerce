@@ -20,6 +20,7 @@ import { ProductPackagingUnit } from '../entities/product-packaging-unit.entity.
 import { ProductValueOverride } from '../entities/product-value-override.entity.js';
 import { ProductVariant } from '../entities/product-variant.entity.js';
 import { uuidArrayLiteral } from './sql-id-arrays.js';
+import { predicateClause, requireVisibility, type CatalogAdminProductVisibility } from './admin-product-visibility.js';
 
 /**
  * The row-level read model `catalog` publishes (feature 075, Phase P).
@@ -50,10 +51,18 @@ export class CatalogProductReadService implements CatalogProductReadPort {
        * Both answer the same page; a test forces each.
        */
       sparseSearchLimit?: number;
+      /**
+       * Spec 193 (T043) — `product_visibility_rules`' predicates for a narrowed scope on the
+       * admin-name page. Without it a narrowed scope refuses, never widens.
+       */
+      visibility?: CatalogAdminProductVisibility;
     } = {},
   ) {
     this.#sparseSearchLimit = options.sparseSearchLimit ?? SPARSE_SEARCH_LIMIT;
+    this.#visibility = options.visibility;
   }
+
+  readonly #visibility: CatalogAdminProductVisibility | undefined;
 
   async findById(
     id: string,
@@ -286,11 +295,16 @@ export class CatalogProductReadService implements CatalogProductReadPort {
     const key = `p."admin_name_key"`;
     const searchKey = `p."admin_search_key"`;
     const order = `${key}, p."sku", p."id"`;
-    const member = `(p."id" in (${query.membership.sql})) is true`;
     const offset = Math.max(0, Math.floor(query.offset));
     const limit = Math.max(0, Math.floor(query.limit));
     const em = this.emFactory();
     const term = query.search?.trim() ?? '';
+    // Spec 193 (T043, FR-030) — the caller's visibility, inside every statement: page and total.
+    const narrowing = requireVisibility(this.#visibility, query.scope);
+    const visible = narrowing ? predicateClause(narrowing.productPredicate(query.scope, { productId: '"p"."id"' })) : null;
+    if (visible === false) return { ids: [], total: query.withTotal === false && term.length === 0 ? null : 0 };
+    const member = `(p."id" in (${query.membership.sql})) is true${visible ? ` and ${visible.sql}` : ''}`;
+    const memberParams = [...query.membership.params, ...(visible ? visible.params : [])];
 
     if (term.length === 0) {
       const withTotal = query.withTotal !== false;
@@ -298,7 +312,7 @@ export class CatalogProductReadService implements CatalogProductReadPort {
         tx.execute<Array<{ total: number | null; ids: string[] | null }>>(
           `select ${withTotal ? `(select count(*)::int from "products" p where ${member})` : 'null::int'} as "total",
                   array(select p."id" from "products" p where ${member} order by ${order} offset ? limit ?) as "ids"`,
-          [...(withTotal ? query.membership.params : []), ...query.membership.params, offset, limit],
+          [...(withTotal ? memberParams : []), ...memberParams, offset, limit],
         ),
       );
       const row = rows[0];
@@ -311,7 +325,7 @@ export class CatalogProductReadService implements CatalogProductReadPort {
                                       where lower(v."sku") like '%' || lower(?) || '%')) is true)`;
     const counted = await em.execute<Array<{ n: number }>>(
       `select count(*)::int as "n" from "products" p where ${member} and ${matches}`,
-      [...query.membership.params, literal, literal],
+      [...memberParams, literal, literal],
     );
     const total = Number(counted[0]?.n ?? 0);
     if (total === 0 || offset >= total || limit === 0) return { ids: [], total };
@@ -323,19 +337,19 @@ export class CatalogProductReadService implements CatalogProductReadPort {
           await withSort(em, true, (tx) =>
             tx.execute<Array<{ id: string }>>(
               `with "hits" as materialized (
-                 select p."id", ${key} as "k", p."sku" from "products" p where ${matches}
+                 select p."id", ${key} as "k", p."sku" from "products" p where ${matches}${visible ? ` and ${visible.sql}` : ''}
                )
                select h."id" from "hits" h
                 where (h."id" in (${query.membership.sql})) is true
                 order by h."k", h."sku", h."id" offset ? limit ?`,
-              [literal, literal, ...query.membership.params, offset, limit],
+              [literal, literal, ...(visible ? visible.params : []), ...query.membership.params, offset, limit],
             ),
           )
         : // Many: walk the order index, keeping the matching members.
           await withSort(em, false, (tx) =>
             tx.execute<Array<{ id: string }>>(
               `select p."id" from "products" p where ${member} and ${matches} order by ${order} offset ? limit ?`,
-              [...query.membership.params, literal, literal, offset, limit],
+              [...memberParams, literal, literal, offset, limit],
             ),
           );
     return { ids: page.map((r) => r.id), total };

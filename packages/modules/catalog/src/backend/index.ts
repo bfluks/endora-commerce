@@ -915,7 +915,8 @@ export function registerModule(ctx: ModuleContext): void {
   ctx.di.providePort<CatalogProductReadPort>(
     'catalogProductReadPort',
     ctx
-      .asFunction(({ emFactory }: CatalogCradle) => new CatalogProductReadService(emFactory))
+      // Spec 193 (T043) — the admin-name page narrows by the scope its caller passes.
+      .asFunction(({ emFactory }: CatalogCradle) => new CatalogProductReadService(emFactory, { visibility: adminProductVisibility }))
       .singleton(),
   );
 

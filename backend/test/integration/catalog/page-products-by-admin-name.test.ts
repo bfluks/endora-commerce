@@ -4,6 +4,10 @@ import { Product, ProductVariant } from '../../helpers/package-entities.js';
 import { setupBackendServer, teardownBackendServer, type BackendServerHandle } from '../../helpers/test-server.js';
 import { CatalogProductReadService } from '../../../../packages/modules/catalog/src/backend/services/catalog-product-read.service.js';
 import { seedBulkProductsSql } from '../../helpers/price-book-bulk.js';
+import type { AdminProductVisibilityScope } from '@endora-commerce/contracts';
+
+/** Spec 193 (T043) — these reads are the system's: the scope narrows nothing. */
+const SYSTEM: AdminProductVisibilityScope = { kind: 'system' };
 
 /**
  * Feature 161, G15 redesign (`research.md` R14) — `catalogProductReadPort.pageProductsByAdminName`:
@@ -68,7 +72,7 @@ describe('CatalogProductReadService.pageProductsByAdminName (161 G15)', () => {
   });
 
   const page = (svc: CatalogProductReadService, query: { language?: string | null; search?: string; offset?: number; limit?: number }) =>
-    svc.pageProductsByAdminName({ membership, ...(query.search ? { search: query.search } : {}), offset: query.offset ?? 0, limit: query.limit ?? 50 });
+    svc.pageProductsByAdminName({ membership, scope: SYSTEM, ...(query.search ? { search: query.search } : {}), offset: query.offset ?? 0, limit: query.limit ?? 50 });
 
   it('orders the members by the English key, then SKU, with the total; non-members absent', async () => {
     const answer = await page(port, { language: 'en' });
@@ -126,7 +130,7 @@ describe('CatalogProductReadService.pageProductsByAdminName (161 G15)', () => {
     const bulk = await seedBulkProductsSql(h.em(), { count: 3000, namePrefix: `Deep ${stamp}`, skuPrefix: `G15W-${stamp}`, words: ['Screw', 'Bolt', 'Nut'] });
     const deep = { sql: 'select m.id from unnest(?::uuid[]) as m(id)', params: [`{${bulk.join(',')}}`] };
     const at = (svc: CatalogProductReadService, search: string | undefined, offset: number) =>
-      svc.pageProductsByAdminName({ membership: deep, ...(search ? { search } : {}), offset, limit: 100 });
+      svc.pageProductsByAdminName({ membership: deep, scope: SYSTEM, ...(search ? { search } : {}), offset, limit: 100 });
     for (const [search, offset] of [
       [undefined, 2900],
       [undefined, 1500],
@@ -149,8 +153,8 @@ describe('CatalogProductReadService.pageProductsByAdminName (161 G15)', () => {
       return original(...args);
     };
     try {
-      await dense.pageProductsByAdminName({ membership, search: 'g15n', offset: 1, limit: 2 });
-      await port.pageProductsByAdminName({ membership, offset: 1, limit: 2 });
+      await dense.pageProductsByAdminName({ membership, scope: SYSTEM, search: 'g15n', offset: 1, limit: 2 });
+      await port.pageProductsByAdminName({ membership, scope: SYSTEM, offset: 1, limit: 2 });
     } finally {
       conn.execute = original;
     }

@@ -7,7 +7,7 @@ import {
   type ListingPriceOrderQuery,
   type ListingPriceOrderRow,
 } from '@endora-commerce/contracts';
-import { SalesChannel } from '@endora-commerce/platform/kernel';
+import { rethrowIfModuleDisabled, SalesChannel } from '@endora-commerce/platform/kernel';
 import type { BookLineAnswer, BookPricing, BookPricingViewer, ProfileListingAnswer } from './book-pricing.js';
 import { compareDecimal } from './matrix-decimal.js';
 import type { PricedProductRef } from './pricing-service.interface.js';
@@ -829,6 +829,8 @@ export class PriceSurface {
         await this.#buildOnce(id, profile, everyone !== null, everyoneServed, due);
         return id;
       } catch (err) {
+        // A presence answer from a port the pass reaches is never a vanished product.
+        rethrowIfModuleDisabled(err);
         if (!isVanishedProduct(err)) throw err;
         if (attempt >= VANISHED_ATTEMPTS) throw new ProductsVanished(`price surface: products vanished under the build of ${id}`);
       }
@@ -951,6 +953,8 @@ export class PriceSurface {
         await this.#refreshOnce(due, profile, ids, everyoneServed);
         return;
       } catch (err) {
+        // A presence answer from a port the pass reaches is never a vanished product.
+        rethrowIfModuleDisabled(err);
         if (!isVanishedProduct(err)) throw err;
         if (attempt >= VANISHED_ATTEMPTS) throw new ProductsVanished(`price surface: products vanished under the refresh of ${due.id}`);
       }

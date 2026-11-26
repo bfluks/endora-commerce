@@ -103,6 +103,23 @@ export const manifest = defineModuleManifest({
     'organizations',
     'settings',
   ],
+  nonBindingDependencies: [
+    {
+      moduleId: 'product_visibility_rules',
+      name: 'adminProductVisibilityPort',
+      kind: 'degrades-without',
+      whenAbsent:
+        'the price book grid is not narrowed by role: every administrator sees every product and ' +
+        'variant line, exactly as before the feature',
+      reason:
+        'Spec 193 (T044). The grid\'s product page is cut by `catalog` with the caller\'s scope and ' +
+        'its variant lines are filtered through this port. `product_visibility_rules` depends on ' +
+        'this module (its catalogue price), so a `dependencies` edge back would close a cycle, and ' +
+        'it is deactivatable and off by default: presence is probed in front of the port ' +
+        '(`index.ts`), absent reads as the system scope, and a call made while present is never ' +
+        'caught (TM-3 (4)). Row edits never ask it (FR-038).',
+    },
+  ],
   permissions: [
     { code: PRICE_LIST_PERMISSIONS.READ, label: 'View price books and display modes' },
     {
