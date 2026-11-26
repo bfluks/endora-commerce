@@ -681,27 +681,33 @@ export class SalesChannelsService {
   }
 
   /**
-   * Spec 193 T100 (FR-059, R-10) — a fallback onto a governed default is no fallback: product
-   * orphans rebound there would be admitted without the rule. Refused before any write, naming the
-   * rule (user-authored text, rendered as text) and a count — never a product id (FR-082). Only
-   * the product bridge is ever governed; a governor that throws propagates (TM-10).
+   * A fallback onto a governed default is no fallback (FR-059, R-10): product orphans rebound there
+   * would be admitted without the rule. Refused before any write, naming the rule (user-authored
+   * text, rendered as text) — never a product id nor a count, since the orphans may include
+   * products the caller cannot see (FR-082). Only the product bridge is ever governed; a governor
+   * that throws propagates (TM-10), and a composition without the membership port fails closed.
    */
   private async refuseRebindOntoGovernedDefault(
     em: EntityManager,
     defaultId: string,
     orphans: ReadonlyArray<{ entityType: string }>,
   ): Promise<void> {
-    const products = orphans.filter((o) => o.entityType === 'product').length;
-    if (products === 0 || !this.membership) return;
+    if (!orphans.some((o) => o.entityType === 'product')) return;
+    if (!this.membership) {
+      throw new Error(
+        '[sales_channels] the membership port is not composed, so whether the system default is ' +
+          'governed cannot be asked; refusing to rebind product orphans onto it.',
+      );
+    }
     const governed = await this.membership.isGoverned('product', defaultId, { em });
     if (governed === null) return;
     throw new HttpError(
       422,
       ERROR_CODES.ENTITY_WOULD_HAVE_ZERO_CHANNELS,
-      `Deleting this sales channel would leave ${products} product(s) on no sales channel: the ` +
-        `system default's products follow the rule "${governed.ruleLabel}", so they cannot be moved there.`,
-      // `code` picks the translated sentence; the scalars fill it (`{count}`, `{rule}`).
-      { code: 'default_channel_governed', entityType: 'product', count: products, rule: governed.ruleLabel },
+      `Deleting this sales channel would leave products on no sales channel: the system default's ` +
+        `products follow the rule "${governed.ruleLabel}", so they cannot be moved there.`,
+      // `code` picks the translated sentence; the scalars fill it (`{rule}`).
+      { code: 'default_channel_governed', entityType: 'product', rule: governed.ruleLabel },
     );
   }
 

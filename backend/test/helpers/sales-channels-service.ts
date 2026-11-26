@@ -7,7 +7,7 @@ import { CommandBus } from '@endora-commerce/platform/commands';
 import type { EventBus } from '@endora-commerce/platform/events';
 import type { AuditLogService } from '@endora-commerce/platform/composition';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
-import type { SalesChannelsCacheInvalidation } from '@endora-commerce/platform/kernel';
+import type { SalesChannelMembershipPort, SalesChannelsCacheInvalidation } from '@endora-commerce/platform/kernel';
 import {
   SalesChannelsService,
   type ChannelBridgeRead,
@@ -47,6 +47,7 @@ export function salesChannelsServiceFor(
     salesChannelAttributionRegistry: SalesChannelAttributionRegistryPort;
     salesChannelBridgeRegistry: ChannelBridgeRead;
     commandBus: CommandBus;
+    salesChannelMembershipPort: SalesChannelMembershipPort;
   };
   return new SalesChannelsService(
     emFactory,
@@ -64,6 +65,10 @@ export function salesChannelsServiceFor(
     cradle.commandBus,
     extras.auditLogService,
     extras.cache,
+    undefined,
+    undefined,
+    // The governed-default guard fails closed without it, as `registerModule` composes it.
+    cradle.salesChannelMembershipPort,
   );
 }
 

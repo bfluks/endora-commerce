@@ -83,7 +83,7 @@
   "errors.CANNOT_MODIFY_SYSTEM_DEFAULT": "This is the platform's default sales channel, so it cannot be deactivated or deleted.",
   "errors.SALES_CHANNEL_HAS_ATTRIBUTIONS": "Other records are assigned to this sales channel, so it cannot be deleted. Deactivate it instead.",
   "errors.ENTITY_WOULD_HAVE_ZERO_CHANNELS": "This change would leave the record without a sales channel, and every record must belong to at least one.",
-  "errors.ENTITY_WOULD_HAVE_ZERO_CHANNELS.default_channel_governed": "Deleting this sales channel would leave {count} product(s) on no sales channel: the default sales channel's products follow the rule \"{rule}\", so they cannot be moved there. Move the products to another sales channel first, or detach the rule from the default sales channel.",
+  "errors.ENTITY_WOULD_HAVE_ZERO_CHANNELS.default_channel_governed": "Deleting this sales channel would leave products on no sales channel: the default sales channel's products follow the rule \"{rule}\", so they cannot be moved there. Move the products to another sales channel first, or detach the rule from the default sales channel.",
   "errors.CHANNEL_MEMBERSHIP_GOVERNED": "This sales channel's products follow the rule \"{rule}\", so they cannot be added or removed by hand. Change the rule or detach it from the channel instead.",
   "errors.STALE_SALES_CHANNEL_WRITE": "Someone else changed this sales channel in the meantime. Reload it and try again.",
   "errors.SALES_CHANNEL_ATTRIBUTION_IMMUTABLE": "The sales channel a record was created in cannot be changed.",
