@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CatalogAttributeView, ProductRuleDefinition } from '@endora-commerce/contracts';
+import type { CatalogAttributeView, ProductRuleDefinition, RuleCondition } from '@endora-commerce/contracts';
 import {
   isRuleMember,
   meetsDefinition,
@@ -46,7 +46,7 @@ function facts(overrides: Partial<ProductRuleFacts> = {}): ProductRuleFacts {
 }
 
 const featured = { kind: 'attribute_boolean', attributeKey: 'featured', value: true } as const;
-const trade = { kind: 'attribute_choice', attributeKey: 'segment', optionKeys: ['trade', 'export'] } as const;
+const trade: RuleCondition = { kind: 'attribute_choice', attributeKey: 'segment', optionKeys: ['trade', 'export'] };
 const pricedPln = { kind: 'catalogue_price', currencyCode: 'PLN', threshold: 'gt_zero' } as const;
 const pricedEurZero = { kind: 'catalogue_price', currencyCode: 'EUR', threshold: 'gte_zero' } as const;
 

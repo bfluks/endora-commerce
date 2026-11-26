@@ -85,6 +85,12 @@ export const manifest = defineModuleManifest({
     { code: E.VISIBILITY_CATEGORY_IN_USE },
     { code: E.ROLE_NOT_MAPPABLE },
     { code: E.DESIGNATION_INVALID },
+    // Phase 6 — the website rule (stream B).
+    { code: E.PRODUCT_RULE_ATTACHED },
+    { code: E.WEBSITE_RULE_PREVIEW_REQUIRED },
+    { code: E.WEBSITE_RULE_PREVIEW_LIMIT },
+    { code: E.WEBSITE_RULE_PREVIEW_STALE },
+    { code: E.CHANNEL_ALREADY_GOVERNED },
   ],
   i18n: { bundlesDir: 'i18n' },
   docs: { dir: 'docs' },

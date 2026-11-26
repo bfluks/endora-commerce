@@ -6,6 +6,7 @@ import {
   type AdminProductVisibilityPort,
   type AdminRolePort,
   type AuditReferenceRegistryPort,
+  type CatalogAttributeReadPort,
   type CatalogProductReadPort,
   type CatalogueReferencePricePort,
   type CurrencyReadPort,
@@ -19,7 +20,10 @@ import {
   type ChannelMembershipGovernorRegistryPort,
   type ModuleContext,
   type RequireAdminFactory,
+  type SalesChannelMembershipPort,
+  type SalesChannelResolutionPort,
 } from '@endora-commerce/platform/kernel';
+import type { EventBus } from '@endora-commerce/platform/events';
 import { registerProductVisibilityAuditReferences } from './services/audit-references.js';
 import { AdminVisibilityScopeService } from './services/admin-visibility-scope.js';
 import { handleCataloguePricesChanged } from './services/catalogue-price-change-feed.js';
@@ -28,6 +32,9 @@ import type { CataloguePriceFlagsScheduler } from './services/catalogue-price-fl
 import { createFlagsProducer, startFlagsWorker, type FlagsProducer } from './workers/catalogue-price-flags-worker.js';
 import { VisibilityConfigService } from './services/visibility-config.service.js';
 import { WebsiteRuleGovernorHandle } from './services/membership-governor.js';
+import { WebsiteRuleService } from './services/website-rule.service.js';
+import { createWebsiteRuleProducer, startWebsiteRuleWorker, type WebsiteRuleProducer } from './workers/website-rule-worker.js';
+import { registerWebsiteRuleAdminRoutes } from './routes.website-rules.js';
 import { registerProductVisibilityAdminRoutes } from './routes.admin.js';
 import { CataloguePriceDesignation } from './entities/catalogue-price-designation.entity.js';
 import { CataloguePriceGeneration } from './entities/catalogue-price-generation.entity.js';
@@ -59,6 +66,10 @@ export interface ProductVisibilityRulesCradle {
   readonly productVisibilityFlagsScheduler: CataloguePriceFlagsScheduler;
   readonly productVisibilityScope: AdminVisibilityScopeService;
   readonly productVisibilityConfig: VisibilityConfigService;
+  readonly eventBus: EventBus;
+  /** Phase 6 — the website rule and its queue producer. */
+  readonly productVisibilityWebsiteRulesProducer: WebsiteRuleProducer;
+  readonly productVisibilityWebsiteRules: WebsiteRuleService;
 }
 
 /**
@@ -127,6 +138,28 @@ export function registerModule(ctx: ModuleContext): void {
           }),
       )
       .singleton(),
+    // Phase 6 (T057 – T059) — the website rule. The governor's write token reaches the service
+    // through this closure (`websiteRuleGovernor`), never through the container (TM-10).
+    productVisibilityWebsiteRulesProducer: ctx
+      .asFunction(({ moduleQueueRedis }: ProductVisibilityRulesCradle) => createWebsiteRuleProducer(moduleQueueRedis))
+      .singleton(),
+    productVisibilityWebsiteRules: ctx
+      .asFunction(
+        ({ emFactory, commandBus, eventBus, productVisibilityWebsiteRulesProducer }: ProductVisibilityRulesCradle) =>
+          new WebsiteRuleService({
+            emFactory,
+            commandBus,
+            eventBus,
+            membership: () => lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+            channels: () => lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
+            products: () => lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
+            attributes: () => lazyPort<CatalogAttributeReadPort>(ctx, 'catalogAttributeReadPort'),
+            prices: () => lazyPort<CatalogueReferencePricePort>(ctx, 'catalogueReferencePricePort'),
+            governor: websiteRuleGovernor,
+            jobs: productVisibilityWebsiteRulesProducer,
+          }),
+      )
+      .singleton(),
   });
 
   /**
@@ -151,6 +184,49 @@ export function registerModule(ctx: ModuleContext): void {
       config: productVisibilityConfig,
     });
   });
+
+  /** T057, T058 — the product-rule and website-rule routes, gated like the configuration's. */
+  ctx.routes(async (app) => {
+    const { requireAdmin, productVisibilityScope, productVisibilityWebsiteRules } = ctx.cradle<ProductVisibilityRulesCradle>();
+    await registerWebsiteRuleAdminRoutes(app, {
+      requireAdmin,
+      resolveAdminUserId: (request) => ctx.cradle<ProductVisibilityRulesCradle>().adminContextResolver(request).adminUserId,
+      callerScopeKind: async (adminUserId) => (await productVisibilityScope.resolveScope(adminUserId)).kind,
+      websiteRules: productVisibilityWebsiteRules,
+    });
+  });
+
+  /** T058, T059 — the website-rule worker (previews, snapshots, the steady state), stopped with the module. */
+  ctx.routes(async (app) => {
+    const cradle = ctx.cradle<ProductVisibilityRulesCradle>();
+    app.addHook('onClose', () => cradle.productVisibilityWebsiteRulesProducer.close());
+    await startWebsiteRuleWorker({
+      processRunsWorkers: cradle.processRunsWorkers,
+      moduleQueueRedis: cradle.moduleQueueRedis,
+      work: cradle.productVisibilityWebsiteRules,
+      log: ctx.log,
+      attach: (worker) => ctx.worker(worker, { logger: app.log }),
+      onClose: (close) => app.addHook('onClose', close),
+    });
+  });
+
+  /**
+   * T059 (R-11) — a product created, changed, archived or deleted is marked for re-evaluation on
+   * every governed channel; the mark is durable before the debounced evaluation is asked for.
+   * `ctx.subscribe`, so nothing runs while the module is off (the hourly reconcile after a
+   * re-enable covers what happened meanwhile).
+   */
+  for (const event of ['product.created.v1', 'product.updated.v1', 'product.archived.v1', 'product.deleted.v1']) {
+    ctx.subscribe(event, async (payload: unknown) => {
+      const productId = (payload as { productId?: unknown } | null)?.productId;
+      if (typeof productId !== 'string') return;
+      const { productVisibilityWebsiteRules, productVisibilityWebsiteRulesProducer } = ctx.cradle<ProductVisibilityRulesCradle>();
+      await enterSystemScope('product_visibility_rules: mark products for the website rule', async () => {
+        await productVisibilityWebsiteRules.markProducts([productId]);
+        await productVisibilityWebsiteRulesProducer.enqueueEvaluate();
+      });
+    });
+  }
 
   /**
    * T028, T030 — the flags worker (`product_visibility_rules.flags`), its two-minute drift poll

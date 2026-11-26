@@ -42,7 +42,7 @@ describe('website rule (spec 193, T056)', () => {
     return { id: res.body.data.id, name: res.body.data.name };
   }
 
-  async function preview(body: unknown, cookies = ADMIN): Promise<string> {
+  async function preview(body: unknown, cookies: Record<string, string> = ADMIN): Promise<string> {
     const res = await call(h, 'POST', '/website-rules/previews', { payload: body, cookies });
     expect(res.status, JSON.stringify(res.body)).toBe(202);
     return res.body.data.previewId as string;
@@ -54,7 +54,7 @@ describe('website rule (spec 193, T056)', () => {
     return id;
   }
 
-  async function confirm(previewId: string, cookies = ADMIN) {
+  async function confirm(previewId: string, cookies: Record<string, string> = ADMIN) {
     return call(h, 'POST', `/website-rules/previews/${previewId}/confirm`, { cookies });
   }
 

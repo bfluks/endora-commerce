@@ -417,7 +417,7 @@ FR-088 docs table (T094).
 
 Stream B owns the files listed in plan.md § *Parallel builders*.
 
-- [ ] T055 [P] [B] Failing unit tests `PVR/backend/services/product-rule-evaluator.test.ts`: all/any,
+- [x] T055 [P] [B] Failing unit tests `PVR/backend/services/product-rule-evaluator.test.ts`: all/any,
   one nesting level, boolean / choice / price conditions, missing value ⇒ not met (FR-057), inactive /
   archived / deleted never member (FR-079); **TM-11**: an attribute deleted or re-scoped after save evaluates
   "not met"; no definition value reaches SQL or a JSON path.
@@ -431,10 +431,10 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   created the preview ⇒ not found; per-admin cap on concurrent previews (3) and a size cap on
   `website_rule_preview_changes` (2 000 000 rows) ⇒ `409 WEBSITE_RULE_PREVIEW_LIMIT`; Zod bounds on `sales_channel_ids` (≤ 50),
   conditions (≤ 20), option keys (≤ 100), string lengths, under the route `bodyLimit`.
-- [ ] T057 [B] `PVR/backend/services/product-rule-evaluator.ts` (pure, re-validates attribute keys at
+- [x] T057 [B] `PVR/backend/services/product-rule-evaluator.ts` (pure, re-validates attribute keys at
   evaluation) + rule Commands and routes (create/update/delete; attribute validation through
   `catalogAttributeReadPort`).
-- [ ] T058 [B] Preview job + tables (caps of T056), confirm (`attach` / `change` Commands; creator check
+- [x] T058 [B] Preview job + tables (caps of T056), confirm (`attach` / `change` Commands; creator check
   against the session), apply job writing the snapshot with the governor token in transactions of 500
   (`PVR/backend/services/website-rule.service.ts`, `PVR/backend/workers/website-rule-worker.ts`);
   **`website_rule_admissions` writers (M4, N2)**: the apply job inserts a row per governor-token add,

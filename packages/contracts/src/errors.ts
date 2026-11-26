@@ -1421,6 +1421,16 @@ export const ERROR_CODES = {
   ROLE_NOT_MAPPABLE: 'ROLE_NOT_MAPPABLE',
   /** A designated book that is missing, not regular / for everyone / of the currency, or not on the channel (RQ-1 A). */
   DESIGNATION_INVALID: 'DESIGNATION_INVALID',
+  /** Deleting a product rule that governs a sales channel. */
+  PRODUCT_RULE_ATTACHED: 'PRODUCT_RULE_ATTACHED',
+  /** A definition change of an attached product rule without a preview (FR-053). */
+  WEBSITE_RULE_PREVIEW_REQUIRED: 'WEBSITE_RULE_PREVIEW_REQUIRED',
+  /** The per-administrator preview cap or the preview snapshot cap is reached (TM-11). */
+  WEBSITE_RULE_PREVIEW_LIMIT: 'WEBSITE_RULE_PREVIEW_LIMIT',
+  /** A preview that expired, is not ready, or whose rule moved since (FR-053). */
+  WEBSITE_RULE_PREVIEW_STALE: 'WEBSITE_RULE_PREVIEW_STALE',
+  /** A second product rule on a sales channel (FR-051). */
+  CHANNEL_ALREADY_GOVERNED: 'CHANNEL_ALREADY_GOVERNED',
 
   // Forms (`specs/170-forms-module/`, research R-25) — the spellings of
   // `FORMS_ERROR_CODES`. Each is declared by the `forms` module's manifest and

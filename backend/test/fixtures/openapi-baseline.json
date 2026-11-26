@@ -6238,6 +6238,15 @@
         }
       }
     },
+    "/api/v1/admin/product-visibility/attributes": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/v1/admin/product-visibility/categories": {
       "post": {
         "responses": {
@@ -6297,8 +6306,69 @@
         }
       }
     },
+    "/api/v1/admin/product-visibility/product-rules": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/product-visibility/product-rules/{id}": {
+      "delete": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "patch": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/v1/admin/product-visibility/role-mappings/{roleId}": {
       "put": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/product-visibility/website-rules/attachments/{salesChannelId}": {
+      "delete": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/product-visibility/website-rules/previews": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/product-visibility/website-rules/previews/{id}": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/product-visibility/website-rules/previews/{id}/confirm": {
+      "post": {
         "responses": {
           "200": {
             "description": "OK"

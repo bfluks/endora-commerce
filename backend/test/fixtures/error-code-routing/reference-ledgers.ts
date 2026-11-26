@@ -1342,6 +1342,46 @@ export const MINTED_ERROR_CODES: MintedErrorCodes = {
       '`product_visibility.designation.set` Command. `VALIDATION_FAILED` is not reused: the body is well ' +
       'formed, and the sentence has to say what the book must be.',
   },
+  PRODUCT_RULE_ATTACHED: {
+    to: 'product_visibility_rules',
+    reason:
+      'Minted by `specs/193-product-visibility-rules/` (contracts/events-and-errors.md §2) for deleting a ' +
+      'product rule that still governs a sales channel. The rule is `product_visibility_rules`\' own row; ' +
+      'raised by the `product_visibility.product_rule.delete` Command. `CONFLICT` is not reused: the ' +
+      'sentence has to say the rule must be detached first.',
+  },
+  WEBSITE_RULE_PREVIEW_REQUIRED: {
+    to: 'product_visibility_rules',
+    reason:
+      'Minted by `specs/193-product-visibility-rules/` (FR-053) for a definition change of an attached ' +
+      'product rule sent without a preview. Raised by the `product_visibility.product_rule.update` ' +
+      'Command. `VALIDATION_FAILED` is not reused: the body is well formed, the change has to go through ' +
+      'a preview.',
+  },
+  WEBSITE_RULE_PREVIEW_LIMIT: {
+    to: 'product_visibility_rules',
+    reason:
+      'Minted by `specs/193-product-visibility-rules/` (threat model TM-11) for a preview refused by the ' +
+      'per-administrator concurrent-preview cap or the snapshot-size cap. Raised by the website-rule ' +
+      'service. `TOO_MANY_REQUESTS`-style rate limiting does not fit: the cap is on standing previews, ' +
+      'not on request rate.',
+  },
+  WEBSITE_RULE_PREVIEW_STALE: {
+    to: 'product_visibility_rules',
+    reason:
+      'Minted by `specs/193-product-visibility-rules/` (FR-053, SC-004) for confirming a preview that ' +
+      'expired, is not ready, or whose rule moved since it was evaluated. Raised by the website-rule ' +
+      'service before the attach / change Command. `VERSION_CONFLICT` is not reused: the remedy is a new ' +
+      'preview, not a re-read.',
+  },
+  CHANNEL_ALREADY_GOVERNED: {
+    to: 'product_visibility_rules',
+    reason:
+      'Minted by `specs/193-product-visibility-rules/` (FR-051) for a preview or confirm that would put a ' +
+      'second product rule on a sales channel. The attachment is `product_visibility_rules`\' own row. ' +
+      '`CHANNEL_MEMBERSHIP_GOVERNED` (the kernel\'s) is not reused: that one refuses a membership write, ' +
+      'this one an attachment.',
+  },
   RFQ_SAVED_VIEW_NAME_TAKEN: {
     to: 'quote_requests',
     reason:

@@ -427,3 +427,35 @@ export const websiteRulePreviewResponseSchema = z.object({
   expiresAt: isoDateTimeSchema,
 });
 export type WebsiteRulePreviewResponse = z.infer<typeof websiteRulePreviewResponseSchema>;
+
+/** A saved product rule, as the rule routes answer it (`ETag` = `version`). */
+export const productRuleSchema = z.object({
+  id: uuidSchema,
+  name: z.string(),
+  version: z.number().int().positive(),
+  definition: ProductRuleDefinitionSchema,
+});
+export type ProductRuleView = z.infer<typeof productRuleSchema>;
+
+/** `GET /attributes` — the attributes a rule may name (FR-050): global boolean or choice ones. */
+export const productRuleAttributesResponseSchema = z.object({
+  items: z.array(
+    z.object({
+      key: z.string(),
+      labelDefault: z.string(),
+      label: z.record(z.string(), z.string()),
+      kind: z.enum(['boolean', 'choice']),
+      /** Option keys of a choice attribute; empty for a boolean one. */
+      options: z.array(z.string()),
+    }),
+  ),
+});
+export type ProductRuleAttributesResponse = z.infer<typeof productRuleAttributesResponseSchema>;
+
+/** `POST /website-rules/previews` — 202. */
+export const websiteRulePreviewCreatedSchema = z.object({ previewId: uuidSchema });
+
+/** `website_rule:<productRuleId>` — the audit `source` of a membership the rule wrote (FR-072). */
+export function websiteRuleAuditSource(productRuleId: string): string {
+  return `website_rule:${productRuleId}`;
+}
