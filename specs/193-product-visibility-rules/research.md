@@ -545,3 +545,32 @@ screens `/orders/new` and `/quote-requests/new`, which submit `POST /api/v1/admi
 (`crm/src/admin/api.ts:275,286,594,607`), and the CRM backend has no product-line write. So FR-037 /
 FR-041 checks (T081, T084) and the FR-091 allowance (T093) already cover the opportunity paths; no
 extra task. T080 / T083 each add one case starting from an opportunity hand-off (same request body).
+
+## R-20 Checkpoint 1 fix round — residual risks and accepted oracles (2026-11-26)
+
+**In-handler routes and API pre-interceptors (T041, TM-1).** The catalog's hidden-product guard
+answers a hidden product before the API pre-interceptor dispatcher, except on the nine routes
+`HIDDEN_ANSWERS` marks `'in-handler'` (they parse their own query or body first): there the handler
+asks at its own lookup, after the dispatcher, so a pre-interceptor on one of them would receive a
+hidden product's id. `catalog/src/backend/hidden-product-guard.interceptors.test.ts` scans every
+`phase: 'pre'` registration in `packages/` and `backend/src` (non-test source), requires its
+`target` to be a string literal (or an array of them) and refuses any that names an in-handler
+route; today the only pre-interceptors are the connectors' module-activation ones. **Residual
+risk:** a module outside this repository (an overlay or third-party package composed by an
+instance) is not scanned; the platform validates a target only against the route table, not
+against this list. Such a module would see the id of a hidden product addressed by a restricted
+administrator on those nine routes — not its data. Closing it needs a platform rule (the
+dispatcher skipping, or the registry refusing, these identities), which is outside this feature's
+modules; recorded for the platform owner.
+
+**Accepted row-write oracles (FR-082, FR-094).** A restricted administrator's price-book rows write
+is answered `PRICE_BOOK_ROW_LIMIT` against the book's full row count and `PRICE_BOOK_ROW_OVERLAP`
+for an overlap with a hidden product's row (that row unnamed). Both reveal that rows they cannot list
+exist; both are accepted, next to the bare SKU / URL-key "already taken" answer, because row writes
+on hidden products stay accepted (FR-038) and hiding them would let a book exceed its limit or hold
+overlapping rows. Spec Edge Cases records the same.
+
+**Not changed, reported (checkpoint 1 F1 inspection).** The `orders`, `categories` and `customers`
+CSV adapters carry no product-keyed data (order headers only; categories; accounts), so FR-085 does
+not reach them. The audit log entry of a price-book delete or duplicate keeps the full `rowCount`
+(audit log is accepted as is, FR-086).
