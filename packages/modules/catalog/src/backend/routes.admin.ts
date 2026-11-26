@@ -286,10 +286,7 @@ export async function registerCatalogAdminRoutes(
   const productClauseOf = async (request: FastifyRequest): Promise<ProductVisibilityClause> =>
     adminService.productClause(await requestVisibility.scopeOf(request), '"p"."id"');
   /** Spec 193 (FR-080) — which named products are hidden from this request's caller. */
-  const hiddenFor =
-    (request: FastifyRequest): HiddenProducts =>
-    async (productIds) =>
-      adminService.hiddenProductIds(await requestVisibility.scopeOf(request), productIds);
+  const hiddenFor = (request: FastifyRequest): HiddenProducts => requestVisibility.hiddenFor(request);
 
   /**
    * Feature 002 T155 — fire-and-forget audit log helper used by the
@@ -932,7 +929,7 @@ export async function registerCatalogAdminRoutes(
           throw new ZodError(parsed.error.issues);
         }
         await requestVisibility.refuseHiddenProduct(request, request.params.id);
-        return scopedSvc.save(request.params.id, parsed.data);
+        return scopedSvc.save(request.params.id, parsed.data, hiddenFor(request));
       },
     );
     // Feature 174 (T115; §4, FR-086) — "Copy to other channels": one Command, one audit entry.

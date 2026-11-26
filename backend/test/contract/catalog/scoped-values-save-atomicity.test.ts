@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { ERROR_CODES, type CatalogAttributeView } from '@endora-commerce/contracts';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import { scopedValuesSaveCommand } from '../../../../packages/modules/catalog/dist/backend/commands/scoped-values.commands.js';
+import { NO_PRODUCT_HIDDEN } from '../../../../packages/modules/catalog/dist/backend/services/admin-product-visibility.js';
 import { setupBackendServer, teardownBackendServer, type BackendServerHandle } from '../../helpers/test-server.js';
 import { ADMIN, scopedValuesFixture, type ScopedValuesFixture } from '../../helpers/scoped-values-fixture.js';
 
@@ -96,6 +97,7 @@ describe('174 US7 — the Save is atomic (T104)', () => {
           },
         },
         undefined,
+        NO_PRODUCT_HIDDEN,
       );
       await expect(cradle.commandBus.run(command)).rejects.toThrow(`injected failure before ${family}`);
       events.off();

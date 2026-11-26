@@ -3,12 +3,14 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ERROR_CODES, isUuidShape } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import {
+  hiddenProductIds,
   isNarrowed,
   isProductHidden as hiddenFrom,
   isVariantHidden,
   SYSTEM_PRODUCT_SCOPE,
   type AdminProductReadScope,
   type CatalogAdminProductVisibility,
+  type HiddenProducts,
 } from './services/admin-product-visibility.js';
 
 /**
@@ -110,6 +112,8 @@ export interface CatalogRequestVisibility {
    * hidden from the caller. The handler then answers exactly as it answers a missing product.
    */
   isProductHidden(request: FastifyRequest, productId: string): Promise<boolean>;
+  /** Spec 193 (FR-080, FR-082) — which named products are hidden from this request's caller. */
+  hiddenFor(request: FastifyRequest): HiddenProducts;
   /** {@link isProductHidden}, answered with `404 PRODUCT_NOT_FOUND` "Product not found." */
   refuseHiddenProduct(request: FastifyRequest, productId: string): Promise<void>;
 }
@@ -138,6 +142,8 @@ export function createCatalogRequestVisibility(deps: {
   return {
     scopeOf,
     isProductHidden,
+    hiddenFor: (request) => async (productIds) =>
+      hiddenProductIds(deps.emFactory(), deps.visibility, await scopeOf(request), productIds),
     async refuseHiddenProduct(request, productId) {
       if (await isProductHidden(request, productId)) {
         request.log.debug({ route: request.routeOptions.url }, 'catalog: admin product hidden by visibility rules');

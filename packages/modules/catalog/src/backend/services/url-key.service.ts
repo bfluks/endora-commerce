@@ -1,3 +1,4 @@
+import { NO_PRODUCT_HIDDEN, type HiddenProducts } from './admin-product-visibility.js';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { randomUUID } from 'node:crypto';
 import {
@@ -63,6 +64,12 @@ export interface UrlKeyCheckOptions {
    */
   mode: 'interactive' | 'integration';
   confirmTakeover?: readonly string[];
+  /**
+   * Spec 193 (FR-082, TM-2) — for `interactive`: the products hidden from the operator. A refusal
+   * names such a holder by key and channel only, never by id or name. `integration` callers hold
+   * no admin scope and omit it.
+   */
+  hidden?: HiddenProducts;
 }
 
 export interface UrlRedirectAuditRow {
@@ -325,13 +332,15 @@ export class UrlKeyService {
     const current = conflicts.filter((conflict) => conflict.kind === 'current');
     if (current.length > 0) {
       const names = await this.#names(em, current.map((conflict) => conflict.holderId));
+      const hidden = await (options.hidden ?? NO_PRODUCT_HIDDEN)(current.map((conflict) => conflict.holderId));
       const details: UrlKeyTakenDetails = {
         conflicts: current.map((conflict) => ({
           channelId: conflict.channelId,
           languageCode: conflict.languageCode,
           key: conflict.key,
-          heldByProductId: conflict.holderId,
-          heldByProductName: names.get(conflict.holderId) ?? conflict.holderId,
+          ...(hidden.has(conflict.holderId)
+            ? {}
+            : { heldByProductId: conflict.holderId, heldByProductName: names.get(conflict.holderId) ?? conflict.holderId }),
         })),
       };
       throw new HttpError(409, ERROR_CODES.URL_KEY_TAKEN, 'This URL key is used by another product.', details);
@@ -340,13 +349,15 @@ export class UrlKeyService {
     const unconfirmed = redirectConflicts.filter((conflict) => !confirm.has(conflict.key));
     if (unconfirmed.length > 0) {
       const names = await this.#names(em, unconfirmed.map((conflict) => conflict.holderId));
+      const hidden = await (options.hidden ?? NO_PRODUCT_HIDDEN)(unconfirmed.map((conflict) => conflict.holderId));
       const details: UrlKeyRedirectTakeoverRequiredDetails = {
         takeovers: unconfirmed.map((conflict) => ({
           channelId: conflict.channelId,
           languageCode: conflict.languageCode,
           key: conflict.key,
-          losingProductId: conflict.holderId,
-          losingProductName: names.get(conflict.holderId) ?? conflict.holderId,
+          ...(hidden.has(conflict.holderId)
+            ? {}
+            : { losingProductId: conflict.holderId, losingProductName: names.get(conflict.holderId) ?? conflict.holderId }),
         })),
       };
       throw new HttpError(409, ERROR_CODES.URL_KEY_REDIRECT_TAKEOVER_REQUIRED, 'This URL key redirects to another product; confirm to take it over.', details);
@@ -555,7 +566,12 @@ export class UrlKeyService {
   }
 
   /** `PUT /admin/catalog/products/:id/url-keys` (API; §3) — interactive, takeover by confirmation. */
-  async update(productId: string, request: PutProductUrlKeysRequest): Promise<ProductUrlKeysResponse['data']> {
+  async update(
+    productId: string,
+    request: PutProductUrlKeysRequest,
+    /** Spec 193 (FR-082) — the products hidden from the operator, left unnamed in a refusal. */
+    hidden: HiddenProducts,
+  ): Promise<ProductUrlKeysResponse['data']> {
     if (!isUuidShape(productId)) throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
     const writes: UrlKeyWrite[] = [];
     if (request.globalKey !== undefined) writes.push({ scope: { level: 'global' }, op: { op: 'set', key: request.globalKey } });
@@ -565,7 +581,7 @@ export class UrlKeyService {
         : { level: 'channel', channelId: entry.channelId };
       writes.push({ scope, op: typeof entry.key === 'string' ? { op: 'set', key: entry.key } : { op: 'inherit' } });
     }
-    await this.#runWrite(this.#writeCommand(productId, writes, { mode: 'interactive', confirmTakeover: request.confirmTakeover ?? [] }));
+    await this.#runWrite(this.#writeCommand(productId, writes, { mode: 'interactive', confirmTakeover: request.confirmTakeover ?? [], hidden }));
     return this.read(productId);
   }
 

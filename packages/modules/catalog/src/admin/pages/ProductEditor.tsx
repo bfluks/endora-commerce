@@ -1518,10 +1518,12 @@ function ScopedProductEditor({
             <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
               {takeovers.map((k) => (
                 <li key={`${k.languageCode ?? ''}|${k.key}`}>
-                  {t('productEditor.urlKeys.takeover.item', {
-                    product: k.losingProductName,
-                    key: describeKeyInLanguage(k.key, k.languageCode, t),
-                  })}
+                  {k.losingProductName === undefined
+                    ? t('productEditor.urlKeys.takeover.itemAnother', { key: describeKeyInLanguage(k.key, k.languageCode, t) })
+                    : t('productEditor.urlKeys.takeover.item', {
+                        product: k.losingProductName,
+                        key: describeKeyInLanguage(k.key, k.languageCode, t),
+                      })}
                 </li>
               ))}
             </ul>

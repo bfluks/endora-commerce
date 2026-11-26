@@ -7,6 +7,7 @@ import {
 import { ANONYMOUS_PRODUCT_AUDIENCE } from '@endora-commerce/contracts';
 import { Product, type ProductRow } from '../../helpers/package-entities.js';
 import { ProductLinkService } from '../../../../packages/modules/catalog/dist/backend/services/product-link.service.js';
+import { NO_PRODUCT_HIDDEN } from '../../../../packages/modules/catalog/dist/backend/services/admin-product-visibility.js';
 import { ensureBaseBookSql, seedBasePriceSql } from '../../helpers/price-book-sql.js';
 
 /**
@@ -81,9 +82,7 @@ describe('product link tile price source (#132)', () => {
   ): Promise<{ amount: number; currency: string } | null> {
     const source = await makeProduct({});
     const target = await makeProduct(targetAttributes);
-    await svc.bulkCreate(source.id, [
-      { targetProductId: target.id, kind: 'cross_sell' },
-    ]);
+    await svc.bulkCreate(source.id, [{ targetProductId: target.id, kind: 'cross_sell' }], NO_PRODUCT_HIDDEN);
     if (listAmount !== null) {
       await seedBasePriceSql(h.em(), target.id, listAmount);
     }

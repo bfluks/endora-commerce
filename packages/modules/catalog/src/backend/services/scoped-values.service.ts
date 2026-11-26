@@ -1,3 +1,4 @@
+import type { HiddenProducts } from './admin-product-visibility.js';
 import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import type { EntityManager } from '@mikro-orm/postgresql';
@@ -58,10 +59,11 @@ export class ScopedValuesService {
     return this.#read.read(productId, request);
   }
 
-  async save(productId: string, body: SaveScopedValuesRequest): Promise<SaveScopedValuesResponse> {
+  /** `hidden` (spec 193, FR-082): the products hidden from the operator, left unnamed in a URL-key refusal. */
+  async save(productId: string, body: SaveScopedValuesRequest, hidden: HiddenProducts): Promise<SaveScopedValuesResponse> {
     const touchesStatus = body.changes.status !== undefined;
     const completeness = touchesStatus ? await this.deps.gate?.mode() : undefined;
-    const command = scopedValuesSaveCommand(this.deps, productId, body, completeness);
+    const command = scopedValuesSaveCommand(this.deps, productId, body, completeness, hidden);
     // Constitution XIII — the editor's main write is audited or refused, never run bare.
     if (!this.commandBus) throw new Error('ScopedValuesService: the save needs the command bus.');
     let result: ScopedValuesSaveResult;

@@ -65,10 +65,13 @@ export function urlKeyErrorMessage(err: unknown, t: Translate): string | null {
     return t('productEditor.urlKeys.error.taken', {
       conflicts: taken.conflicts
         .map((c) =>
-          t('productEditor.urlKeys.error.takenBy', {
-            key: describeKeyInLanguage(c.key, c.languageCode, t),
-            product: c.heldByProductName,
-          }),
+          // Spec 193 (FR-082) — a holder hidden from the operator comes without a name.
+          c.heldByProductName === undefined
+            ? t('productEditor.urlKeys.error.takenByAnother', { key: describeKeyInLanguage(c.key, c.languageCode, t) })
+            : t('productEditor.urlKeys.error.takenBy', {
+                key: describeKeyInLanguage(c.key, c.languageCode, t),
+                product: c.heldByProductName,
+              }),
         )
         .join('; '),
     });

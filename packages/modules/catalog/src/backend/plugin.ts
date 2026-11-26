@@ -678,7 +678,7 @@ export function catalogModule(options: CatalogModuleOptions) {
                           em,
                           input.productId,
                           [{ scope: input.scope, op: input.cell.op.op === 'set' ? { op: 'set', key: String(input.cell.op.value) } : { op: 'inherit' } }],
-                          { mode: 'interactive', confirmTakeover: input.confirmTakeover },
+                          { mode: 'interactive', confirmTakeover: input.confirmTakeover, hidden: input.hidden },
                         )
                         .then((effects) => ({ before: effects.before, after: effects.after })),
                   }

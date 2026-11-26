@@ -6,6 +6,7 @@ import {
 } from '../../helpers/test-server.js';
 import { ANONYMOUS_PRODUCT_AUDIENCE } from '@endora-commerce/contracts';
 import { ProductLinkService } from '../../../../packages/modules/catalog/dist/backend/services/product-link.service.js';
+import { NO_PRODUCT_HIDDEN } from '../../../../packages/modules/catalog/dist/backend/services/admin-product-visibility.js';
 import { Product, type ProductRow } from '../../helpers/package-entities.js';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 
@@ -100,7 +101,7 @@ describe('ProductLinkService.listForStorefront — channel filter (feature 052 U
   async function linked(): Promise<{ sourceId: string; targetId: string }> {
     const source = await makeProduct();
     const target = await makeProduct();
-    await svc.bulkCreate(source.id, [{ targetProductId: target.id, kind: 'cross_sell' }]);
+    await svc.bulkCreate(source.id, [{ targetProductId: target.id, kind: 'cross_sell' }], NO_PRODUCT_HIDDEN);
     return { sourceId: source.id, targetId: target.id };
   }
 

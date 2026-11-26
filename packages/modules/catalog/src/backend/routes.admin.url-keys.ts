@@ -43,7 +43,7 @@ export async function registerCatalogUrlKeyAdminRoutes(
     async (request) => {
       const body = putProductUrlKeysRequestSchema.parse(request.body);
       await requestVisibility.refuseHiddenProduct(request, request.params.id);
-      return { data: await urlKeyService.update(request.params.id, body) };
+      return { data: await urlKeyService.update(request.params.id, body, requestVisibility.hiddenFor(request)) };
     },
   );
 

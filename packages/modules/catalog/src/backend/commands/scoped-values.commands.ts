@@ -1,3 +1,4 @@
+import type { HiddenProducts } from '../services/admin-product-visibility.js';
 import { randomUUID } from 'node:crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
@@ -68,7 +69,14 @@ export interface ScopedValuesCommandDeps {
    */
   writeUrlKey?: (
     em: EntityManager,
-    input: { productId: string; scope: ScopeRef; cell: PlannedCell; confirmTakeover: readonly string[] },
+    input: {
+      productId: string;
+      scope: ScopeRef;
+      cell: PlannedCell;
+      confirmTakeover: readonly string[];
+      /** Spec 193 (FR-082) — the products hidden from the operator. */
+      hidden: HiddenProducts;
+    },
   ) => Promise<{ before: Record<string, unknown>; after: Record<string, unknown> }>;
   /** Step 3a (R21) — the organisations an audience names must exist. */
   organizations?: Pick<OrganizationDetailsPort, 'findByIds'> | undefined;
@@ -115,6 +123,7 @@ export function scopedValuesSaveCommand(
   productId: string,
   body: SaveScopedValuesRequest,
   completeness: ScopeCompletenessGateMode | undefined,
+  hidden: HiddenProducts,
 ): Command<ScopedValuesSaveResult> {
   // Spec 193 T049 — hookable (`CATALOG_HOOKABLE_ACTIONS.productScopedValuesSave`).
   return withProductStatusHookData({
@@ -156,6 +165,7 @@ export function scopedValuesSaveCommand(
           scope,
           cell: urlKeyCell,
           confirmTakeover: body.changes.confirmTakeover ?? [],
+          hidden,
         });
       }
 

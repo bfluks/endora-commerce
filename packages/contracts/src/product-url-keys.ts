@@ -172,8 +172,9 @@ export const urlKeyTakenDetailsSchema = z.object({
     z.object({
       ...keyAddressSchema,
       key: z.string(),
-      heldByProductId: uuidSchema,
-      heldByProductName: z.string(),
+      /** Spec 193 (FR-082, TM-2) — absent when the holder is hidden from the caller: key and channel only. */
+      heldByProductId: uuidSchema.optional(),
+      heldByProductName: z.string().optional(),
     }),
   ),
 });
@@ -185,8 +186,9 @@ export const urlKeyRedirectTakeoverRequiredDetailsSchema = z.object({
     z.object({
       ...keyAddressSchema,
       key: z.string(),
-      losingProductId: uuidSchema,
-      losingProductName: z.string(),
+      /** Spec 193 (FR-082, TM-2) — absent when the product is hidden from the caller. */
+      losingProductId: uuidSchema.optional(),
+      losingProductName: z.string().optional(),
     }),
   ),
 });
