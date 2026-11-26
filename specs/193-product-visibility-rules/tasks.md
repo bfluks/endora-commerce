@@ -320,28 +320,31 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
 
 ## Phase 5b — [A] Catalog: cross-references, error details, aggregates, assistant tools, hookable actions, off state (FR-080 – FR-082; TM-2, TM-3, TM-6)
 
-- [ ] T045 [A] FR-080 (OQ-D A): links / grouped items / bundle options omit hidden
+- [x] T045 [A] FR-080 (OQ-D A): links / grouped items / bundle options omit hidden
   targets for restricted callers; adding a hidden target answers target-not-found. Test
   `BT/integration/catalog/visibility-cross-references.test.ts`.
-- [ ] T046 [A] FR-082, **TM-2**: `URL_KEY_TAKEN` (`CAT/backend/services/url-key.service.ts:324-337`) and the
+- [x] T046 [A] FR-082, **TM-2**: `URL_KEY_TAKEN` (`CAT/backend/services/url-key.service.ts:324-337`) and the
   integration-mode issues (`:309-316`) drop `heldByProductId` / `heldByProductName` when the holder is
   hidden from the caller (key and channel only); sweep every `HttpError` message and `details` in
   `catalog` and `price_lists` that names a product other than the addressed one (grep `heldBy`,
   `productId`, `name` in details) and redact the same way (the `sales_channels` part of the sweep is
   stream B's, in T065). Test
   `BT/integration/catalog/visibility-error-details.test.ts` (product save, scoped values, bulk, variants).
-- [ ] T047 [A] **FR-031**, **TM-6** aggregate inventory: category `productCount`
+  *Build note*: done for `URL_KEY_TAKEN` and `URL_KEY_REDIRECT_TAKEOVER_REQUIRED` on the operator's paths (`PUT …/url-keys`, the scoped-values save); integration mode (connector, CSV) holds no admin scope and keeps naming holders. The rest of the sweep found no catalog refusal naming a product other than one the caller sent (`SKU_ALREADY_EXISTS` names the SKU only); `price_lists` was **not** swept — open.
+- [x] T047 [A] **FR-031**, **TM-6** aggregate inventory: category `productCount`
   (`CAT/backend/services/catalog-category-read.service.ts:257-268`), attribute-set `productCount` and the
   `assertNotInUse` error details (`attribute-set.service.ts:118-140,319,536-545`),
   `attributes/:idOrKey/usage`, `attributes/:idOrKey/scope-change-preview`: narrowed with the same
   predicate for a restricted caller (narrowing chosen for every row: it follows FR-031 "no response
   counts hidden products"; listed in the FR-088 docs table, T094). Test
   `BT/integration/catalog/visibility-aggregates.test.ts`.
-- [ ] T048 [A] FR-081 (OQ-E A). **Failing test first** `BT/integration/catalog/visibility-assistant-tools.test.ts`
+  *Build note*: the admin category tree carries no product count (`countLiveProductsByCategory` is a port read for system callers), so nothing to narrow there. The attribute delete Command's guard still counts every product; only the usage dialog is narrowed.
+- [x] T048 [A] FR-081 (OQ-E A). **Failing test first** `BT/integration/catalog/visibility-assistant-tools.test.ts`
   (US1-17: a hidden product asked through each catalog tool is not found and not written; a confirm
   executed later re-resolves the scope), then: the assistant tools `catalog` contributes to
   `promptActionToolRegistry` resolve `resolveScope(invokingAdminUserId)` **at tool execution** (also on a
   later confirm), never from an ambient request (**TM-3 (2)**).
+  *Build note*: search, the four bulk-field tools and Archive / Restore resolve the invoking admin's scope at preview and again at confirm; the bulk-progress reader reads as the system (the selection was narrowed when queued).
 - [x] T049 [A] `CAT/manifest.ts`: declare hookable (`beforeCommit`), with hook data contracts carrying
   the before/after global status, archive flag and the channel-scoped status cells written (needed by
   T068), **every catalog Command that writes a global status, an archive flag, a channel-scoped status
@@ -359,9 +362,10 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
   in `CAT/backend/hookable-status-writers.test.ts` lists every Command action whose run writes
   `status` or a channel-scoped cell and fails on one not declared hookable. Contract-surface entry +
   changeset.
-- [ ] T050 [A] Off-state test `BT/integration/catalog/visibility-off-state.test.ts`: module off ⇒ every
+- [x] T050 [A] Off-state test `BT/integration/catalog/visibility-off-state.test.ts`: module off ⇒ every
   read/write above identical to module-absent; on again ⇒ narrowing back; **TM-3 (4)** module present
   but its port throwing ⇒ 5xx, never unfiltered.
+  *Build note*: written after the code it holds (it is the off-state characterisation); green on its first run.
 
 **Verification (5b)**: `pnpm --filter @endora-commerce/mod-catalog exec vitest run src/backend/hookable-status-writers.test.ts`;
 `pnpm --filter backend exec vitest run test/integration/catalog/visibility-assistant-tools.test.ts test/integration/catalog/visibility-cross-references.test.ts test/integration/catalog/visibility-error-details.test.ts test/integration/catalog/visibility-aggregates.test.ts test/integration/catalog/visibility-off-state.test.ts test/contract/catalog/visibility-route-inventory.test.ts`;
