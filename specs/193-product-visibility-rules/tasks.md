@@ -464,7 +464,7 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
 
 ## Phase 7 — [B] Kernel governance and admission (US4; FR-054, FR-059, FR-092, FR-093; TM-10)
 
-- [ ] T062 [P] [B] Failing unit tests `KSC/sales-channel-membership.governor.test.ts`: per method
+- [x] T062 [P] [B] Failing unit tests `KSC/sales-channel-membership.governor.test.ts`: per method
   (`addToChannel`, `removeFromChannel` incl. fallback, `bindToDefaultIfEmpty`, `copyMemberships`,
   `replaceChannelsForEntity`, `clearChannelsForEntity`) × (ungoverned, governed skip, governed refuse,
   governor token); zero-channel floor waived only for a token write and for a request that named a
@@ -473,12 +473,12 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   the registry (structurally identical object) is rejected (identity check); registration after boot
   or a second governor for one module id throws; `governs()` throwing ⇒ the write is refused, never
   "not governed"; a caller-supplied `source` without the token is ignored in the audit row.
-- [ ] T063 [B] `KSC/membership-governors.ts` (registry, module-private `WeakSet` of issued tokens,
+- [x] T063 [B] `KSC/membership-governors.ts` (registry, module-private `WeakSet` of issued tokens,
   frozen after boot; the token type is opaque and not constructible from the `./kernel` barrel) and
   `KSC/sales-channel-membership.service.ts` semantics (R-10); `packages/platform/src/kernel/ports/sales-channel.ts`
   additive options/result; error code + pl/en message (rule label rendered as text only); audit
   `source` honoured only with the token. Changeset for `@endora-commerce/platform`.
-- [ ] T064 [B] **TM-10** bridge-writer inventory test `BT/unit/kernel/channel-product-bridge-writers.test.ts`:
+- [x] T064 [B] **TM-10** bridge-writer inventory test `BT/unit/kernel/channel-product-bridge-writers.test.ts`:
   greps `packages/**` for statements writing the channel-product bridge table and fails on any file
   other than `KSC/sales-channel-membership.service.ts` (two-way: a listed writer that disappears fails
   too).
