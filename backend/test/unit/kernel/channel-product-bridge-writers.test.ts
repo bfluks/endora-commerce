@@ -9,8 +9,9 @@ import { describe, expect, it } from 'vitest';
  * The website rule's governor (research R-10) sits inside `SalesChannelMembershipService`, the
  * single mutator of the bridges (Principle XII). A statement that writes `sales_channel_products`
  * anywhere else bypasses it: a product joins or leaves a governed channel without the rule's say.
- * This test reads every TypeScript source under `packages/**` for a write statement naming the
- * table — literally, or through a registered bridge's table name (`bridge.table`, `bridgeTable`) —
+ * This test reads every TypeScript source under `packages/**` and `backend/src/**` for a write
+ * statement naming the table — literally, or through a registered bridge's table name
+ * (`bridge.table`, `registration.table`, any `${….table}`, `bridgeTable`) —
  * and compares the files with the ledger below, **in both directions**: an unlisted writer fails,
  * and so does a listed one that no longer writes, so the ledger cannot go stale.
  *
@@ -18,7 +19,7 @@ import { describe, expect, it } from 'vitest';
  */
 
 const REPO = resolve(fileURLToPath(new URL('.', import.meta.url)), '../../../..');
-const PACKAGES = join(REPO, 'packages');
+const ROOTS = [join(REPO, 'packages'), join(REPO, 'backend/src')];
 
 const WRITERS: Readonly<Record<string, string>> = {
   'packages/platform/src/kernel/sales-channels/sales-channel-membership.service.ts':
@@ -32,7 +33,7 @@ const WRITERS: Readonly<Record<string, string>> = {
 };
 
 /** A write statement whose target is the product bridge, by name or through a bridge registration. */
-const WRITE = /\b(?:insert\s+into|delete\s+from|update)\s+"?(?:sales_channel_products\b|\$\{\s*[\w.]*(?:bridge\.table|bridgeTable)\s*\})/i;
+const WRITE = /\b(?:insert\s+into|delete\s+from|update)\s+"?(?:sales_channel_products\b|\$\{\s*[\w.]*(?:\.table|bridgeTable)\s*\})/i;
 
 function sources(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -50,7 +51,7 @@ function sources(dir: string, out: string[] = []): string[] {
 }
 
 describe('channel-product bridge writers (spec 193, T064, TM-10)', () => {
-  const found = sources(PACKAGES)
+  const found = ROOTS.flatMap((root) => sources(root))
     .filter((path) => WRITE.test(readFileSync(path, 'utf8')))
     .map((path) => relative(REPO, path).split('\\').join('/'))
     .sort();
@@ -60,6 +61,8 @@ describe('channel-product bridge writers (spec 193, T064, TM-10)', () => {
     expect(WRITE.test('`delete from sales_channel_products where product_id in`')).toBe(true);
     expect(WRITE.test('`insert into "${bridge.table}" ("sales_channel_id", …)`')).toBe(true);
     expect(WRITE.test('`insert into "${o.bridgeTable}" ("sales_channel_id", …)`')).toBe(true);
+    expect(WRITE.test('`delete from "${registration.table}" where …`')).toBe(true);
+    expect(WRITE.test('`update ${entry.table} set …`')).toBe(true);
     expect(WRITE.test('`select "product_id" from "sales_channel_products" where …`')).toBe(false);
   });
 
