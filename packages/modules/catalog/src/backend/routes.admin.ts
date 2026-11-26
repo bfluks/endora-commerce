@@ -118,7 +118,7 @@ import type { AttributeOptionResult } from './commands/attribute-commands.js';
 import type { Category } from './entities/category.entity.js';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import type { CatalogRequestVisibility } from './hidden-product-guard.js';
-import type { HiddenProducts } from './services/admin-product-visibility.js';
+import type { HiddenProducts, ProductVisibilityClause } from './services/admin-product-visibility.js';
 import { adminProductListVisibility } from '@endora-commerce/contracts';
 
 /**
@@ -282,6 +282,9 @@ export async function registerCatalogAdminRoutes(
   deps: CatalogAdminDeps,
 ): Promise<void> {
   const { adminService, requireAdmin, requestVisibility } = deps;
+  /** Spec 193 (FR-031) — the caller's visibility over `"p"."id"`, for a statement counting products. */
+  const productClauseOf = async (request: FastifyRequest): Promise<ProductVisibilityClause> =>
+    adminService.productClause(await requestVisibility.scopeOf(request), '"p"."id"');
   /** Spec 193 (FR-080) — which named products are hidden from this request's caller. */
   const hiddenFor =
     (request: FastifyRequest): HiddenProducts =>
@@ -961,7 +964,11 @@ export async function registerCatalogAdminRoutes(
       '/api/v1/admin/catalog/attributes/:idOrKey/scope-change-preview',
       { preHandler: requireAdmin('catalog:read') },
       async (request) => ({
-        data: await previewSvc.preview(request.params.idOrKey, (request.query ?? {}) as Record<string, unknown>),
+        data: await previewSvc.preview(
+          request.params.idOrKey,
+          (request.query ?? {}) as Record<string, unknown>,
+          await productClauseOf(request),
+        ),
       }),
     );
   }
@@ -1163,7 +1170,9 @@ export async function registerCatalogAdminRoutes(
   app.get<{ Params: { idOrKey: string } }>(
     '/api/v1/admin/catalog/attributes/:idOrKey/usage',
     { preHandler: requireAdmin('catalog:read') },
-    async (request) => ({ data: await adminService.getAttributeUsage(request.params.idOrKey) }),
+    async (request) => ({
+      data: await adminService.getAttributeUsage(await requestVisibility.scopeOf(request), request.params.idOrKey),
+    }),
   );
 
   // Feature 012 — delete an attribute. Refused while any Attribute Set or
@@ -1375,8 +1384,8 @@ export async function registerCatalogAdminRoutes(
     app.get(
       '/api/v1/admin/catalog/attribute-sets',
       { preHandler: requireAdmin('catalog:read') },
-      async () => {
-        const sets = await attrSetService.listSets();
+      async (request) => {
+        const sets = await attrSetService.listSets(await productClauseOf(request));
         return { data: sets };
       },
     );
@@ -1385,7 +1394,7 @@ export async function registerCatalogAdminRoutes(
       '/api/v1/admin/catalog/attribute-sets/:id',
       { preHandler: requireAdmin('catalog:read') },
       async (request) => {
-        const detail = await attrSetService.getSetDetail(request.params.id);
+        const detail = await attrSetService.getSetDetail(request.params.id, await productClauseOf(request));
         return { data: detail };
       },
     );
@@ -1415,7 +1424,7 @@ export async function registerCatalogAdminRoutes(
       async (request) => {
         const body = updateAttributeSetRequestSchema.parse(request.body);
         // Audited co-transactionally via the `attribute_set.update` Command.
-        const set = await attrSetService.updateSet(request.params.id, body);
+        const set = await attrSetService.updateSet(request.params.id, body, await productClauseOf(request));
         return { data: set };
       },
     );
@@ -1425,7 +1434,7 @@ export async function registerCatalogAdminRoutes(
       { preHandler: requireAdmin('catalog:write') },
       async (request, reply) => {
         // Audited co-transactionally via the `attribute_set.delete` Command.
-        await attrSetService.deleteSet(request.params.id);
+        await attrSetService.deleteSet(request.params.id, await productClauseOf(request));
         return reply.status(204).send();
       },
     );
@@ -1440,7 +1449,7 @@ export async function registerCatalogAdminRoutes(
         const body = assignAttributesRequestSchema.parse(request.body);
         // Audited co-transactionally via the `attribute_set.assign_attributes`
         // Command (feature 061 — the bridge write and audit share one tx).
-        const detail = await attrSetService.assignAttributes(request.params.id, body);
+        const detail = await attrSetService.assignAttributes(request.params.id, body, await productClauseOf(request));
         return { data: detail };
       },
     );

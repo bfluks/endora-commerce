@@ -88,7 +88,8 @@ export async function registerCatalogApiKeyRoutes(
       '/api/v1/catalog/attribute-sets',
       { preHandler: requireApiKey('catalog:read') },
       async () => {
-        const sets = await attrSetService.listSets();
+        // Spec 193 — a connector holds no admin scope: every product counts.
+        const sets = await attrSetService.listSets(null);
         return { data: sets };
       },
     );
@@ -98,7 +99,7 @@ export async function registerCatalogApiKeyRoutes(
       { preHandler: requireApiKey('catalog:read') },
       async (request) => {
         // Feature 172 (FR-042) — content attributes are not offered for mapping.
-        const detail = await attrSetService.getSetDetail(request.params.id, { includeContent: false });
+        const detail = await attrSetService.getSetDetail(request.params.id, null, { includeContent: false });
         return { data: detail };
       },
     );

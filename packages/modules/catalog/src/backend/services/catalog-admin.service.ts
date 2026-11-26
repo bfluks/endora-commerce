@@ -170,6 +170,7 @@ import {
   requireVisibility,
   type AdminProductReadScope,
   type CatalogAdminProductVisibility,
+  type ProductVisibilityClause,
 } from './admin-product-visibility.js';
 import type { SqlFragment } from '@endora-commerce/contracts';
 import {
@@ -1872,6 +1873,14 @@ export class CatalogAdminService {
   }
 
   /**
+   * Spec 193 (FR-031) — the visibility clause over `column` (`"alias"."column"`) for a scope, for a
+   * statement of another service of this module that counts products.
+   */
+  productClause(scope: AdminProductReadScope, column: string): ProductVisibilityClause {
+    return this.#visibleProductsClause(scope, column);
+  }
+
+  /**
    * Spec 193 — the visibility clause over `column` for a scope: `null` adds nothing (system,
    * unrestricted), `false` matches nothing (`deny`), otherwise a parenthesised fragment.
    */
@@ -2340,13 +2349,15 @@ export class CatalogAdminService {
    * would meet, for the attributes screen's confirmation dialog. The same query
    * the delete Command's guard runs, so the dialog and the refusal agree.
    */
-  async getAttributeUsage(idOrKey: string): Promise<AdminAttributeUsage> {
+  async getAttributeUsage(scope: AdminProductReadScope, idOrKey: string): Promise<AdminAttributeUsage> {
     const attr = await this.getAttributeByIdOrKey(idOrKey);
-    return readAttributeUsage(this.emFactory(), {
-      definitionId: attr.customFieldDefinitionId,
-      extensionId: attr.id,
-      key: attr.key,
-    });
+    // Spec 193 (FR-031) — the dialog's counts are the caller's visible products; the delete
+    // Command's guard still counts every product, so a delete stays refused while any uses it.
+    return readAttributeUsage(
+      this.emFactory(),
+      { definitionId: attr.customFieldDefinitionId, extensionId: attr.id, key: attr.key },
+      this.#visibleProductsClause(scope, '"p"."id"'),
+    );
   }
 
   /**

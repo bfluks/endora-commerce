@@ -1,3 +1,4 @@
+import type { ProductVisibilityClause } from './admin-product-visibility.js';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { AdminAttributeUsage } from '@endora-commerce/contracts';
 
@@ -32,7 +33,18 @@ export async function readAttributeUsage(
   /** A Command's EntityManager (the delete guard), or a fresh one (the usage read). */
   em: EntityManager,
   target: AttributeUsageTarget,
+  /** Spec 193 (FR-031) — over `"p"."id"`: the caller's visible products only; `null` counts every one. */
+  visible: ProductVisibilityClause,
 ): Promise<AdminAttributeUsage> {
+  if (visible === false) {
+    const [row] = (await em.execute(
+      `select count(*)::int as attribute_set_count from attribute_set_attributes where custom_field_definition_id = ?`,
+      [target.definitionId],
+    )) as Array<{ attribute_set_count: number }>;
+    return { attributeSetCount: Number(row?.attribute_set_count ?? 0), productValueCount: 0, productContentCount: 0 };
+  }
+  const narrow = visible ? ` and ${visible.sql}` : '';
+  const narrowParams = visible ? visible.params : [];
   // `em.execute`, never `em.getConnection().execute`: inside a Command this
   // must read the state of the transaction whose write it guards (issue #200).
   // The JSONB key operator is escaped (`\\?`), because a bare `?` is a binding.
@@ -41,7 +53,7 @@ export async function readAttributeUsage(
        (select count(*)::int from attribute_set_attributes where custom_field_definition_id = ?) as attribute_set_count,
        (select count(*)::int
           from products p
-         where p.deleted_at is null
+         where p.deleted_at is null${narrow}
            and (p.attribute_values \\? ?
                 or exists (select 1 from product_value_overrides o
                             where o.product_id = p.id and o.attribute_key = ?)
@@ -51,8 +63,8 @@ export async function readAttributeUsage(
        (select count(*)::int
           from product_content_values pcv
           join products p on p.id = pcv.product_id
-         where pcv.product_attribute_id = ? and p.deleted_at is null) as product_content_count`,
-    [target.definitionId, target.key, target.key, target.key, target.extensionId],
+         where pcv.product_attribute_id = ? and p.deleted_at is null${narrow}) as product_content_count`,
+    [target.definitionId, ...narrowParams, target.key, target.key, target.key, target.extensionId, ...narrowParams],
   )) as Array<{ attribute_set_count: number; product_value_count: number; product_content_count: number }>;
   const row = rows[0];
   return {

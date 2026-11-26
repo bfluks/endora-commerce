@@ -1,3 +1,4 @@
+import type { ProductVisibilityClause } from './admin-product-visibility.js';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   ERROR_CODES,
@@ -90,7 +91,8 @@ export class AttributeScopePreviewService {
     private readonly attributeRead: Pick<CatalogAttributeReadService, 'getByIdOrKey'>,
   ) {}
 
-  async preview(idOrKey: string, query: Record<string, unknown>): Promise<AttributeScopeChangePreview> {
+  /** Spec 193 (FR-031) — `visible` (over `"p"."id"`) counts the caller's visible products' overrides only. */
+  async preview(idOrKey: string, query: Record<string, unknown>, visible: ProductVisibilityClause): Promise<AttributeScopeChangePreview> {
     // System attributes (`name`, `description`) are not rows: their scope is pinned and
     // has no preview, so they answer as an unknown attribute does.
     const attribute = await this.attributeRead.getByIdOrKey(idOrKey);
@@ -98,7 +100,7 @@ export class AttributeScopePreviewService {
     const current: AttributeScopeInput = { scopable: attribute.scopable, valueType: attribute.valueType };
     const next = parseScopeChangeQuery(query, current);
     const slots = slotsOrphanedByScopeChange(attributeScopeSet(current), attributeScopeSet(next));
-    if (!slots.channel && !slots.channelLanguage) return { orphanedOverrides: 0, byChannel: [] };
+    if ((!slots.channel && !slots.channelLanguage) || visible === false) return { orphanedOverrides: 0, byChannel: [] };
 
     const slotCondition =
       slots.channel && slots.channelLanguage
@@ -112,10 +114,10 @@ export class AttributeScopePreviewService {
         `select o.channel_id, count(*)::text as n
            from product_value_overrides o
            join products p on p.id = o.product_id and p.deleted_at is null
-          where o.attribute_key = ? and ${slotCondition}
+          where o.attribute_key = ? and ${slotCondition}${visible ? ` and ${visible.sql}` : ''}
           group by o.channel_id
           order by o.channel_id`,
-        [attribute.key],
+        [attribute.key, ...(visible ? visible.params : [])],
       );
     const byChannel = rows.map((row) => ({ channelId: row.channel_id, count: Number(row.n) }));
     return { orphanedOverrides: byChannel.reduce((sum, row) => sum + row.count, 0), byChannel };

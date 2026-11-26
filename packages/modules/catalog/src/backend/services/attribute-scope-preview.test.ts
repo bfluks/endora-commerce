@@ -89,7 +89,7 @@ describe('AttributeScopePreviewService.preview', () => {
   }
 
   it('answers 404 NOT_FOUND for an unknown attribute or a system one (not a row)', async () => {
-    await expect(service({ attribute: null }).preview('name', {})).rejects.toMatchObject({
+    await expect(service({ attribute: null }).preview('name', {}, null)).rejects.toMatchObject({
       statusCode: 404,
       code: 'NOT_FOUND',
     });
@@ -99,7 +99,7 @@ describe('AttributeScopePreviewService.preview', () => {
     const sql: Array<{ sql: string; params: unknown[] }> = [];
     const out = await service({ attribute: { key: 'color', scopable: false, valueType: 'string' }, sql }).preview('color', {
       scopable: 'true',
-    });
+    }, null);
     expect(out).toEqual({ orphanedOverrides: 0, byChannel: [] });
     expect(sql).toHaveLength(0);
   });
@@ -113,7 +113,7 @@ describe('AttributeScopePreviewService.preview', () => {
         { channel_id: C2, n: '1' },
       ],
       sql,
-    }).preview('color', { scopable: 'false' });
+    }).preview('color', { scopable: 'false' }, null);
     expect(() => attributeScopeChangePreviewResponseSchema.parse({ data: out })).not.toThrow();
     expect(out).toEqual({
       orphanedOverrides: 4,
@@ -134,7 +134,7 @@ describe('AttributeScopePreviewService.preview', () => {
       attribute: { key: 'material', scopable: true, valueType: 'string' },
       rows: [{ channel_id: C1, n: '2' }],
       sql,
-    }).preview('material', { valueType: 'select' });
+    }).preview('material', { valueType: 'select' }, null);
     expect(out).toEqual({ orphanedOverrides: 2, byChannel: [{ channelId: C1, count: 2 }] });
     expect(sql).toHaveLength(1);
     expect(sql[0]!.sql).toMatch(/language_code is not null/);
@@ -146,7 +146,7 @@ describe('AttributeScopePreviewService.preview', () => {
       ['number', 'date'],
     ] as const) {
       const sql: Array<{ sql: string; params: unknown[] }> = [];
-      const out = await service({ attribute: { key: 'k', scopable: true, valueType: from }, sql }).preview('k', { valueType: to });
+      const out = await service({ attribute: { key: 'k', scopable: true, valueType: from }, sql }).preview('k', { valueType: to }, null);
       expect(out).toEqual({ orphanedOverrides: 0, byChannel: [] });
       expect(sql).toHaveLength(0);
     }

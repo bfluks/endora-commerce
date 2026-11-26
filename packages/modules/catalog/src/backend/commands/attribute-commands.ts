@@ -484,7 +484,8 @@ export function deleteAttributeCommand(
       // dialog shows (`GET …/attributes/:idOrKey/usage`), on this Command's
       // EntityManager so it sees the state of the transaction it guards
       // (issue #200).
-      const usage = await readAttributeUsage(em, target);
+      // The guard counts every product: a delete is refused while any product uses the attribute.
+      const usage = await readAttributeUsage(em, target, null);
       if (usage.attributeSetCount > 0) {
         throw new HttpError(
           409,

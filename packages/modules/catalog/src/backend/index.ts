@@ -1229,14 +1229,20 @@ export function registerModule(ctx: ModuleContext): void {
   ctx.di.providePort<CatalogAttributeSetPort>(
     'attributeSetService',
     ctx
-      .asFunction(
-        ({ emFactory, commandBus }: CatalogCradle) =>
-          new AttributeSetService(
-            emFactory,
-            commandBus,
-            lazyPort<CatalogAttributeReadService>(ctx, 'catalogAttributeReadPort'),
-          ),
-      )
+      .asFunction(({ emFactory, commandBus }: CatalogCradle): CatalogAttributeSetPort => {
+        const sets = new AttributeSetService(
+          emFactory,
+          commandBus,
+          lazyPort<CatalogAttributeReadService>(ctx, 'catalogAttributeReadPort'),
+        );
+        // Spec 193 (FR-031) — the published port answers as the system: every product counts.
+        return {
+          listSets: () => sets.listSets(null),
+          getSetDetail: (id) => sets.getSetDetail(id, null),
+          createSet: (input) => sets.createSet(input),
+          assignAttributes: (id, input) => sets.assignAttributes(id, input, null),
+        };
+      })
       .singleton(),
   );
 

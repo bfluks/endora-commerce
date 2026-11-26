@@ -92,6 +92,12 @@ export function predicateClause(predicate: VisibilityPredicate): SqlFragment | n
   }
 }
 
+/**
+ * A scope's predicate as a clause over one product id column, for a statement that counts products:
+ * `null` adds nothing, `false` counts none, a fragment narrows (FR-031).
+ */
+export type ProductVisibilityClause = SqlFragment | null | false;
+
 /** A narrowed scope with no visibility wiring is a composition fault — refuse, never widen. */
 export function requireVisibility(
   visibility: CatalogAdminProductVisibility | undefined,
