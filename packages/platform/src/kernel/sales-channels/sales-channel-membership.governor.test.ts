@@ -507,3 +507,22 @@ describe('membership governor — enlisted in the caller’s transaction', () =>
     expect(h.deferred).toEqual([]);
   });
 });
+
+/**
+ * The container holds a facade, never the registry (TM-10): every module can resolve the cradle,
+ * so `seal`, `tokenModule` and `governing` must not be reachable from it.
+ */
+describe('the registration facade a composition contributes', () => {
+  it('exposes only `register`, frozen, and registers into the registry', async () => {
+    const registry = new ChannelMembershipGovernorRegistry();
+    const port = registry.registrationPort();
+    expect(Object.keys(port)).toEqual(['register']);
+    expect(Object.isFrozen(port)).toBe(true);
+    for (const name of ['seal', 'tokenModule', 'governing', 'governsType', 'isSealed']) expect(name in port).toBe(false);
+    const token = port.register({ moduleId: 'm', entityTypes: ['product'], governs: async () => ({ ruleLabel: RULE }) });
+    expect(registry.tokenModule(token)).toBe('m');
+    expect(registry.registrationPort()).toBe(port);
+    registry.seal();
+    expect(() => port.register({ moduleId: 'late', entityTypes: ['product'], governs: async () => null })).toThrow(/sealed/);
+  });
+});

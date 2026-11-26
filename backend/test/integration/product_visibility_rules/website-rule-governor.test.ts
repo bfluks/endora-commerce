@@ -148,4 +148,11 @@ describe('website rule membership governor (spec 193, T066)', () => {
     expect(names.filter((n) => /token/i.test(n) && /governor|website|visibility/i.test(n))).toEqual([]);
     expect(names.filter((n) => /governor/i.test(n))).toEqual(['salesChannelMembershipGovernors']);
   });
+
+  it('contributes a registration facade, not the registry: only `register` is reachable (TM-10)', () => {
+    const contributed = (h.container.cradle as unknown as Record<string, object>)['salesChannelMembershipGovernors']!;
+    expect(Object.keys(contributed)).toEqual(['register']);
+    expect(Object.isFrozen(contributed)).toBe(true);
+    for (const name of ['seal', 'tokenModule', 'governing', 'governsType']) expect(name in contributed).toBe(false);
+  });
 });
