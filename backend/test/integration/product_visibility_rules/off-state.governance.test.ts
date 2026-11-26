@@ -20,8 +20,8 @@ import {
  * an attachment row (T100 case 5). Values for a governed channel the product is not a member of
  * are refused as today (`SCOPE_INVALID`, FR-073 — the FR-093 allowance is the module's).
  *
- * The reactivation `beforeCommit` hook (T068) is not built yet; its "hook not run while off" case
- * joins this file with it.
+ * The reactivation `beforeCommit` hook (T068) is not run while off: a reactivation of a product on
+ * a governed channel leaves its membership and its admissions row as they were.
  */
 const COOKIE = { cookie: 'b2b_session=stub-admin-session' };
 
@@ -87,5 +87,21 @@ describe('product_visibility_rules off-state — governance (spec 193, T069)', (
       expect(result.applied).toBe(0);
       expect(result.refused.map((r) => r.code)).toEqual(['SCOPE_INVALID']);
     });
+  });
+
+  it.each(['deactivated', 'platform-unavailable'] as const)('while %s: the reactivation hook is not run (T068)', async (axis) => {
+    const product = await createProduct(h, { color: 'red' }, { status: 'inactive' });
+    await bridgeProduct(h, governed, product);
+    await sql(
+      `insert into "website_rule_admissions" ("sales_channel_id", "product_id", "admitted_at", "post_admission_status_seen") values (?, ?, now(), true)`,
+      [governed, product],
+    );
+    await withModuleOff('product_visibility_rules', axis, async () => {
+      const res = await h.app.inject({ method: 'PATCH', url: `/api/v1/admin/catalog/products/${product}`, headers: COOKIE, payload: { status: 'active' } });
+      expect(res.statusCode, res.body).toBe(200);
+    });
+    expect(await isMember(h, governed, product)).toBe(true);
+    expect(await sql(`select 1 from "website_rule_admissions" where "sales_channel_id" = ? and "product_id" = ?`, [governed, product])).toHaveLength(1);
+    expect(await sql(`select 1 from "website_rule_stale_products" where "product_id" = ?`, [product])).toHaveLength(0);
   });
 });
