@@ -107,8 +107,9 @@ export interface ImportExportAdapter {
    */
   requiresProfile?: boolean;
   /**
-   * Spec 193 (FR-085) — the entity is a whole-catalogue product read or write: refused `403` to an
-   * administrator whose product visibility is narrowed (a restricted or no-category role).
+   * Spec 193 (FR-085) — the entity is a whole-catalogue product read or write (products; stock,
+   * keyed by product SKU): refused `403` to an administrator whose product visibility is narrowed
+   * (a restricted or no-category role).
    */
   refusedToNarrowedProductScopes?: boolean;
   /** Header columns the import expects. Undefined when import is unsupported. */

@@ -19,6 +19,8 @@ export function stockAdapter(ports: ImportExportPorts): ImportExportAdapter {
     owners: ['inventory', 'catalog'],
     exportPermission: 'inventory:read',
     importPermission: 'inventory:write',
+    // Spec 193 (FR-085, owner ruling 2026-11-26) — a whole-catalogue file of product-keyed rows.
+    refusedToNarrowedProductScopes: true,
     exportHeader: ['product_sku', 'variant_id', 'on_hand', 'reserved'] as const,
 
     async exportRows(): Promise<string[][]> {

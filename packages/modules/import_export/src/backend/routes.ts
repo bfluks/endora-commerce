@@ -40,10 +40,10 @@ export async function registerImportExportRoutes(
   deps: ImportExportRoutesDeps,
 ): Promise<void> {
   const { service, profiles, requireAdmin, requireAdminAny } = deps;
-  /** Spec 193 (FR-085) — a whole-catalogue product file is not for a narrowed administrator. */
+  /** Spec 193 (FR-085) — a whole-catalogue product-keyed file (products, stock) is not for a narrowed administrator. */
   const refuseNarrowed = async (entity: string, request: FastifyRequest): Promise<void> => {
     if (service.refusedToNarrowedProductScopes(entity) && (await deps.productScopeNarrowed(request))) {
-      throw new HttpError(403, ERROR_CODES.FORBIDDEN, 'Your role does not see every product, so it cannot export or import products.');
+      throw new HttpError(403, ERROR_CODES.FORBIDDEN, 'Your role does not see every product, so it cannot export or import this data.');
     }
   };
 
