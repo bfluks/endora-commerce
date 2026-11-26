@@ -40,7 +40,7 @@ describe('website-rule reactivation through the bulk-edit undo (spec 193, T068, 
       conditions: [{ kind: 'attribute_choice', attributeKey: colour, optionKeys: ['red'] }],
     });
     const em = (): EntityManager => h.orm.em.fork();
-    const cradle = h.container.cradle as Record<string, never>;
+    const cradle = h.container.cradle as unknown as Record<string, never>;
     const commandBus = cradle['commandBus'];
     const audit = cradle['auditLogService'];
     const admin_ = new CatalogAdminService(em, h.eventBus as unknown as CatalogEventBus, audit, undefined, commandBus);

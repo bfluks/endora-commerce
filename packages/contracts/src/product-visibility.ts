@@ -239,9 +239,9 @@ export type ProductRuleDefinition = z.infer<typeof ProductRuleDefinitionSchema>;
 // ────────────────────────────────────────────────────────────────────────
 
 /**
- * Owner: `product_visibility_rules`. A capability read port (FR-055), published as
- * `productRuleGovernancePort` when the website rule lands (spec 193 Phase 6); the type is
- * declared now so the contract is reviewed with the configuration.
+ * Container name: `productRuleGovernancePort`. Owner: `product_visibility_rules`. A capability
+ * read port (FR-055), registered since the website rule landed (spec 193 Phase 6); `catalog`
+ * resolves it behind its presence probe (`degrades-without`).
  *
  * **Owner off:** the port gate answers 503 `MODULE_DISABLED`; a connector that probes
  * presence first treats absent as "nothing governed", consistent with the kernel.
