@@ -4,7 +4,7 @@ import { enterSystemScope, type PlatformLogger } from '@endora-commerce/platform
 import type { WebsiteRuleJobs } from '../services/website-rule.service.js';
 
 /**
- * The website-rule queue — spec 193 T058, T059 (research R-11; Principle X).
+ * The website-rule queue (research R-11; Principle X).
  *
  * - `preview` / `apply` — one job per preview id (deduplicated by id): evaluate a preview, write
  *   a confirmed snapshot. The apply job deletes each batch's rows with its batch, so a retry
@@ -27,13 +27,10 @@ export const WR_EVALUATE_JOB = 'evaluate';
 export const WR_RECONCILE_JOB = 'reconcile';
 export const WR_EVALUATE_DEBOUNCE_MS = 30_000;
 export const WR_RECONCILE_PATTERN = '41 * * * *';
-/**
- * An evaluation poll that finds the previous one longer ago than this reconciles first (R-15):
- * the module was off (its worker paused, its event subscriber silent) or no worker ran, so
- * changes made meanwhile were never marked.
- */
-export const WR_REENABLE_GAP_MS = 4 * WR_EVALUATE_DEBOUNCE_MS;
-const LAST_EVALUATION_KEY = 'product_visibility_rules.website_rule:last-evaluation';
+/** Bumped by every process that sees the module's presence change (see {@link recordPresenceTransitions}). */
+const PRESENCE_EPOCH_KEY = 'product_visibility_rules.website_rule:presence-epoch';
+/** The presence epoch the last reconcile-after-a-change ran at. */
+const RECONCILED_EPOCH_KEY = 'product_visibility_rules.website_rule:reconciled-epoch';
 
 const SCOPE_REASON = 'product_visibility_rules: website rule';
 
@@ -44,14 +41,85 @@ export interface WebsiteRuleWork {
   reconcileAll(): Promise<{ changed: number }>;
 }
 
-/** When the evaluation poll last ran, across processes. */
-export interface EvaluationClock {
-  /** Milliseconds since the previous evaluation poll, recording this one; `null` = none recorded. */
-  sinceLastEvaluation(): Promise<number | null>;
+/**
+ * Whether the module's presence changed since the last reconcile, across processes (R-15). While
+ * off, the catalogue-event subscriber is silent in every process that sees it off, so changes made
+ * meanwhile were never marked; each such process bumps the epoch, and the next evaluation poll
+ * reconciles. A worker that merely stalled sees no new epoch.
+ */
+export interface PresenceEpochs {
+  /** The current epoch; `'0'` before any process recorded a change. */
+  presenceEpoch(): Promise<string>;
+  /** The epoch the last reconcile after a change ran at; `null` = never (or no store). */
+  reconciledEpoch(): Promise<string | null>;
+  markReconciled(epoch: string): Promise<void>;
+  bumpPresenceEpoch(): Promise<void>;
 }
 
-export interface WebsiteRuleProducer extends WebsiteRuleJobs, EvaluationClock {
+/** Presence epochs in Redis; without a connection there is no record, so every poll reconciles. */
+export function createPresenceEpochs(redis: Redis | undefined): PresenceEpochs {
+  return {
+    async presenceEpoch() {
+      return (await redis?.get(PRESENCE_EPOCH_KEY)) ?? '0';
+    },
+    async reconciledEpoch() {
+      return (await redis?.get(RECONCILED_EPOCH_KEY)) ?? null;
+    },
+    async markReconciled(epoch) {
+      await redis?.set(RECONCILED_EPOCH_KEY, epoch);
+    },
+    async bumpPresenceEpoch() {
+      await redis?.incr(PRESENCE_EPOCH_KEY);
+    },
+  };
+}
+
+export interface WebsiteRuleProducer extends WebsiteRuleJobs {
   close(): Promise<void>;
+}
+
+/**
+ * Record, in this process, every change of the module's presence by bumping the shared epoch. A
+ * gated subscriber drops work only in a process whose installed presence says absent, and this
+ * listener sees every install into that same state, so a process that never installed "absent"
+ * dropped nothing. Both directions bump: a process that comes back on after the worker already
+ * reconciled may have dropped marks until then. A process that starts while the module is off
+ * bumps at once. A failed bump stays owed and is retried on the next install (installs are
+ * level-triggered). Answers the unsubscribe.
+ */
+export function recordPresenceTransitions(input: {
+  readonly isPresent: () => boolean;
+  readonly onPresenceInstalled: (listener: () => void) => () => void;
+  readonly bump: () => Promise<void>;
+  readonly log: PlatformLogger;
+}): () => void {
+  let last = input.isPresent();
+  let owed = last ? 0 : 1;
+  let writing = false;
+  const flush = (): void => {
+    if (owed === 0 || writing) return;
+    const paying = owed;
+    writing = true;
+    input.bump().then(
+      () => {
+        owed -= paying;
+        writing = false;
+        flush();
+      },
+      (err: unknown) => {
+        writing = false;
+        input.log.warn({ err }, 'product_visibility_rules: could not record a presence change; retried on the next presence install');
+      },
+    );
+  };
+  const unsubscribe = input.onPresenceInstalled(() => {
+    const present = input.isPresent();
+    if (present !== last) owed += 1;
+    last = present;
+    flush();
+  });
+  flush();
+  return unsubscribe;
 }
 
 function queueOf(redis: Redis): Queue {
@@ -81,12 +149,6 @@ export function createWebsiteRuleProducer(redis: Redis | undefined): WebsiteRule
       const delay = Math.max(0, at.getTime() - Date.now());
       await q()?.add(WR_RECONCILE_JOB, {}, { jobId: `window-${key.replace(/[^A-Za-z0-9_.-]/g, '_')}`, delay });
     },
-    async sinceLastEvaluation() {
-      if (redis === undefined) return null;
-      const now = Date.now();
-      const previous = await redis.getset(LAST_EVALUATION_KEY, String(now));
-      return previous === null ? null : now - Number(previous);
-    },
     async close() {
       await queue?.close();
       queue = undefined;
@@ -100,7 +162,7 @@ export async function runWebsiteRuleJob(
   data: { previewId?: string },
   work: WebsiteRuleWork,
   log: PlatformLogger,
-  clock: EvaluationClock,
+  epochs: PresenceEpochs,
 ): Promise<void> {
   await enterSystemScope(SCOPE_REASON, async () => {
     if (name === WR_PREVIEW_JOB && data.previewId) return work.runPreview(data.previewId);
@@ -110,10 +172,13 @@ export async function runWebsiteRuleJob(
       return;
     }
     if (name === WR_EVALUATE_JOB) {
-      const gap = await clock.sinceLastEvaluation();
-      if (gap === null || gap > WR_REENABLE_GAP_MS) {
+      // Read before the reconcile and stored after it: a change recorded meanwhile moves the
+      // epoch past the stored one, and a failed reconcile stores nothing, so the next poll retries.
+      const epoch = await epochs.presenceEpoch();
+      if ((await epochs.reconciledEpoch()) !== epoch) {
         const reconciled = await work.reconcileAll();
-        log.info({ gapMs: gap, ...reconciled }, 'product_visibility_rules: website rule reconciled after a pause');
+        await epochs.markReconciled(epoch);
+        log.info({ presenceEpoch: epoch, ...reconciled }, 'product_visibility_rules: website rule reconciled after the module was switched off or on');
       }
       const result = await work.evaluateMarked();
       if (result.changed > 0) log.info(result, 'product_visibility_rules: website rule re-evaluated marked products');
@@ -130,7 +195,7 @@ export async function startWebsiteRuleWorker(input: {
   readonly processRunsWorkers: boolean;
   readonly moduleQueueRedis: Redis | undefined;
   readonly work: WebsiteRuleWork;
-  readonly clock: EvaluationClock;
+  readonly epochs: PresenceEpochs;
   readonly log: PlatformLogger;
   readonly attach: (worker: Worker) => void;
   readonly onClose: (close: () => Promise<void>) => void;
@@ -138,7 +203,7 @@ export async function startWebsiteRuleWorker(input: {
   if (!input.processRunsWorkers || input.moduleQueueRedis === undefined) return false;
   const worker = new Worker(
     WEBSITE_RULE_QUEUE,
-    (job: Job<{ previewId?: string }>) => runWebsiteRuleJob(job.name, job.data ?? {}, input.work, input.log, input.clock),
+    (job: Job<{ previewId?: string }>) => runWebsiteRuleJob(job.name, job.data ?? {}, input.work, input.log, input.epochs),
     { connection: input.moduleQueueRedis, concurrency: 1 },
   );
   worker.on('failed', (job, err) => {

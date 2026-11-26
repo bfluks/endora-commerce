@@ -37,7 +37,13 @@ import { VisibilityConfigService } from './services/visibility-config.service.js
 import { WebsiteRuleGovernorHandle } from './services/membership-governor.js';
 import { WebsiteRuleService } from './services/website-rule.service.js';
 import { ProductRuleGovernance } from './services/product-rule-governance.js';
-import { createWebsiteRuleProducer, startWebsiteRuleWorker, type WebsiteRuleProducer } from './workers/website-rule-worker.js';
+import {
+  createPresenceEpochs,
+  createWebsiteRuleProducer,
+  recordPresenceTransitions,
+  startWebsiteRuleWorker,
+  type WebsiteRuleProducer,
+} from './workers/website-rule-worker.js';
 import { registerWebsiteRuleAdminRoutes } from './routes.website-rules.js';
 import { registerProductVisibilityAdminRoutes } from './routes.admin.js';
 import { CataloguePriceDesignation } from './entities/catalogue-price-designation.entity.js';
@@ -63,6 +69,8 @@ export interface ProductVisibilityRulesCradle {
   readonly adminContextResolver: (request: FastifyRequest) => { adminUserId: string };
   /** The composition's queue connection, when it has one, and whether this process consumes queues. */
   readonly moduleQueueRedis: Redis | undefined;
+  /** The platform's connection, where the website rule records presence changes every process sees. */
+  readonly redis: Redis | undefined;
   readonly processRunsWorkers: boolean;
   readonly productVisibilityFlags: CataloguePriceFlags;
   readonly productVisibilityFlagsProducer: FlagsProducer;
@@ -219,15 +227,28 @@ export function registerModule(ctx: ModuleContext): void {
     });
   });
 
-  /** T058, T059 — the website-rule worker (previews, snapshots, the steady state), stopped with the module. */
+  /**
+   * The website-rule worker (previews, snapshots, the steady state), stopped with the module; and,
+   * in every process, the recorder of this module's presence changes the worker reconciles after
+   * (R-15). Registration runs whatever the presence, and the recorder is ungated on purpose: it is
+   * what remembers that the gated subscribers were silent here.
+   */
   ctx.routes(async (app) => {
     const cradle = ctx.cradle<ProductVisibilityRulesCradle>();
+    const epochs = createPresenceEpochs(cradle.redis);
+    const stopRecording = recordPresenceTransitions({
+      isPresent: () => effectiveState.isPresent('product_visibility_rules'),
+      onPresenceInstalled: (listener) => effectiveState.onPresenceInstalled(listener),
+      bump: () => epochs.bumpPresenceEpoch(),
+      log: ctx.log,
+    });
+    app.addHook('onClose', async () => stopRecording());
     app.addHook('onClose', () => cradle.productVisibilityWebsiteRulesProducer.close());
     await startWebsiteRuleWorker({
       processRunsWorkers: cradle.processRunsWorkers,
       moduleQueueRedis: cradle.moduleQueueRedis,
       work: cradle.productVisibilityWebsiteRules,
-      clock: cradle.productVisibilityWebsiteRulesProducer,
+      epochs,
       log: ctx.log,
       attach: (worker) => ctx.worker(worker, { logger: app.log }),
       onClose: (close) => app.addHook('onClose', close),

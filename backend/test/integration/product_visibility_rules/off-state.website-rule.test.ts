@@ -1,4 +1,10 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { PlatformLogger } from '@endora-commerce/platform/kernel';
+import {
+  WR_EVALUATE_JOB,
+  createPresenceEpochs,
+  runWebsiteRuleJob,
+} from '../../../../packages/modules/product_visibility_rules/src/backend/workers/website-rule-worker.js';
 import { setupBackendServer, teardownBackendServer, type BackendServerHandle } from '../../helpers/test-server.js';
 import { expectModuleAbsent, withModuleOff } from '../../helpers/off-state.js';
 import { ADMIN, BASE, call } from './fixtures.js';
@@ -19,8 +25,9 @@ import {
  *  * the catalogue-event subscriber does not run (`ctx.subscribe`): a product change marks nothing,
  *    so nothing is evaluated, and memberships stay as last computed;
  *  * the worker is attached with `ctx.worker`, so its jobs wait (the platform's worker gate, held
- *    by its own tests; the shared harness runs no worker) — and the first evaluation poll after
- *    the module is back reconciles every governed channel (`website-rule-worker.test.ts`);
+ *    by its own tests; the shared harness runs no worker) — and every process records that it saw
+ *    the module off, so the first evaluation poll after it is back reconciles every governed
+ *    channel, however short the pause, and the poll after that does not;
  *  * rules, attachments and admissions are kept, and govern again once back.
  */
 const UNKNOWN = '00000000-0000-4000-8000-000000000193';
@@ -31,6 +38,20 @@ describe('product_visibility_rules off-state — website rule (spec 193, T061)',
   let ruleId: string;
   const sql = <T = Record<string, unknown>>(s: string, params: unknown[] = []) => h.orm.em.fork().getConnection().execute<T[]>(s, params);
   const count = async (table: string) => (await sql<{ n: number }>(`select count(*)::int as n from "${table}"`))[0]!.n;
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as PlatformLogger;
+  /** One evaluation poll as the worker runs it; answers how many reconciles it ran. */
+  async function evaluationPoll(): Promise<number> {
+    const service = websiteRules(h);
+    let reconciles = 0;
+    const work = {
+      runPreview: (id: string) => service.runPreview(id),
+      applyPreview: (id: string) => service.applyPreview(id),
+      evaluateMarked: () => service.evaluateMarked(),
+      reconcileAll: () => ((reconciles += 1), service.reconcileAll()),
+    };
+    await runWebsiteRuleJob(WR_EVALUATE_JOB, {}, work, log, createPresenceEpochs(h.redis));
+    return reconciles;
+  }
   const port = () => (h.container as unknown as { resolve<T>(n: string): T }).resolve<{ governedChannels(): Promise<unknown> }>('productRuleGovernancePort');
 
   beforeAll(async () => {
@@ -74,6 +95,9 @@ describe('product_visibility_rules off-state — website rule (spec 193, T061)',
   it.each(['deactivated', 'platform-unavailable'] as const)(
     'while %s: no mark, no evaluation, the port refuses, memberships and rows kept',
     async (axis) => {
+      // Settle any presence change recorded before this case: a steady poll reconciles nothing.
+      await evaluationPoll();
+      expect(await evaluationPoll()).toBe(0);
       const members = await channelMembers(h, channel);
       expect(members.length).toBeGreaterThan(0);
       const rows = { rules: await count('product_rules'), attachments: await count('website_rule_attachments'), admissions: await count('website_rule_admissions') };
@@ -90,11 +114,13 @@ describe('product_visibility_rules off-state — website rule (spec 193, T061)',
 
       expect(await channelMembers(h, channel)).toEqual(members);
       expect({ rules: await count('product_rules'), attachments: await count('website_rule_attachments'), admissions: await count('website_rule_admissions') }).toEqual(rows);
-      // Back on: the rule governs again, and the reconcile the first poll runs admits the product
-      // whose creation went unmarked while off.
+      // Back on, seconds later: the rule governs again, and the first poll reconciles — admitting
+      // the product whose creation went unmarked while off. The poll after it only evaluates.
       expect(await port().governedChannels()).toEqual([expect.objectContaining({ salesChannelId: channel, productRuleId: ruleId })]);
-      await websiteRules(h).reconcileAll();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(await evaluationPoll()).toBe(1);
       expect(await channelMembers(h, channel)).toContain(joiner);
+      expect(await evaluationPoll()).toBe(0);
     },
   );
 });
