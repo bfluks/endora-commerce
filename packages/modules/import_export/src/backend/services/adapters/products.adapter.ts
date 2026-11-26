@@ -183,6 +183,7 @@ export function productsAdapter(ports: ImportExportPorts): ImportExportAdapter {
     exportPermission: 'catalog:read',
     importPermission: 'catalog:write',
     requiresProfile: true,
+    refusedToNarrowedProductScopes: true,
     exportHeader: EXPORT_HEADER,
 
     // The fixed Global columns, then one `<field>@<channel code>[/<language>]` column per

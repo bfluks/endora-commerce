@@ -48,6 +48,7 @@ async function harness(held: readonly string[]) {
   await registerImportExportRoutes(app, {
     service,
     profiles: {} as Parameters<typeof registerImportExportRoutes>[1]['profiles'],
+    productScopeNarrowed: async () => false,
     requireAdmin: (code) => async () => {
       if (code !== undefined && !held.includes(code)) throw forbidden(code);
     },

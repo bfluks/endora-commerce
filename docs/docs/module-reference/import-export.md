@@ -41,6 +41,7 @@ An operator switches this module on and off on **/platform/modules**. The choice
 | `orders` | no | degrades-without `orderReadPort` — The import/export centre stops offering the Orders export; every other entity is unaffected. |
 | `organizations` | no | degrades-without `organizationDetailsPort` — The import/export centre stops offering the Customers export; every other entity is unaffected. |
 | `organizations` | no | degrades-without `organizationRoleReadPort` — The import/export centre stops offering the Customers export; every other entity is unaffected. |
+| `product_visibility_rules` | no | degrades-without `adminProductVisibilityPort` — every administrator who may export or import products does so, as before the feature |
 
 ## Permissions
 

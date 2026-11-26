@@ -12,7 +12,9 @@ import type {
   OrganizationRoleReadPort,
 } from '@endora-commerce/contracts';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
-import { lazyPort } from '@endora-commerce/platform/kernel';
+import { effectiveState, lazyPort } from '@endora-commerce/platform/kernel';
+import type { AdminProductVisibilityPort } from '@endora-commerce/contracts';
+import type { FastifyRequest } from 'fastify';
 import type {
   RequireAdminAnyFactory,
   RequireAdminFactory,
@@ -53,6 +55,7 @@ export interface ImportExportCradle {
 }
 
 export function registerModule(ctx: ModuleContext): void {
+  const productVisibilityPort = lazyPort<AdminProductVisibilityPort>(ctx, 'adminProductVisibilityPort');
   ctx.di.register({
     /**
      * D-74 — the seven edges, all of them ports now.
@@ -110,6 +113,14 @@ export function registerModule(ctx: ModuleContext): void {
       profiles: importProfileService,
       requireAdmin,
       requireAdminAny,
+      // Spec 193 (FR-085) — `degrades-without`: presence decided here, in front of the port; a
+      // call made while present is not caught.
+      productScopeNarrowed: async (request) => {
+        if (!effectiveState.isPresent('product_visibility_rules')) return false;
+        const adminUserId = ctx.cradle<{ adminContextResolver: (r: FastifyRequest) => { adminUserId: string } }>().adminContextResolver(request).adminUserId;
+        const scope = await productVisibilityPort.resolveScope(adminUserId);
+        return scope.kind === 'restricted' || scope.kind === 'no_category';
+      },
     });
   });
 }

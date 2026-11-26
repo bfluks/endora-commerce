@@ -39,6 +39,14 @@ export const manifest = defineModuleManifest({
    */
   nonBindingDependencies: [
     {
+      moduleId: 'product_visibility_rules',
+      name: 'adminProductVisibilityPort',
+      kind: 'degrades-without',
+      whenAbsent: 'every administrator who may export or import products does so, as before the feature',
+      reason:
+        'Spec 193 (FR-085). A products file is the whole catalogue, so an administrator whose product visibility is narrowed is refused it. The module is deactivatable and off by default: presence is probed in front of the port, and a call made while present is never caught.',
+    },
+    {
       moduleId: 'catalog',
       name: 'catalogProductReadPort',
       kind: 'degrades-without',

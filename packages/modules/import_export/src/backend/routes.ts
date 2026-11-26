@@ -18,6 +18,11 @@ export interface ImportExportRoutesDeps {
   profiles: ImportProfileService;
   requireAdmin: RequireAdminFactory;
   requireAdminAny: RequireAdminAnyFactory;
+  /**
+   * Spec 193 (FR-085) — whether the caller's admin product visibility is narrowed (restricted or
+   * no category), resolved per request; `false` while `product_visibility_rules` is absent.
+   */
+  productScopeNarrowed(request: FastifyRequest): Promise<boolean>;
 }
 
 const FILENAME_RE = /^[a-z][a-z0-9_]*$/;
@@ -35,6 +40,12 @@ export async function registerImportExportRoutes(
   deps: ImportExportRoutesDeps,
 ): Promise<void> {
   const { service, profiles, requireAdmin, requireAdminAny } = deps;
+  /** Spec 193 (FR-085) — a whole-catalogue product file is not for a narrowed administrator. */
+  const refuseNarrowed = async (entity: string, request: FastifyRequest): Promise<void> => {
+    if (service.refusedToNarrowedProductScopes(entity) && (await deps.productScopeNarrowed(request))) {
+      throw new HttpError(403, ERROR_CODES.FORBIDDEN, 'Your role does not see every product, so it cannot export or import products.');
+    }
+  };
 
   /**
    * Holding one of the codes an entity of the centre is gated by — the owning
@@ -124,6 +135,7 @@ export async function registerImportExportRoutes(
         reply.status(400);
         return { error: { code: 'VALIDATION_FAILED', message: 'invalid entity slug' } };
       }
+      await refuseNarrowed(entity, request);
       const body = await service.exportToCsv(entity);
       reply
         .header('Content-Type', 'text/csv; charset=utf-8')
@@ -140,6 +152,7 @@ export async function registerImportExportRoutes(
       reply.status(400);
       return { error: { code: 'VALIDATION_FAILED', message: 'invalid entity slug' } };
     }
+    await refuseNarrowed(entity, request);
     const body =
       typeof request.body === 'string'
         ? request.body

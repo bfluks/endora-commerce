@@ -108,6 +108,11 @@ export class ImportExportService {
    * answers its export code, so a caller who may not read the rows is refused
    * with 403 rather than told by a 405 how the entity behaves.
    */
+  /** Spec 193 (FR-085) — whether a narrowed product visibility refuses this entity. */
+  refusedToNarrowedProductScopes(entity: string): boolean {
+    return this.available().find((candidate) => candidate.name === entity)?.refusedToNarrowedProductScopes === true;
+  }
+
   importPermissionFor(entity: string): string | undefined {
     const adapter = this.available().find((candidate) => candidate.name === entity);
     return adapter ? (adapter.importPermission ?? adapter.exportPermission) : undefined;

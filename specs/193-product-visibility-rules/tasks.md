@@ -401,11 +401,11 @@ FR-088 docs table (T094).
   drops hidden products' lines. Row **edits** stay unrestricted (FR-038).
   *Build note*: the product's history answers a hidden product as one with none (after the book is read through its scope); a change's lines keep lines naming no product. `price_lists` asks the port (`filterVisible`, `productPredicate`) — it never reads `products`.
   *Off state*: `other-admin-reads.test.ts` holds both history reads equal to the platform administrator's with the module off on both axes.
-- [ ] T054 [A] `import_export` products adapter
+- [x] T054 [A] `import_export` products adapter
   (`packages/modules/import_export/src/backend/services/adapters/products.adapter.ts`): export and
   import of products refused `403` for a non-unrestricted scope, one check through the port, resolved
   at job execution for the requester.
-  *Build state*: **not started**.
+  *Build note*: the request is synchronous (no job), so the scope is resolved per request for the requester; the adapter flag `refusedToNarrowedProductScopes` marks the products entity. Off state held in `other-admin-reads.test.ts`.
 
 **Verification (5c)**: `pnpm --filter backend exec vitest run test/integration/product_visibility_rules/other-admin-reads.test.ts test/integration/product_visibility_rules/sc-009-surfaces.test.ts test/integration/product_visibility_rules/off-state.other-admin-reads.test.ts test/integration/inventory test/integration/import_export`;
 `pnpm --filter @endora-commerce/mod-import-export exec vitest run src/backend/services/adapters/products.adapter.test.ts`;

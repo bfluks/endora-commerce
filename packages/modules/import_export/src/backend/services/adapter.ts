@@ -106,6 +106,11 @@ export interface ImportExportAdapter {
    * (`422 IMPORT_PROFILE_REQUIRED` without one).
    */
   requiresProfile?: boolean;
+  /**
+   * Spec 193 (FR-085) — the entity is a whole-catalogue product read or write: refused `403` to an
+   * administrator whose product visibility is narrowed (a restricted or no-category role).
+   */
+  refusedToNarrowedProductScopes?: boolean;
   /** Header columns the import expects. Undefined when import is unsupported. */
   importHeader?: readonly string[];
   /**
