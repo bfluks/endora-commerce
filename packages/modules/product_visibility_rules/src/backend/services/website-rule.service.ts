@@ -194,11 +194,19 @@ export class WebsiteRuleService {
 
   async updateRule(id: string, body: ProductRuleUpdateBody, expectedVersion: number | undefined): Promise<ProductRuleView> {
     if (body.definition !== undefined) await this.#assertDefinitionValid(body.definition);
-    return view(await this.deps.commandBus.run(productRuleUpdateCommand(id, body, expectedVersion)));
+    return view(await this.deps.commandBus.run(productRuleUpdateCommand(id, body, expectedVersion, await this.#deadAttachments(id))));
   }
 
   async deleteRule(id: string, expectedVersion: number | undefined): Promise<void> {
-    await this.deps.commandBus.run(productRuleDeleteCommand(id, expectedVersion));
+    await this.deps.commandBus.run(productRuleDeleteCommand(id, expectedVersion, await this.#deadAttachments(id)));
+  }
+
+  /** Channels attached to `ruleId` that no longer exist (deleted while governed). */
+  async #deadAttachments(ruleId: string): Promise<string[]> {
+    const rows = await this.#em().find(WebsiteRuleAttachment, { productRuleId: ruleId });
+    const dead: string[] = [];
+    for (const r of rows) if ((await this.deps.channels().getById(r.salesChannelId)) === null) dead.push(r.salesChannelId);
+    return dead;
   }
 
   // ── Previews (T058; FR-053, TM-11) ─────────────────────────────────────────────────────
@@ -231,7 +239,11 @@ export class WebsiteRuleService {
     } else {
       await this.#assertDefinitionValid(body.definition);
       definition = body.definition;
-      salesChannelIds = (await em.find(WebsiteRuleAttachment, { productRuleId: rule.id })).map((a) => a.salesChannelId).sort();
+      const dead = new Set(await this.#deadAttachments(rule.id));
+      salesChannelIds = (await em.find(WebsiteRuleAttachment, { productRuleId: rule.id }))
+        .map((a) => a.salesChannelId)
+        .filter((id) => !dead.has(id))
+        .sort();
     }
 
     // TM-11 — standing previews of this administrator, and the snapshot table as a whole.
@@ -343,7 +355,7 @@ export class WebsiteRuleService {
     const command =
       preview.kind === 'attach'
         ? websiteRuleAttachCommand(previewId, adminUserId, now, existing)
-        : websiteRuleChangeCommand(previewId, adminUserId, now);
+        : websiteRuleChangeCommand(previewId, adminUserId, now, preview.productRuleId ? await this.#deadAttachments(preview.productRuleId) : []);
     const confirmed = await this.deps.commandBus.run(command);
     await this.deps.jobs.enqueueApply(previewId);
     await this.scheduleWindowBoundaries();

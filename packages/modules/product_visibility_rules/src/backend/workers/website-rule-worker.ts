@@ -57,7 +57,9 @@ export interface WebsiteRuleProducer extends WebsiteRuleJobs, EvaluationClock {
 function queueOf(redis: Redis): Queue {
   return new Queue(WEBSITE_RULE_QUEUE, {
     connection: redis,
-    defaultJobOptions: { removeOnComplete: true, removeOnFail: 100, attempts: 5, backoff: { type: 'exponential', delay: 5_000 } },
+    // Fixed job ids (`evaluate`, one per preview) must be free again once a job is done or failed,
+    // or a failed one would swallow every later request under the same id.
+    defaultJobOptions: { removeOnComplete: true, removeOnFail: true, attempts: 5, backoff: { type: 'exponential', delay: 5_000 } },
   });
 }
 

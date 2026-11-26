@@ -61,6 +61,17 @@ async function loadRule(em: Em, id: string, expectedVersion?: number): Promise<P
   return rule;
 }
 
+/**
+ * Drop the attachments (and admissions) of channels that no longer exist — a sales channel deleted
+ * while governed leaves its rows behind (no foreign key leaves this module, data-model §0). The
+ * service names them; the Command removes them in its own transaction before it decides.
+ */
+async function dropDeadAttachments(em: Em, deadChannelIds: readonly string[]): Promise<void> {
+  if (deadChannelIds.length === 0) return;
+  await em.nativeDelete(WebsiteRuleAttachment, { salesChannelId: { $in: [...deadChannelIds] } });
+  await em.nativeDelete(WebsiteRuleAdmission, { salesChannelId: { $in: [...deadChannelIds] } });
+}
+
 async function attachedChannelIds(em: Em, ruleId: string): Promise<string[]> {
   const rows = await em.find(WebsiteRuleAttachment, { productRuleId: ruleId }, { orderBy: { salesChannelId: 'asc' } });
   return rows.map((r) => r.salesChannelId);
@@ -91,6 +102,7 @@ export function productRuleUpdateCommand(
   id: string,
   patch: { name?: string | undefined; definition?: ProductRuleDefinition | undefined },
   expectedVersion: number | undefined,
+  deadChannelIds: readonly string[] = [],
 ): Command<ProductRule> {
   return {
     action: A.PRODUCT_RULE_UPDATE,
@@ -103,6 +115,7 @@ export function productRuleUpdateCommand(
       const definitionChanged = patch.definition !== undefined && JSON.stringify(patch.definition) !== JSON.stringify(rule.definition);
       if (nextName === rule.name && !definitionChanged) return { result: rule, before, after: before, skipAudit: true };
       if (definitionChanged) {
+        await dropDeadAttachments(em, deadChannelIds);
         if ((await attachedChannelIds(em, id)).length > 0) {
           throw new HttpError(
             409,
@@ -121,13 +134,14 @@ export function productRuleUpdateCommand(
 }
 
 /** `product_visibility.product_rule.delete` — refused while attached to any channel. */
-export function productRuleDeleteCommand(id: string, expectedVersion: number | undefined): Command<void> {
+export function productRuleDeleteCommand(id: string, expectedVersion: number | undefined, deadChannelIds: readonly string[] = []): Command<void> {
   return {
     action: A.PRODUCT_RULE_DELETE,
     objectType: 'product_rule',
     objectId: id,
     async run({ em }) {
       const rule = await loadRule(em, id, expectedVersion);
+      await dropDeadAttachments(em, deadChannelIds);
       const channels = await attachedChannelIds(em, id);
       if (channels.length > 0) {
         throw new HttpError(409, E.PRODUCT_RULE_ATTACHED, 'This product rule governs a sales channel; detach it first.', {
@@ -200,7 +214,15 @@ export function websiteRuleAttachCommand(
         em.persist(em.create(WebsiteRuleAttachment, { salesChannelId, productRuleId: rule.id, appliedRuleVersion: rule.version }));
       }
       preview.status = 'applied';
-      await em.flush();
+      try {
+        await em.flush();
+      } catch (error) {
+        // Two confirms racing for one channel: the loser meets the primary key (FR-051).
+        if (error instanceof UniqueConstraintViolationException) {
+          throw new HttpError(409, E.CHANNEL_ALREADY_GOVERNED, 'A sales channel of this preview already follows a product rule.');
+        }
+        throw error;
+      }
       return {
         result: { previewId, productRuleId: rule.id, salesChannelIds: channelIds },
         before: null,
@@ -215,7 +237,12 @@ export function websiteRuleAttachCommand(
  * rule's, its version moves, and every attachment records it. Stale when the channels the rule
  * governs changed since the preview.
  */
-export function websiteRuleChangeCommand(previewId: string, adminUserId: string, now: Date): Command<WebsiteRuleConfirmed> {
+export function websiteRuleChangeCommand(
+  previewId: string,
+  adminUserId: string,
+  now: Date,
+  deadChannelIds: readonly string[] = [],
+): Command<WebsiteRuleConfirmed> {
   return {
     action: A.WEBSITE_RULE_CHANGE,
     objectType: 'website_rule_preview',
@@ -223,6 +250,7 @@ export function websiteRuleChangeCommand(previewId: string, adminUserId: string,
     async run({ em }) {
       const { preview, rule } = await lockReadyPreview(em, previewId, adminUserId, now);
       if (preview.kind !== 'change') throw stale('it is not a change preview');
+      await dropDeadAttachments(em, deadChannelIds);
       const channelIds = await attachedChannelIds(em, rule.id);
       if (JSON.stringify(channelIds) !== JSON.stringify(Object.keys(preview.counts ?? {}).sort())) {
         throw stale('the channels the rule governs changed since');
