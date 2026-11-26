@@ -40,6 +40,7 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 | `sales_channels` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `settings` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `transactional_emails` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
+| `product_visibility_rules` | nie | degrades-without `adminProductVisibilityPort` — listy magazynowe w panelu i narzędzie asystenta do ustawiania stanu nie są zawężane według roli: każdy administrator widzi i wskazuje każdy produkt, dokładnie jak przed wprowadzeniem tej funkcji |
 | `prompt_actions` | nie | contributes-to `promptActionToolRegistry` |
 
 ## Uprawnienia

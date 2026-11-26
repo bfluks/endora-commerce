@@ -36,6 +36,7 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 | `customer_accounts` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `organizations` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `settings` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
+| `product_visibility_rules` | nie | degrades-without `adminProductVisibilityPort` — siatka cennika nie jest zawężana według roli: każdy administrator widzi każdą linię produktu i wariantu, dokładnie jak przed wprowadzeniem tej funkcji |
 
 ## Uprawnienia
 

@@ -41,6 +41,7 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 | `orders` | nie | degrades-without `orderReadPort` — Centrum importu i eksportu przestaje oferować eksport zamówień; pozostałe encje działają bez zmian. |
 | `organizations` | nie | degrades-without `organizationDetailsPort` — Centrum importu i eksportu przestaje oferować eksport klientów; pozostałe encje działają bez zmian. |
 | `organizations` | nie | degrades-without `organizationRoleReadPort` — Centrum importu i eksportu przestaje oferować eksport klientów; pozostałe encje działają bez zmian. |
+| `product_visibility_rules` | nie | degrades-without `adminProductVisibilityPort` — każdy administrator uprawniony do eksportu lub importu produktów robi to jak przed wprowadzeniem tej funkcji |
 
 ## Uprawnienia
 
