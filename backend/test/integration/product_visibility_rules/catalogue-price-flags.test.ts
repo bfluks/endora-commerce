@@ -267,7 +267,9 @@ describe('catalogue-price flags and the admin scope (spec 193, T026)', () => {
       .em()
       .getConnection()
       .execute<Array<{ served_generation: number }>>(`select "served_generation" from "catalogue_price_generations" where "currency_code" = ?`, [code]);
-    return Number(row?.served_generation ?? 0);
+    // beforeAll built every designated currency, so the generation row exists; its absence is a failure.
+    if (!row) throw new Error(`no catalogue_price_generations row for ${code}`);
+    return Number(row.served_generation);
   }
 
   async function flagRowCount(code: string, generation: number): Promise<number> {
