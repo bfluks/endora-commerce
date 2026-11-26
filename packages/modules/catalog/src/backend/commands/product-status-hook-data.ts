@@ -59,6 +59,8 @@ export function withProductStatusHookData<TResult>(
       const ids = typeof productIds === 'function' ? await productIds(ctx.em) : productIds;
       const before = await readProductStatusFacts(ctx.em, ids);
       const outcome = await command.run(ctx);
+      // command-coverage-ignore: flushes the wrapped Command's own pending writes, inside its run and
+      // on its transaction, so the after-read sees them — this function writes nothing of its own.
       await ctx.em.flush();
       data = productStatusChanges(before, await readProductStatusFacts(ctx.em, ids));
       return outcome;
