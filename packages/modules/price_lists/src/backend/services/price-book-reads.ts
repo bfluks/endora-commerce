@@ -395,9 +395,22 @@ export class PriceBookReads {
     query: PriceBookRowsQuery,
     scope: PriceBookScope,
     language: string | null,
+    /**
+     * Spec 193 (T102, FR-094) — the caller's admin product visibility: rows of hidden products and
+     * non-qualifying variants are left out before labels, search and count, so the export names
+     * none of them and its count is of what it lists. Required; a system caller passes
+     * `{ kind: 'system' }`.
+     */
+    productScope: AdminProductVisibilityScope,
   ): Promise<{ data: PriceBookRow[]; meta: { page: number; pageSize: number; totalCount: number } }> {
+    const narrowed = narrowsProducts(productScope);
+    if (narrowed && !this.deps.productVisibility) {
+      throw new Error('price_lists: a narrowed admin product scope reached a row export composed without product visibility.');
+    }
     await this.header(bookId, scope);
-    const stored = await this.storedRows(bookId);
+    const all = await this.storedRows(bookId);
+    const hidden = narrowed ? await this.deps.productVisibility!.hiddenRowIds(productScope, all) : null;
+    const stored = hidden && hidden.size > 0 ? all.filter((row) => !hidden.has(row.id)) : all;
     const labelled = await this.label(stored, language);
     const search = query.search?.toLowerCase() ?? null;
     const filtered = labelled.filter((row) => {

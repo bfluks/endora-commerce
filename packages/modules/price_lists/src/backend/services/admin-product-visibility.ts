@@ -19,6 +19,15 @@ export interface PriceBookProductVisibility {
   productHidden(scope: AdminProductVisibilityScope, productId: string): Promise<boolean>;
   /** Which of `variantIds` the scope lets through (all of them for a scope that narrows nothing). */
   visibleVariants(scope: AdminProductVisibilityScope, variantIds: readonly string[]): Promise<ReadonlySet<string>>;
+  /**
+   * Spec 193 (T102, FR-094) — the ids of the stored rows the scope does not let through: a row
+   * naming a hidden product, or a variant that does not qualify. A row naming no product is
+   * visible. One port call for the whole set, none for a scope that narrows nothing.
+   */
+  hiddenRowIds(
+    scope: AdminProductVisibilityScope,
+    rows: ReadonlyArray<{ id: string; productId: string | null; variantId: string | null }>,
+  ): Promise<ReadonlySet<string>>;
 }
 
 const SYSTEM: AdminProductVisibilityScope = Object.freeze({ kind: 'system' }) as AdminProductVisibilityScope;
@@ -54,6 +63,22 @@ export function createPriceBookProductVisibility(deps: {
     async visibleVariants(scope, variantIds) {
       if (!narrowsProducts(scope) || variantIds.length === 0) return new Set(variantIds);
       return (await deps.port().filterVisible(scope, { variantIds })).variantIds;
+    },
+    async hiddenRowIds(scope, rows) {
+      if (!narrowsProducts(scope)) return new Set();
+      const productIds = [...new Set(rows.flatMap((r) => (r.productId ? [r.productId] : [])))];
+      const variantIds = [...new Set(rows.flatMap((r) => (r.variantId ? [r.variantId] : [])))];
+      if (productIds.length === 0 && variantIds.length === 0) return new Set();
+      const visible = await deps.port().filterVisible(scope, { productIds, variantIds });
+      return new Set(
+        rows
+          .filter(
+            (r) =>
+              (r.productId !== null && !visible.productIds.has(r.productId)) ||
+              (r.variantId !== null && !visible.variantIds.has(r.variantId)),
+          )
+          .map((r) => r.id),
+      );
     },
   };
 }

@@ -190,6 +190,12 @@ export function planBatch(input: {
    * batch passes none.
    */
   keepIds?: ReadonlySet<string>;
+  /**
+   * Spec 193 (T102, FR-094, FR-082) — stored rows of products or variants hidden from a restricted
+   * caller. A `replace` keeps them when the file leaves them out (the file a restricted user
+   * exported never holds them), and an overlap with one is refused without naming it.
+   */
+  hiddenIds?: ReadonlySet<string>;
 }): BatchPlan {
   const errors: PriceBookRowError[] = [...input.parseErrors];
   const resolved: Array<StoredRow | null> = Array.from({ length: input.upsertCount }, () => null);
@@ -245,8 +251,11 @@ export function planBatch(input: {
   const incoming = resolved.filter((r): r is StoredRow => r !== null);
   const incomingIds = new Set(incoming.map((r) => r.id));
   const deleted = new Set(input.deleteIds);
+  const hidden = input.hiddenIds ?? new Set<string>();
   const kept =
-    input.mode === 'replace' ? [] : input.stored.filter((r) => !incomingIds.has(r.id) && !deleted.has(r.id));
+    input.mode === 'replace'
+      ? input.stored.filter((r) => hidden.has(r.id) && !incomingIds.has(r.id))
+      : input.stored.filter((r) => !incomingIds.has(r.id) && !deleted.has(r.id));
   const final = [...kept, ...incoming];
   const added: StoredRow[] = [];
   const changed: Array<{ before: StoredRow; after: StoredRow }> = [];
@@ -260,7 +269,7 @@ export function planBatch(input: {
   }
   const removed =
     input.mode === 'replace'
-      ? input.stored.filter((r) => !incomingIds.has(r.id))
+      ? input.stored.filter((r) => !incomingIds.has(r.id) && !hidden.has(r.id))
       : input.stored.filter((r) => deleted.has(r.id) && !incomingIds.has(r.id));
 
   // 4. The limit and overlapping windows over the book as it would be. The
@@ -280,13 +289,17 @@ export function planBatch(input: {
     const second = final[b]!;
     // The error sits on an incoming row (the one being written), naming the other.
     const [mine, other] = indexOf.has(second.id) ? [second, first] : [first, second];
+    // A row hidden from the caller is never named (spec 193, FR-082).
+    const named = !hidden.has(other.id);
     errors.push({
       ...(indexOf.has(mine.id) ? { index: indexOf.get(mine.id)! } : {}),
-      rowId: other.id,
+      ...(named ? { rowId: other.id } : {}),
       field: 'minQuantity',
       code: 'PRICE_BOOK_ROW_OVERLAP',
       reason: 'rows_overlap',
-      message: `This row overlaps row ${other.id} of the same selection in its quantity window.`,
+      message: named
+        ? `This row overlaps row ${other.id} of the same selection in its quantity window.`
+        : 'This row overlaps another row of the same selection in its quantity window.',
     });
   }
 

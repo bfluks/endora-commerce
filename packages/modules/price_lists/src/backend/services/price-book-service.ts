@@ -5,6 +5,7 @@ import {
   bookProductRowsWriteSchema,
   priceBookRowsWriteSchema,
   priceBookSelectionKind,
+  type AdminProductVisibilityScope,
   type BasePricesWrite,
   type PriceBook,
   type BookProductRows,
@@ -37,6 +38,7 @@ import {
   type StoredRow,
 } from './price-book-batch.js';
 import type { PriceBookReads } from './price-book-reads.js';
+import { narrowsProducts, type PriceBookProductVisibility } from './admin-product-visibility.js';
 import {
   assertBookTakesModuleRows,
   bookProductRowsOf,
@@ -111,6 +113,11 @@ export interface PriceBookServiceDeps {
    * composition with no queue; never throws.
    */
   requestTableMaintenance?: () => Promise<unknown>;
+  /**
+   * Spec 193 (T102, FR-094) — `product_visibility_rules`' scope for the admin row batch,
+   * presence-decided by the wiring. Without it a narrowed scope refuses, never widens.
+   */
+  productVisibility?: PriceBookProductVisibility;
 }
 
 /** The platform default currency's base book keeps the id the old `Default` list had. */
@@ -803,9 +810,25 @@ export class PriceBookService {
   async writeRows(
     bookId: string,
     rawBody: unknown,
-    options: { dryRun: boolean; expectedVersion?: number | null; scope?: PriceBookScope; language?: string | null },
+    options: {
+      dryRun: boolean;
+      expectedVersion?: number | null;
+      scope?: PriceBookScope;
+      language?: string | null;
+      /**
+       * Spec 193 (T102, FR-094) — the acting administrator's product visibility; absent for an
+       * internal caller (the system's). For a restricted caller a `replace` keeps the rows of
+       * hidden products, and no error names one (FR-082). Merge, upsert and `delete` are not
+       * narrowed (FR-038).
+       */
+      productScope?: AdminProductVisibilityScope;
+    },
   ): Promise<PriceBookRowsDryRun | (PriceBookRowsWriteResult & { stored: StoredRow[] })> {
     const scope = options.scope ?? ALL_BOOKS_SCOPE;
+    const productScope = options.productScope;
+    if (productScope && narrowsProducts(productScope) && !this.deps.productVisibility) {
+      throw new Error('price_lists: a narrowed admin product scope reached a row batch composed without product visibility.');
+    }
     const parsedBody = priceBookRowsWriteSchema.safeParse(rawBody);
     if (!parsedBody.success) {
       throw new HttpError(
@@ -825,6 +848,7 @@ export class PriceBookService {
       action: 'price_list.rows_replace',
       dryRun: options.dryRun,
       expectedVersion,
+      ...(productScope && narrowsProducts(productScope) ? { productScope } : {}),
     });
   }
 
@@ -860,6 +884,8 @@ export class PriceBookService {
        * quantity reaches `audit_log_entries`. `audit` must then hold ids only.
        */
       namesOnly?: boolean;
+      /** A narrowing admin product scope: the stored rows it hides go to `planBatch` as `hiddenIds`. */
+      productScope?: AdminProductVisibilityScope;
     },
   ): Promise<PriceBookRowsDryRun | (PriceBookRowsWriteResult & { stored: StoredRow[] })> {
     const bookId = book.id;
@@ -880,6 +906,8 @@ export class PriceBookService {
             ]),
             storedRowCount: book.isSystem ? 0 : await em.count(PriceListMatrixEntry, { priceListId: bookId }),
           };
+    // Spec 193 (T102) — one port call for every stored row the batch is planned against.
+    const hiddenIds = options.productScope ? await this.deps.productVisibility!.hiddenRowIds(options.productScope, stored) : null;
     const plan = planBatch({
       isBaseBook: book.isSystem,
       stored,
@@ -892,6 +920,7 @@ export class PriceBookService {
       lookups,
       newId: () => randomUUID(),
       ...(options.keepIds ? { keepIds: options.keepIds } : {}),
+      ...(hiddenIds && hiddenIds.size > 0 ? { hiddenIds } : {}),
     });
 
     // Natural keys of what the answer and the diff name — never of the untouched book.

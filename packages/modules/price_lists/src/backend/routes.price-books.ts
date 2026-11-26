@@ -514,7 +514,13 @@ export async function registerPriceBookRoutes(app: FastifyInstance, deps: PriceB
   app.get<{ Params: { id: string } }>(`${base}/:id/rows`, { preHandler: readGate }, async (request) => {
     if (!isUuidShape(request.params.id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Price book not found.');
     const query = parseOr400(priceBookRowsQuerySchema, request.query);
-    return deps.reads.rows(request.params.id, query, await currentPriceBookScope(), await labelLanguage(request));
+    return deps.reads.rows(
+      request.params.id,
+      query,
+      await currentPriceBookScope(),
+      await labelLanguage(request),
+      await deps.productScopeOf(request),
+    );
   });
 
   // 161 G15 — the grid's pages: whole lines, at a cost that does not grow with the book.
@@ -604,7 +610,13 @@ export async function registerPriceBookRoutes(app: FastifyInstance, deps: PriceB
       const bodyVersion = typeof raw.expectedVersion === 'number' ? raw.expectedVersion : undefined;
       // A preview may be asked without a version; a write may not (G5).
       const expectedVersion = dryRun && bodyVersion === undefined && !request.headers['if-match'] ? null : expectedVersionOf(request, bodyVersion);
-      const result = await books.writeRows(id, request.body, { dryRun, expectedVersion, scope, language: await labelLanguage(request) });
+      const result = await books.writeRows(id, request.body, {
+        dryRun,
+        expectedVersion,
+        scope,
+        language: await labelLanguage(request),
+        productScope: await deps.productScopeOf(request),
+      });
       if (dryRun) return { data: result };
       const { stored: _stored, ...answer } = result as typeof result & { stored?: unknown };
       return { data: answer };

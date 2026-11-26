@@ -316,7 +316,7 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
   state** (M3): module off ⇒ the grid's pages and counts identical to module-absent.
   *`rows` export*: resolved by T102 (owner 2026-11-26). `GET …/product-lines` stays as it is (coordinator decision): addressed by product id, FR-038.
 
-- [ ] T102 [A] FR-094 (owner ruling 2026-11-26) — price-book row export and replace for a restricted
+- [x] T102 [A] FR-094 (owner ruling 2026-11-26) — price-book row export and replace for a restricted
   user. **Failing test first** `BT/integration/price_lists/book-export-visibility.test.ts`: (1) a
   restricted export omits hidden products' rows and labels; (2) a restricted `replace` with a
   narrowed file keeps hidden rows and deletes visible rows missing from the file; (3) its dry-run
@@ -324,7 +324,9 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
   as today; (5) module off as today. Then `PL/backend/services/price-book-reads.ts` (rows page) and the
   `writeRows` replace path (`price-book-batch.ts`: hidden rows kept, set-based through
   `adminProductVisibilityPort`, no per-row port call). Merge, upsert by id and explicit `delete` stay
-  unrestricted (FR-038). *Build state*: **not started**.
+  unrestricted (FR-038).
+  *Build note*: `PriceBookProductVisibility.hiddenRowIds` is one `filterVisible` call for a set of stored rows (a row is hidden when its product is not visible or its variant does not qualify; a row naming no product is visible; a deleted target reads as hidden, as in T042). The export drops hidden rows before labels, search and count. `writeRows` takes the product scope from `productScopeOf(request)` (not `currentPriceBookScope()`, which is the book scope) and hands `planBatch` the hidden ids in both modes: a `replace` keeps them (they stay in `final`, so the row limit and overlap checks see the real book) and leaves them out of `removed`; an overlap with a hidden row is refused without `rowId` and without its id in the message (FR-082). Tests: `BT/integration/price_lists/book-export-visibility.test.ts`, `PL/backend/services/price-book-batch.test.ts`.
+  *Leftover*: the book header's `rowCount` (`GET /price-books/:id`, list) still counts every row, so it minus the export's count reveals how many rows are hidden; not in FR-094's text (export and dry-run), flagged for the owner.
 
 **Verification (5a)**: `pnpm --filter backend exec vitest run test/contract/catalog/visibility-route-inventory.test.ts test/integration/catalog/visibility-list.test.ts test/integration/catalog/bulk-operations-visibility.test.ts test/integration/price_lists/book-lines-visibility.test.ts test/contract/catalog/admin-list-routes.test.ts test/contract/catalog/products-resolve-ids.test.ts test/contract/catalog/products-admin-list-filters.test.ts test/contract/catalog/admin-product-variants-read.test.ts test/contract/catalog/admin-variants.test.ts`;
 `pnpm --filter @endora-commerce/mod-catalog exec vitest run src/backend/admin-search-provider.test.ts src/backend/services/admin-scope-required.test.ts`;

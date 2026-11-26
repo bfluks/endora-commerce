@@ -301,6 +301,7 @@ export function priceListsModule(options: PriceListsModuleOptions): {
     targetReads: options.targetReads,
     reads: priceBookReads,
     ...(options.requestTableMaintenance ? { requestTableMaintenance: options.requestTableMaintenance } : {}),
+    ...(options.productVisibility ? { productVisibility: options.productVisibility } : {}),
   });
   const priceBookHistory = new PriceBookHistory({
     emFactory: options.emFactory,
