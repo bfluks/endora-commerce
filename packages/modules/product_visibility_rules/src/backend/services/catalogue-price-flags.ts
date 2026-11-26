@@ -213,6 +213,18 @@ export class CataloguePriceFlags {
           where "currency_code" = ?`,
         [start.next, designation?.priceListId ?? null, designation?.salesChannelId ?? null, code],
       );
+      // Spec 193 T059 (Q2 A) — the website rule re-evaluates only the products whose flag row the
+      // swap changed (appeared, disappeared or moved across zero); the rest keep their membership.
+      await tx.execute(
+        `insert into "website_rule_stale_products" ("product_id", "marked_at")
+         select coalesce(n."product_id", o."product_id"), clock_timestamp()
+           from (select "product_id", "has_positive" from "product_catalogue_prices" where "currency_code" = ? and "generation" = ?) n
+           full join (select "product_id", "has_positive" from "product_catalogue_prices" where "currency_code" = ? and "generation" = ?) o
+             on o."product_id" = n."product_id"
+          where n."product_id" is null or o."product_id" is null or n."has_positive" <> o."has_positive"
+         on conflict ("product_id") do update set "marked_at" = excluded."marked_at"`,
+        [code, start.next, code, row.served_generation],
+      );
       await tx.execute(`delete from "product_catalogue_prices" where "currency_code" = ? and "generation" < ?`, [code, start.next]);
       await tx.execute(`delete from "variant_catalogue_prices" where "currency_code" = ? and "generation" < ?`, [code, start.next]);
       return true;
@@ -268,6 +280,7 @@ export class CataloguePriceFlags {
           [code],
         );
         if (!locked || locked.served_generation !== served) return false;
+        const before = await this.#productFlags(tx, code, served, productIds);
         await tx.execute(
           `delete from "product_catalogue_prices" where "currency_code" = ? and "generation" = ? and "product_id" = any(?::uuid[])`,
           [code, served, uuidArray(productIds)],
@@ -277,6 +290,11 @@ export class CataloguePriceFlags {
           [code, served, uuidArray(productIds)],
         );
         await this.#writeRows(tx, code, served, answers);
+        const after = await this.#productFlags(tx, code, served, productIds);
+        await markForWebsiteRule(
+          tx,
+          productIds.filter((id) => before.get(id) !== after.get(id)),
+        );
         await tx.execute(
           `delete from "catalogue_price_stale_products"
             where "currency_code" = ? and "product_id" = any(?::uuid[]) and "marked_at" < ?`,
@@ -287,6 +305,20 @@ export class CataloguePriceFlags {
       if (wrote) refreshed += productIds.length;
     }
     return refreshed;
+  }
+
+  /** Each product's flag row at one generation: `true` / `false` (`has_positive`), absent = unpriced. */
+  async #productFlags(
+    em: Pick<EntityManager, 'execute'>,
+    code: string,
+    generation: number,
+    productIds: readonly string[],
+  ): Promise<Map<string, boolean>> {
+    const rows = await em.execute<Array<{ product_id: string; has_positive: boolean }>>(
+      `select "product_id", "has_positive" from "product_catalogue_prices" where "currency_code" = ? and "generation" = ? and "product_id" = any(?::uuid[])`,
+      [code, generation, uuidArray(productIds)],
+    );
+    return new Map(rows.map((r) => [r.product_id, r.has_positive]));
   }
 
   async #writeRows(
@@ -369,4 +401,19 @@ export class CataloguePriceFlags {
     }
     return out;
   }
+}
+
+/**
+ * Spec 193 T059 — mark products whose flag row changed for the website rule's steady state, in
+ * the refreshing transaction (the mark is durable with the change). The evaluation job takes them
+ * within its period; with no governed channel it simply clears them.
+ */
+async function markForWebsiteRule(em: Pick<EntityManager, 'execute'>, productIds: readonly string[]): Promise<void> {
+  if (productIds.length === 0) return;
+  await em.execute(
+    `insert into "website_rule_stale_products" ("product_id", "marked_at")
+     select p, clock_timestamp() from unnest(?::uuid[]) as t(p)
+     on conflict ("product_id") do update set "marked_at" = excluded."marked_at"`,
+    [uuidArray(productIds)],
+  );
 }

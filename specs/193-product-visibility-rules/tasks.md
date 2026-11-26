@@ -441,7 +441,7 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   deletes it per governor-token remove and deletes all rows of a channel on detach (LOW 17; asserted
   in T056); the reactivation hook (T068) deletes the row with every token removal it makes and sets
   `post_admission_status_seen` on the first channel-status write — no other writer.
-- [ ] T059 [B] Steady state: marks from `product.created.v1` / `product.updated.v1` /
+- [x] T059 [B] Steady state: marks from `product.created.v1` / `product.updated.v1` /
   `product.archived.v1` / `product.deleted.v1` and from flag refreshes; debounced evaluation job (30 s);
   window-boundary delayed jobs from `designationStatus.window`; hourly reconcile per governed channel.
   **Q2 A**: while a currency's designation rebuild runs, the rule's price conditions on that currency
