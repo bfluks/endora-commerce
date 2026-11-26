@@ -314,7 +314,17 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
   `degrades-without` entry (stream A owns `PL/manifest.ts` for this). Row **edits** stay unrestricted
   (FR-038). Test `BT/integration/price_lists/book-lines-visibility.test.ts`, including the **off
   state** (M3): module off ⇒ the grid's pages and counts identical to module-absent.
-  *Open leak*: `GET /price-books/:id/rows` (labels name hidden products) and `GET …/product-lines` are **not** narrowed — the test asserts `rows` answers 200 to a restricted caller (FR-038 reading); FR-030 needs a decision for `rows` (asked of the owner — unchanged until then). `GET …/product-lines` stays as it is (coordinator decision): addressed by product id, FR-038.
+  *`rows` export*: resolved by T102 (owner 2026-11-26). `GET …/product-lines` stays as it is (coordinator decision): addressed by product id, FR-038.
+
+- [ ] T102 [A] FR-094 (owner ruling 2026-11-26) — price-book row export and replace for a restricted
+  user. **Failing test first** `BT/integration/price_lists/book-export-visibility.test.ts`: (1) a
+  restricted export omits hidden products' rows and labels; (2) a restricted `replace` with a
+  narrowed file keeps hidden rows and deletes visible rows missing from the file; (3) its dry-run
+  reports no deletion of hidden rows and its counts do not reveal them; (4) an unrestricted replace
+  as today; (5) module off as today. Then `PL/backend/services/price-book-reads.ts` (rows page) and the
+  `writeRows` replace path (`price-book-batch.ts`: hidden rows kept, set-based through
+  `adminProductVisibilityPort`, no per-row port call). Merge, upsert by id and explicit `delete` stay
+  unrestricted (FR-038). *Build state*: **not started**.
 
 **Verification (5a)**: `pnpm --filter backend exec vitest run test/contract/catalog/visibility-route-inventory.test.ts test/integration/catalog/visibility-list.test.ts test/integration/catalog/bulk-operations-visibility.test.ts test/integration/price_lists/book-lines-visibility.test.ts test/contract/catalog/admin-list-routes.test.ts test/contract/catalog/products-resolve-ids.test.ts test/contract/catalog/products-admin-list-filters.test.ts test/contract/catalog/admin-product-variants-read.test.ts test/contract/catalog/admin-variants.test.ts`;
 `pnpm --filter @endora-commerce/mod-catalog exec vitest run src/backend/admin-search-provider.test.ts src/backend/services/admin-scope-required.test.ts`;

@@ -601,6 +601,8 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
 
 ### Edge Cases
 
+- **Restricted replace of a price book's rows** (FR-094): the file a restricted user exported
+  holds no hidden product's rows, so replacing with it keeps those rows instead of deleting them.
 - **Price 0 versus no price**: a product with a row of amount 0 in the designated book has price 0;
   a product with no row that prices it has no price. They are never treated alike.
 - **Designated book in force but silent on a product**: the base book's price stands (OQ-1 b).
@@ -1027,6 +1029,15 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   always counts, whenever it was stored** — including a value stored pending admission and a value
   left over on a channel whose rule excludes the product: a product inactive on that channel by its
   channel status is not sold through the sales-team paths (H2, N1).
+
+- **FR-094** (owner ruling 2026-11-26): A restricted user's price-book row export
+  (`GET /price-books/:id/rows`) MUST list only rows of products and variants visible to their
+  category (of a visible configurable product, its qualifying variants only — FR-005). In a rows
+  write with `mode: 'replace'` from a restricted user, "rows not in the file are deleted" MUST apply
+  only to rows of visible products; rows of hidden products are kept unchanged. Merge, upsert by id
+  and explicit `delete` stay unrestricted (FR-038). Neither the export's counts nor a dry-run's
+  answer MAY reveal how many rows were kept hidden. Unrestricted users, and every user while the
+  feature is off, behave exactly as today.
 
 ### Key Entities
 
