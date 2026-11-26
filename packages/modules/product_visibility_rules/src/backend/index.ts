@@ -11,6 +11,7 @@ import {
   type CatalogueReferencePricePort,
   type CurrencyReadPort,
   type PermissionReadPort,
+  type ProductRuleGovernancePort,
 } from '@endora-commerce/contracts';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import {
@@ -33,6 +34,7 @@ import { createFlagsProducer, startFlagsWorker, type FlagsProducer } from './wor
 import { VisibilityConfigService } from './services/visibility-config.service.js';
 import { WebsiteRuleGovernorHandle } from './services/membership-governor.js';
 import { WebsiteRuleService } from './services/website-rule.service.js';
+import { ProductRuleGovernance } from './services/product-rule-governance.js';
 import { createWebsiteRuleProducer, startWebsiteRuleWorker, type WebsiteRuleProducer } from './workers/website-rule-worker.js';
 import { registerWebsiteRuleAdminRoutes } from './routes.website-rules.js';
 import { registerProductVisibilityAdminRoutes } from './routes.admin.js';
@@ -173,6 +175,25 @@ export function registerModule(ctx: ModuleContext): void {
   ctx.di.providePort<AdminProductVisibilityPort>(
     'adminProductVisibilityPort',
     ctx.asFunction(({ productVisibilityScope }: ProductVisibilityRulesCradle) => productVisibilityScope).singleton(),
+  );
+
+  /**
+   * Container name: `productRuleGovernancePort` (T060, FR-055). A connector declaring it
+   * `degrades-without` probes presence first and reads absent as "nothing governed", as the
+   * kernel does; a call made while off answers 503 `MODULE_DISABLED` (the `providePort` gate).
+   */
+  ctx.di.providePort<ProductRuleGovernancePort>(
+    'productRuleGovernancePort',
+    ctx
+      .asFunction(
+        ({ productVisibilityWebsiteRules }: ProductVisibilityRulesCradle) =>
+          new ProductRuleGovernance({
+            rules: productVisibilityWebsiteRules,
+            membership: () => lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+            products: () => lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
+          }),
+      )
+      .singleton(),
   );
 
   ctx.routes(async (app) => {

@@ -450,7 +450,7 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   Test `…/website-rule-timing.test.ts` (US4-2, US4-5, US4-11, SC-005; designation change ⇒ zero
   transient leave/join events; a rule change emits exactly one `sales_channels.membership_changed` per
   product that joined or left — LOW 12) with a controllable clock.
-- [ ] T060 [B] `productRuleGovernancePort` (FR-055) via `ctx.di.providePort`; test
+- [x] T060 [B] `productRuleGovernancePort` (FR-055) via `ctx.di.providePort`; test
   `PVR/backend/services/product-rule-governance-port.test.ts` (`governedChannels`, `meetsRule`, owner
   off ⇒ 503).
 - [ ] T061 [B] Off-state test `…/off-state.website-rule.test.ts`: no evaluation, jobs left waiting,
