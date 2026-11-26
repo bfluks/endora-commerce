@@ -87,6 +87,7 @@ import {
   type ResolveAvailabilityPort,
 } from './services/catalog-org-price-decorator.js';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import type { GovernedChannelsSource } from './services/governed-pending.js';
 
 /**
  * Composition root for the catalog module. Wires the ORM's per-request EM into
@@ -254,6 +255,11 @@ export interface CatalogModuleOptions {
    * every admin read is the system scope, and a narrowed scope reaching a service refuses.
    */
   adminProductVisibility?: CatalogAdminProductVisibility;
+  /**
+   * Spec 193 T070 (FR-093) — the governed channels a scoped write may name for a product not on
+   * them yet (values stored pending admission). Presence-probed by the wiring; absent = none.
+   */
+  governedChannels?: GovernedChannelsSource;
   /**
    * Feature 022 / 163 / 174 — the platform's languages: read by the value
    * resolver, the scope overview (the active languages of a product in no
@@ -457,6 +463,7 @@ export function catalogModule(options: CatalogModuleOptions) {
           options.commandBus,
           options.organizations,
           completenessGate,
+          options.governedChannels,
         )
       : undefined;
     const bulkUpdateService = new CatalogBulkUpdateService(
@@ -654,7 +661,7 @@ export function catalogModule(options: CatalogModuleOptions) {
       : undefined;
     // Feature 163 / 174 (T039) — URL keys at G, C and C×L, and their redirects: the one key writer.
     const urlKeyService = options.salesChannelMembership
-      ? new UrlKeyService(options.emFactory, options.salesChannelMembership, options.commandBus)
+      ? new UrlKeyService(options.emFactory, options.salesChannelMembership, options.commandBus, undefined, options.governedChannels)
       : undefined;
     // Feature 174 — the editor's scoped-values read and save (one Command per save).
     const scopedValuesService =
@@ -664,6 +671,7 @@ export function catalogModule(options: CatalogModuleOptions) {
             {
               membership: options.salesChannelMembership,
               listAttributes: () => attributeReadService.listAll(),
+              ...(options.governedChannels ? { governedChannels: options.governedChannels } : {}),
               ...(options.languageService ? { languages: options.languageService } : {}),
               ...(options.assets ? { assets: options.assets } : {}),
               ...(options.organizations ? { organizations: options.organizations } : {}),

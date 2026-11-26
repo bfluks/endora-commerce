@@ -20,9 +20,10 @@ import { HttpError } from '@endora-commerce/platform/http';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 
 import { auditStates, ownValues, planScopedSave, withoutUnchangedCells, writeScopedSave, type ScopedSavePlan } from './scoped-values-save.service.js';
-import { bumpScopeVersion, loadScopedState, resolveRequestScope, type ScopedProductState } from './scoped-values-state.js';
+import { bumpScopeVersion, loadScopedState, pendingScopeOptions, resolveRequestScope, type ScopedProductState } from './scoped-values-state.js';
 import type { UrlKeyService, UrlKeyWrite } from './url-key.service.js';
 import { withProductStatusHookData } from '../commands/product-status-hook-data.js';
+import type { GovernedChannelsSource } from './governed-pending.js';
 
 /**
  * Feature 174, US4 (T083, T084; `contracts/pim-locale-mapping.md` §4, R13a, R21) — the integration
@@ -43,6 +44,11 @@ import { withProductStatusHookData } from '../commands/product-status-hook-data.
 export interface ScopedImportDeps {
   membership: Pick<SalesChannelMembershipPort, 'listChannelsForEntity'>;
   listAttributes: () => Promise<CatalogAttributeView[]>;
+  /**
+   * Spec 193 T070 (FR-093) — the governed channels, presence-probed by the wiring; absent = none
+   * (a non-member channel is `SCOPE_INVALID`, as before).
+   */
+  governedChannels?: GovernedChannelsSource;
   urlKeys: () => Pick<UrlKeyService, 'lockAndCheck'>;
 }
 
@@ -246,6 +252,7 @@ export function planIntegrationCells(
           : cell.scope.level === 'channel'
             ? { channelId: cell.scope.channelId }
             : { channelId: cell.scope.channelId, languageCode: cell.scope.languageCode },
+        pendingScopeOptions(state),
       );
     } catch (error) {
       refuse(refusalOf(error));
@@ -378,7 +385,7 @@ export async function runScopedImport(
 /** The plan of an import without writing (the products import's dry run). */
 export async function planScopedImport(
   em: EntityManager,
-  deps: Pick<ScopedImportDeps, 'membership' | 'listAttributes'>,
+  deps: Pick<ScopedImportDeps, 'membership' | 'listAttributes' | 'governedChannels'>,
   productId: string,
   cells: readonly ProductScopedWriteCell[],
   extras?: ScopedImportExtras,

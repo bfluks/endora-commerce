@@ -478,6 +478,20 @@ export const manifest = defineModuleManifest({
         'in front of the port (`index.ts`), absent reads as the system scope, and a call made ' +
         'while present is never caught (TM-3 (4)).',
     },
+    {
+      moduleId: 'product_visibility_rules',
+      name: 'productRuleGovernancePort',
+      kind: 'degrades-without',
+      whenAbsent:
+        'no sales channel is governed by a website rule: a scoped value for a channel the product ' +
+        'is not a member of is refused (`SCOPE_INVALID`), exactly as before the feature',
+      reason:
+        'Spec 193 T070 (FR-093, I-4). Scoped-value writers (the admin save, copy to channels, the ' +
+        'scopes update, URL keys, the CSV import and connector `applyScopes`) store values for a ' +
+        'governed channel the rule has not admitted the product to yet. Presence is probed in front ' +
+        'of the port (`index.ts`), absent reads as "nothing governed", and a call made while ' +
+        'present is never caught.',
+    },
   ],
   // Feature 074 (Constitution XVII), test C2 — functional base. This module had
   // no activation declaration at all, which resolved as "always activated" and

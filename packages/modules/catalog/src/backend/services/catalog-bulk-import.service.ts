@@ -21,7 +21,7 @@ import type { CommandBus } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { EventBus } from '@endora-commerce/platform/events';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
-import { SalesChannel } from '@endora-commerce/platform/kernel';
+import { rethrowIfModuleDisabled, SalesChannel } from '@endora-commerce/platform/kernel';
 import { Category } from '../entities/category.entity.js';
 import { Product } from '../entities/product.entity.js';
 import { ProductChannelScope } from '../entities/product-channel-scope.entity.js';
@@ -266,6 +266,9 @@ export class CatalogBulkImportService implements CatalogBulkImportPort {
         // re-import still counts its rows (`contracts/import-profiles-and-csv.md` §2.3).
         if (cells.length - result.refused.length - takenUrlKeys > 0 || extras !== undefined) imported += 1;
       } catch (error) {
+        // Spec 193 T070 — a closed `productRuleGovernancePort` gate (resolved while present) is
+        // the run's failure, never one row's error.
+        rethrowIfModuleDisabled(error);
         if (!(error instanceof HttpError)) throw error;
         errors.push({ index, reason: `${error.code}: ${error.message}` });
       }

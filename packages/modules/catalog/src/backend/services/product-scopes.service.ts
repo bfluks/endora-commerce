@@ -32,6 +32,7 @@ import { globalScopeFields } from './product-availability.service.js';
 import type { ScopeCompletenessGate } from './scope-completeness.js';
 import { bumpScopeVersion } from './scoped-values-state.js';
 import { withProductStatusHookData } from '../commands/product-status-hook-data.js';
+import { governedPendingOf, pendingChannelsFor, type GovernedChannelsSource } from './governed-pending.js';
 
 /**
  * Feature 163 (`specs/163-product-data-scopes/`) — a product's scoped values per
@@ -62,7 +63,10 @@ export interface ProductScopeWriteState {
   globalWindow: PublicationWindow;
   channelRows: readonly ProductChannelScopeRecord[];
   languageRows: readonly ProductChannelLanguageScopeRecord[];
-  /** The product's member channels → their current content languages. */
+  /**
+   * The product's member channels → their current content languages; with spec 193 T070
+   * (FR-093) also the governed channels it is not on yet (values stored pending admission).
+   */
   memberChannels: ReadonlyMap<string, readonly string[]>;
 }
 
@@ -709,6 +713,8 @@ export class ProductScopesService {
      * connector is never gated (A-6), whatever it passes.
      */
     private readonly gate?: ScopeCompletenessGate,
+    /** Spec 193 T070 (FR-093) — the governed channels, presence-probed by the wiring; absent = none. */
+    private readonly governedChannels?: GovernedChannelsSource,
   ) {}
 
   /** The gate's mode for an operator's write, read once per request; `undefined` where no gate is composed. */
@@ -888,7 +894,10 @@ export class ProductScopesService {
             globalWindow: { from: product.publishFrom ?? null, until: product.publishUntil ?? null },
             channelRows: channelRows.map(toChannelRecord),
             languageRows: languageRows.map(toLanguageRecord),
-            memberChannels: new Map(members.map((channel) => [channel.id, toScopeChannel(channel).languages])),
+            memberChannels: new Map([
+              ...governedPendingOf(await pendingChannelsFor(this.governedChannels, members)),
+              ...members.map((channel) => [channel.id, toScopeChannel(channel).languages] as const),
+            ]),
           },
           request,
         );

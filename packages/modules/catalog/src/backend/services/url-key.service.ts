@@ -27,6 +27,7 @@ import { ProductUrlKey } from '../entities/product-url-key.entity.js';
 import { ProductUrlRedirect } from '../entities/product-url-redirect.entity.js';
 import { channelUrlFactsOf } from './channel-url-facts.js';
 import { bumpScopeVersion } from './scoped-values-state.js';
+import { pendingChannelsFor, type GovernedChannelsSource } from './governed-pending.js';
 
 /**
  * Feature 174 (T039; `contracts/url-keys.md`, research R12) — URL keys at Global (`products.slug`),
@@ -214,6 +215,8 @@ export class UrlKeyService {
     private readonly commandBus?: CommandBus,
     /** Whether `seo` is effectively present: it decides whether redirects are listed (Q-C). Writes never ask. */
     private readonly seoPresent: () => boolean = () => effectiveState.isPresent('seo'),
+    /** Spec 193 T070 (FR-093) — the governed channels, presence-probed by the wiring; absent = none. */
+    private readonly governedChannels?: GovernedChannelsSource,
   ) {}
 
   /**
@@ -236,7 +239,13 @@ export class UrlKeyService {
       em.find(ProductUrlKey, { productId }),
       em.find(ProductUrlRedirect, { productId }),
     ]);
-    const channels = new Map(members.map((channel) => [channel.id, toScopeChannel(channel)]));
+    // Spec 193 T070 (FR-093) — a governed channel the product is not on yet takes a key too
+    // (stored pending admission; the write adds no membership).
+    const pending = await pendingChannelsFor(this.governedChannels, members);
+    const channels = new Map<string, ScopeChannel>([
+      ...pending.map((channel) => [channel.id, channel] as const),
+      ...members.map((channel) => [channel.id, toScopeChannel(channel)] as const),
+    ]);
     const confirm = new Set(options.mode === 'interactive' ? (options.confirmTakeover ?? []).map(normaliseUrlKey) : []);
 
     // The planned state: own rows and slug after every write; languages in the channel's spelling.

@@ -33,10 +33,12 @@ import {
 import {
   atValidScopes,
   loadScopedState,
+  pendingScopeOptions,
   resolveRequestScope,
   type MemberChannel,
   type ScopedProductState,
 } from './scoped-values-state.js';
+import type { GovernedChannelsSource } from './governed-pending.js';
 
 /**
  * Feature 174 (T036; `contracts/scoped-values-api.md` §2) — `GET …/products/:id/scoped-values`:
@@ -55,6 +57,11 @@ export const GALLERY_ROLE_KEYS = {
 export interface ScopedValuesReadDeps {
   membership: Pick<SalesChannelMembershipPort, 'listChannelsForEntity'>;
   listAttributes: () => Promise<CatalogAttributeView[]>;
+  /**
+   * Spec 193 T070 (FR-093) — the governed channels, presence-probed by the wiring; absent = none
+   * (a non-member channel is `SCOPE_INVALID`, as before).
+   */
+  governedChannels?: GovernedChannelsSource;
   languages?: Pick<LanguageReadPort, 'list'>;
   assets?: Pick<AssetReadPort, 'findByIds'>;
   organizations?: Pick<OrganizationDetailsPort, 'findByIds'>;
@@ -321,14 +328,19 @@ export class ScopedValuesReadService {
   ): Promise<ScopedValuesData> {
     const em = this.emFactory();
     const state = await loadScopedState(em, productId, this.deps);
-    const scope = resolveRequestScope(state.members, request);
+    const scope = resolveRequestScope(state.members, request, pendingScopeOptions(state));
     return this.project(state, scope);
   }
 
   /** The read body for an already-loaded state — the save answers with it, re-read at the same scope. */
   async project(state: ScopedProductState, scope: ScopeRef): Promise<ScopedValuesData> {
     const { product } = state;
-    const views = scopedViews(state, scope);
+    // Spec 193 T070 (FR-093, R-11) — a governed channel the product is not on yet: its pending
+    // values are read as if it were a member, for this projection only. `validScopes` and the SEO
+    // block stay with the real memberships.
+    const pending = scope.level === 'global' ? undefined : state.pendingChannels.find((channel) => channel.id === scope.channelId);
+    const viewed = pending ? { ...state, members: [...state.members, pending] } : state;
+    const views = scopedViews(viewed, scope);
     const languageCode = scope.level === 'channel_language' ? scope.languageCode : null;
 
     const assets = views.galleryAssetIds.length > 0 && this.deps.assets ? await this.deps.assets.findByIds(views.galleryAssetIds) : [];
@@ -385,7 +397,7 @@ export class ScopedValuesReadService {
       packagingUnits: views.packagingUnits,
       // An orphaned scope (a removal-only save's answer) has no SEO view: seo refuses that scope.
       seo: this.deps.readSeo && isLiveScope(state, scope) ? await this.deps.readSeo(product.id, scope) : null,
-      completeness: completenessSummary(state, scope),
+      completeness: completenessSummary(viewed, scope),
       organizations,
     };
   }

@@ -27,6 +27,7 @@ import { ProductPackagingUnitScopeOverride } from '../entities/product-packaging
 import { ProductUrlKey } from '../entities/product-url-key.entity.js';
 import { ProductValueOverride } from '../entities/product-value-override.entity.js';
 import { attributeSetDefinitionIds } from './scope-completeness.js';
+import { governedPendingOf, pendingChannelsFor, type GovernedChannelsSource } from './governed-pending.js';
 
 /**
  * Feature 174 (`contracts/scoped-values-api.md` §1–§3) — everything the scoped-values read and
@@ -44,6 +45,12 @@ export interface ScopedProductState {
   version: string;
   categoryIds: string[];
   members: MemberChannel[];
+  /**
+   * Spec 193 T070 (FR-093) — governed channels the product is not a member of yet: a scope there
+   * resolves (values pending admission), but it is **not** membership — the completeness gate,
+   * the snapshot and `validScopes` read `members` only. `[]` while `product_visibility_rules` is off.
+   */
+  pendingChannels: MemberChannel[];
   channelRows: ProductChannelScope[];
   languageRows: ProductChannelLanguageScope[];
   valueOverrides: ProductValueOverride[];
@@ -99,6 +106,7 @@ export async function loadScopedState(
   deps: {
     membership: Pick<SalesChannelMembershipPort, 'listChannelsForEntity'>;
     listAttributes: () => Promise<CatalogAttributeView[]>;
+    governedChannels?: GovernedChannelsSource;
   },
 ): Promise<ScopedProductState> {
   assertProductId(productId);
@@ -168,7 +176,15 @@ export async function loadScopedState(
     packagingOverrides,
     urlKeys,
     attributes: scopedAttributesOf(views, setDefinitions),
+    pendingChannels: await pendingChannelsFor(deps.governedChannels, members),
   };
+}
+
+/** `resolveRequestScope`'s `governedPending` option for a loaded state (spec 193 T070, FR-093). */
+export function pendingScopeOptions(state: Pick<ScopedProductState, 'pendingChannels'>): {
+  governedPending: ReadonlyMap<string, readonly string[]>;
+} {
+  return { governedPending: governedPendingOf(state.pendingChannels) };
 }
 
 /**
@@ -186,8 +202,14 @@ export function resolveRequestScope(
    * an orphaned scope — a channel the product left, a language the channel dropped — is
    * accepted as named, so the overview's orphan deletion keeps working. A value there is still
    * `SCOPE_INVALID`.
+   *
+   * Spec 193 T070 (FR-093, I-4) — `governedPending`: the governed channels the product is not a
+   * member of yet (channel id → the channel's own languages), built by the caller from
+   * `productRuleGovernancePort` (`governed-pending.ts`). Such a channel resolves as if it were a
+   * member — the value is stored pending admission, the write adds no membership. Absent or empty
+   * (module off) ⇒ `not_a_member`, as before.
    */
-  options: { removalOnly?: boolean } = {},
+  options: { removalOnly?: boolean; governedPending?: ReadonlyMap<string, readonly string[]> } = {},
 ): ScopeRef {
   const parsed = scopeFromRequest(request);
   if (!parsed.ok) {
@@ -195,7 +217,10 @@ export function resolveRequestScope(
   }
   const scope = parsed.scope;
   if (scope.level === 'global') return scope;
-  const channel = members.find((member) => member.id === scope.channelId);
+  const pendingLanguages = options.governedPending?.get(scope.channelId);
+  const channel =
+    members.find((member) => member.id === scope.channelId) ??
+    (pendingLanguages === undefined ? undefined : { id: scope.channelId, languages: [...pendingLanguages] });
   if (options.removalOnly === true) {
     const spelling = channel?.languages.find((language) => scope.level === 'channel_language' && sameLanguage(language, scope.languageCode));
     if (!channel || (scope.level === 'channel_language' && spelling === undefined)) return scope;

@@ -1,4 +1,5 @@
 import type { HiddenProducts } from './admin-product-visibility.js';
+import { governedPendingOf, pendingChannelsFor } from './governed-pending.js';
 import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import type { EntityManager } from '@mikro-orm/postgresql';
@@ -48,7 +49,9 @@ export class ScopedValuesService {
     const product = await em.findOne(Product, { id: productId, deletedAt: null }, { fields: ['id'] });
     if (!product) throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
     const members = (await this.deps.membership.listChannelsForEntity('product', productId)).map((channel) => toScopeChannel(channel));
-    return resolveRequestScope(members, request);
+    // Spec 193 T070 (FR-093) — a governed channel the product is not on yet resolves too.
+    const pending = await pendingChannelsFor(this.deps.governedChannels, members);
+    return resolveRequestScope(members, request, { governedPending: governedPendingOf(pending) });
   }
 
   completenessMode() {

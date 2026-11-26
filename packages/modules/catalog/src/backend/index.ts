@@ -13,8 +13,10 @@ import {
   type WebhookEventRegistryPort,
 } from '@endora-commerce/contracts';
 import type { AuditReferenceRegistryPort } from '@endora-commerce/contracts';
-import type { AdminProductVisibilityPort } from '@endora-commerce/contracts';
+import type { AdminProductVisibilityPort, ProductRuleGovernancePort } from '@endora-commerce/contracts';
 import { createCatalogAdminProductVisibility, NO_PRODUCT_HIDDEN } from './services/admin-product-visibility.js';
+import { toScopeChannel } from '@endora-commerce/contracts';
+import type { GovernedChannelsSource } from './services/governed-pending.js';
 import type {
   AdminI18nTranslatePort,
   AdminSearchProviderRegistryPort,
@@ -487,6 +489,25 @@ export function registerModule(ctx: ModuleContext): void {
     port: () => productVisibilityPort,
   });
 
+  /**
+   * Spec 193 T070 (FR-093, I-4, N6) — the governed channels a write may name for a product the
+   * rule has not admitted yet (values stored pending admission, no membership added). `catalog`
+   * declares `productRuleGovernancePort` `degrades-without`: presence is decided here, in front of
+   * the resolution — absent, nothing is governed and a non-member channel is `SCOPE_INVALID` as
+   * before (FR-073); present, a failing call is not caught. Languages are the channel's own.
+   */
+  const productRuleGovernance = lazyPort<ProductRuleGovernancePort>(ctx, 'productRuleGovernancePort');
+  const governedChannels: GovernedChannelsSource = async () => {
+    if (!effectiveState.isPresent('product_visibility_rules')) return [];
+    const governed = await productRuleGovernance.governedChannels();
+    if (governed.length === 0) return [];
+    const resolution = lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort');
+    const channels = await Promise.all(governed.map((entry) => resolution.getById(entry.salesChannelId)));
+    return channels
+      .filter((channel): channel is NonNullable<typeof channel> => channel !== null)
+      .map((channel) => ({ ...toScopeChannel(channel), code: channel.code, name: channel.name }));
+  };
+
   const inventoryStockRead = lazyPort<InventoryStockReadPort>(ctx, 'inventoryStockReadPort');
   const stockFilter: CatalogStockFilterSource = {
     available: () => effectiveState.isPresent('inventory'),
@@ -884,6 +905,7 @@ export function registerModule(ctx: ModuleContext): void {
             copySeoProductMeta,
             stockFilter,
             adminProductVisibility,
+            governedChannels,
             resolveAdminUserId: (req: FastifyRequest) => cradle().adminContextResolver(req).adminUserId,
           }),
       )
@@ -997,7 +1019,7 @@ export function registerModule(ctx: ModuleContext): void {
         ({ commandBus, emFactory, eventBus, catalogTableMaintenance }: CatalogCradle) => {
           const membership = lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort');
           const attributes = lazyPort<CatalogAttributeReadService>(ctx, 'catalogAttributeReadPort');
-          const urlKeys = new UrlKeyService(emFactory, membership, commandBus);
+          const urlKeys = new UrlKeyService(emFactory, membership, commandBus, undefined, governedChannels);
           return new CatalogBulkImportService(
             commandBus,
             membership,
@@ -1005,7 +1027,7 @@ export function registerModule(ctx: ModuleContext): void {
               emFactory,
               eventBus,
               // Feature 174 (T084) — each product row through the scoped import's planner and writers.
-              importDeps: { membership, listAttributes: () => attributes.listAll(), urlKeys: () => urlKeys },
+              importDeps: { membership, listAttributes: () => attributes.listAll(), urlKeys: () => urlKeys, governedChannels },
               // Issue #409 — a products import that wrote asks for the vacuum of the tables it rewrote.
               requestTableMaintenance: () => catalogTableMaintenance.request(),
             },
@@ -1095,7 +1117,7 @@ export function registerModule(ctx: ModuleContext): void {
     ctx
       .asFunction(({ emFactory, commandBus }: CatalogCradle) => {
         const membership = lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort');
-        const urlKeys = new UrlKeyService(emFactory, membership, commandBus);
+        const urlKeys = new UrlKeyService(emFactory, membership, commandBus, undefined, governedChannels);
         const attributes = lazyPort<CatalogAttributeReadService>(ctx, 'catalogAttributeReadPort');
         return createCatalogProductScopeWritePort({
           commandBus: () => commandBus,
@@ -1103,6 +1125,7 @@ export function registerModule(ctx: ModuleContext): void {
             membership,
             listAttributes: () => attributes.listAll(),
             urlKeys: () => urlKeys,
+            governedChannels,
           }),
           isRegisteredModule: (moduleId) => effectiveState.presence(moduleId) !== undefined,
         });

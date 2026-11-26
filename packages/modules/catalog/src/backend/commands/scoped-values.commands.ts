@@ -45,7 +45,8 @@ import {
 import { cellChanges } from '../services/scoped-values-import.js';
 import { assertGlobalOnlyFields, useTargetAttributeSet } from '../services/scoped-values-global-only.js';
 import type { LinkableAssetReader } from '../services/linkable-asset.js';
-import { loadScopedState, resolveRequestScope, type ScopedProductState } from '../services/scoped-values-state.js';
+import { loadScopedState, pendingScopeOptions, resolveRequestScope, type ScopedProductState } from '../services/scoped-values-state.js';
+import type { GovernedChannelsSource } from '../services/governed-pending.js';
 
 /**
  * Feature 174 (T038; `contracts/scoped-values-api.md` §3) — the Command `product.scoped_values.save`:
@@ -62,6 +63,11 @@ import { loadScopedState, resolveRequestScope, type ScopedProductState } from '.
 export interface ScopedValuesCommandDeps {
   membership: Pick<SalesChannelMembershipPort, 'listChannelsForEntity'>;
   listAttributes: () => Promise<CatalogAttributeView[]>;
+  /**
+   * Spec 193 T070 (FR-093) — the governed channels, presence-probed by the wiring; absent = none
+   * (a non-member channel is `SCOPE_INVALID`, as before).
+   */
+  governedChannels?: GovernedChannelsSource;
   gate?: ScopeCompletenessGate | undefined;
   /**
    * The URL-key step (T039): writes the key at the scope under the URL-key service's locks and
@@ -135,7 +141,7 @@ export function scopedValuesSaveCommand(
       await bumpScopeVersion(em, productId, body.version);
       const state = await loadScopedState(em, productId, deps);
       const removalOnly = isRemovalOnly(body.changes);
-      const scope = resolveRequestScope(state.members, body.scope, { removalOnly });
+      const scope = resolveRequestScope(state.members, body.scope, { removalOnly, ...pendingScopeOptions(state) });
       // Step 3a (code review 1) — a set change plans the attribute cells against the new set.
       if (scope.level === 'global') await useTargetAttributeSet(em, deps, state, body.changes.product?.attributeSetId);
       const plan = planScopedSave(state, scope, body.changes);
@@ -293,7 +299,7 @@ export interface CopyPlan {
  * empty value of a required field). `toChannelIds` deduplicated; the source channel skipped.
  */
 export function planCopy(state: ScopedProductState, body: CopyScopedValueRequest): CopyPlan {
-  const resolved = resolveRequestScope(state.members, body.from);
+  const resolved = resolveRequestScope(state.members, body.from, pendingScopeOptions(state));
   // The body names a channel and a language, so the scope is a C×L one.
   const from = resolved as Extract<ScopeRef, { level: 'channel_language' }>;
   const refuse = (reason: 'not_supported' | 'source_inherits') =>
@@ -307,7 +313,7 @@ export function planCopy(state: ScopedProductState, body: CopyScopedValueRequest
 
   const targets = [...new Set(body.toChannelIds)].filter((channelId) => channelId !== from.channelId);
   const plans = targets.map((channelId) => {
-    const scope = resolveRequestScope(state.members, { channelId, languageCode: body.from.languageCode });
+    const scope = resolveRequestScope(state.members, { channelId, languageCode: body.from.languageCode }, pendingScopeOptions(state));
     return { channelId, plan: planScopedSave(state, scope, changes) };
   });
   const overwrites: CopyPlan['overwrites'] = [];

@@ -564,7 +564,7 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
 - [x] T069 [B] ("hook not run" case pending: it joins with T068) Off-state test `BT/integration/product_visibility_rules/off-state.governance.test.ts`:
   module off ⇒ no write refused or skipped, hook not run, pending-admission scoped values refused as
   today (FR-073).
-- [ ] T070 [A] (after T060, T063, T066) **FR-093 (I-4)** — the refusal seam is
+- [x] T070 [A] (after T060, T063, T066) **FR-093 (I-4)** — the refusal seam is
   `resolveRequestScope` (`CAT/backend/services/scoped-values-state.ts:181-215`, `not_a_member` at
   `:204`), shared by the save (`commands/scoped-values.commands.ts:127,284,298`), the import / connector
   path (`services/scoped-values-import.ts:241`), the scope resolution of the scoped-values service
