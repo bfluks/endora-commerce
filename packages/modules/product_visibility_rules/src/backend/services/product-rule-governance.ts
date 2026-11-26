@@ -4,7 +4,7 @@ import { isLive } from './product-rule-evaluator.js';
 import type { WebsiteRuleService } from './website-rule.service.js';
 
 /**
- * `productRuleGovernancePort` — spec 193 T060 (FR-055, FR-090, FR-091; contracts/ports.md §2,
+ * `productRuleGovernancePort` (FR-055, FR-090, FR-091; contracts/ports.md §2,
  * research R-18). Published with `ctx.di.providePort`, so it answers 503 `MODULE_DISABLED` while
  * the module is off; a connector probing presence first reads absent as "nothing governed",
  * which is what the kernel does too.

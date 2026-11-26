@@ -4,7 +4,7 @@ import { manifest } from '../manifest.js';
 import en from '../../i18n/en.json' with { type: 'json' };
 import pl from '../../i18n/pl.json' with { type: 'json' };
 
-/** Spec 193 T002 — what `product_visibility_rules` declares. */
+/** What `product_visibility_rules` declares. */
 describe('product_visibility_rules manifest', () => {
   const settings = manifest.settings?.settings ?? [];
 

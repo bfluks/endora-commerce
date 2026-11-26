@@ -2,7 +2,7 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import type { CatalogueDesignation, CatalogueReferenceLine, CatalogueReferencePricePort } from '@endora-commerce/contracts';
 
 /**
- * The catalogue-price flags — spec 193 (`specs/193-product-visibility-rules/` data-model §2,
+ * The catalogue-price flags (`specs/193-product-visibility-rules/` data-model §2,
  * research R-5, R-17; threat model TM-7, TM-12).
  *
  * Per currency, `product_catalogue_prices` / `variant_catalogue_prices` hold a row for every
@@ -29,7 +29,7 @@ export interface CataloguePriceFlagsDeps {
   readonly prices: () => Pick<CatalogueReferencePricePort, 'resolve' | 'changeWatermark'>;
   /** Every product id of the catalogue, through `catalog`'s read port. */
   readonly listProductIds: () => Promise<readonly string[]>;
-  /** Active currency codes, through `currencies`' read port — the bootstrap set (T031). */
+  /** Active currency codes, through `currencies`' read port — the bootstrap set. */
   readonly activeCurrencies: () => Promise<readonly string[]>;
   readonly now?: () => Date;
 }
@@ -62,7 +62,7 @@ export class CataloguePriceFlags {
   /**
    * Ask for a whole rebuild of each currency (a designation change, a catalogue-wide price
    * change, the nightly reconcile). A currency never built gets its row, served generation 0:
-   * until its first build swaps in, its conditions are not met (fail-closed, T031).
+   * until its first build swaps in, its conditions are not met (fail-closed).
    */
   async requestRebuild(currencyCodes: readonly string[]): Promise<void> {
     const codes = [...new Set(currencyCodes.map((c) => c.toUpperCase()))];
@@ -99,7 +99,7 @@ export class CataloguePriceFlags {
     );
   }
 
-  /** T031 — every active currency has a generation row; a missing one is asked for. */
+  /** Every active currency has a generation row; a missing one is asked for. */
   async ensureActiveCurrencies(): Promise<string[]> {
     const tracked = new Set(await this.trackedCurrencies());
     const missing = (await this.deps.activeCurrencies()).map((c) => c.toUpperCase()).filter((c) => !tracked.has(c));
@@ -213,7 +213,7 @@ export class CataloguePriceFlags {
           where "currency_code" = ?`,
         [start.next, designation?.priceListId ?? null, designation?.salesChannelId ?? null, code],
       );
-      // Spec 193 T059 (Q2 A) — the website rule re-evaluates only the products whose flag row the
+      // The website rule re-evaluates only the products whose flag row the
       // swap changed (appeared, disappeared or moved across zero); the rest keep their membership.
       await tx.execute(
         `insert into "website_rule_stale_products" ("product_id", "marked_at")
@@ -232,7 +232,7 @@ export class CataloguePriceFlags {
     if (swapped) {
       // A whole generation was written and the old one deleted: the planner's statistics are
       // stale until autovacuum comes round, and the restricted list pays for it in the plan of
-      // its semi-join (measured, T035). Best effort — the flags are right either way.
+      // its semi-join (measured). Best effort — the flags are right either way.
       await em.execute(`analyze "product_catalogue_prices"`).catch(() => undefined);
       await em.execute(`analyze "variant_catalogue_prices"`).catch(() => undefined);
     }
@@ -404,7 +404,7 @@ export class CataloguePriceFlags {
 }
 
 /**
- * Spec 193 T059 — mark products whose flag row changed for the website rule's steady state, in
+ * Mark products whose flag row changed for the website rule's steady state, in
  * the refreshing transaction (the mark is durable with the change). The evaluation job takes them
  * within its period; with no governed channel it simply clears them.
  */

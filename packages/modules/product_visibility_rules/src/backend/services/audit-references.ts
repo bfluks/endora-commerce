@@ -2,11 +2,11 @@ import type { AuditReferenceRegistryPort } from '@endora-commerce/contracts';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { VisibilityCategory } from '../entities/visibility-category.entity.js';
 
-/** The configuration screen every reference links to (Phase 8, T071). */
+/** The configuration screen every reference links to. */
 const CONFIGURATION_URL = '/product-visibility';
 
 /**
- * Spec 193 T022 — what this module's audit rows are called, and where the admin app shows
+ * What this module's audit rows are called, and where the admin app shows
  * them: a visibility category by its name, a designation by its currency. Both open the
  * module's configuration screen. A mapping's audit row names an admin role, which
  * `admin_roles` already resolves.

@@ -158,11 +158,11 @@ export const manifest = defineModuleManifest({
    */
   errorCodes: [
     { code: 'CANNOT_MODIFY_SYSTEM_DEFAULT' },
-    // Spec 193 (FR-054) — a manual membership write on a channel a website rule governs. Raised
+    // A manual membership write on a channel a website rule governs. Raised
     // by the kernel's membership service; owned here by the domain noun (D-95.2).
     { code: 'CHANNEL_MEMBERSHIP_GOVERNED' },
     { code: 'DUPLICATE_SALES_CHANNEL_CODE' },
-    // Spec 193 T100 — a channel delete refused because the default is governed for products.
+    // A channel delete refused because the default is governed for products.
     { code: 'ENTITY_WOULD_HAVE_ZERO_CHANNELS', tokens: ['default_channel_governed'] },
     { code: 'INACTIVE_SALES_CHANNEL' },
     { code: 'MISSING_SALES_CHANNEL_CONTEXT' },

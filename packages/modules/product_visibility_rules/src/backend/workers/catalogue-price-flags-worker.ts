@@ -3,7 +3,7 @@ import type { Redis } from 'ioredis';
 import { enterSystemScope, type PlatformLogger } from '@endora-commerce/platform/kernel';
 
 /**
- * The catalogue-price flags queue — spec 193 (research R-5, R-6; T028, T030; threat model TM-12,
+ * The catalogue-price flags queue (research R-5, R-6; threat model TM-12,
  * TM-7 (5); Principle X).
  *
  * Three kinds of job, one consumer at a time:
@@ -13,7 +13,7 @@ import { enterSystemScope, type PlatformLogger } from '@endora-commerce/platform
  *   requests themselves are durable rows, and a pass that completes asks for a follow-up while
  *   work is pending, so nothing asked during a running pass is lost.
  * - `drift-poll` — every two minutes: give every active currency its generation row (the
- *   first-enable bootstrap, T031) and compare `price_lists`' change watermark (TM-7 (5)).
+ * first-enable bootstrap) and compare `price_lists`' change watermark (TM-7 (5)).
  * - `nightly-reconcile` — the last resort: a whole rebuild of every tracked currency.
  *
  * Attached with `ctx.worker`, so it stops with the module (Principle XVII) and a job taken while

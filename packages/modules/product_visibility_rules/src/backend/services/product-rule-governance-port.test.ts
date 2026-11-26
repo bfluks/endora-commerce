@@ -3,7 +3,7 @@ import type { CatalogProductRecord, ProductRuleDefinition } from '@endora-commer
 import { ProductRuleGovernance, type ProductRuleGovernanceDeps } from './product-rule-governance.js';
 
 /**
- * Spec 193 T060 (FR-055; contracts/ports.md §2) — `productRuleGovernancePort`, the read a
+ * (FR-055; contracts/ports.md §2) — `productRuleGovernancePort`, the read a
  * connector asks to avoid writing against a website rule. The owner-off answer (503
  * `MODULE_DISABLED`) is the `providePort` gate's, asserted against the composed module in
  * `off-state.website-rule.test.ts`.
@@ -34,7 +34,7 @@ function deps(overrides: Partial<ProductRuleGovernanceDeps> = {}): ProductRuleGo
   };
 }
 
-describe('ProductRuleGovernance (T060, FR-055)', () => {
+describe('ProductRuleGovernance (FR-055)', () => {
   it('governedChannels names each governed channel and its rule', async () => {
     const port = new ProductRuleGovernance(deps());
     expect(await port.governedChannels()).toEqual([{ salesChannelId: G, productRuleId: 'r1', productRuleName: 'Featured' }]);

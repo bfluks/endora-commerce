@@ -6,7 +6,7 @@ import type {
 } from '@endora-commerce/contracts';
 
 /**
- * The product rule evaluator — spec 193 T057 (research R-9; FR-050, FR-051, FR-057, FR-079;
+ * The product rule evaluator (research R-9; FR-050, FR-051, FR-057, FR-079;
  * threat model TM-11).
  *
  * **Pure.** A rule is evaluated over a product's facts and the attribute catalogue as it is at

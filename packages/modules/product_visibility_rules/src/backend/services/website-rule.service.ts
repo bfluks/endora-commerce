@@ -46,7 +46,7 @@ import {
 } from './product-rule-evaluator.js';
 
 /**
- * The website rule — spec 193 Phase 6 (T057 – T060; research R-9 – R-11; FR-050 – FR-061,
+ * The website rule (research R-9 – R-11; FR-050 – FR-061,
  * FR-072, FR-079; threat model TM-10, TM-11).
  *
  * A named product rule governs the product membership of the sales channels it is attached to.
@@ -176,7 +176,7 @@ export class WebsiteRuleService {
     return this.deps.emFactory().fork();
   }
 
-  // ── Product rules (T057; FR-050, FR-056) ──────────────────────────────────────────────
+  // ── Product rules (FR-050, FR-056) ──────────────────────────────────────────────
 
   /** FR-050 — the attributes a rule may name, for the rule editor. */
   async listAttributes(): Promise<ProductRuleAttributesResponse> {
@@ -228,7 +228,7 @@ export class WebsiteRuleService {
     return dead;
   }
 
-  // ── Previews (T058; FR-053, TM-11) ─────────────────────────────────────────────────────
+  // ── Previews (FR-053, TM-11) ─────────────────────────────────────────────────────
 
   /** Enqueue a preview of attaching or changing a rule; the job evaluates it. */
   async createPreview(adminUserId: string, body: WebsiteRulePreviewCreateBody): Promise<{ previewId: string }> {
@@ -436,7 +436,7 @@ export class WebsiteRuleService {
     await this.deps.commandBus.run(websiteRuleDetachCommand(salesChannelId));
   }
 
-  // ── Steady state (T059; R-11, SC-005, Q2 A) ───────────────────────────────────────────
+  // ── Steady state (R-11, SC-005, Q2 A) ───────────────────────────────────────────
 
   /** Mark products for re-evaluation on every governed channel; durable before it returns. */
   async markProducts(productIds: readonly string[]): Promise<void> {
@@ -450,7 +450,7 @@ export class WebsiteRuleService {
     );
   }
 
-  // ── Reactivation (T068; FR-092, FR-093, H2 A, Q1 A, N2, N3) ─────────────────────────
+  // ── Reactivation (FR-092, FR-093, H2 A, Q1 A, N2, N3) ─────────────────────────
 
   /**
    * The `beforeCommit` hook of every catalog status writer (`CATALOG_HOOKABLE_ACTIONS`), on the
@@ -574,7 +574,7 @@ export class WebsiteRuleService {
    * then any confirmed preview whose snapshot is still unapplied, and expired previews are swept.
    */
   async reconcileAll(): Promise<{ changed: number }> {
-    // T101 — first the rows of channels deleted while the module was off (no event reached it).
+    // First the rows of channels deleted while the module was off (no event reached it).
     await this.sweepDeletedChannels();
     const governed = await this.governedChannels();
     let changed = 0;
@@ -598,7 +598,7 @@ export class WebsiteRuleService {
   }
 
   /**
-   * T101 — delete the attachment and admissions rows of every channel that no longer resolves. A
+   * Delete the attachment and admissions rows of every channel that no longer resolves. A
    * sales channel deleted while governed leaves them (no foreign key leaves this module,
    * data-model §0). Run on every `sales_channels.lifecycle_changed` — a delete emits it, and there
    * is no dedicated delete event — and at the start of the hourly reconcile. Idempotent; a
@@ -651,7 +651,7 @@ export class WebsiteRuleService {
     return scheduled;
   }
 
-  // ── Port (T060; FR-055) ───────────────────────────────────────────────────────────────
+  // ── Port (FR-055) ───────────────────────────────────────────────────────────────
 
   /**
    * Every attachment whose channel still exists, with its rule: the attachments in one statement

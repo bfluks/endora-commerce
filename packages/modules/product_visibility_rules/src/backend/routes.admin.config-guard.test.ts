@@ -6,7 +6,7 @@ import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import { registerProductVisibilityAdminRoutes, type ProductVisibilityConfigApi } from './routes.admin.js';
 
 /**
- * Spec 193 T020 (threat model TM-4 c, analyze M2) — every configuration **write** answers
+ * Every configuration **write** answers
  * `403 FORBIDDEN` unless the caller's own scope is `unrestricted`, and writes nothing. FR-026
  * makes every `product_visibility:manage` holder unrestricted, so this cannot be reached end to
  * end; it is defence in depth, held here with a stubbed scope. Reads are not affected.

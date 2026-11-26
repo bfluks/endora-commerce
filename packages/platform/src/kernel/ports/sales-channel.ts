@@ -57,7 +57,7 @@ export interface SalesChannelResolutionPort {
  * scopes its own rows to a channel goes through this rather than writing the
  * bridge table itself — the sanctioned bridge accessor of Constitution XII.
  *
- * Spec 193 (R-10): a pair on a channel a membership governor governs is skipped
+ * A pair on a channel a membership governor governs is skipped
  * by default (listed in `skippedGovernedChannelIds`), refused with `409
  * CHANNEL_MEMBERSHIP_GOVERNED` when `onGoverned: 'refuse'`, and written only
  * with the governing module's `governorToken`. A caller that never passes
@@ -110,7 +110,7 @@ export interface SalesChannelMembershipPort {
   ): Promise<MembershipMutationResult>;
 
   /**
-   * Spec 193 T100 (R-10, TM-10) — whether `channelId` is governed for `entityType` and by which
+   * Whether `channelId` is governed for `entityType` and by which
    * rule (its label, user-authored text). `null` when not governed or the governing module is
    * absent. A governor that throws propagates: the caller refuses its write. Asked on `em` when
    * given, inside its transaction.

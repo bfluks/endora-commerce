@@ -12,7 +12,7 @@ import {
 import { SalesChannelMembershipService } from './sales-channel-membership.service.js';
 
 /**
- * Spec 193 (T062; research R-10; contracts/ports.md §5; threat model TM-10) — the membership
+ * The membership
  * governor inside the kernel's single membership mutator.
  *
  * A module contributes a governor for a channel; the service **skips** a governed (channel,
@@ -391,7 +391,7 @@ describe('governor registry (TM-10)', () => {
   });
 });
 
-describe('isGoverned — the read a caller asks before a write it does not route through the mutator (T100)', () => {
+describe('isGoverned — the read a caller asks before a write it does not route through the mutator', () => {
   it('names the rule of a governed channel and answers null for an ungoverned one', async () => {
     const h = harness();
     await expect(h.service.isGoverned('product', G)).resolves.toEqual({ ruleLabel: RULE });

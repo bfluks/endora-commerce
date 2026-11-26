@@ -103,7 +103,7 @@ export interface MembershipMutationOptions {
    */
   em?: EntityManager;
   /**
-   * Spec 193 (R-10) — what happens to a pair on a governed channel without the governing token:
+   * What happens to a pair on a governed channel without the governing token:
    * `'skip'` (the default — automatic writers comply unchanged) or `'refuse'` (a manual write:
    * `409 CHANNEL_MEMBERSHIP_GOVERNED`, nothing written).
    */
@@ -122,7 +122,7 @@ export interface MembershipMutationResult {
   changed: boolean;
   /** Set when the FR-008 fallback was applied. */
   fallbackAppliedToDefault?: boolean;
-  /** Spec 193 — governed channels whose pair this mutation skipped (absent when none). */
+  /** Governed channels whose pair this mutation skipped (absent when none). */
   skippedGovernedChannelIds?: string[];
 }
 
@@ -155,7 +155,7 @@ export class SalesChannelMembershipService {
      */
     private readonly accessCache?: SalesChannelAccessCacheInvalidation,
     /**
-     * Spec 193 — the governors composed for this platform. Optional so a composition with none —
+     * The governors composed for this platform. Optional so a composition with none —
      * a unit test, a bare harness — keeps today's behaviour exactly.
      */
     private readonly governors?: ChannelMembershipGovernorRegistry,
@@ -190,7 +190,7 @@ export class SalesChannelMembershipService {
   }
 
   /**
-   * Spec 193 T100 — whether `channelId` is governed for `entityType`, and by which rule: the read
+   * Whether `channelId` is governed for `entityType`, and by which rule: the read
    * a caller asks before a write it does not route through this mutator (the channel delete's
    * orphan rebind). `null` = not governed — no governor for the type, its module absent, or no
    * rule on the channel. A governor that throws propagates (TM-10); the caller refuses.
@@ -338,7 +338,7 @@ export class SalesChannelMembershipService {
     // one, FR-008 either refuses (default) or rebinds to Default (when the
     // caller opted in).
     const totalChannels = await this.countMembershipsForEntity(em, bridge, entityId);
-    // Spec 193 — the governing module's own write is exempt from the floor (R-10): a rule removes
+    // The governing module's own write is exempt from the floor (R-10): a rule removes
     // a product from its only channel, and it stays on none until the rule admits it.
     const wouldOrphan = totalChannels === 1 && decision !== 'token';
     // A fallback onto a governed default is no fallback (R-10): the default's own rule decides.
@@ -412,7 +412,7 @@ export class SalesChannelMembershipService {
     if (remaining > 0) return { changed: false };
 
     const defaultId = await this.requireSystemDefaultId(em);
-    // Spec 193 (R-10, FR-059) — a governed default binds nothing: the entity stays on no channel
+    // A governed default binds nothing: the entity stays on no channel
     // until the governing rule admits it.
     const decision = await this.decide(em, entityType, defaultId, options);
     if (decision === 'skip') return { changed: false, skippedGovernedChannelIds: [defaultId] };
@@ -519,7 +519,7 @@ export class SalesChannelMembershipService {
     const existingSet = new Set(existingIds);
     const desiredSet = new Set(desiredIds);
 
-    // Spec 193 (R-10) — every pair that would change is decided first: a governed one is kept as
+    // Every pair that would change is decided first: a governed one is kept as
     // it is (skip), refused, or follows the desired set with the governing token.
     const final = new Set(existingIds);
     const sources = new Map<string, string | undefined>();
@@ -923,7 +923,7 @@ export class SalesChannelMembershipService {
     op: 'add' | 'remove',
     options: MembershipMutationOptions,
     fallbackAppliedToDefault?: boolean,
-    /** Spec 193 (FR-072) — only ever a token write's, see {@link sourceOf}. */
+    /** Only ever a token write's, see {@link sourceOf}. */
     source?: string,
   ): Promise<void> {
     if (!this.auditLogService) return;

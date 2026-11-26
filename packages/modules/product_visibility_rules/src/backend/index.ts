@@ -74,7 +74,7 @@ export interface ProductVisibilityRulesCradle {
   readonly processRunsWorkers: boolean;
   readonly productVisibilityFlags: CataloguePriceFlags;
   readonly productVisibilityFlagsProducer: FlagsProducer;
-  /** T023 — where a designation change asks for its currency's flag rebuild: a durable request, then a pass. */
+  /** Where a designation change asks for its currency's flag rebuild: a durable request, then a pass. */
   readonly productVisibilityFlagsScheduler: CataloguePriceFlagsScheduler;
   readonly productVisibilityScope: AdminVisibilityScopeService;
   readonly productVisibilityConfig: VisibilityConfigService;
@@ -95,7 +95,7 @@ export interface ProductVisibilityRulesCradle {
  */
 export function registerModule(ctx: ModuleContext): void {
   /**
-   * T066 (TM-10) — the website rule's governor write token lives in this closure, handed to the
+   * The website rule's governor write token lives in this closure, handed to the
    * website-rule service below and never registered in the container.
    */
   const websiteRuleGovernor = new WebsiteRuleGovernorHandle();
@@ -150,7 +150,7 @@ export function registerModule(ctx: ModuleContext): void {
           }),
       )
       .singleton(),
-    // Phase 6 (T057 – T059) — the website rule. The governor's write token reaches the service
+    // The website rule. The governor's write token reaches the service
     // through this closure (`websiteRuleGovernor`), never through the container (TM-10).
     productVisibilityWebsiteRulesProducer: ctx
       .asFunction(({ moduleQueueRedis }: ProductVisibilityRulesCradle) => createWebsiteRuleProducer(moduleQueueRedis))
@@ -175,7 +175,7 @@ export function registerModule(ctx: ModuleContext): void {
   });
 
   /**
-   * Container name: `adminProductVisibilityPort` (T034). Consumers (`catalog`, `price_lists`,
+   * Container name: `adminProductVisibilityPort`. Consumers (`catalog`, `price_lists`,
    * later `orders`, `quote_requests`) declare it `degrades-without`, probe
    * `effectiveState.isPresent('product_visibility_rules')` before resolving, and treat absent as
    * unrestricted; a call made while present is never caught. A SQL fragment is embedded inside
@@ -188,7 +188,7 @@ export function registerModule(ctx: ModuleContext): void {
   );
 
   /**
-   * Container name: `productRuleGovernancePort` (T060, FR-055). A connector declaring it
+   * Container name: `productRuleGovernancePort` (FR-055). A connector declaring it
    * `degrades-without` probes presence first and reads absent as "nothing governed", as the
    * kernel does; a call made while off answers 503 `MODULE_DISABLED` (the `providePort` gate).
    */
@@ -216,7 +216,7 @@ export function registerModule(ctx: ModuleContext): void {
     });
   });
 
-  /** T057, T058 — the product-rule and website-rule routes, gated like the configuration's. */
+  /** The product-rule and website-rule routes, gated like the configuration's. */
   ctx.routes(async (app) => {
     const { requireAdmin, productVisibilityScope, productVisibilityWebsiteRules } = ctx.cradle<ProductVisibilityRulesCradle>();
     await registerWebsiteRuleAdminRoutes(app, {
@@ -256,7 +256,7 @@ export function registerModule(ctx: ModuleContext): void {
   });
 
   /**
-   * T059 (R-11) — a product created, changed, archived or deleted is marked for re-evaluation on
+   * A product created, changed, archived or deleted is marked for re-evaluation on
    * every governed channel; the mark is durable before the debounced evaluation is asked for.
    * `ctx.subscribe`, so nothing runs while the module is off (the hourly reconcile after a
    * re-enable covers what happened meanwhile).
@@ -274,7 +274,7 @@ export function registerModule(ctx: ModuleContext): void {
   }
 
   /**
-   * T068 (FR-092, FR-093, SC-005) — the reactivation hook on every catalog status writer, in the
+   * The reactivation hook on every catalog status writer, in the
    * writer's transaction: a product that becomes active again on a governed channel leaves it with
    * the governor token and is marked, so it is back only once the rule re-admits it. The bus skips
    * the hook while this module is off (FR-073).
@@ -291,7 +291,7 @@ export function registerModule(ctx: ModuleContext): void {
   ]);
 
   /**
-   * T101 — a sales channel deleted while governed leaves its attachment and admissions rows; they
+   * A sales channel deleted while governed leaves its attachment and admissions rows; they
    * are swept on every lifecycle change of a channel (a delete emits `sales_channels.lifecycle_changed`;
    * no dedicated delete event exists, and its payload — `channelCode` only — is not read: the sweep
    * asks which attached channels still resolve). Events missed while off are swept by the hourly
@@ -306,7 +306,7 @@ export function registerModule(ctx: ModuleContext): void {
   });
 
   /**
-   * T028, T030 — the flags worker (`product_visibility_rules.flags`), its two-minute drift poll
+   * The flags worker (`product_visibility_rules.flags`), its two-minute drift poll
    * and its nightly reconcile, attached with `ctx.worker` so they stop with the module.
    */
   ctx.routes(async (app) => {
@@ -324,7 +324,7 @@ export function registerModule(ctx: ModuleContext): void {
   });
 
   /**
-   * T029 — a price change marks the products it names, or asks for a whole rebuild (R-6). The
+   * A price change marks the products it names, or asks for a whole rebuild (R-6). The
    * marks are durable before the handler returns (TM-7 (5)); the pass is then asked for.
    * `ctx.subscribe`, so nothing runs while the module is off.
    */
@@ -337,7 +337,7 @@ export function registerModule(ctx: ModuleContext): void {
   });
 
   /**
-   * T031 — a **work** boot hook: give every active currency its flag generation and ask for a
+   * A **work** boot hook: give every active currency its flag generation and ask for a
    * pass. Presence is decided first, outside any `try` (`module-activation.md`): while off it
    * does nothing, and the drift poll does the same within two minutes of a re-enable.
    */
@@ -350,7 +350,7 @@ export function registerModule(ctx: ModuleContext): void {
   });
 
   /**
-   * T066 (R-10) — the website rule's channel-membership governor. A **contribution** hook: no
+   * The website rule's channel-membership governor. A **contribution** hook: no
    * presence probe — the registry is sealed after boot and asks `isPresent` per mutation, so a
    * module switched on later governs from its next write and one switched off governs nothing.
    */
@@ -359,7 +359,7 @@ export function registerModule(ctx: ModuleContext): void {
   });
 
   /**
-   * T022 — what an audit row of this module is called, and where the admin app shows it. A
+   * What an audit row of this module is called, and where the admin app shows it. A
    * **contribution** hook into an ungated registry: no presence probe (D-67/D-68); the
    * registry drops the entry while the module is absent.
    */

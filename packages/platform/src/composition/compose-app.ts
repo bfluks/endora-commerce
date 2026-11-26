@@ -824,7 +824,7 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
     redis,
     redisSubscriber,
     auditLogService,
-    // Spec 193 (R-10) — a governor of a switched-off module governs nothing (FR-073).
+    // A governor of a switched-off module governs nothing (FR-073).
     isModulePresent: (moduleId) => effectiveState.isPresent(moduleId),
   });
 
@@ -1466,7 +1466,7 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
   // below it throws `ContributionWindowClosedError` naming the rule, rather
   // than landing somewhere no hook will read.
   await composedModules.runBootHooks();
-  // Spec 193 (TM-10) — membership governors register from boot hooks only.
+  // Membership governors register from boot hooks only.
   salesChannels.membershipGovernors.seal();
   // The bracket opened beside the writer closes here: what a plugin body,
   // a worker or a request widens from now on is not the process start.

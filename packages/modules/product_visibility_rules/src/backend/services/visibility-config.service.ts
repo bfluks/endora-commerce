@@ -200,7 +200,7 @@ export class VisibilityConfigService {
       );
     }
     const { changed } = await this.deps.commandBus.run(designationSetCommand(currencyCode, body));
-    // T023 — a new designation rebuilds the currency's flags; until then it contributes no
+    // A new designation rebuilds the currency's flags; until then it contributes no
     // condition (TM-7 (4)).
     if (changed) await this.deps.flagsScheduler.requestCurrencyRebuild(currencyCode);
     return { currencyCode, designation: { ...body }, designationStatus: status };

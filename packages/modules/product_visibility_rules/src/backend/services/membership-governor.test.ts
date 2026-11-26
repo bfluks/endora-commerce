@@ -8,7 +8,7 @@ import type {
 import { WebsiteRuleGovernorHandle, websiteRuleMembershipGovernor } from './membership-governor.js';
 
 /**
- * Spec 193 T066 (R-10, TM-10) — the website rule's channel-membership governor and the holder of
+ * The website rule's channel-membership governor and the holder of
  * its write token.
  */
 const CHANNEL = '0b7d4a52-2f0e-4c47-9a0e-7a2b3c4d5e6f';
@@ -28,7 +28,7 @@ function emReturning(rows: unknown[] | Error): { em: EntityManager; execute: Ret
   return { em, execute };
 }
 
-describe('websiteRuleMembershipGovernor (T066)', () => {
+describe('websiteRuleMembershipGovernor', () => {
   const governor = websiteRuleMembershipGovernor();
 
   it('governs products only, as product_visibility_rules', () => {
@@ -79,7 +79,7 @@ describe('websiteRuleMembershipGovernor (T066)', () => {
   });
 });
 
-describe('WebsiteRuleGovernorHandle (T066, TM-10)', () => {
+describe('WebsiteRuleGovernorHandle (TM-10)', () => {
   function registry(): { port: ChannelMembershipGovernorRegistryPort; issued: GovernorWriteToken; registered: ChannelMembershipGovernor[] } {
     const issued = Object.freeze(Object.create(null) as object) as GovernorWriteToken;
     const registered: ChannelMembershipGovernor[] = [];

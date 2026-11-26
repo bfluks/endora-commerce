@@ -14,7 +14,7 @@ import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import type { WebsiteRuleService } from './services/website-rule.service.js';
 
 /**
- * The product-rule and website-rule routes of `product_visibility_rules` — spec 193 T057, T058
+ * The product-rule and website-rule routes of `product_visibility_rules` — 
  * (contracts/admin-api.md §1, the rule rows). Mounted through `ctx.routes`, so the module's
  * presence gates every route (FR-073, FR-077). Reads need `product_visibility:read`; writes need
  * `product_visibility:manage` **and** an unrestricted caller (TM-4 c). Bodies are bounded by

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { roleEffect, roleScopeKind, isRoleMappable } from './role-visibility.js';
 
 /**
- * Spec 193 research R-13 (FR-020 – FR-026, OQ-G 1, I-2) — what the module does to one role,
+ * Research R-13 (FR-020 – FR-026, OQ-G 1, I-2) — what the module does to one role,
  * decided in one order: platform administrator, self-lifting permission, mapped unrestricted,
  * mapped to a category, unmapped with `rfqs:handle` (fail-closed), otherwise unrestricted.
  */

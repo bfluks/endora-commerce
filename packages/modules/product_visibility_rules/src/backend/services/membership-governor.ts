@@ -8,7 +8,7 @@ import type {
 } from '@endora-commerce/platform/kernel';
 
 /**
- * The website rule's channel-membership governor — spec 193 T066 (research R-10, contracts/ports.md
+ * The website rule's channel-membership governor (research R-10, contracts/ports.md
  * §5, threat model TM-10).
  *
  * A channel is governed while it has a `website_rule_attachments` row; the refusal names the

@@ -42,7 +42,7 @@ function assertColumn(column: string): void {
 }
 
 /**
- * `adminProductVisibilityPort` — spec 193 (`specs/193-product-visibility-rules/` contracts/ports.md §1,
+ * `adminProductVisibilityPort` (`specs/193-product-visibility-rules/` contracts/ports.md §1,
  * research R-7, R-8, R-13; threat model TM-3, TM-7 (4), TM-8).
  *
  * The scope is resolved per call and never cached (FR-060). It never catches: a role refusal

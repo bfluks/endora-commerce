@@ -9,7 +9,7 @@ import {
 } from './product-rule-evaluator.js';
 
 /**
- * Spec 193 T055 (FR-050, FR-051, FR-057, FR-079; R-9; threat model TM-11) — the product rule
+ * The product rule
  * evaluator: a pure function over a product's facts and the attribute catalogue as it is now.
  */
 

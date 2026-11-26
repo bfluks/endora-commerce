@@ -60,7 +60,7 @@ export interface SalesChannelsKernelOptions {
    */
   readonly strictAdmin?: boolean;
   /**
-   * Spec 193 — whether a module is present on the effective state, asked per membership mutation
+   * Whether a module is present on the effective state, asked per membership mutation
    * by the governor registry. Defaults to always-present (a bare composition).
    */
   readonly isModulePresent?: (moduleId: string) => boolean;

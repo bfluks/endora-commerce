@@ -14,7 +14,7 @@ import { WebsiteRuleAttachment } from '../entities/website-rule-attachment.entit
 import { WebsiteRulePreview } from '../entities/website-rule-preview.entity.js';
 
 /**
- * The product-rule and website-rule Commands — spec 193 T057, T058 (FR-050 – FR-053, FR-056,
+ * The product-rule and website-rule Commands (FR-050 – FR-053, FR-056,
  * FR-058, FR-070; contracts/events-and-errors.md §3). Each is one `CommandBus.run`: one
  * transaction, one audit entry naming the actor. Rules and attachments are platform-global
  * configuration (Principle XI, FR-075): the audit state carries names, definitions and ids.

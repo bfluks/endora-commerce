@@ -5,8 +5,8 @@ import type { CataloguePriceFlags } from './catalogue-price-flags.js';
 export const CHANGE_FEED_ID_CAP = 1_000;
 
 /**
- * `price_lists.catalogue_prices_changed` → marks or whole rebuilds (spec 193 research R-6,
- * T029; threat model TM-12, TM-7 (5)).
+ * `price_lists.catalogue_prices_changed` → marks or whole rebuilds (research R-6,
+ * threat model TM-12, TM-7 (5)).
  *
  * The announcement is a **hint**: the in-process bus does not check who emits, so nothing is
  * ever copied from it — flags come only from the engine. A payload that does not parse, or names

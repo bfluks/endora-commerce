@@ -174,7 +174,7 @@ export class SalesChannelsService {
      */
     private readonly assets?: Pick<AssetReadPort, 'visibleToCaller'>,
     /**
-     * Spec 193 T100 (FR-059, R-10, TM-10) — asked before the delete rebinds product orphans to the
+     * Asked before the delete rebinds product orphans to the
      * system default: a default whose product membership a governor decides (the website rule) is
      * no fallback. Absent — a composition with no governors — nothing is governed.
      */
@@ -498,7 +498,7 @@ export class SalesChannelsService {
     // pairs that would have zero memberships if this channel were removed.
     const orphans = await this.findOrphansForChannel(em, channel.id);
     if (orphans.length > 0 && !options.fallbackToDefault) {
-      // A count per entity type, never an id (spec 193 FR-082): an id here could name a product
+      // A count per entity type, never an id (FR-082): an id here could name a product
       // the caller's visibility scope hides.
       throw new HttpError(
         422,

@@ -247,7 +247,7 @@ export {
   type MembershipMutationOptions,
   type MembershipMutationResult,
 } from './sales-channels/sales-channel-membership.service.js';
-// Spec 193 (R-10, TM-10) — the governor contribution: types only. The registry class is the
+// The governor contribution: types only. The registry class is the
 // host's; the write token is opaque and nothing published constructs one. A module resolves the
 // registry as `salesChannelMembershipGovernors` from a boot hook.
 export {

@@ -3,11 +3,11 @@ import type { DesignationStatus } from '@endora-commerce/contracts';
 import { VisibilityConfigService } from './visibility-config.service.js';
 
 /**
- * Spec 193 T023 — a designation set or cleared asks for a whole rebuild of its currency's
+ * A designation set or cleared asks for a whole rebuild of its currency's
  * catalogue-price flags; a refused designation, or a write that changes nothing, asks for
  * nothing.
  */
-describe('designation writes schedule a flag rebuild (T023)', () => {
+describe('designation writes schedule a flag rebuild', () => {
   function service(status: DesignationStatus, changed: boolean) {
     const requested: string[] = [];
     const svc = new VisibilityConfigService({

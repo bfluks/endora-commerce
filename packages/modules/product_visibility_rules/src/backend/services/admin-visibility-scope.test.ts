@@ -8,7 +8,7 @@ import { VisibilityCategory } from '../entities/visibility-category.entity.js';
 import { VisibilityRoleMapping } from '../entities/visibility-role-mapping.entity.js';
 
 /**
- * Spec 193 T032 — the admin scope (research R-7, R-13; FR-021 – FR-026; threat model TM-3, TM-7 (4),
+ * The admin scope (research R-7, R-13; FR-021 – FR-026; threat model TM-3, TM-7 (4),
  * TM-8) and the live line check (R-8, FR-043).
  */
 const ROLE = 'role-1';
