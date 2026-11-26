@@ -15,7 +15,7 @@ import {
 } from './website-rule-fixtures.js';
 
 /**
- * Spec 193 T059 [real DB] — the website rule's steady state (R-11; US4-2, US4-5, US4-11,
+ * Spec 193 T059 [real DB] — the website rule's steady state (R-11; US4-2, US4-6, US4-11,
  * SC-005, Q2 A, LOW 12): products marked by catalogue events and by flag refreshes that changed
  * their row are re-evaluated on every governed channel; a designation rebuild moves nothing (the
  * rule reads the served generation until the swap, and the swap marks only products whose flags
@@ -61,7 +61,7 @@ describe('website rule steady state (spec 193, T059)', () => {
     await teardownBackendServer(h);
   });
 
-  describe('marks from catalogue events (US4-2, US4-5, FR-079)', () => {
+  describe('marks from catalogue events (US4-2, US4-6, FR-079)', () => {
     let channel: string;
     let product: string;
 
@@ -71,7 +71,7 @@ describe('website rule steady state (spec 193, T059)', () => {
       await attach({ match: 'all', conditions: [{ kind: 'attribute_choice', attributeKey: 'color', optionKeys: ['red'] }] }, [channel]);
     });
 
-    it('a product that starts to meet the rule joins on the next evaluation (US4-2)', async () => {
+    it('a product that starts to meet the rule is admitted on the next evaluation (US4-6)', async () => {
       expect(await isMember(h, channel, product)).toBe(false);
       await sql(`update "products" set "attribute_values" = '{"color":"red"}'::jsonb where "id" = ?`, [product]);
       await announce('product.updated.v1', product);
@@ -92,7 +92,7 @@ describe('website rule steady state (spec 193, T059)', () => {
       expect(await isMember(h, channel, product)).toBe(true);
     });
 
-    it('a product that stops meeting the rule leaves, and its admission goes (US4-5, N2)', async () => {
+    it('a product that stops meeting the rule leaves, and its admission goes (US4-2, N2)', async () => {
       await sql(`update "products" set "attribute_values" = '{"color":"blue"}'::jsonb where "id" = ?`, [product]);
       await announce('product.updated.v1', product);
       expect((await websiteRules(h).evaluateMarked()).changed).toBe(1);
