@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CATALOGUE_PRICES_CHANGED_EVENT,
   CataloguePricesChangedEventSchema,
@@ -18,12 +18,19 @@ import { setupPricingFixture, type PricingFixture } from '../../helpers/pricing-
  * by the writing process, after commit, carrying the bump's `SurfaceChange` in names-only
  * form; a change that moves nothing the surface stores (`{ kind: 'none' }`) is not emitted.
  * The status sweep's flip emits too. Every emission moves the change watermark.
+ *
+ * The events are recorded **at emission** (a spy on the bus's `emit`), not by a subscriber: the
+ * bus awaits its handlers one by one, and `product_visibility_rules`' handler (registered first)
+ * does database work, so a subscriber added here is called after the awaited write returns — its
+ * events then leaked into the next case (QA W1, checkpoint 1). The writer emits before the write's
+ * promise resolves (`announceCataloguePricesChanged` is awaited after commit), so what the spy saw
+ * when the write returns is exactly what that write emitted.
  */
 describe('price_lists.catalogue_prices_changed (spec 193, R-6)', () => {
   let h: BackendServerHandle;
   let f: PricingFixture;
   let events: CataloguePricesChangedEvent[] = [];
-  let off: () => void;
+  let emit: { mockRestore(): void } | undefined;
   const port = () => (h.container as unknown as { resolve<T>(n: string): T }).resolve<CatalogueReferencePricePort>('catalogueReferencePricePort');
   const worker = () =>
     (h.container as unknown as { resolve<T>(name: string): T }).resolve<{
@@ -33,17 +40,25 @@ describe('price_lists.catalogue_prices_changed (spec 193, R-6)', () => {
   beforeAll(async () => {
     h = await setupBackendServer();
     f = await setupPricingFixture(h);
-    off = h.eventBus.on(CATALOGUE_PRICES_CHANGED_EVENT as never, ((payload: CataloguePricesChangedEvent) => {
-      events.push(payload);
-    }) as never);
+    const bus = h.eventBus as unknown as { emit(name: string, payload: unknown): void };
+    const original = bus.emit.bind(bus);
+    emit = vi.spyOn(bus, 'emit').mockImplementation((name: string, payload: unknown) => {
+      if (name === CATALOGUE_PRICES_CHANGED_EVENT) events.push(payload as CataloguePricesChangedEvent);
+      original(name, payload);
+    });
   }, 5 * 60_000);
+
+  // The fixture's own writes emitted too: each case starts from what it does itself.
+  beforeEach(() => {
+    events = [];
+  });
 
   afterEach(() => {
     events = [];
   });
 
   afterAll(async () => {
-    off();
+    emit?.mockRestore();
     await f.clearBooks();
     await teardownBackendServer(h);
   });
@@ -65,7 +80,7 @@ describe('price_lists.catalogue_prices_changed (spec 193, R-6)', () => {
     events = [];
     await f.system(() =>
       f.books.replaceRows(book.id, {
-        upsert: [{ selection: { productId: f.products.P1.id }, minQuantity: 1, maxQuantity: null, price: { type: 'fixed', amount: '99' } }],
+        upsert: [{ selection: { productId: f.products.P1.id }, minQuantity: 1, maxQuantity: null, price: { type: 'fixed', amount: '987.6543' } }],
         delete: [],
       }),
     );
@@ -75,8 +90,8 @@ describe('price_lists.catalogue_prices_changed (spec 193, R-6)', () => {
       kind: 'books',
       books: [{ bookId: book.id, currencyCodes: ['PLN'], isSystem: false, productIds: [f.products.P1.id] }],
     });
-    // Names only: nothing in the payload is an amount.
-    expect(JSON.stringify(event)).not.toContain('99');
+    // Names only: nothing in the payload is an amount (one no id or timestamp can spell).
+    expect(JSON.stringify(event)).not.toContain('987.6543');
   });
 
   it('a base price write emits a products change', async () => {
