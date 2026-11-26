@@ -371,3 +371,44 @@ describe('a batch row never replaces a kept stored row by its natural key (issue
     ]);
   });
 });
+
+describe('rows hidden from a restricted caller (spec 193, T102, FR-094, FR-082)', () => {
+  const H = '00000000-0000-4000-8000-00000000ab01';
+  const VIS = '00000000-0000-4000-8000-00000000ab02';
+  const run = (mode: 'merge' | 'replace', upsert: unknown[], hiddenIds?: ReadonlySet<string>) => {
+    const rows = [stored(H, P2, 1, null, '40'), stored(VIS, P1, 1, null, '90')];
+    const { parsed, errors } = parseBatchRows(upsert);
+    return planBatch({
+      isBaseBook: false,
+      stored: rows,
+      storedRowCount: rows.length,
+      mode,
+      parsed,
+      parseErrors: errors,
+      deleteIds: [],
+      upsertCount: upsert.length,
+      lookups,
+      newId,
+      ...(hiddenIds ? { hiddenIds } : {}),
+    });
+  };
+
+  it('a replace keeps the hidden rows missing from the file and removes only the visible ones', () => {
+    const plan = run('replace', [], new Set([H]));
+    expect(plan.errors).toEqual([]);
+    expect(plan.removed.map((r) => r.id)).toEqual([VIS]);
+    expect(plan.final.map((r) => r.id)).toEqual([H]);
+  });
+
+  it('without hidden rows a replace removes every row missing from the file, as before', () => {
+    expect(run('replace', []).removed.map((r) => r.id).sort()).toEqual([H, VIS].sort());
+  });
+
+  it('an overlap with a hidden row is refused without naming it', () => {
+    const plan = run('merge', [{ selection: { productId: P2 }, minQuantity: 2, price: { type: 'fixed', amount: '39' } }], new Set([H]));
+    expect(plan.errors).toHaveLength(1);
+    expect(plan.errors[0]).toEqual(expect.objectContaining({ index: 0, code: 'PRICE_BOOK_ROW_OVERLAP', reason: 'rows_overlap' }));
+    expect(plan.errors[0]!.rowId).toBeUndefined();
+    expect(JSON.stringify(plan.errors)).not.toContain(H);
+  });
+});
