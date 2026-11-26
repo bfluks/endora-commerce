@@ -482,7 +482,7 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   greps `packages/**` for statements writing the channel-product bridge table and fails on any file
   other than `KSC/sales-channel-membership.service.ts` (two-way: a listed writer that disappears fails
   too).
-- [ ] T065 [B] `packages/modules/sales_channels/src/backend/routes.admin.ts:387-431`: pass
+- [x] T065 [B] `packages/modules/sales_channels/src/backend/routes.admin.ts:387-431`: pass
   `onGoverned: 'refuse'`; contract test `BT/contract/sales_channels/governed-membership.contract.test.ts`
   (US4-3 manual refusal, translated, membership unchanged). Also the `sales_channels` part of the
   FR-082 error-details sweep (moved here from T046, stream B owns the module): no error answer names

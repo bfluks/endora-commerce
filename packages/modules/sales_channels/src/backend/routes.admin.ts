@@ -395,7 +395,8 @@ export async function registerSalesChannelsAdminRoutes(
         channel.id,
         entityType,
         request.params.entityId,
-        { actorAdminUserId: ctx.actorAdminUserId },
+        // Spec 193 (FR-054) — a manual write: on a governed channel it is refused, never skipped.
+        { actorAdminUserId: ctx.actorAdminUserId, onGoverned: 'refuse' },
       );
       reply.code(result.changed ? 201 : 200);
       return {
@@ -424,6 +425,8 @@ export async function registerSalesChannelsAdminRoutes(
         {
           fallbackToDefault: q.fallbackToDefault ?? false,
           actorAdminUserId: ctx.actorAdminUserId,
+          // Spec 193 (FR-054) — a manual write: on a governed channel it is refused, never skipped.
+          onGoverned: 'refuse',
         },
       );
       reply.code(200);
