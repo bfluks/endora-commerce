@@ -66,4 +66,26 @@ describe('catalog error details — a hidden holder is not named (spec 193, T046
     expect(conflict.heldByProductId).toBe(fx.hidden.id);
     expect(conflict.heldByProductName).toBe(hiddenName);
   });
+
+  it('the scoped-values save names a hidden holder by key only too', async () => {
+    const save = async (cookies: Record<string, string>) => {
+      const read = await h.app.inject({ method: 'GET', url: `${C}/${fx.visible.id}/scoped-values`, cookies: ADMIN });
+      expect(read.statusCode, read.body).toBe(200);
+      const res = await h.app.inject({
+        method: 'PUT',
+        url: `${C}/${fx.visible.id}/scoped-values`,
+        cookies,
+        payload: { scope: {}, version: read.json().data.version, changes: { urlKey: hiddenSlug } },
+      });
+      return { status: res.statusCode, body: res.json(), raw: res.body };
+    };
+    const restricted = await save(fx.restricted.cookies);
+    expect(restricted.status, restricted.raw).toBe(409);
+    expect(restricted.body.error.code).toBe('URL_KEY_TAKEN');
+    expect(restricted.raw).not.toContain(fx.hidden.id);
+    expect(restricted.raw).not.toContain(hiddenName);
+    const admin = await save(ADMIN);
+    expect(admin.status, admin.raw).toBe(409);
+    expect(admin.body.error.details.conflicts[0].heldByProductId).toBe(fx.hidden.id);
+  });
 });

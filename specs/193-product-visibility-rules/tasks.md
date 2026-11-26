@@ -326,7 +326,7 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
   targets for restricted callers; adding a hidden target answers target-not-found. Test
   `BT/integration/catalog/visibility-cross-references.test.ts`.
   *Build note*: an existing link, grouped item or bundle option whose target is hidden answers its route's own not-found on update / remove / reorder and is not changed.
-- [ ] T046 [A] FR-082, **TM-2**: `URL_KEY_TAKEN` (`CAT/backend/services/url-key.service.ts:324-337`) and the
+- [x] T046 [A] FR-082, **TM-2**: `URL_KEY_TAKEN` (`CAT/backend/services/url-key.service.ts:324-337`) and the
   integration-mode issues (`:309-316`) drop `heldByProductId` / `heldByProductName` when the holder is
   hidden from the caller (key and channel only); sweep every `HttpError` message and `details` in
   `catalog` and `price_lists` that names a product other than the addressed one (grep `heldBy`,
@@ -334,7 +334,7 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
   stream B's, in T065). Test
   `BT/integration/catalog/visibility-error-details.test.ts` (product save, scoped values, bulk, variants).
   *Build note*: done for `URL_KEY_TAKEN` and `URL_KEY_REDIRECT_TAKEOVER_REQUIRED` on the operator's paths (`PUT …/url-keys`, the scoped-values save); integration mode (connector, CSV) holds no admin scope and keeps naming holders. The rest of the sweep found no catalog refusal naming a product other than one the caller sent (`SKU_ALREADY_EXISTS` names the SKU only); `price_lists` was **not** swept — open.
-  *Open (why unticked)*: `price_lists` refusals not swept; the test covers `PUT …/url-keys` only (the scoped-values save path is wired the same way but untested; bulk and variant refusals name no other product).
+  *Sweep*: `price_lists` refusals name only ids the caller sent (`Product <id> not found.`, a variant not of the product) — none names a holder, nothing to redact. The test covers `PUT …/url-keys` and the scoped-values save (written after their code, which was wired in c16baf10f); bulk and variant refusals name no other product.
 - [x] T047 [A] **FR-031**, **TM-6** aggregate inventory: category `productCount`
   (`CAT/backend/services/catalog-category-read.service.ts:257-268`), attribute-set `productCount` and the
   `assertNotInUse` error details (`attribute-set.service.ts:118-140,319,536-545`),
