@@ -30,7 +30,7 @@ import { priceBookMembership } from './price-book-membership.js';
 import { audienceKindWritable, bookVisible, bookWritable, visibleBookSql, type PriceBookScope } from './price-book-scope.js';
 import { pgArray } from './sql-array.js';
 import { narrowsProducts, type PriceBookProductVisibility } from './admin-product-visibility.js';
-import type { AdminProductVisibilityScope } from '@endora-commerce/contracts';
+import type { AdminProductVisibilityScope, VisibilityPredicate } from '@endora-commerce/contracts';
 
 /**
  * The admin reads of price books — feature 160 (US7,
@@ -192,15 +192,53 @@ export class PriceBookReads {
     );
   }
 
-  async get(id: string, scope: PriceBookScope): Promise<PriceBook> {
+  /**
+   * One book as the admin API answers it. `productScope` (spec 193, owner ruling 2026-11-26,
+   * FR-094): for a narrowed caller `rowCount` and `tierStarts` are of the rows `rows()` lists to
+   * them; a system caller passes `{ kind: 'system' }`.
+   */
+  async get(id: string, scope: PriceBookScope, productScope: AdminProductVisibilityScope): Promise<PriceBook> {
     const header = await this.header(id, scope);
     const [bindings] = [await this.#bindings([header])];
-    return bookOf(header, bindings.get(header.id) ?? [], scope);
+    const [counted] = await this.#visibleCounts([header], productScope);
+    return bookOf(counted!, bindings.get(header.id) ?? [], scope);
+  }
+
+  /**
+   * Spec 193 (owner ruling 2026-11-26, FR-094) — the headers' `row_count` and `tier_starts`
+   * recounted over the rows the caller's product scope lets through, with the predicate `rows()`
+   * applies through `hiddenRowIds` (a row naming a hidden product or a non-qualifying variant is
+   * left out; a row naming neither is kept), in one statement for the whole page. A scope that
+   * narrows nothing gets the headers back unchanged (SC-003).
+   */
+  async #visibleCounts(headers: BookHeaderRow[], productScope: AdminProductVisibilityScope): Promise<BookHeaderRow[]> {
+    if (!narrowsProducts(productScope) || headers.length === 0) return headers;
+    const visibility = this.deps.productVisibility;
+    if (!visibility) {
+      throw new Error('price_lists: a narrowed admin product scope reached a book header composed without product visibility.');
+    }
+    const product = visibilityClause(visibility.productPredicate(productScope, '"e"."product_id"'), '"e"."product_id"');
+    const variant = visibilityClause(visibility.variantPredicate(productScope, '"e"."variant_id"'), '"e"."variant_id"');
+    const rows = (await this.deps.emFactory().execute(
+      `select e."price_list_id" as "id", count(*)::int as "row_count",
+              array_agg(distinct e."min_quantity" order by e."min_quantity") as "tier_starts"
+         from "price_list_matrix_entries" e
+        where e."price_list_id" = any(?::uuid[]) and ${product.sql} and ${variant.sql}
+        group by e."price_list_id"`,
+      [pgArray(headers.map((h) => h.id)), ...product.params, ...variant.params],
+    )) as Array<{ id: string; row_count: number; tier_starts: number[] | null }>;
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return headers.map((h) => {
+      const counted = byId.get(h.id);
+      return { ...h, row_count: counted?.row_count ?? 0, tier_starts: counted?.tier_starts ?? [] };
+    });
   }
 
   async list(
     query: PriceBookListQuery,
     scope: PriceBookScope,
+    /** Spec 193 (owner ruling 2026-11-26) — as {@link get}: the summaries' counts are of visible rows. */
+    productScope: AdminProductVisibilityScope,
   ): Promise<{ data: PriceBookSummary[]; meta: { page: number; pageSize: number; totalCount: number; creatableAudienceKinds: PriceBook['audience']['kind'][] } }> {
     const em = this.deps.emFactory();
     const where: string[] = ['true'];
@@ -253,12 +291,15 @@ export class PriceBookReads {
     }
     const clause = where.join(' and ');
     const offset = (query.page - 1) * query.pageSize;
-    const rows = (await em.execute(
-      `select ${HEADER_COLUMNS} from "price_lists" l where ${clause}
-        order by l."is_system" desc, l."currency_code" asc, l."priority" desc, l."name" asc, l."id" asc
-        limit ? offset ?`,
-      [...params, query.pageSize, offset],
-    )) as BookHeaderRow[];
+    const rows = await this.#visibleCounts(
+      (await em.execute(
+        `select ${HEADER_COLUMNS} from "price_lists" l where ${clause}
+          order by l."is_system" desc, l."currency_code" asc, l."priority" desc, l."name" asc, l."id" asc
+          limit ? offset ?`,
+        [...params, query.pageSize, offset],
+      )) as BookHeaderRow[],
+      productScope,
+    );
     const counted = (await em.execute(`select count(*)::int as "n" from "price_lists" l where ${clause}`, params)) as Array<{ n: number }>;
     const n = counted[0]?.n ?? 0;
     const bindings = await this.#bindings(rows);
@@ -883,4 +924,19 @@ function bookOf(row: BookHeaderRow, channels: Array<{ channelId: string; dormant
     // G11 — the scope rule the write routes apply, so the flag predicts their answer.
     writable: bookWritable(scope, { audienceKind: row.audience_kind, isSystem: row.is_system, organizationIds: row.member_org_ids ?? [] }),
   };
+}
+
+/**
+ * A row-level visibility clause over one nullable id column: a row naming nothing there is kept,
+ * `deny` keeps only those, a fragment narrows (spec 193, FR-094 — the `hiddenRowIds` rule in SQL).
+ */
+function visibilityClause(predicate: VisibilityPredicate, column: string): { sql: string; params: unknown[] } {
+  switch (predicate.kind) {
+    case 'none':
+      return { sql: 'true', params: [] };
+    case 'deny':
+      return { sql: `${column} is null`, params: [] };
+    case 'sql':
+      return { sql: `(${column} is null or (${predicate.fragment.sql}))`, params: [...predicate.fragment.params] };
+  }
 }

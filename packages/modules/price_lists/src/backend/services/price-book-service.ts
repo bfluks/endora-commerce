@@ -38,7 +38,7 @@ import {
   type StoredRow,
 } from './price-book-batch.js';
 import type { PriceBookReads } from './price-book-reads.js';
-import { narrowsProducts, type PriceBookProductVisibility } from './admin-product-visibility.js';
+import { narrowsProducts, SYSTEM_PRODUCT_SCOPE, type PriceBookProductVisibility } from './admin-product-visibility.js';
 import {
   assertBookTakesModuleRows,
   bookProductRowsOf,
@@ -1282,9 +1282,9 @@ export class PriceBookService {
     await reconcileProductLines(this.deps.emFactory(), productId);
   }
 
-  /** A visible book, as the admin API answers it. */
+  /** A visible book, as the admin API answers a caller whose product visibility narrows nothing. */
   async read(bookId: string, scope: PriceBookScope): Promise<PriceBook> {
-    return this.#reads().get(bookId, scope);
+    return this.#reads().get(bookId, scope, SYSTEM_PRODUCT_SCOPE);
   }
 
   // ---- Internals ------------------------------------------------------------

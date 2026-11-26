@@ -205,7 +205,17 @@ export class PriceBookHistory {
   constructor(private readonly deps: PriceBookHistoryDeps) {}
 
   /** `GET …/:id/price-history` — the book's changes, `(at desc, id desc)`. */
-  async changes(bookId: string, query: PriceBookHistoryQuery, scope: PriceBookScope): Promise<PriceBookHistoryChangesResponse> {
+  async changes(
+    bookId: string,
+    query: PriceBookHistoryQuery,
+    scope: PriceBookScope,
+    /**
+     * Spec 193 (owner ruling 2026-11-26, FR-084) — the caller's predicate over `"l"."product_id"`,
+     * as {@link lines} takes it: a narrowed caller's `lineCount` is the count of the lines `lines`
+     * lists to them. `none` reads the stored count (SC-003).
+     */
+    visible: VisibilityPredicate,
+  ): Promise<PriceBookHistoryChangesResponse> {
     await this.deps.reads.header(bookId, scope);
     const after = readCursor(changeCursor, query.cursor);
     const params: unknown[] = [bookId];
@@ -215,14 +225,20 @@ export class PriceBookHistory {
       params.push(after.at, after.id);
     }
     params.push(query.limit + 1);
+    const counted = lineVisibility(visible);
+    const lineCount =
+      visible.kind === 'none'
+        ? '"line_count"'
+        : `(select count(*)::int from "price_list_row_value_changes" l
+             where l."change_id" = "price_list_value_changes"."id" and l."price_list_id" = "price_list_value_changes"."price_list_id"${counted.sql}) as "line_count"`;
     const rows = (await this.deps.emFactory().execute(
       `select "id", "action", "actor_kind", "actor_admin_user_id", ${AT_KEY('"at"')} as "at_key",
-              "header_before", "header_after", "line_count"
+              "header_before", "header_after", ${lineCount}
          from "price_list_value_changes"
         where "price_list_id" = ? ${keyset}
         order by "at" desc, "id" desc
         limit ?`,
-      params,
+      [...(visible.kind === 'none' ? [] : counted.params), ...params],
     )) as ChangeRow[];
     const page = rows.slice(0, query.limit);
     const actors = await this.#actors(page);

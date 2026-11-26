@@ -154,14 +154,14 @@ export async function registerPriceBookRoutes(app: FastifyInstance, deps: PriceB
 
   app.get(base, { preHandler: readGate }, async (request) => {
     const query = parseOr400(priceBookListQuerySchema, request.query);
-    return deps.reads.list(query, await currentPriceBookScope());
+    return deps.reads.list(query, await currentPriceBookScope(), await deps.productScopeOf(request));
   });
 
   app.post(base, { preHandler: writeGate }, async (request, reply) => {
     const body = parseOr400(priceBookCreateSchema, request.body);
     const created = await books.createBook(body, await currentPriceBookScope());
     reply.status(201);
-    return { data: await deps.reads.get(created.id, await currentPriceBookScope()) };
+    return { data: await deps.reads.get(created.id, await currentPriceBookScope(), await deps.productScopeOf(request)) };
   });
 
   // ---- Settings (G8) and precedence: fixed paths before `/:id` --------------------
@@ -456,7 +456,7 @@ export async function registerPriceBookRoutes(app: FastifyInstance, deps: PriceB
 
   app.get<{ Params: { id: string } }>(`${base}/:id`, { preHandler: readGate }, async (request) => {
     if (!isUuidShape(request.params.id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Price book not found.');
-    return { data: await deps.reads.get(request.params.id, await currentPriceBookScope()) };
+    return { data: await deps.reads.get(request.params.id, await currentPriceBookScope(), await deps.productScopeOf(request)) };
   });
 
   app.patch<{ Params: { id: string } }>(`${base}/:id`, { preHandler: writeGate }, async (request) => {
@@ -476,21 +476,21 @@ export async function registerPriceBookRoutes(app: FastifyInstance, deps: PriceB
     }
     const body = parseOr400(priceBookPatchRequestSchema, raw);
     await books.patchBook(id, body, { expectedVersion: expectedVersionOf(request, body.expectedVersion), scope });
-    return { data: await deps.reads.get(id, scope) };
+    return { data: await deps.reads.get(id, scope, await deps.productScopeOf(request)) };
   });
 
   app.post<{ Params: { id: string } }>(`${base}/:id/activate`, { preHandler: writeGate }, async (request) => {
     if (!isUuidShape(request.params.id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Price book not found.');
     const scope = await currentPriceBookScope();
     await books.activate(request.params.id, scope);
-    return { data: await deps.reads.get(request.params.id, scope) };
+    return { data: await deps.reads.get(request.params.id, scope, await deps.productScopeOf(request)) };
   });
 
   app.post<{ Params: { id: string } }>(`${base}/:id/draftify`, { preHandler: writeGate }, async (request) => {
     if (!isUuidShape(request.params.id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Price book not found.');
     const scope = await currentPriceBookScope();
     await books.draftify(request.params.id, scope);
-    return { data: await deps.reads.get(request.params.id, scope) };
+    return { data: await deps.reads.get(request.params.id, scope, await deps.productScopeOf(request)) };
   });
 
   app.post<{ Params: { id: string } }>(`${base}/:id/duplicate`, { preHandler: writeGate }, async (request, reply) => {
@@ -500,7 +500,7 @@ export async function registerPriceBookRoutes(app: FastifyInstance, deps: PriceB
     const body = parseOr400(priceBookDuplicateSchema, request.body);
     const copy = await books.duplicate(request.params.id, body, scope);
     reply.status(201);
-    return { data: await deps.reads.get(copy.id, scope) };
+    return { data: await deps.reads.get(copy.id, scope, await deps.productScopeOf(request)) };
   });
 
   app.delete<{ Params: { id: string } }>(`${base}/:id`, { preHandler: writeGate }, async (request, reply) => {
@@ -551,7 +551,12 @@ export async function registerPriceBookRoutes(app: FastifyInstance, deps: PriceB
   app.get<{ Params: { id: string } }>(`${base}/:id/price-history`, { preHandler: readGate }, async (request) => {
     if (!isUuidShape(request.params.id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Price book not found.');
     const query = parseOr400(priceBookHistoryQuerySchema, request.query);
-    return deps.history.changes(request.params.id, query, await currentPriceBookScope());
+    return deps.history.changes(
+      request.params.id,
+      query,
+      await currentPriceBookScope(),
+      await deps.productPredicateOf(request, '"l"."product_id"'),
+    );
   });
 
   app.get<{ Params: { id: string; productId: string } }>(

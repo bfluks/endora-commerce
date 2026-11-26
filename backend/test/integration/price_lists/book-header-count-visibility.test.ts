@@ -28,7 +28,8 @@ describe('price book header and list row count for a restricted administrator (s
       audience: 'everyone',
       rows: [
         { product: { id: fx.visible.id }, fixed: '90' },
-        { product: { id: fx.hidden.id }, fixed: '40' },
+        // A tier only the hidden product's row starts: `tierStarts` must not publish it either.
+        { product: { id: fx.hidden.id }, fixed: '40', min: 7 },
         { product: { id: fx.hidden.id }, variant: fx.hidden.variantId, fixed: '41' },
         { product: { id: fx.configurable.id }, variant: fx.configurable.visibleVariant, fixed: '45' },
         { product: { id: fx.configurable.id }, variant: fx.configurable.hiddenVariant, fixed: '46' },
@@ -51,18 +52,85 @@ describe('price book header and list row count for a restricted administrator (s
     expect(await exportTotal(ADMIN)).toBe(5);
   });
 
-  // KNOWN DEFECT (QA, spec 193 checkpoint 1): header rowCount is count(*) over price_list_matrix_entries with no
-  // visibility predicate; a restricted admin gets 5, the export lists 2. Flip to `it` when the count is narrowed.
-  it.fails('the book header shows a restricted administrator the count of the rows they can list, not the hidden ones', async () => {
+  it('the book header shows a restricted administrator the count of the rows they can list, not the hidden ones', async () => {
     const listed = await exportTotal(editor.cookies);
     const header = (await h.app.inject({ method: 'GET', url: `${BASE}/${bookId}`, cookies: editor.cookies })).json() as { data: { rowCount: number } };
     expect(header.data.rowCount).toBe(listed);
   });
 
-  it.fails('the book list summary shows a restricted administrator the count of the rows they can list', async () => {
+  it('the book list summary shows a restricted administrator the count of the rows they can list', async () => {
     const listed = await exportTotal(editor.cookies);
     const res = await h.app.inject({ method: 'GET', url: `${BASE}?pageSize=100`, cookies: editor.cookies });
     const summary = (res.json() as { data: Array<{ id: string; rowCount: number }> }).data.find((b) => b.id === bookId);
     expect(summary?.rowCount).toBe(listed);
+  });
+
+  const tierStartsOf = async (cookies: Record<string, string>) =>
+    ((await h.app.inject({ method: 'GET', url: `${BASE}/${bookId}`, cookies })).json() as { data: { tierStarts: number[] } }).data.tierStarts;
+
+  it('the tier starts published to a restricted administrator are those of the rows they can list (owner ruling 2026-11-26)', async () => {
+    expect(await tierStartsOf(ADMIN)).toEqual([1, 7]);
+    const rows = ((await h.app.inject({ method: 'GET', url: `${BASE}/${bookId}/rows?pageSize=1000`, cookies: editor.cookies })).json() as {
+      data: Array<{ minQuantity: number }>;
+    }).data;
+    const listedStarts = [...new Set(rows.map((r) => r.minQuantity))].sort((a, b) => a - b);
+    expect(await tierStartsOf(editor.cookies)).toEqual(listedStarts);
+    expect(listedStarts).not.toContain(7);
+    const res = await h.app.inject({ method: 'GET', url: `${BASE}?pageSize=100`, cookies: editor.cookies });
+    const summary = (res.json() as { data: Array<{ id: string; tierStarts: number[] }> }).data.find((b) => b.id === bookId);
+    expect(summary?.tierStarts).toEqual(listedStarts);
+  });
+
+  it('a price-history entry shows a restricted administrator the count of the lines it lists to them', async () => {
+    const changesOf = async (cookies: Record<string, string>) =>
+      ((await h.app.inject({ method: 'GET', url: `${BASE}/${bookId}/price-history`, cookies })).json() as {
+        data: Array<{ id: string; lineCount: number }>;
+      }).data;
+    const all = await changesOf(ADMIN);
+    const mine = await changesOf(editor.cookies);
+    expect(mine.map((c) => c.id)).toEqual(all.map((c) => c.id));
+    let narrowed = 0;
+    for (const change of mine) {
+      const lines = (await h.app.inject({
+        method: 'GET',
+        url: `${BASE}/${bookId}/price-history/${change.id}/lines?limit=200`,
+        cookies: editor.cookies,
+      })).json() as { data: unknown[]; pagination: { hasMore: boolean } };
+      expect(lines.pagination.hasMore).toBe(false);
+      expect(change.lineCount).toBe(lines.data.length);
+      if (change.lineCount < all.find((c) => c.id === change.id)!.lineCount) narrowed += 1;
+    }
+    // Not vacuous: the rows' write named the hidden product.
+    expect(narrowed).toBeGreaterThan(0);
+  });
+
+  it('a book a restricted administrator duplicates is counted, in its header and its history, over the rows they can list', async () => {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `${BASE}/${bookId}/duplicate`,
+      cookies: editor.cookies,
+      payload: { name: `Copy ${bookId.slice(0, 8)}`, channelIds: [], currencyCode: 'PLN', audience: { kind: 'everyone', memberIds: [] } },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    const copy = (res.json() as { data: { id: string; rowCount: number; tierStarts: number[] } }).data;
+    const listed = ((await h.app.inject({ method: 'GET', url: `${BASE}/${copy.id}/rows?pageSize=1000`, cookies: editor.cookies })).json() as {
+      meta: { totalCount: number };
+    }).meta.totalCount;
+    expect(copy.rowCount).toBe(listed);
+    expect(copy.tierStarts).not.toContain(7);
+    const adminCopy = ((await h.app.inject({ method: 'GET', url: `${BASE}/${copy.id}`, cookies: ADMIN })).json() as { data: { rowCount: number } }).data;
+    expect(adminCopy.rowCount).toBe(5);
+    const history = ((await h.app.inject({ method: 'GET', url: `${BASE}/${copy.id}/price-history`, cookies: editor.cookies })).json() as {
+      data: Array<{ id: string; lineCount: number }>;
+    }).data;
+    expect(history.length).toBeGreaterThan(0);
+    for (const change of history) {
+      const lines = (await h.app.inject({
+        method: 'GET',
+        url: `${BASE}/${copy.id}/price-history/${change.id}/lines?limit=200`,
+        cookies: editor.cookies,
+      })).json() as { data: unknown[] };
+      expect(change.lineCount).toBe(lines.data.length);
+    }
   });
 });

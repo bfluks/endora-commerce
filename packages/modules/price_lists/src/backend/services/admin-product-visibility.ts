@@ -15,6 +15,11 @@ export interface PriceBookProductVisibility {
    * scope that narrows nothing, without asking the port.
    */
   productPredicate(scope: AdminProductVisibilityScope, column: string): VisibilityPredicate;
+  /**
+   * Owner ruling 2026-11-26 (FR-094) — the scope's variant predicate over `column`; `none` for a
+   * scope that narrows nothing, without asking the port.
+   */
+  variantPredicate(scope: AdminProductVisibilityScope, column: string): VisibilityPredicate;
   /** Whether the scope does not let the product through; `false` for a scope that narrows nothing. */
   productHidden(scope: AdminProductVisibilityScope, productId: string): Promise<boolean>;
   /** Which of `variantIds` the scope lets through (all of them for a scope that narrows nothing). */
@@ -55,6 +60,9 @@ export function createPriceBookProductVisibility(deps: {
     },
     productPredicate(scope, column) {
       return narrowsProducts(scope) ? deps.port().productPredicate(scope, { productId: column }) : NONE;
+    },
+    variantPredicate(scope, column) {
+      return narrowsProducts(scope) ? deps.port().variantPredicate(scope, { variantId: column }) : NONE;
     },
     async productHidden(scope, productId) {
       if (!narrowsProducts(scope)) return false;

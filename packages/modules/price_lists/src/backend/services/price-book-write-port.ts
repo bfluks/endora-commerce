@@ -11,6 +11,7 @@ import {
 import { HttpError } from '@endora-commerce/platform/http';
 import type { PriceBookReads } from './price-book-reads.js';
 import { ALL_BOOKS_SCOPE, type PriceBookService } from './price-book-service.js';
+import { SYSTEM_PRODUCT_SCOPE } from './admin-product-visibility.js';
 
 /**
  * Feature 160, FR-049 (owner ruling 2026-10-22) — `priceBookWritePort`, the
@@ -52,6 +53,7 @@ export function createPriceBookWritePort(deps: {
         const answer = await reads.list(
           { productId, ...(variantId ? { variantId } : {}), page, pageSize: 200 },
           ALL_BOOKS_SCOPE,
+          SYSTEM_PRODUCT_SCOPE,
         );
         books.push(...answer.data);
         if (answer.data.length === 0 || books.length >= answer.meta.totalCount) return books;
