@@ -4,6 +4,7 @@ import {
   setupCatalogVisibilityFixture,
   type CatalogVisibilityFixture,
 } from '../../helpers/catalog-visibility-fixture.js';
+import { withModuleOff } from '../../helpers/off-state.js';
 import { ADMIN, call, roleWith, type TestRole } from './fixtures.js';
 
 /**
@@ -72,6 +73,20 @@ describe('other admin product reads — narrowed by the visibility category (spe
         expect(productIdsOf(restricted.body)).toEqual(productIdsOf(admin.body).filter((id) => id !== fx.hidden.id));
       }
       expect(seenHidden, 'the fixture wrote a line for the hidden product').toBe(true);
+    });
+
+    it('off state (M3): with the module off both history reads are the platform administrator\'s', async () => {
+      const changes = (await get(`${history()}?limit=50`, ADMIN)).body.data as Array<{ id: string }>;
+      const urls = [`${history()}/products/${fx.hidden.id}`, ...changes.map((c) => `${history()}/${c.id}/lines?limit=100`)];
+      const read = async (cookies: Record<string, string>) => {
+        const out: unknown[] = [];
+        for (const url of urls) out.push((await get(url, cookies)).body);
+        return out;
+      };
+      const admin = await read(ADMIN);
+      for (const axis of ['deactivated', 'platform-unavailable'] as const) {
+        expect(await withModuleOff('product_visibility_rules', axis, () => read(reader.cookies))).toEqual(admin);
+      }
     });
   });
 

@@ -274,6 +274,7 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
   TM-14); **FR-079** (admin side): no visibility rule ever resurfaces an inactive, archived or deleted
   product on any admin read (each state × restricted / unrestricted). The governed-channel side of
   FR-079 is stream B's (T055, T056, T068 — N5).
+  *Open*: the Cache-Control case "absent from the composition" is not tested (on and off are); the header is set unconditionally by the route.
 - [x] T038 [A] `CAT/backend/index.ts`: resolve `adminProductVisibilityPort` per request behind
   `effectiveState.isPresent('product_visibility_rules')` (absent ⇒ `systemScope`-equivalent
   `unrestricted`; present and throwing ⇒ propagates, **TM-3 (4)**); `CAT/manifest.ts`
@@ -313,6 +314,7 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
   `degrades-without` entry (stream A owns `PL/manifest.ts` for this). Row **edits** stay unrestricted
   (FR-038). Test `BT/integration/price_lists/book-lines-visibility.test.ts`, including the **off
   state** (M3): module off ⇒ the grid's pages and counts identical to module-absent.
+  *Open leak*: `GET /price-books/:id/rows` (labels name hidden products) and `GET …/product-lines` are **not** narrowed — the test asserts `rows` answers 200 to a restricted caller (FR-038 reading); FR-030 needs a decision for `rows`.
 
 **Verification (5a)**: `pnpm --filter backend exec vitest run test/contract/catalog/visibility-route-inventory.test.ts test/integration/catalog/visibility-list.test.ts test/integration/catalog/bulk-operations-visibility.test.ts test/integration/price_lists/book-lines-visibility.test.ts test/contract/catalog/admin-list-routes.test.ts test/contract/catalog/products-resolve-ids.test.ts test/contract/catalog/products-admin-list-filters.test.ts test/contract/catalog/admin-product-variants-read.test.ts test/contract/catalog/admin-variants.test.ts`;
 `pnpm --filter @endora-commerce/mod-catalog exec vitest run src/backend/admin-search-provider.test.ts src/backend/services/admin-scope-required.test.ts`;
@@ -323,7 +325,8 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
 - [x] T045 [A] FR-080 (OQ-D A): links / grouped items / bundle options omit hidden
   targets for restricted callers; adding a hidden target answers target-not-found. Test
   `BT/integration/catalog/visibility-cross-references.test.ts`.
-- [x] T046 [A] FR-082, **TM-2**: `URL_KEY_TAKEN` (`CAT/backend/services/url-key.service.ts:324-337`) and the
+  *Open*: update / remove / reorder of an existing link, grouped item or bundle option whose target is hidden are not guarded (the restricted caller never sees its id).
+- [ ] T046 [A] FR-082, **TM-2**: `URL_KEY_TAKEN` (`CAT/backend/services/url-key.service.ts:324-337`) and the
   integration-mode issues (`:309-316`) drop `heldByProductId` / `heldByProductName` when the holder is
   hidden from the caller (key and channel only); sweep every `HttpError` message and `details` in
   `catalog` and `price_lists` that names a product other than the addressed one (grep `heldBy`,
@@ -331,6 +334,7 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
   stream B's, in T065). Test
   `BT/integration/catalog/visibility-error-details.test.ts` (product save, scoped values, bulk, variants).
   *Build note*: done for `URL_KEY_TAKEN` and `URL_KEY_REDIRECT_TAKEOVER_REQUIRED` on the operator's paths (`PUT …/url-keys`, the scoped-values save); integration mode (connector, CSV) holds no admin scope and keeps naming holders. The rest of the sweep found no catalog refusal naming a product other than one the caller sent (`SKU_ALREADY_EXISTS` names the SKU only); `price_lists` was **not** swept — open.
+  *Open (why unticked)*: `price_lists` refusals not swept; the test covers `PUT …/url-keys` only (the scoped-values save path is wired the same way but untested; bulk and variant refusals name no other product).
 - [x] T047 [A] **FR-031**, **TM-6** aggregate inventory: category `productCount`
   (`CAT/backend/services/catalog-category-read.service.ts:257-268`), attribute-set `productCount` and the
   `assertNotInUse` error details (`attribute-set.service.ts:118-140,319,536-545`),
@@ -396,6 +400,7 @@ FR-088 docs table (T094).
   `…/price-history/products/:productId` answers as absent for a hidden product; `…/:changeId/lines`
   drops hidden products' lines. Row **edits** stay unrestricted (FR-038).
   *Build note*: the product's history answers a hidden product as one with none (after the book is read through its scope); a change's lines keep lines naming no product. `price_lists` asks the port (`filterVisible`, `productPredicate`) — it never reads `products`.
+  *Off state*: `other-admin-reads.test.ts` holds both history reads equal to the platform administrator's with the module off on both axes.
 - [ ] T054 [A] `import_export` products adapter
   (`packages/modules/import_export/src/backend/services/adapters/products.adapter.ts`): export and
   import of products refused `403` for a non-unrestricted scope, one check through the port, resolved
