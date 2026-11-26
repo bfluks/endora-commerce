@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ERROR_CODES, PRODUCT_VISIBILITY_ERROR_CODES as E } from '@endora-commerce/contracts';
 import { setupBackendServer, teardownBackendServer, type BackendServerHandle } from '../../helpers/test-server.js';
@@ -70,11 +71,12 @@ describe('website rule (spec 193, T056)', () => {
     manager = await roleWith(h, ['product_visibility:read', 'product_visibility:manage'], 'pvr_mgr');
   }, 5 * 60_000);
 
-  beforeEach(() => {
-    const limits = websiteRules(h).limits;
-    // The stub admin leaves previews standing across cases; the cap is asserted on its own.
-    limits.maxConcurrentPreviewsPerAdmin = 1_000;
-    limits.maxPreviewChanges = 2_000_000;
+  beforeEach(async () => {
+    // The stub admin would otherwise leave previews standing across cases and meet the
+    // per-administrator cap, which is asserted on its own.
+    const conn = h.orm.em.fork().getConnection();
+    await conn.execute(`delete from "website_rule_preview_changes"`);
+    await conn.execute(`delete from "website_rule_previews"`);
   });
 
   afterAll(async () => {
@@ -408,17 +410,16 @@ describe('website rule (spec 193, T056)', () => {
     it('caps concurrent previews per administrator, and the snapshot table', async () => {
       const channel = await createChannel(h, 'wr-cap');
       const rule = await createRule();
-      websiteRules(h).limits.maxConcurrentPreviewsPerAdmin = 3;
+      expect(websiteRules(h).limits.maxConcurrentPreviewsPerAdmin).toBe(3);
       for (let i = 0; i < 3; i += 1) await preview({ kind: 'attach', productRuleId: rule.id, salesChannelIds: [channel] }, manager.cookies);
       const fourth = await call(h, 'POST', '/website-rules/previews', { payload: { kind: 'attach', productRuleId: rule.id, salesChannelIds: [channel] }, cookies: manager.cookies });
       expect(fourth.status).toBe(409);
       expect(fourth.body.error.code).toBe(E.WEBSITE_RULE_PREVIEW_LIMIT);
 
-      websiteRules(h).limits.maxConcurrentPreviewsPerAdmin = 1_000;
-      websiteRules(h).limits.maxPreviewChanges = 0;
-      const full = await call(h, 'POST', '/website-rules/previews', { payload: { kind: 'attach', productRuleId: rule.id, salesChannelIds: [channel] } });
-      expect(full.status).toBe(409);
-      expect(full.body.error.code).toBe(E.WEBSITE_RULE_PREVIEW_LIMIT);
+      const full = websiteRules(h)
+        .withLimits({ maxPreviewChanges: 0 })
+        .createPreview(randomUUID(), { kind: 'attach', productRuleId: rule.id, salesChannelIds: [channel] });
+      await expect(full).rejects.toMatchObject({ statusCode: 409, code: E.WEBSITE_RULE_PREVIEW_LIMIT });
     });
 
     it('a preview whose snapshot would pass the cap fails rather than writing past it', async () => {
@@ -427,8 +428,7 @@ describe('website rule (spec 193, T056)', () => {
       const rule = await createRule();
       const id = await preview({ kind: 'attach', productRuleId: rule.id, salesChannelIds: [channel] });
       const [row] = await h.orm.em.fork().getConnection().execute<Array<{ n: number }>>(`select count(*)::int as n from "website_rule_preview_changes"`);
-      websiteRules(h).limits.maxPreviewChanges = row!.n;
-      await websiteRules(h).runPreview(id);
+      await websiteRules(h).withLimits({ maxPreviewChanges: row!.n }).runPreview(id);
       expect((await call(h, 'GET', `/website-rules/previews/${id}`)).body.data.status).toBe('failed');
       expect(await previewChanges(h, id)).toEqual([]);
     });

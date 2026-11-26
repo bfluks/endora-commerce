@@ -121,7 +121,16 @@ export interface WebsiteRuleServiceForTests {
   applyPreview(previewId: string): Promise<{ applied: number }>;
   evaluateMarked(): Promise<{ evaluated: number; changed: number }>;
   reconcileAll(): Promise<{ changed: number }>;
-  limits: { maxConcurrentPreviewsPerAdmin: number; maxPreviewChanges: number; applyBatch: number };
+  readonly limits: Readonly<WebsiteRuleLimitsForTests>;
+  /** A sibling service on the same deps with some limits lowered; the singleton is never mutated. */
+  withLimits(limits: Partial<WebsiteRuleLimitsForTests>): WebsiteRuleServiceForTests;
+  createPreview(adminUserId: string, body: unknown): Promise<{ previewId: string }>;
+}
+
+export interface WebsiteRuleLimitsForTests {
+  maxConcurrentPreviewsPerAdmin: number;
+  maxPreviewChanges: number;
+  applyBatch: number;
 }
 
 /** A live product with these attribute values; optionally made inactive, archived or deleted. */

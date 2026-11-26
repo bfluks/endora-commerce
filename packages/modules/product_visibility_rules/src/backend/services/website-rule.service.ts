@@ -157,10 +157,15 @@ function previewNotFound(): HttpError {
 }
 
 export class WebsiteRuleService {
-  readonly limits: WebsiteRuleLimits;
+  readonly limits: Readonly<WebsiteRuleLimits>;
 
   constructor(private readonly deps: WebsiteRuleServiceDeps) {
-    this.limits = { ...DEFAULT_WEBSITE_RULE_LIMITS, ...deps.limits };
+    this.limits = Object.freeze({ ...DEFAULT_WEBSITE_RULE_LIMITS, ...deps.limits });
+  }
+
+  /** The same service on the same deps with some limits replaced; this one is left as it is. */
+  withLimits(limits: Partial<WebsiteRuleLimits>): WebsiteRuleService {
+    return new WebsiteRuleService({ ...this.deps, limits: { ...this.limits, ...limits } });
   }
 
   #now(): Date {
