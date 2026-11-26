@@ -132,4 +132,59 @@ describe('catalog cross-references — hidden targets left out (spec 193, T045)'
       expect(await productFingerprint(h, c.owner), c.url).toEqual(before);
     }
   });
+
+  it('an existing link, grouped item or bundle option to a hidden target answers as a missing one, and is not changed', async () => {
+    const links = (await inject('GET', `${P}/${fx.visible.id}/links`, ADMIN)).body.data as Array<{ id: string; targetProductId: string }>;
+    const hiddenLink = links.find((l) => l.targetProductId === hiddenTarget)!.id;
+    const visibleLink = links.find((l) => l.targetProductId === visibleTarget)!.id;
+    const items = (await inject('GET', `${P}/${grouped}/grouped-items`, ADMIN)).body.data as Array<{ id: string; childProductId: string }>;
+    const hiddenItem = items.find((i) => i.childProductId === hiddenTarget)!.id;
+    const slots = (await inject('GET', `${P}/${bundle}/bundle-slots`, ADMIN)).body.data as Array<{
+      options: Array<{ id: string; optionProductId: string }>;
+    }>;
+    const hiddenOption = slots[0]!.options.find((o) => o.optionProductId === hiddenTarget)!.id;
+    const cases: Array<{ method: 'PATCH' | 'PUT' | 'DELETE'; url: (id: string) => string; body?: (id: string) => unknown; owner: string; id: string }> = [
+      { method: 'DELETE', url: (id) => `${P}/${fx.visible.id}/links/${id}`, owner: fx.visible.id, id: hiddenLink },
+      {
+        method: 'PUT',
+        url: () => `${P}/${fx.visible.id}/links/related/order`,
+        body: (id) => ({ linkIds: [visibleLink, id] }),
+        owner: fx.visible.id,
+        id: hiddenLink,
+      },
+      { method: 'PATCH', url: (id) => `${P}/${grouped}/grouped-items/${id}`, body: () => ({ quantity: 3 }), owner: grouped, id: hiddenItem },
+      { method: 'DELETE', url: (id) => `${P}/${grouped}/grouped-items/${id}`, owner: grouped, id: hiddenItem },
+      { method: 'DELETE', url: (id) => `${P}/${bundle}/bundle-slots/${slotId}/options/${id}`, owner: bundle, id: hiddenOption },
+    ];
+    for (const c of cases) {
+      const missing = randomUUID();
+      const send = async (id: string) => {
+        const res = await h.app.inject({
+          method: c.method,
+          url: c.url(id),
+          cookies: fx.restricted.cookies,
+          ...(c.body ? { payload: c.body(id) as never } : {}),
+        });
+        return masked(res.body, id);
+      };
+      const before = await productFingerprint(h, c.owner);
+      const rowsBefore = JSON.stringify([
+        (await inject('GET', `${P}/${fx.visible.id}/links`, ADMIN)).body,
+        (await inject('GET', `${P}/${grouped}/grouped-items`, ADMIN)).body,
+        (await inject('GET', `${P}/${bundle}/bundle-slots`, ADMIN)).body,
+      ]);
+      const asHidden = await send(c.id);
+      const asMissing = await send(missing);
+      expect(asHidden, `${c.method} ${c.url('<id>')}`).toEqual(asMissing);
+      expect(await productFingerprint(h, c.owner)).toEqual(before);
+      expect(
+        JSON.stringify([
+          (await inject('GET', `${P}/${fx.visible.id}/links`, ADMIN)).body,
+          (await inject('GET', `${P}/${grouped}/grouped-items`, ADMIN)).body,
+          (await inject('GET', `${P}/${bundle}/bundle-slots`, ADMIN)).body,
+        ]),
+        `${c.method} ${c.url('<id>')} changed a row`,
+      ).toEqual(rowsBefore);
+    }
+  });
 });
