@@ -386,17 +386,21 @@ FR-088 docs table (T094).
   no error answer names a hidden product (FR-082) — reuses the fixtures of T045, T046, T048.
   **Off state (M3)**: `BT/integration/product_visibility_rules/off-state.other-admin-reads.test.ts` —
   module off ⇒ every 5c surface identical to module-absent (no narrowing, no `403`).
+  *Build state (wip)*: `other-admin-reads.test.ts` holds the price-history block (green with T053); the inventory (FR-083 + set-stock tool) and export/import (FR-085) blocks are `it.todo`. `sc-009-surfaces.test.ts` and `off-state.other-admin-reads.test.ts` are **not written**.
 - [ ] T052 [A] `inventory` (`packages/modules/inventory/src/backend/routes.admin.ts:124-615`,
   `prompt-tools.ts:86-101`): admin lists narrowed through the port (product predicate on its product
   column); the set-stock tool resolves the product through the scoped lookup (hidden ⇒ not found);
   `inventory/manifest.ts` `degrades-without` entry.
-- [ ] T053 [A] `price_lists` price history (`PL/backend/routes.price-books.ts:536-567`):
+  *Build state*: **not started**.
+- [x] T053 [A] `price_lists` price history (`PL/backend/routes.price-books.ts:536-567`):
   `…/price-history/products/:productId` answers as absent for a hidden product; `…/:changeId/lines`
   drops hidden products' lines. Row **edits** stay unrestricted (FR-038).
+  *Build note*: the product's history answers a hidden product as one with none (after the book is read through its scope); a change's lines keep lines naming no product. `price_lists` asks the port (`filterVisible`, `productPredicate`) — it never reads `products`.
 - [ ] T054 [A] `import_export` products adapter
   (`packages/modules/import_export/src/backend/services/adapters/products.adapter.ts`): export and
   import of products refused `403` for a non-unrestricted scope, one check through the port, resolved
   at job execution for the requester.
+  *Build state*: **not started**.
 
 **Verification (5c)**: `pnpm --filter backend exec vitest run test/integration/product_visibility_rules/other-admin-reads.test.ts test/integration/product_visibility_rules/sc-009-surfaces.test.ts test/integration/product_visibility_rules/off-state.other-admin-reads.test.ts test/integration/inventory test/integration/import_export`;
 `pnpm --filter @endora-commerce/mod-import-export exec vitest run src/backend/services/adapters/products.adapter.test.ts`;
