@@ -508,6 +508,15 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   changeset), the refusal in `sales_channels` `SalesChannelsService.delete` before any write, the
   plain refusal's details reduced to counts per entity type (FR-082), pl + en sentence, T064 ledger
   reason updated.
+- [x] T101 [B] **Rows of a channel deleted while governed** (coordinator decision, option a — no
+  change to `sales_channels`). Failing test first
+  `BT/integration/product_visibility_rules/channel-deleted-cleanup.test.ts`: a governed channel
+  deleted ⇒ its `website_rule_attachments` and `website_rule_admissions` rows go, other channels'
+  stay; a second delivery changes nothing; a deactivate leaves the rows; module off ⇒ nothing
+  subscribes, and the reconcile once back sweeps them. Then a PVR `ctx.subscribe` on
+  `sales_channels.lifecycle_changed` (a delete emits it; no dedicated delete event exists) sweeping
+  the rows of every channel that no longer resolves, and the same sweep at the start of the hourly
+  reconcile.
 - [ ] T067 [A] (after T063 is on the shared branch) `CAT/backend/services/catalog-bulk-update.service.ts:562,570,576`:
   `onGoverned: 'refuse'` + enqueue-time refusal when the patch names a governed channel; test in
   `BT/integration/catalog/bulk-update-governed-channel.test.ts`.

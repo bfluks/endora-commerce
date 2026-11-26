@@ -251,6 +251,21 @@ export function registerModule(ctx: ModuleContext): void {
   }
 
   /**
+   * T101 — a sales channel deleted while governed leaves its attachment and admissions rows; they
+   * are swept on every lifecycle change of a channel (a delete emits `sales_channels.lifecycle_changed`;
+   * no dedicated delete event exists, and its payload — `channelCode` only — is not read: the sweep
+   * asks which attached channels still resolve). Events missed while off are swept by the hourly
+   * reconcile.
+   */
+  ctx.subscribe('sales_channels.lifecycle_changed', async () => {
+    const { productVisibilityWebsiteRules } = ctx.cradle<ProductVisibilityRulesCradle>();
+    await enterSystemScope('product_visibility_rules: sweep website-rule rows of deleted channels', async () => {
+      const swept = await productVisibilityWebsiteRules.sweepDeletedChannels();
+      if (swept.length > 0) ctx.log.info({ salesChannelIds: swept }, 'product_visibility_rules: swept website-rule rows of deleted sales channels');
+    });
+  });
+
+  /**
    * T028, T030 — the flags worker (`product_visibility_rules.flags`), its two-minute drift poll
    * and its nightly reconcile, attached with `ctx.worker` so they stop with the module.
    */

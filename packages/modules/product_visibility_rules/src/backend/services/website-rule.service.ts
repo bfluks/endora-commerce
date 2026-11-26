@@ -464,6 +464,8 @@ export class WebsiteRuleService {
    * then any confirmed preview whose snapshot is still unapplied, and expired previews are swept.
    */
   async reconcileAll(): Promise<{ changed: number }> {
+    // T101 — first the rows of channels deleted while the module was off (no event reached it).
+    await this.sweepDeletedChannels();
     const governed = await this.governedChannels();
     let changed = 0;
     if (governed.length > 0) {
@@ -483,6 +485,29 @@ export class WebsiteRuleService {
     );
     await this.scheduleWindowBoundaries();
     return { changed };
+  }
+
+  /**
+   * T101 — delete the attachment and admissions rows of every channel that no longer resolves. A
+   * sales channel deleted while governed leaves them (no foreign key leaves this module,
+   * data-model §0). Run on every `sales_channels.lifecycle_changed` — a delete emits it, and there
+   * is no dedicated delete event — and at the start of the hourly reconcile. Idempotent; a
+   * deactivated channel still resolves and keeps its rows. Answers the channels swept.
+   */
+  async sweepDeletedChannels(): Promise<string[]> {
+    const conn = this.#em().getConnection();
+    const rows = await conn.execute<Array<{ sales_channel_id: string }>>(
+      `select "sales_channel_id" from "website_rule_attachments"
+       union select "sales_channel_id" from "website_rule_admissions"`,
+    );
+    const gone: string[] = [];
+    for (const { sales_channel_id: id } of rows) if ((await this.deps.channels().getById(id)) === null) gone.push(id);
+    if (gone.length === 0) return [];
+    await this.#em().transactional(async (tx) => {
+      await tx.getConnection().execute(`delete from "website_rule_admissions" where "sales_channel_id" = any(?::uuid[])`, [uuidArray(gone)], 'run', tx.getTransactionContext());
+      await tx.getConnection().execute(`delete from "website_rule_attachments" where "sales_channel_id" = any(?::uuid[])`, [uuidArray(gone)], 'run', tx.getTransactionContext());
+    });
+    return gone;
   }
 
   /**
