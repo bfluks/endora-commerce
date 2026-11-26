@@ -445,6 +445,10 @@ membership writes not skipped/refused, workers paused (jobs left waiting), comma
 flags and rules kept; re-enable restores configuration, enqueues a reconcile of every governed
 channel and a rebuild of every designated currency.
 
+The presence-epoch recorder runs while the module is off (one Redis INCR per presence change); the
+only accepted exception to FR-073's never-installed rule, because it is what lets the module
+reconcile when switched back on.
+
 ## R-16 Performance verification (SC-007)
 
 **Decision**: `backend/test/perf/product_visibility_rules/admin-list-visibility.bench.ts`
