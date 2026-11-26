@@ -491,7 +491,7 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   channel-side membership routes; if the sweep finds no `details` / message naming another product,
   the task records that evidence (the grep and its empty result) in the PR and the test asserts the
   current shapes so a later regression fails.
-- [ ] T066 [B] `PVR/backend/services/membership-governor.ts`: `governs` reads `website_rule_attachments`
+- [x] T066 [B] `PVR/backend/services/membership-governor.ts`: `governs` reads `website_rule_attachments`
   on the passed `em`; contributed from the module's boot hook (contribution sink, filtered by
   presence); the token is held in a module-local closure of the website-rule service and **never
   registered in the DI container** (TM-10).

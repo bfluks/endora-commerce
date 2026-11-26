@@ -16,6 +16,7 @@ import {
   effectiveState,
   enterSystemScope,
   lazyPort,
+  type ChannelMembershipGovernorRegistryPort,
   type ModuleContext,
   type RequireAdminFactory,
 } from '@endora-commerce/platform/kernel';
@@ -26,6 +27,7 @@ import { CataloguePriceFlags } from './services/catalogue-price-flags.js';
 import type { CataloguePriceFlagsScheduler } from './services/catalogue-price-flags-scheduler.js';
 import { createFlagsProducer, startFlagsWorker, type FlagsProducer } from './workers/catalogue-price-flags-worker.js';
 import { VisibilityConfigService } from './services/visibility-config.service.js';
+import { WebsiteRuleGovernorHandle } from './services/membership-governor.js';
 import { registerProductVisibilityAdminRoutes } from './routes.admin.js';
 import { CataloguePriceDesignation } from './entities/catalogue-price-designation.entity.js';
 import { CataloguePriceGeneration } from './entities/catalogue-price-generation.entity.js';
@@ -69,6 +71,12 @@ export interface ProductVisibilityRulesCradle {
  * never captured.
  */
 export function registerModule(ctx: ModuleContext): void {
+  /**
+   * T066 (TM-10) — the website rule's governor write token lives in this closure, handed to the
+   * website-rule service below and never registered in the container.
+   */
+  const websiteRuleGovernor = new WebsiteRuleGovernorHandle();
+
   ctx.di.register({
     productVisibilityFlags: ctx
       .asFunction(
@@ -186,6 +194,15 @@ export function registerModule(ctx: ModuleContext): void {
     await enterSystemScope('product_visibility_rules: bootstrap catalogue-price flags', async () => {
       if ((await productVisibilityFlags.ensureActiveCurrencies()).length > 0) await productVisibilityFlagsProducer.enqueuePass();
     });
+  });
+
+  /**
+   * T066 (R-10) — the website rule's channel-membership governor. A **contribution** hook: no
+   * presence probe — the registry is sealed after boot and asks `isPresent` per mutation, so a
+   * module switched on later governs from its next write and one switched off governs nothing.
+   */
+  ctx.onBoot(() => {
+    websiteRuleGovernor.register(lazyPort<ChannelMembershipGovernorRegistryPort>(ctx, 'salesChannelMembershipGovernors'));
   });
 
   /**

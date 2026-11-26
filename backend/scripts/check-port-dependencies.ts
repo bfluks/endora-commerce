@@ -250,6 +250,10 @@ export const PLATFORM_OWNED_NAMES: ReadonlySet<string> = new Set([
   'settingsChannelResolver',
   'salesChannelResolutionPort',
   'salesChannelMembershipPort',
+  // Spec 193 (R-10, TM-10) — the membership-governor contribution point, composed off
+  // `composeSalesChannelsKernel` and sealed after boot. `product_visibility_rules` registers its
+  // website-rule governor into it from a boot hook; no module owns the name.
+  'salesChannelMembershipGovernors',
   // Feature 154 — the sales-channel access rule (`SalesChannelAccessPort`) and
   // the invalidating half of its per-Organization cache, both composed off
   // `composeSalesChannelsKernel` and contributed by both roots. The rule is a
