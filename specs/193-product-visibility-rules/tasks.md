@@ -390,7 +390,7 @@ FR-088 docs table (T094).
   no error answer names a hidden product (FR-082) — reuses the fixtures of T045, T046, T048.
   **Off state (M3)**: `BT/integration/product_visibility_rules/off-state.other-admin-reads.test.ts` —
   module off ⇒ every 5c surface identical to module-absent (no narrowing, no `403`).
-  *Build state (wip)*: `other-admin-reads.test.ts` holds the price-history block (green with T053); the inventory (FR-083 + set-stock tool) and export/import (FR-085) blocks are `it.todo`. `sc-009-surfaces.test.ts` and `off-state.other-admin-reads.test.ts` are **not written**.
+  *Build state (wip)*: `other-admin-reads.test.ts` holds the price-history block (green with T053); the export/import block (FR-085, with T054) is green; the inventory block (FR-083 + set-stock tool, with T052) is `it.todo`. `sc-009-surfaces.test.ts` and `off-state.other-admin-reads.test.ts` are **not written**.
 - [ ] T052 [A] `inventory` (`packages/modules/inventory/src/backend/routes.admin.ts:124-615`,
   `prompt-tools.ts:86-101`): admin lists narrowed through the port (product predicate on its product
   column); the set-stock tool resolves the product through the scoped lookup (hidden ⇒ not found);
