@@ -261,6 +261,8 @@ export class WebsiteRuleService {
       throw new HttpError(409, E.WEBSITE_RULE_PREVIEW_LIMIT, 'The preview store is full; try again when earlier previews expired.');
     }
 
+    // command-coverage-ignore: a preview is a short-lived, per-administrator scratch snapshot (TTL,
+    // swept on expiry) that changes no domain state; its confirm is the audited Command.
     const preview = em.create(WebsiteRulePreview, {
       kind: body.kind,
       productRuleId: rule.id,
