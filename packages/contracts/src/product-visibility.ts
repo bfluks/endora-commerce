@@ -156,6 +156,84 @@ export interface AdminProductVisibilityPort {
   ): Promise<ReadonlyArray<{ visible: boolean; noFixedPrice: boolean }>>;
 }
 
+/** `system` and `unrestricted` narrow nothing (SC-003: no clause, byte-identical answers). */
+export function narrowsAdminProducts(scope: AdminProductVisibilityScope): boolean {
+  switch (scope.kind) {
+    case 'system':
+    case 'unrestricted':
+      return false;
+    case 'no_category':
+    case 'restricted':
+      return true;
+  }
+}
+
+/** The one frozen `system` scope a consumer reads with when the owner is absent (and passes as a system caller). */
+export const SYSTEM_ADMIN_PRODUCT_SCOPE: AdminProductVisibilityScope = Object.freeze({ kind: 'system' }) as AdminProductVisibilityScope;
+const NO_PREDICATE: VisibilityPredicate = Object.freeze({ kind: 'none' }) as VisibilityPredicate;
+
+/**
+ * What a consumer module asks of {@link AdminProductVisibilityPort}, with the owner's absence decided
+ * in front of the port (`degrades-without`, D-44) — the one shell `catalog`, `price_lists` and
+ * `inventory` wrap (spec 193, checkpoint 1):
+ *
+ * - **absent** ⇒ every scope is `system`, and the port is never resolved;
+ * - a scope that **narrows nothing** (`system`, `unrestricted`) ⇒ predicates are `none` and
+ *   `filterVisible` answers the ids it was given, without asking the port;
+ * - **present** ⇒ the port answers, and a failure is **not** caught (TM-3 (4)): a request whose
+ *   scope cannot be read answers 5xx, never unfiltered.
+ */
+export interface DegradingAdminProductVisibility {
+  /** Per request (or at execution, for the requesting administrator). Never cached. */
+  scopeFor(adminUserId: string): Promise<AdminProductVisibilityScope>;
+  productPredicate(scope: AdminProductVisibilityScope, columns: { productId: string }): VisibilityPredicate;
+  variantPredicate(scope: AdminProductVisibilityScope, columns: { variantId: string }): VisibilityPredicate;
+  filterVisible(
+    scope: AdminProductVisibilityScope,
+    ids: { productIds?: readonly string[]; variantIds?: readonly string[] },
+  ): Promise<{ productIds: ReadonlySet<string>; variantIds: ReadonlySet<string> }>;
+}
+
+export function createDegradingAdminProductVisibility(deps: {
+  isPresent: () => boolean;
+  port: () => AdminProductVisibilityPort;
+}): DegradingAdminProductVisibility {
+  return {
+    async scopeFor(adminUserId) {
+      if (!deps.isPresent()) return SYSTEM_ADMIN_PRODUCT_SCOPE;
+      return deps.port().resolveScope(adminUserId);
+    },
+    productPredicate(scope, columns) {
+      return narrowsAdminProducts(scope) ? deps.port().productPredicate(scope, columns) : NO_PREDICATE;
+    },
+    variantPredicate(scope, columns) {
+      return narrowsAdminProducts(scope) ? deps.port().variantPredicate(scope, columns) : NO_PREDICATE;
+    },
+    async filterVisible(scope, ids) {
+      if (!narrowsAdminProducts(scope)) {
+        return { productIds: new Set(ids.productIds ?? []), variantIds: new Set(ids.variantIds ?? []) };
+      }
+      return deps.port().filterVisible(scope, ids);
+    },
+  };
+}
+
+/**
+ * A predicate as a clause for a consumer's statements: `null` adds nothing (the statement is the
+ * one it was before the feature), `false` matches nothing, a fragment narrows. Exhaustive on
+ * purpose: a new predicate kind is a compile error here, never a silent "unrestricted" (TM-3 (3)).
+ */
+export function visibilityPredicateClause(predicate: VisibilityPredicate): SqlFragment | null | false {
+  switch (predicate.kind) {
+    case 'none':
+      return null;
+    case 'deny':
+      return false;
+    case 'sql':
+      return { sql: `(${predicate.fragment.sql})`, params: [...predicate.fragment.params] };
+  }
+}
+
 /**
  * Spec 193 (FR-023, US1-6, US1-11; contracts/admin-api.md §2) — beside a catalog admin product
  * list answered to a restricted caller. **Absent** for an unrestricted caller (SC-003).
