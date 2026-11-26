@@ -422,7 +422,7 @@ FR-088 docs table (T094).
 **Verification (5c)**: `pnpm --filter backend exec vitest run test/integration/product_visibility_rules/other-admin-reads.test.ts test/integration/product_visibility_rules/sc-009-surfaces.test.ts test/integration/product_visibility_rules/off-state.other-admin-reads.test.ts test/integration/inventory test/integration/import_export`;
 `pnpm --filter @endora-commerce/mod-import-export exec vitest run src/backend/services/adapters/products.adapter.test.ts`;
 `pnpm --filter backend run check:port-dependencies && pnpm --filter backend run check:port-catches`.
-*Run 2026-11-26* (with T102): all green — the three `product_visibility_rules` files 17/17, `test/integration/inventory` 13 files, `test/integration/import_export` 72/72, `products.adapter.test.ts` 50/50, both checks clean.
+*Run 2026-11-26* (with T102): all green — the backend command exactly as written 23 files / 160 tests, `products.adapter.test.ts` 50/50, both checks clean.
 
 ---
 

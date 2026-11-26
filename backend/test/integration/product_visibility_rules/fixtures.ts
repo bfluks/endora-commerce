@@ -165,3 +165,39 @@ export async function waitForMark(h: BackendServerHandle, productId: string): Pr
   }
   throw new Error(`no catalogue-price mark for ${productId} within 5 s`);
 }
+
+/**
+ * Spec 193 T051 — the inventory rows a test writes for shared fixture products, put back after
+ * it: every `stock_levels` row of `productIds` as it was, and every back-in-stock request of them
+ * the test added (those created after the snapshot) removed.
+ */
+export async function snapshotInventory(h: BackendServerHandle, productIds: readonly string[]): Promise<() => Promise<void>> {
+  const conn = h.em().getConnection();
+  const ids = `{${productIds.join(',')}}`;
+  const [stock] = await conn.execute<Array<{ rows: unknown }>>(
+    `select coalesce(json_agg(s), '[]'::json) as "rows" from "stock_levels" s where s."product_id" = any(?::uuid[])`,
+    [ids],
+  );
+  const [queue] = await conn.execute<Array<{ ids: string[] | null }>>(
+    `select array_agg(n."id") as "ids" from "availability_notifications" n where n."product_id" = any(?::uuid[])`,
+    [ids],
+  );
+  const keptRequests = `{${(queue?.ids ?? []).join(',')}}`;
+  return async () => {
+    const before = JSON.stringify(stock?.rows ?? []);
+    await conn.execute(
+      `delete from "stock_levels" s where s."product_id" = any(?::uuid[])
+          and not exists (select 1 from json_populate_recordset(null::"stock_levels", ?::json) x where x."id" = s."id")`,
+      [ids, before],
+    );
+    await conn.execute(
+      `update "stock_levels" s set "on_hand" = x."on_hand", "reserved" = x."reserved", "updated_at" = x."updated_at"
+         from json_populate_recordset(null::"stock_levels", ?::json) x where s."id" = x."id"`,
+      [before],
+    );
+    await conn.execute(`delete from "availability_notifications" where "product_id" = any(?::uuid[]) and not ("id" = any(?::uuid[]))`, [
+      ids,
+      keptRequests,
+    ]);
+  };
+}

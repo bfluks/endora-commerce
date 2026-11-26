@@ -385,15 +385,21 @@ export class AvailabilityNotificationService {
     // queue, its total and its pages are of the products it lets through.
     const visible = productClause(filter.visible ?? NO_PRODUCT_PREDICATE);
     if (visible === false) return { items: [], page, pageSize, total: 0 };
+    const narrowed = async (clause: { sql: string; params: unknown[] }) => {
+      const qb = em
+        .createQueryBuilder(AvailabilityNotification, 'n')
+        .where(where)
+        .andWhere(clause.sql, clause.params)
+        .orderBy({ requestedAt: 'desc', id: 'desc' })
+        .offset(page * pageSize)
+        .limit(pageSize);
+      // A QueryBuilder does not take the entity filters by itself: the same tenant
+      // predicate `findAndCount` gets, applied here.
+      await qb.applyFilters();
+      return qb.getResultAndCount();
+    };
     const [rows, total] = visible
-      ? await em
-          .createQueryBuilder(AvailabilityNotification, 'n')
-          .where(where)
-          .andWhere(visible.sql, visible.params)
-          .orderBy({ requestedAt: 'desc', id: 'desc' })
-          .offset(page * pageSize)
-          .limit(pageSize)
-          .getResultAndCount()
+      ? await narrowed(visible)
       : await em.findAndCount(AvailabilityNotification, where, {
           orderBy: { requestedAt: 'desc', id: 'desc' },
           offset: page * pageSize,

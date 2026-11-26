@@ -8,7 +8,7 @@ import {
   type CatalogVisibilityFixture,
 } from '../../helpers/catalog-visibility-fixture.js';
 import { withModuleOff } from '../../helpers/off-state.js';
-import { ADMIN, call, roleWith, type TestRole } from './fixtures.js';
+import { ADMIN, call, roleWith, snapshotInventory, type TestRole } from './fixtures.js';
 
 /**
  * Spec 193 T051 — the other admin product reads (FR-083 – FR-085, SC-009), one block per narrowed
@@ -97,6 +97,7 @@ describe('other admin product reads — narrowed by the visibility category (spe
     const INV = '/api/v1/admin/inventory';
     let warehouseId: string;
     let thresholds: Array<{ id: string; manage_stock: boolean; low_stock_threshold: number | null }>;
+    let restoreInventory: (() => Promise<void>) | undefined;
     const marks = () => [fx.hidden.id, fx.hidden.sku];
 
     const tool = (id: string): PromptActionTool => {
@@ -130,6 +131,7 @@ describe('other admin product reads — narrowed by the visibility category (spe
       const warehouses = await get('/api/v1/admin/warehouses', ADMIN);
       expect(warehouses.status, warehouses.raw).toBe(200);
       warehouseId = (warehouses.body.data ?? warehouses.body.items)[0].id;
+      restoreInventory = await snapshotInventory(h, [fx.visible.id, fx.hidden.id]);
       for (const [productId, onHand] of [[fx.visible.id, 3], [fx.hidden.id, 2]] as const) {
         const set = await h.app.inject({ method: 'PUT', url: `${INV}/levels`, cookies: ADMIN, payload: { productId, warehouseId, onHand } });
         expect(set.statusCode, set.body).toBe(200);
@@ -151,6 +153,7 @@ describe('other admin product reads — narrowed by the visibility category (spe
     });
 
     afterAll(async () => {
+      await restoreInventory?.();
       for (const row of thresholds ?? []) {
         await h.em().getConnection().execute(`update "products" set "manage_stock" = ?, "low_stock_threshold" = ? where "id" = ?`, [
           row.manage_stock,

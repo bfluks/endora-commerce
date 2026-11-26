@@ -5,7 +5,7 @@ import { setupBackendServer, teardownBackendServer, type BackendServerHandle } f
 import { setupCatalogVisibilityFixture, type CatalogVisibilityFixture } from '../../helpers/catalog-visibility-fixture.js';
 import { withModuleOff } from '../../helpers/off-state.js';
 import { AvailabilityNotification } from '../../helpers/package-entities.js';
-import { ADMIN, call, roleWith, type TestRole } from './fixtures.js';
+import { ADMIN, call, roleWith, snapshotInventory, type TestRole } from './fixtures.js';
 
 /**
  * Spec 193 T051 — analyze M3 for Phase 5c: with `product_visibility_rules` off (deactivated, or
@@ -23,6 +23,7 @@ describe('off state — the other admin reads with the module off are as never i
   let reader: TestRole;
   let bookId: string;
   let warehouseId: string;
+  let restoreInventory: (() => Promise<void>) | undefined;
 
   const get = async (url: string, cookies: Record<string, string>) => {
     const res = await h.app.inject({ method: 'GET', url, cookies });
@@ -53,6 +54,7 @@ describe('off state — the other admin reads with the module off are as never i
       })
     ).id;
     warehouseId = (await get('/api/v1/admin/warehouses', ADMIN)).body.items[0].id;
+    restoreInventory = await snapshotInventory(h, [fx.visible.id, fx.hidden.id]);
     const em = h.em();
     for (const productId of [fx.visible.id, fx.hidden.id]) {
       const set = await h.app.inject({ method: 'PUT', url: `${INV}/levels`, cookies: ADMIN, payload: { productId, warehouseId, onHand: 4 } });
@@ -63,6 +65,7 @@ describe('off state — the other admin reads with the module off are as never i
   }, 5 * 60_000);
 
   afterAll(async () => {
+    await restoreInventory?.();
     await fx?.teardown();
     await teardownBackendServer(h);
   });

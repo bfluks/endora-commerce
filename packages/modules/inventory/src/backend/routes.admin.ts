@@ -611,14 +611,14 @@ export async function registerInventoryAdminRoutes(
       // Spec 193 (T052, FR-083) — the caller's product predicate over `"s"."product_id"`.
       const visible = productClause(await visibleOf(request, '"s"."product_id"'));
       if (visible === false) return { data: [] };
+      const narrowed = async (clause: { sql: string; params: unknown[] }) => {
+        const qb = em.createQueryBuilder(StockLevel, 's').where(where).andWhere(clause.sql, clause.params).orderBy({ updatedAt: 'desc' }).limit(limit);
+        // The entity filters `em.find` gets, applied to the QueryBuilder too.
+        await qb.applyFilters();
+        return qb.getResultList();
+      };
       const rows = visible
-        ? await em
-            .createQueryBuilder(StockLevel, 's')
-            .where(where)
-            .andWhere(visible.sql, visible.params)
-            .orderBy({ updatedAt: 'desc' })
-            .limit(limit)
-            .getResultList()
+        ? await narrowed(visible)
         : await em.find(StockLevel, where, {
             limit,
             orderBy: { updatedAt: 'desc' },

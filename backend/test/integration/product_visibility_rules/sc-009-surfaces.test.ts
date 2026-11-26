@@ -4,7 +4,7 @@ import type { PromptActionTool, ToolContext } from '@endora-commerce/contracts';
 import { setupBackendServer, teardownBackendServer, type BackendServerHandle } from '../../helpers/test-server.js';
 import { setupCatalogVisibilityFixture, type CatalogVisibilityFixture } from '../../helpers/catalog-visibility-fixture.js';
 import { AvailabilityNotification, Product } from '../../helpers/package-entities.js';
-import { ADMIN, call, flagsOf, roleWith, settleFlags, type TestRole } from './fixtures.js';
+import { ADMIN, call, flagsOf, roleWith, settleFlags, snapshotInventory, type TestRole } from './fixtures.js';
 
 /**
  * Spec 193 T051 — the SC-009 sweep: for a restricted administrator every surface of FR-080 –
@@ -24,6 +24,7 @@ describe('SC-009 — no surface of FR-080 – FR-085 gives a restricted administ
   let bundle: string;
   let bookId: string;
   let warehouseId: string;
+  let restoreInventory: (() => Promise<void>) | undefined;
   let hiddenSimple: { id: string; sku: string; name: string };
   let hidden: { slug: string; name: string };
 
@@ -133,6 +134,7 @@ describe('SC-009 — no surface of FR-080 – FR-085 gives a restricted administ
     // FR-083 — stock and a back-in-stock request for both.
     const warehouses = await inject('GET', '/api/v1/admin/warehouses', ADMIN);
     warehouseId = warehouses.body.items[0].id;
+    restoreInventory = await snapshotInventory(h, [fx.visible.id, fx.hidden.id]);
     for (const productId of [fx.visible.id, fx.hidden.id]) {
       const set = await inject('PUT', `${INV}/levels`, ADMIN, { productId, warehouseId, onHand: 1 });
       expect(set.status, set.raw).toBe(200);
@@ -142,6 +144,7 @@ describe('SC-009 — no surface of FR-080 – FR-085 gives a restricted administ
   }, 5 * 60_000);
 
   afterAll(async () => {
+    await restoreInventory?.();
     await fx?.teardown();
     await teardownBackendServer(h);
   });
