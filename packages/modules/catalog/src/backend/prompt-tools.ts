@@ -263,8 +263,12 @@ async function previewProducts(
   em: EntityManager,
   productIds: string[],
   headline: string,
+  /** Spec 193 (FR-081) — the products hidden from the invoking admin: previewed as missing. */
+  hidden: ReadonlySet<string>,
 ): Promise<{ headline: string; affectedCount: number; sample: Array<{ id: string; label: string }> }> {
-  const products = await em.find(Product, { id: { $in: productIds } }, { fields: ['id', 'name', 'sku'] });
+  const products = (await em.find(Product, { id: { $in: productIds } }, { fields: ['id', 'name', 'sku'] })).filter(
+    (p) => !hidden.has(p.id),
+  );
   if (products.length !== productIds.length) {
     throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'One or more products were not found.');
   }
@@ -277,6 +281,9 @@ async function previewProducts(
 
 export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): PromptActionTool[] {
   const services = buildBulkServices(deps);
+  /** Spec 193 (FR-081) — the named products hidden from the invoking admin, at preview time. */
+  const hiddenFor = async (ctx: ToolContext, productIds: readonly string[]): Promise<ReadonlySet<string>> =>
+    services.adminService.hiddenProductIds(await services.scopeFor(ctx.adminUserId), productIds);
   const { bulkOperationService, bulkUpdateService, adminService } = services;
 
   const assignToCategory: PromptActionTool<AssignProductsToCategoryParams> = {
@@ -287,7 +294,7 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
       'Assign one or more products to a category (additive — existing category assignments are kept). Resolve products via catalog.search_products and the category via catalog.search_categories first. Captured into a plan the operator must confirm; not executed immediately.',
     requiredPermission: 'catalog:write',
     paramsSchema: AssignProductsToCategoryParamsSchema,
-    preview: async (params) => {
+    preview: async (params, ctx) => {
       // D-75 — this module's own fork, not the caller's manager. A preview
       // reads committed rows: the request row it would have shared a unit of
       // work with is flushed before the interpreter runs, and nothing here
@@ -298,11 +305,11 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
       if (!category) throw new HttpError(404, 'NOT_FOUND', 'Category not found.');
       // The preview runs the same membership query execution will use: the
       // ids are validated to exist so the affected count is honest (FR-004).
-      const products = await em.find(
-        Product,
-        { id: { $in: params.productIds } },
-        { fields: ['id', 'name', 'sku'] },
-      );
+      // Spec 193 (FR-081) — a product hidden from the invoking admin previews as a missing one.
+      const hidden = await services.adminService.hiddenProductIds(await services.scopeFor(ctx.adminUserId), params.productIds);
+      const products = (
+        await em.find(Product, { id: { $in: params.productIds } }, { fields: ['id', 'name', 'sku'] })
+      ).filter((p) => !hidden.has(p.id));
       if (products.length !== params.productIds.length) {
         throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'One or more products were not found.');
       }
@@ -363,7 +370,7 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
       'Remove one or more products from a category (subtractive — only the named category is removed, other category assignments are kept). Resolve products via catalog.search_products and the category via catalog.search_categories first. Captured into a plan the operator must confirm; not executed immediately.',
     requiredPermission: 'catalog:write',
     paramsSchema: RemoveProductsFromCategoryParamsSchema,
-    preview: async (params) => {
+    preview: async (params, ctx) => {
       // D-75 — this module's own fork, not the caller's manager. A preview
       // reads committed rows: the request row it would have shared a unit of
       // work with is flushed before the interpreter runs, and nothing here
@@ -372,11 +379,11 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
       if (!isUuidShape(params.categoryId)) throw new HttpError(404, 'NOT_FOUND', 'Category not found.');
       const category = await em.findOne(Category, { id: params.categoryId, deletedAt: null });
       if (!category) throw new HttpError(404, 'NOT_FOUND', 'Category not found.');
-      const products = await em.find(
-        Product,
-        { id: { $in: params.productIds } },
-        { fields: ['id', 'name', 'sku'] },
-      );
+      // Spec 193 (FR-081) — a product hidden from the invoking admin previews as a missing one.
+      const hidden = await services.adminService.hiddenProductIds(await services.scopeFor(ctx.adminUserId), params.productIds);
+      const products = (
+        await em.find(Product, { id: { $in: params.productIds } }, { fields: ['id', 'name', 'sku'] })
+      ).filter((p) => !hidden.has(p.id));
       if (products.length !== params.productIds.length) {
         throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'One or more products were not found.');
       }
@@ -407,11 +414,12 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
       'Set the status (active | inactive) of one or more products: inactive switches a product off and does not archive it, and active does not restore an archived product. To archive or restore, use catalog.archive_product or catalog.restore_product. Resolve products via catalog.search_products first. Captured into a plan the operator must confirm; not executed immediately.',
     requiredPermission: 'catalog:write',
     paramsSchema: SetProductStatusParamsSchema,
-    preview: async (params) =>
+    preview: async (params, ctx) =>
       previewProducts(
         deps.emFactory(),
         params.productIds,
         `Set status of ${params.productIds.length} product(s) to "${params.status}"`,
+        await hiddenFor(ctx, params.productIds),
       ),
     execute: async (params, ctx: ToolContext) =>
       runBulkFieldsUpdate(services, { status: params.status }, params.productIds, ctx),
@@ -425,11 +433,12 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
       'Set the storefront visibility (public | logged_in_only | organization_restricted) of one or more products as a bulk action. Resolve products via catalog.search_products first. Captured into a plan the operator must confirm; not executed immediately.',
     requiredPermission: 'catalog:write',
     paramsSchema: SetProductsVisibilityParamsSchema,
-    preview: async (params) =>
+    preview: async (params, ctx) =>
       previewProducts(
         deps.emFactory(),
         params.productIds,
         `Set visibility of ${params.productIds.length} product(s) to "${params.visibility}"`,
+        await hiddenFor(ctx, params.productIds),
       ),
     execute: async (params, ctx: ToolContext) =>
       runBulkFieldsUpdate(services, { visibility: params.visibility }, params.productIds, ctx),
@@ -496,9 +505,25 @@ function archiveRestoreTools(
     deps.auditLogService,
     deps.salesChannelMembership,
     commandBus,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    deps.adminProductVisibility,
   );
+  /** Spec 193 (FR-081, TM-3 (2)) — the invoking admin's scope, resolved now (preview or confirm). */
+  const hiddenFor = async (ctx: ToolContext, productIds: readonly string[]): Promise<ReadonlySet<string>> =>
+    adminService.hiddenProductIds(await toolScope(deps, ctx.adminUserId), productIds);
 
-  const run = async (productIds: string[], archive: boolean, ctx: ToolContext): Promise<unknown> => {
+  const run = async (requested: string[], archive: boolean, ctx: ToolContext): Promise<unknown> => {
+    // A product hidden from the confirming admin goes the way a missing one does: it is reported
+    // "Product not found." (the archive Command's own answer) and never queued or written.
+    const hidden = await hiddenFor(ctx, requested);
+    const productIds = requested.filter((id) => !hidden.has(id));
+    const notFound = requested.filter((id) => hidden.has(id)).map((id) => ({ id, reason: 'Product not found.' }));
     if (productIds.length > BULK_ASYNC_THRESHOLD) {
       const op = await bulkOperationService.create({
         requestedByAdminUserId: ctx.adminUserId,
@@ -506,7 +531,7 @@ function archiveRestoreTools(
       });
       return { delegated: true, bulkOperationId: op.id };
     }
-    const failures: Array<{ id: string; reason: string }> = [];
+    const failures: Array<{ id: string; reason: string }> = [...notFound];
     for (const id of productIds) {
       try {
         if (archive) await adminService.archiveProduct(id);
@@ -524,8 +549,8 @@ function archiveRestoreTools(
     }
     return {
       summary: {
-        total: productIds.length,
-        succeeded: productIds.length - failures.length,
+        total: requested.length,
+        succeeded: requested.length - failures.length,
         failed: failures.length,
         failures: failures.slice(0, 50),
       },
@@ -540,11 +565,12 @@ function archiveRestoreTools(
       'Archive one or more products: an archived product leaves every sales channel and its page answers "gone", whatever its status. It stays archived until catalog.restore_product restores it; setting its status does not. Archiving an already archived product changes nothing. Resolve products via catalog.search_products first. Captured into a plan the operator must confirm; not executed immediately.',
     requiredPermission: 'catalog:write',
     paramsSchema: ArchiveProductsParamsSchema,
-    preview: async (params) =>
+    preview: async (params, ctx) =>
       previewProducts(
         deps.emFactory(),
         params.productIds,
         `Archive ${params.productIds.length} product(s): they leave every sales channel, and only Restore brings them back`,
+        await hiddenFor(ctx, params.productIds),
       ),
     execute: async (params, ctx: ToolContext) => run(params.productIds, true, ctx),
   };
@@ -557,11 +583,12 @@ function archiveRestoreTools(
       'Restore one or more archived products. Restore does not change the status: a restored inactive product stays switched off. Restoring a product that is not archived changes nothing. Resolve products via catalog.search_products first (it reports archived). Captured into a plan the operator must confirm; not executed immediately.',
     requiredPermission: 'catalog:write',
     paramsSchema: RestoreProductsParamsSchema,
-    preview: async (params) =>
+    preview: async (params, ctx) =>
       previewProducts(
         deps.emFactory(),
         params.productIds,
         `Restore ${params.productIds.length} archived product(s); their status stays as it is`,
+        await hiddenFor(ctx, params.productIds),
       ),
     execute: async (params, ctx: ToolContext) => run(params.productIds, false, ctx),
   };
