@@ -92,5 +92,34 @@ describe('other admin product reads — narrowed by the visibility category (spe
 
   // Not built yet (Phase 5c, T052 / T054): each row of the signed-off table still to be narrowed.
   it.todo('FR-083 — inventory admin lists with counts and paging, and the set-stock assistant tool');
-  it.todo('FR-085 — products export / import refused 403 for a non-unrestricted scope');
+  describe('FR-085 — products export and import', () => {
+    const exportCsv = (cookies: Record<string, string>) => h.app.inject({ method: 'GET', url: '/api/v1/admin/export/products.csv', cookies });
+    const importCsv = (cookies: Record<string, string>) =>
+      h.app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/import/products?profileId=00000000-0000-4000-8000-0000000000ef&dryRun=true`,
+        cookies,
+        headers: { 'content-type': 'text/csv' },
+        payload: 'sku\nX\n',
+      });
+
+    it('are refused 403 for a restricted administrator, whatever the file', async () => {
+      for (const cookies of [fx.restricted.cookies, fx.noCategory.cookies]) {
+        const exported = await exportCsv(cookies);
+        expect(exported.statusCode, exported.body).toBe(403);
+        expect(exported.json().error.code).toBe('FORBIDDEN');
+        const imported = await importCsv(cookies);
+        expect(imported.statusCode, imported.body).toBe(403);
+        expect(imported.json().error.code).toBe('FORBIDDEN');
+      }
+    });
+
+    it('are the platform administrator\'s, and a restricted one\'s while the module is off', async () => {
+      expect((await exportCsv(ADMIN)).statusCode).toBe(200);
+      for (const axis of ['deactivated', 'platform-unavailable'] as const) {
+        const off = await withModuleOff('product_visibility_rules', axis, () => exportCsv(fx.restricted.cookies));
+        expect(off.statusCode, off.body).toBe(200);
+      }
+    });
+  });
 });
