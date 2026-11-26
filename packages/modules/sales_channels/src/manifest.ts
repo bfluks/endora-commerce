@@ -162,7 +162,8 @@ export const manifest = defineModuleManifest({
     // by the kernel's membership service; owned here by the domain noun (D-95.2).
     { code: 'CHANNEL_MEMBERSHIP_GOVERNED' },
     { code: 'DUPLICATE_SALES_CHANNEL_CODE' },
-    { code: 'ENTITY_WOULD_HAVE_ZERO_CHANNELS' },
+    // Spec 193 T100 — a channel delete refused because the default is governed for products.
+    { code: 'ENTITY_WOULD_HAVE_ZERO_CHANNELS', tokens: ['default_channel_governed'] },
     { code: 'INACTIVE_SALES_CHANNEL' },
     { code: 'MISSING_SALES_CHANNEL_CONTEXT' },
     { code: 'SALES_CHANNEL_ATTRIBUTION_IMMUTABLE' },

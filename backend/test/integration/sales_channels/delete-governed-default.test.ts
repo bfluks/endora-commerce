@@ -34,18 +34,18 @@ describe('channel delete onto a governed default (spec 193, T100)', () => {
   }
 
   /** A product whose only channel is `channelId`. */
-  async function productOnlyOn(channelId: string): Promise<string> {
+  async function productOnlyOn(channelId: string, keep = false): Promise<string> {
     const [row] = await sql<{ id: string }>(
-      `select p."id" from "products" p where p."deleted_at" is null ` +
-        `and not exists (select 1 from "sales_channel_products" b where b."product_id" = p."id" and b."sales_channel_id" = ?) ` +
-        `order by p."id" limit 1 offset ?`,
-      [channelId, productOffset++],
+      `select p."id" from "products" p where p."deleted_at" is null and not (p."id" = any(?::uuid[])) order by p."id" limit 1`,
+      [`{${usedProducts.join(',')}}`],
     );
+    // Products left on a channel this file keeps (case 1) are not taken again.
+    if (keep) usedProducts.push(row!.id);
     await sql(`delete from "sales_channel_products" where "product_id" = ?`, [row!.id]);
     await sql(`insert into "sales_channel_products" ("sales_channel_id", "product_id") values (?, ?)`, [channelId, row!.id]);
     return row!.id;
   }
-  let productOffset = 0;
+  const usedProducts: string[] = [];
 
   /** A category whose only channel is `channelId`. */
   async function categoryOnlyOn(channelId: string): Promise<string> {
@@ -63,12 +63,12 @@ describe('channel delete onto a governed default (spec 193, T100)', () => {
         `where "table_schema" = current_schema() and "column_name" = 'sales_channel_id' and "table_name" like 'sales\\_channel\\_%' order by 1`,
     );
     const out: Record<string, number> = {};
-    for (const { table_name } of tables) {
+    for (const table of tables.map((t) => t.table_name)) {
       const [row] = await sql<{ n: number }>(
-        `select count(*)::int as n from "${table_name}" where "sales_channel_id" = any(?::uuid[])`,
+        `select count(*)::int as n from "${table}" where "sales_channel_id" = any(?::uuid[])`,
         [`{${channelIds.join(',')}}`],
       );
-      out[table_name] = row!.n;
+      out[table] = row!.n;
     }
     return out;
   }
@@ -105,8 +105,8 @@ describe('channel delete onto a governed default (spec 193, T100)', () => {
   it('(1) refuses before any write when product orphans would land on a governed default', async () => {
     const rule = await attachRuleBySql(h, [defaultId], 'Default rule "PLN"');
     const doomed = await createChannel(h, 'del-gov');
-    const p1 = await productOnlyOn(doomed);
-    const p2 = await productOnlyOn(doomed);
+    const p1 = await productOnlyOn(doomed, true);
+    const p2 = await productOnlyOn(doomed, true);
     await categoryOnlyOn(doomed);
     const bridgesBefore = await bridgeSnapshot([doomed, defaultId]);
     const auditBefore = await auditCount();

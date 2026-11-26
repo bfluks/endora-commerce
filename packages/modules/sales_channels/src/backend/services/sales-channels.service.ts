@@ -19,6 +19,7 @@ import type { EventBus } from '@endora-commerce/platform/events';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import type {
   SalesChannelAccessCacheInvalidation,
+  SalesChannelMembershipPort,
   SalesChannelsCacheInvalidation,
 } from '@endora-commerce/platform/kernel';
 import {
@@ -172,6 +173,12 @@ export class SalesChannelsService {
      * one without it fails closed.
      */
     private readonly assets?: Pick<AssetReadPort, 'visibleToCaller'>,
+    /**
+     * Spec 193 T100 (FR-059, R-10, TM-10) — asked before the delete rebinds product orphans to the
+     * system default: a default whose product membership a governor decides (the website rule) is
+     * no fallback. Absent — a composition with no governors — nothing is governed.
+     */
+    private readonly membership?: Pick<SalesChannelMembershipPort, 'isGoverned'>,
   ) {}
 
   /**
@@ -491,17 +498,20 @@ export class SalesChannelsService {
     // pairs that would have zero memberships if this channel were removed.
     const orphans = await this.findOrphansForChannel(em, channel.id);
     if (orphans.length > 0 && !options.fallbackToDefault) {
+      // A count per entity type, never an id (spec 193 FR-082): an id here could name a product
+      // the caller's visibility scope hides.
       throw new HttpError(
         422,
         ERROR_CODES.ENTITY_WOULD_HAVE_ZERO_CHANNELS,
         `Deleting sales channel "${channel.code}" would orphan ${orphans.length} channel-scoped ` +
           `entity(ies). Pass fallbackToDefault=true to rebind them to the system default.`,
-        orphans.slice(0, 10).map((o) => ({ path: o.entityType, issue: o.entityId })),
+        orphanCounts(orphans),
       );
     }
 
     if (orphans.length > 0) {
       const defaultId = await this.requireSystemDefaultId(em);
+      await this.refuseRebindOntoGovernedDefault(em, defaultId, orphans);
       await this.rebindOrphansToDefault(em, defaultId, orphans);
     }
 
@@ -670,6 +680,31 @@ export class SalesChannelsService {
     return orphans;
   }
 
+  /**
+   * Spec 193 T100 (FR-059, R-10) — a fallback onto a governed default is no fallback: product
+   * orphans rebound there would be admitted without the rule. Refused before any write, naming the
+   * rule (user-authored text, rendered as text) and a count — never a product id (FR-082). Only
+   * the product bridge is ever governed; a governor that throws propagates (TM-10).
+   */
+  private async refuseRebindOntoGovernedDefault(
+    em: EntityManager,
+    defaultId: string,
+    orphans: ReadonlyArray<{ entityType: string }>,
+  ): Promise<void> {
+    const products = orphans.filter((o) => o.entityType === 'product').length;
+    if (products === 0 || !this.membership) return;
+    const governed = await this.membership.isGoverned('product', defaultId, { em });
+    if (governed === null) return;
+    throw new HttpError(
+      422,
+      ERROR_CODES.ENTITY_WOULD_HAVE_ZERO_CHANNELS,
+      `Deleting this sales channel would leave ${products} product(s) on no sales channel: the ` +
+        `system default's products follow the rule "${governed.ruleLabel}", so they cannot be moved there.`,
+      // `code` picks the translated sentence; the scalars fill it (`{count}`, `{rule}`).
+      { code: 'default_channel_governed', entityType: 'product', count: products, rule: governed.ruleLabel },
+    );
+  }
+
   private async rebindOrphansToDefault(
     em: EntityManager,
     defaultId: string,
@@ -754,4 +789,11 @@ function dictionaryReferenceHttpError(err: DictionaryReferenceError, field: stri
       : `${noun} code ${err.entryCode} is not recognised.`,
     [{ path: field, issue: err.code }],
   );
+}
+
+/** How many orphans of each entity type a channel delete would leave — counts, never ids. */
+function orphanCounts(orphans: ReadonlyArray<{ entityType: string }>): Array<{ path: string; issue: string }> {
+  const counts = new Map<string, number>();
+  for (const o of orphans) counts.set(o.entityType, (counts.get(o.entityType) ?? 0) + 1);
+  return [...counts].map(([entityType, count]) => ({ path: entityType, issue: String(count) }));
 }

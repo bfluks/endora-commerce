@@ -1,4 +1,5 @@
 import type { ChannelMemberEntityType } from '@endora-commerce/contracts';
+import type { EntityManager } from '@mikro-orm/postgresql';
 import type { CachedChannel } from '../sales-channels/sales-channels-cache.js';
 import type {
   MembershipMutationOptions,
@@ -107,6 +108,18 @@ export interface SalesChannelMembershipPort {
     entityId: string,
     options?: MembershipMutationOptions,
   ): Promise<MembershipMutationResult>;
+
+  /**
+   * Spec 193 T100 (R-10, TM-10) — whether `channelId` is governed for `entityType` and by which
+   * rule (its label, user-authored text). `null` when not governed or the governing module is
+   * absent. A governor that throws propagates: the caller refuses its write. Asked on `em` when
+   * given, inside its transaction.
+   */
+  isGoverned(
+    entityType: ChannelMemberEntityType,
+    channelId: string,
+    options?: { em?: EntityManager },
+  ): Promise<{ ruleLabel: string } | null>;
 
   /**
    * Give the target every channel the source belongs to, one audited add per

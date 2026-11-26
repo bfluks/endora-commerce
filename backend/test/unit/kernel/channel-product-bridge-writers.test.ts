@@ -24,9 +24,8 @@ const WRITERS: Readonly<Record<string, string>> = {
   'packages/platform/src/kernel/sales-channels/sales-channel-membership.service.ts':
     'The single mutator; the membership governor is applied here (R-10).',
   'packages/modules/sales_channels/src/backend/services/sales-channels.service.ts':
-    'Channel delete with `reassignToDefault` rebinds the deleted channel\'s orphans to the default ' +
-    'channel over every registered bridge, outside the membership service — so a governed default ' +
-    'would receive them unadmitted. Known bypass (spec 193 T064 finding), recorded for a follow-up.',
+    'Channel delete rebinds orphans to the default only after the membership port confirms the ' +
+    'default is not governed for `product` (spec 193 T100); non-product bridges are never governed.',
   'packages/demo-composition/src/composition.ts':
     'The demo seed bridges its own demo products to the demo channels at seed time; a seed, not a ' +
     'runtime writer, and it runs on a demo instance only.',

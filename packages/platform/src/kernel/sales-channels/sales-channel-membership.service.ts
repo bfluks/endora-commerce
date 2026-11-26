@@ -189,6 +189,22 @@ export class SalesChannelMembershipService {
     return 'skip';
   }
 
+  /**
+   * Spec 193 T100 — whether `channelId` is governed for `entityType`, and by which rule: the read
+   * a caller asks before a write it does not route through this mutator (the channel delete's
+   * orphan rebind). `null` = not governed — no governor for the type, its module absent, or no
+   * rule on the channel. A governor that throws propagates (TM-10); the caller refuses.
+   */
+  async isGoverned(
+    entityType: ChannelMemberEntityType,
+    channelId: string,
+    options: { em?: EntityManager } = {},
+  ): Promise<{ ruleLabel: string } | null> {
+    if (!this.governors?.governsType(entityType)) return null;
+    const governed = await this.governors.governing(options.em ?? this.emFactory(), entityType, channelId);
+    return governed === null ? null : { ruleLabel: governed.ruleLabel };
+  }
+
   /** The audit `source` of a pair: the caller's, only on a token write. */
   private static sourceOf(decision: PairDecision, options: MembershipMutationOptions): string | undefined {
     return decision === 'token' ? options.source : undefined;

@@ -495,6 +495,19 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   on the passed `em`; contributed from the module's boot hook (contribution sink, filtered by
   presence); the token is held in a module-local closure of the website-rule service and **never
   registered in the DI container** (TM-10).
+- [x] T100 [B] **FR-059 / TM-10: channel delete onto a governed default** (coordinator decision,
+  option b — refuse; R-10, P9, spec.md:688-690). Failing test first
+  `BT/integration/sales_channels/delete-governed-default.test.ts`: (1) default governed for
+  product, the deleted channel holds product orphans, `fallbackToDefault=true` ⇒ `422
+  ENTITY_WOULD_HAVE_ZERO_CHANNELS` naming the rule and a count, no product id, channel kept, no
+  bridge, audit or lifecycle row changed; (2) non-product orphans only ⇒ rebind as today; (3)
+  default ungoverned ⇒ rebind as today; (4) governed channel deleted onto an ungoverned default ⇒
+  rebind as today; (5) module off with an attachment row ⇒ as today (in T069's
+  `off-state.governance.test.ts`). Then an additive `isGoverned(entityType, channelId, { em? })` on
+  the membership service and `SalesChannelMembershipPort` (a throwing governor propagates;
+  changeset), the refusal in `sales_channels` `SalesChannelsService.delete` before any write, the
+  plain refusal's details reduced to counts per entity type (FR-082), pl + en sentence, T064 ledger
+  reason updated.
 - [ ] T067 [A] (after T063 is on the shared branch) `CAT/backend/services/catalog-bulk-update.service.ts:562,570,576`:
   `onGoverned: 'refuse'` + enqueue-time refusal when the patch names a governed channel; test in
   `BT/integration/catalog/bulk-update-governed-channel.test.ts`.

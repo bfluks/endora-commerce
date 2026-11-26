@@ -290,6 +290,8 @@ previewable); reusing `price_lists`' attribute rows (different semantics).
   for a connector that wants to avoid writing against the rule.
 - Detach (FR-058) deletes the attachment row; memberships stay; the channel is ungoverned from the
   next write.
+- Channel delete with `fallbackToDefault` onto a governed default is no fallback for products:
+  refused `ENTITY_WOULD_HAVE_ZERO_CHANNELS` before any write (T100).
 
 **Measured — product-membership writers on `c3e8a8755`**: catalog create `:518`, duplicate
 `:1159`, bulk update `:562/:570/:576`, `sales_channels` channel-side routes `:394/:420`; no other

@@ -136,6 +136,9 @@ export function registerModule(ctx: ModuleContext): void {
             // Issue #544 — a newly set logo must be a file the administrator
             // may see in the library. Another module's port, resolved per call.
             lazyPort<AssetReadPort>(ctx, 'assetReadPort'),
+            // Spec 193 T100 — the kernel's membership port, asked whether the system default is
+            // governed before a delete rebinds product orphans there. Resolved per call.
+            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
           ),
       )
       .singleton(),
