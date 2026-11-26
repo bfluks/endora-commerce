@@ -3,7 +3,7 @@ import type { CatalogProductRecord, ProductRuleDefinition } from '@endora-commer
 import { ProductRuleGovernance, type ProductRuleGovernanceDeps } from './product-rule-governance.js';
 
 /**
- * (FR-055; contracts/ports.md §2) — `productRuleGovernancePort`, the read a
+ * `productRuleGovernancePort` (FR-055), the read a
  * connector asks to avoid writing against a website rule. The owner-off answer (503
  * `MODULE_DISABLED`) is the `providePort` gate's, asserted against the composed module in
  * `off-state.website-rule.test.ts`.

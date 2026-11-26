@@ -117,7 +117,11 @@ describe('product_visibility_rules off-state — website rule (spec 193, T061)',
       // Back on, seconds later: the rule governs again, and the first poll reconciles — admitting
       // the product whose creation went unmarked while off. The poll after it only evaluates.
       expect(await port().governedChannels()).toEqual([expect.objectContaining({ salesChannelId: channel, productRuleId: ruleId })]);
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // The recorder bumps asynchronously after each presence install; wait for the epoch to move.
+      const epochs = createPresenceEpochs(h.redis);
+      for (let i = 0; i < 40 && (await epochs.presenceEpoch()) === (await epochs.reconciledEpoch()); i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
       expect(await evaluationPoll()).toBe(1);
       expect(await channelMembers(h, channel)).toContain(joiner);
       expect(await evaluationPoll()).toBe(0);
