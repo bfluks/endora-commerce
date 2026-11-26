@@ -168,7 +168,12 @@ interface ChannelMembershipGovernor {
   governs(em: EntityManager, channelId: string): Promise<{ ruleLabel: string } | null>;
 }
 
-interface ChannelMembershipGovernorRegistry {
+/**
+ * What the container holds as `salesChannelMembershipGovernors`: the registry's
+ * `registrationPort()`, a frozen `{ register }` and nothing else. `seal`, `tokenModule` and
+ * `governing` stay on the registry, held only by the composition and the membership service.
+ */
+interface ChannelMembershipGovernorRegistryPort {
   /** Boot-time contribution; returns this governor's write token. Filtered by the module's presence. */
   register(governor: ChannelMembershipGovernor): GovernorWriteToken;
 }
