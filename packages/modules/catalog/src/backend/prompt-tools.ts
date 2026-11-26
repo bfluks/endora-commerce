@@ -32,6 +32,11 @@ import { Category } from './entities/category.entity.js';
 import { Product } from './entities/product.entity.js';
 import { CatalogAdminService, type CatalogEventBus } from './services/catalog-admin.service.js';
 import { CategoryAdminService } from './services/category-admin.service.js';
+import {
+  SYSTEM_PRODUCT_SCOPE,
+  type AdminProductReadScope,
+  type CatalogAdminProductVisibility,
+} from './services/admin-product-visibility.js';
 import { CatalogBulkUpdateService } from './services/catalog-bulk-update.service.js';
 import { BulkOperationService } from './services/bulk-operation.service.js';
 import {
@@ -71,6 +76,17 @@ export interface CatalogPromptToolsDeps {
    * `product.update` Command), and without it no mutation tool is contributed.
    */
   commandBus?: CommandBus;
+  /**
+   * Spec 193 (FR-081, TM-3 (2)) — `product_visibility_rules`' admin scope, presence-decided by
+   * the wiring. Each tool resolves the **invoking** administrator's scope at execution (and again
+   * on a later confirm), never from an ambient request. Without it every tool reads as the system.
+   */
+  adminProductVisibility?: CatalogAdminProductVisibility;
+}
+
+/** The invoking administrator's scope, at execution. */
+async function toolScope(deps: CatalogPromptToolsDeps, adminUserId: string): Promise<AdminProductReadScope> {
+  return deps.adminProductVisibility ? deps.adminProductVisibility.scopeFor(adminUserId) : SYSTEM_PRODUCT_SCOPE;
 }
 
 /** Mirrors the feature-022 route threshold (catalog/routes.admin.ts). */
@@ -88,6 +104,16 @@ export function catalogPromptResolverTools(deps: CatalogPromptToolsDeps): Prompt
     deps.emFactory,
     deps.events as CatalogEventBus,
     deps.auditLogService,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    deps.adminProductVisibility,
   );
   const categoryService = new CategoryAdminService(deps.emFactory);
 
@@ -99,11 +125,11 @@ export function catalogPromptResolverTools(deps: CatalogPromptToolsDeps): Prompt
       'Search products by a name, SKU or slug fragment (case- and diacritic-insensitive substring), archived products included. Returns up to 20 matches as {id, sku, label, status, archived}; archived is independent of status. Use the returned id in mutation tools; never invent ids.',
     requiredPermission: 'catalog:read',
     paramsSchema: SearchProductsParamsSchema,
-    execute: async (params) => {
+    execute: async (params, ctx) => {
       // Feature 163 (P-1 = A) — archived products included, so that
       // `catalog.restore_product` can be resolved at all; the admin list's own
       // default (`exclude`) would hide every product it applies to.
-      const result = await adminService.listProducts({
+      const result = await adminService.listProducts(await toolScope(deps, ctx.adminUserId), {
         q: params.q,
         archived: 'include',
         pageSize: Math.min(params.limit ?? 10, RESULT_LIMIT),

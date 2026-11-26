@@ -156,6 +156,32 @@ export interface AdminProductVisibilityPort {
   ): Promise<ReadonlyArray<{ visible: boolean; noFixedPrice: boolean }>>;
 }
 
+/**
+ * Spec 193 (FR-023, US1-6, US1-11; contracts/admin-api.md §2) — beside a catalog admin product
+ * list answered to a restricted caller. **Absent** for an unrestricted caller (SC-003).
+ */
+export const adminProductListVisibilitySchema = z.object({
+  restricted: z.literal(true),
+  /** FR-023: the role has no visibility category and sees no products. */
+  reason: z.literal('no_category').optional(),
+  /** The category the caller's role is mapped to. */
+  categoryName: z.string().optional(),
+});
+export type AdminProductListVisibility = z.infer<typeof adminProductListVisibilitySchema>;
+
+/** The visibility note a list answer carries for a scope, or `undefined` when it carries none. */
+export function adminProductListVisibility(scope: AdminProductVisibilityScope): AdminProductListVisibility | undefined {
+  switch (scope.kind) {
+    case 'system':
+    case 'unrestricted':
+      return undefined;
+    case 'no_category':
+      return { restricted: true, reason: 'no_category' };
+    case 'restricted':
+      return { restricted: true, categoryName: scope.category.name };
+  }
+}
+
 // ────────────────────────────────────────────────────────────────────────
 //  Product rule definition (contracts/ports.md §4)
 // ────────────────────────────────────────────────────────────────────────

@@ -5,6 +5,12 @@ import type {
   CategoryAdminSearchRow,
   ProductAdminSearchRow,
 } from '../admin-search-provider.js';
+import {
+  predicateClause,
+  requireVisibility,
+  type AdminProductReadScope,
+  type CatalogAdminProductVisibility,
+} from './admin-product-visibility.js';
 
 /**
  * Global search over products and categories (`specs/150-admin-global-search/`,
@@ -25,9 +31,21 @@ export class CatalogAdminSearchService {
   constructor(
     private readonly emFactory: () => EntityManager,
     private readonly attributeRead: Pick<CatalogAttributeReadPort, 'listByFlag'>,
+    /** Spec 193 — `product_visibility_rules`' predicates; without it a narrowed scope refuses. */
+    private readonly visibility?: CatalogAdminProductVisibility,
   ) {}
 
-  async searchProducts(query: CatalogAdminSearchQuery): Promise<{ rows: ProductAdminSearchRow[]; hasMore: boolean }> {
+  /**
+   * Spec 193 (FR-034) — a narrowed `scope` puts the visibility predicate inside the statement, so
+   * the `limit + 1` probe behind `hasMore` counts visible rows only.
+   */
+  async searchProducts(
+    scope: AdminProductReadScope,
+    query: CatalogAdminSearchQuery,
+  ): Promise<{ rows: ProductAdminSearchRow[]; hasMore: boolean }> {
+    const visibility = requireVisibility(this.visibility, scope);
+    const visible = visibility ? predicateClause(visibility.productPredicate(scope, { productId: '"products"."id"' })) : null;
+    if (visible === false) return { rows: [], hasMore: false };
     const fields = new Set(query.fields);
     const contains = `%${query.likeEscaped}%`;
     const quickKeys = fields.has('quickSearchAttributes')
@@ -49,7 +67,7 @@ export class CatalogAdminSearchService {
       name: string;
       type: string;
       status: string;
-    }>('products', ['id', 'sku', 'name', 'type', 'status'], matches, identifiers, query);
+    }>('products', ['id', 'sku', 'name', 'type', 'status'], matches, identifiers, query, visible);
     return {
       hasMore: rows.length > query.limit,
       rows: rows.slice(0, query.limit).map((r) => ({
@@ -98,6 +116,7 @@ export class CatalogAdminSearchService {
     matches: readonly SqlFragment[],
     identifiers: readonly string[],
     query: CatalogAdminSearchQuery,
+    visible: SqlFragment | null = null,
   ): Promise<T[]> {
     if (matches.length === 0) return [];
     const em = this.emFactory();
@@ -121,10 +140,16 @@ export class CatalogAdminSearchService {
     const select = columns.map((c) => (c === 'id' ? '"id"::text as "id"' : `"${c}"`)).join(', ');
     return em.execute<T[]>(
       `select ${select} from "${table}"
-        where "deleted_at" is null and (${matches.map((m) => m.sql).join(' or ')})
+        where "deleted_at" is null and (${matches.map((m) => m.sql).join(' or ')})${visible ? ` and ${visible.sql}` : ''}
         order by ${rank}"updated_at" desc, "id" asc
         limit ?`,
-      [...matches.flatMap((m) => m.params), ...exactBindings, ...startBindings, query.limit + 1],
+      [
+        ...matches.flatMap((m) => m.params),
+        ...(visible ? visible.params : []),
+        ...exactBindings,
+        ...startBindings,
+        query.limit + 1,
+      ],
     );
   }
 

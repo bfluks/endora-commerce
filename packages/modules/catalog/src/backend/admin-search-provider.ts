@@ -35,6 +35,8 @@ export interface CatalogAdminSearchQuery {
   readonly isUuid: boolean;
   readonly fields: readonly string[];
   readonly limit: number;
+  /** Spec 193 (FR-034) — the calling admin, whose visibility scope narrows the product search. */
+  readonly adminUserId: string;
 }
 
 export interface ProductAdminSearchRow {
@@ -81,6 +83,7 @@ function forward(query: AdminSearchProviderQuery): CatalogAdminSearchQuery {
     isUuid: query.isUuid,
     fields: query.fields,
     limit: query.limit,
+    adminUserId: query.adminUserId,
   };
 }
 

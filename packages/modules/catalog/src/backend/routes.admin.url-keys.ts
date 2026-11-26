@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { putProductUrlKeysRequestSchema } from '@endora-commerce/contracts';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import type { UrlKeyService } from './services/url-key.service.js';
+import type { CatalogRequestVisibility } from './hidden-product-guard.js';
 
 /**
  * Feature 163 (`specs/163-product-data-scopes/contracts/url-keys-and-redirects.md`
@@ -20,13 +21,15 @@ import type { UrlKeyService } from './services/url-key.service.js';
 export interface CatalogUrlKeyAdminDeps {
   urlKeyService: UrlKeyService;
   requireAdmin: RequireAdminFactory;
+  /** Spec 193 — the PUT parses its own body, so it asks about a hidden product at its lookup. */
+  requestVisibility: CatalogRequestVisibility;
 }
 
 export async function registerCatalogUrlKeyAdminRoutes(
   app: FastifyInstance,
   deps: CatalogUrlKeyAdminDeps,
 ): Promise<void> {
-  const { urlKeyService, requireAdmin } = deps;
+  const { urlKeyService, requireAdmin, requestVisibility } = deps;
 
   app.get<{ Params: { id: string } }>(
     '/api/v1/admin/catalog/products/:id/url-keys',
@@ -39,6 +42,7 @@ export async function registerCatalogUrlKeyAdminRoutes(
     { preHandler: requireAdmin('catalog:write') },
     async (request) => {
       const body = putProductUrlKeysRequestSchema.parse(request.body);
+      await requestVisibility.refuseHiddenProduct(request, request.params.id);
       return { data: await urlKeyService.update(request.params.id, body) };
     },
   );

@@ -463,6 +463,21 @@ export const manifest = defineModuleManifest({
         'The organization-bound half of the gate above — same namespace, same cycle, same ' +
         '401, and it drains with it.',
     },
+    {
+      moduleId: 'product_visibility_rules',
+      name: 'adminProductVisibilityPort',
+      kind: 'degrades-without',
+      whenAbsent:
+        'admin product reads and writes are not narrowed by role: every administrator sees and ' +
+        'edits every product, exactly as before the feature',
+      reason:
+        'Spec 193 (R-7). The admin list, selection, batch read, variants, search, assistant tools ' +
+        'and every by-id route ask the caller\'s scope per request. `product_visibility_rules` ' +
+        'depends on this module (a `dependencies` edge back would close a cycle) and is ' +
+        'deactivatable and off by default, so its absence is a normal state: presence is probed ' +
+        'in front of the port (`index.ts`), absent reads as the system scope, and a call made ' +
+        'while present is never caught (TM-3 (4)).',
+    },
   ],
   // Feature 074 (Constitution XVII), test C2 — functional base. This module had
   // no activation declaration at all, which resolved as "always activated" and

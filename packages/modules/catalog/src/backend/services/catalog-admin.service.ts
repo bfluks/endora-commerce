@@ -62,6 +62,9 @@ export interface ProductListCounts {
   archived: number;
 }
 
+/** Spec 193 — the badges of a scope that sees no product (`deny`, FR-023). */
+const NO_PRODUCTS: Readonly<ProductListCounts> = Object.freeze({ all: 0, active: 0, inactive: 0, archived: 0 });
+
 /**
  * How a duplicate inherits the source's per-warehouse low-stock thresholds
  * (issue #185).
@@ -160,6 +163,13 @@ import { ProductChannelLanguageScope } from '../entities/product-channel-languag
 import { globalScopeFields } from './product-availability.service.js';
 import { toChannelRecord, toLanguageRecord } from './product-scopes.service.js';
 import type { ScopeCompletenessGate } from './scope-completeness.js';
+import {
+  predicateClause,
+  requireVisibility,
+  type AdminProductReadScope,
+  type CatalogAdminProductVisibility,
+} from './admin-product-visibility.js';
+import type { SqlFragment } from '@endora-commerce/contracts';
 import {
   assertVirtualDownloadFields,
   ProductTypeValidationError,
@@ -352,6 +362,12 @@ export class CatalogAdminService {
      * than being ignored.
      */
     private readonly stockFilter?: CatalogStockFilterSource,
+    /**
+     * Spec 193 (R-7, TM-3) — `product_visibility_rules`' predicates for a narrowed admin scope.
+     * Optional so fixtures keep constructing the service; a narrowed scope reaching an instance
+     * built without it refuses ({@link requireVisibility}), never widens.
+     */
+    private readonly visibility?: CatalogAdminProductVisibility,
   ) {}
 
   /** Issue #1624 — whether the admin list can apply a stock filter right now. */
@@ -1748,7 +1764,15 @@ export class CatalogAdminService {
 
   // --- Read methods (admin lists / detail) --------------------------------
 
-  async listProducts(options: AdminProductListQuery & { page?: number; pageSize?: number } = {}): Promise<{
+  /**
+   * Spec 193 (FR-030, FR-031, R-7) — a narrowed `scope` puts `product_visibility_rules`'
+   * predicate inside both statements (the page and its `total`) and the tab badges, so paging
+   * and counts see visible rows only; `system` and `unrestricted` take the unchanged path.
+   */
+  async listProducts(
+    scope: AdminProductReadScope,
+    options: AdminProductListQuery & { page?: number; pageSize?: number } = {},
+  ): Promise<{
     items: Product[];
     page: number;
     pageSize: number;
@@ -1760,20 +1784,23 @@ export class CatalogAdminService {
     const pageSize = Math.min(Math.max(1, options.pageSize ?? 20), 500);
     const archivedMode = options.archived ?? 'exclude';
     const trimmedQ = options.q?.trim();
+    const visible = this.#visibleProductsClause(scope, '"products"."id"');
+    if (visible === false) return { items: [], page, pageSize, total: 0, counts: { ...NO_PRODUCTS } };
     const narrowed =
       Boolean(trimmedQ) ||
       Boolean(options.categorySlug?.trim()) ||
       options.categoryId !== undefined ||
       options.salesChannelId !== undefined ||
-      options.stock !== undefined;
+      options.stock !== undefined ||
+      visible !== null;
 
     let items: Product[];
     let total: number;
     if (narrowed) {
       // Text search and/or a narrowing filter: page by statement, then re-hydrate.
-      const filters = await this.#adminListFilters(em, options);
+      const filters = await this.#adminListFilters(em, options, visible);
       if (!filters) {
-        return { items: [], page, pageSize, total: 0, counts: await this.#productListCounts(em) };
+        return { items: [], page, pageSize, total: 0, counts: await this.#productListCounts(em, visible) };
       }
       // Both pages run through `em.execute`, so a caller inside a transaction
       // is shown the rows that transaction has written (issue #207).
@@ -1812,7 +1839,16 @@ export class CatalogAdminService {
       });
     }
 
-    return { items, page, pageSize, total, counts: await this.#productListCounts(em) };
+    return { items, page, pageSize, total, counts: await this.#productListCounts(em, visible) };
+  }
+
+  /**
+   * Spec 193 — the visibility clause over `column` for a scope: `null` adds nothing (system,
+   * unrestricted), `false` matches nothing (`deny`), otherwise a parenthesised fragment.
+   */
+  #visibleProductsClause(scope: AdminProductReadScope, column: string): SqlFragment | null | false {
+    const visibility = requireVisibility(this.visibility, scope);
+    return visibility ? predicateClause(visibility.productPredicate(scope, { productId: column })) : null;
   }
 
   /**
@@ -1835,6 +1871,7 @@ export class CatalogAdminService {
   async #adminListFilters(
     em: EntityManager,
     options: AdminProductListQuery,
+    visible: SqlFragment | null,
   ): Promise<{ readonly sql: string; readonly params: readonly unknown[] } | null> {
     const archivedMode = options.archived ?? 'exclude';
     const trimmedQ = options.q?.trim();
@@ -1908,6 +1945,11 @@ export class CatalogAdminService {
       where.push('(LOWER("sku") LIKE ? or LOWER("slug") LIKE ? or LOWER("name"::text) LIKE ?)');
       params.push(needle, needle, needle);
     }
+    // Spec 193 — inside the statement, so the page is cut after visibility narrows it (FR-031).
+    if (visible) {
+      where.push(visible.sql);
+      params.push(...visible.params);
+    }
     return { sql: where.join(' and '), params };
   }
 
@@ -1922,11 +1964,13 @@ export class CatalogAdminService {
    * page above answers from inside it — one screen, two views of `products`
    * (issue #207).
    */
-  async #productListCounts(em: EntityManager): Promise<ProductListCounts> {
+  async #productListCounts(em: EntityManager, visible: SqlFragment | null): Promise<ProductListCounts> {
+    // Spec 193 (FR-031) — a narrowed scope's badges count visible products only.
     const rows = (await em.execute(
       `select status, (archived_at is not null) as archived, count(*) as count
-         from products where deleted_at is null
+         from products where deleted_at is null${visible ? ` and ${visible.sql}` : ''}
         group by status, (archived_at is not null)`,
+      visible ? [...visible.params] : [],
     )) as Array<{ status: string; archived: boolean; count: string | number }>;
     const counts: ProductListCounts = { all: 0, active: 0, inactive: 0, archived: 0 };
     for (const row of rows) {
@@ -1946,10 +1990,15 @@ export class CatalogAdminService {
    * Feature 033 — return all product ids matching list filters (no pagination).
    * The filters are {@link listProducts}' own clause ({@link #adminListFilters}).
    */
-  async resolveProductIds(options: AdminProductListQuery = {}): Promise<{ productIds: string[]; total: number }> {
+  async resolveProductIds(
+    scope: AdminProductReadScope,
+    options: AdminProductListQuery = {},
+  ): Promise<{ productIds: string[]; total: number }> {
     const maxSelectionSize = Number(process.env['CATALOG_MAX_RESOLVE_IDS'] ?? 10_000);
     const em = this.emFactory();
-    const filters = await this.#adminListFilters(em, options);
+    const visible = this.#visibleProductsClause(scope, '"products"."id"');
+    if (visible === false) return { productIds: [], total: 0 };
+    const filters = await this.#adminListFilters(em, options, visible);
     if (!filters) return { productIds: [], total: 0 };
 
     // `em.execute` — see `listProducts` (issue #207).
@@ -2036,15 +2085,29 @@ export class CatalogAdminService {
    * tables) regardless of current status. Paginated for callers that
    * stream large id sets across multiple requests.
    */
-  async listProductsByIds(input: {
-    ids: string[];
-    page?: number;
-    pageSize?: number;
-  }): Promise<{ items: Product[]; page: number; pageSize: number; total: number }> {
+  async listProductsByIds(
+    scope: AdminProductReadScope,
+    input: {
+      ids: string[];
+      page?: number;
+      pageSize?: number;
+    },
+  ): Promise<{ items: Product[]; page: number; pageSize: number; total: number }> {
     const em = this.emFactory();
     const page = Math.max(0, input.page ?? 0);
     const pageSize = Math.min(Math.max(1, input.pageSize ?? 50), 500);
-    const uniqueIds = Array.from(new Set(input.ids));
+    let uniqueIds = Array.from(new Set(input.ids));
+    // Spec 193 (FR-030) — a hidden id is dropped before paging, as an unknown id is.
+    const visible = this.#visibleProductsClause(scope, '"products"."id"');
+    if (visible === false) uniqueIds = [];
+    else if (visible && uniqueIds.length > 0) {
+      const rows = await em.execute<Array<{ id: string }>>(
+        `select "id" from "products" where "id" = any(?::uuid[]) and ${visible.sql}`,
+        [uuidArrayLiteral(uniqueIds), ...visible.params],
+      );
+      const kept = new Set(rows.map((r) => r.id));
+      uniqueIds = uniqueIds.filter((id) => kept.has(id));
+    }
     if (uniqueIds.length === 0) {
       return { items: [], page, pageSize, total: 0 };
     }
@@ -2287,9 +2350,22 @@ export class CatalogAdminService {
    * channel, status or audience filter, unlike the storefront's product read.
    * A deleted or unknown product is `404`.
    */
-  async listVariants(parentProductId: string): Promise<ProductVariant[]> {
+  async listVariants(scope: AdminProductReadScope, parentProductId: string): Promise<ProductVariant[]> {
     const product = await this.getProductById(parentProductId);
-    return this.emFactory().find(ProductVariant, { parentProductId: product.id }, { orderBy: { sku: 'asc' } });
+    const em = this.emFactory();
+    const variants = await em.find(ProductVariant, { parentProductId: product.id }, { orderBy: { sku: 'asc' } });
+    // Spec 193 (RQ-3 A, TM-6) — a restricted caller sees the qualifying variants only.
+    const visibility = requireVisibility(this.visibility, scope);
+    if (!visibility || variants.length === 0) return variants;
+    const clause = predicateClause(visibility.variantPredicate(scope, { variantId: '"product_variants"."id"' }));
+    if (clause === false) return [];
+    if (clause === null) return variants;
+    const rows = await em.execute<Array<{ id: string }>>(
+      `select "id" from "product_variants" where "id" = any(?::uuid[]) and ${clause.sql}`,
+      [uuidArrayLiteral(variants.map((v) => v.id)), ...clause.params],
+    );
+    const kept = new Set(rows.map((r) => r.id));
+    return variants.filter((v) => kept.has(v.id));
   }
 
   async createVariant(

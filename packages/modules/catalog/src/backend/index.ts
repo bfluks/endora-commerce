@@ -13,6 +13,8 @@ import {
   type WebhookEventRegistryPort,
 } from '@endora-commerce/contracts';
 import type { AuditReferenceRegistryPort } from '@endora-commerce/contracts';
+import type { AdminProductVisibilityPort } from '@endora-commerce/contracts';
+import { createCatalogAdminProductVisibility } from './services/admin-product-visibility.js';
 import type {
   AdminI18nTranslatePort,
   AdminSearchProviderRegistryPort,
@@ -278,6 +280,8 @@ export interface CatalogCradle {
   readonly catalogRunBulkOperationWorker: boolean;
   /** Root-shaped: how this deployment names the acting admin on an audit record. */
   readonly catalogAdminAuditContext: NonNullable<CatalogModuleOptions['resolveAdminAuditContext']>;
+  /** The platform's acting-admin resolver (401 for a caller that is not an administrator). */
+  readonly adminContextResolver: (request: FastifyRequest) => { adminUserId: string };
   /**
    * How a stock availability band is resolved for the external catalog
    * namespace, the storefront image placeholder, and the full reindex an
@@ -470,6 +474,19 @@ export function registerModule(ctx: ModuleContext): void {
    * or the selection resolved from it, answers 503. Ignoring the filter instead
    * would let "select all matching" reach the whole catalogue.
    */
+  /**
+   * Spec 193 (T038, R-7, TM-3 (4)) — `product_visibility_rules`' admin scope. `catalog` declares
+   * `adminProductVisibilityPort` `degrades-without`: presence is decided here, in front of the
+   * resolution — absent, every admin read is the system scope and no predicate is asked for;
+   * present, a failing call is not caught, so a request whose scope cannot be read answers 5xx,
+   * never unfiltered.
+   */
+  const productVisibilityPort = lazyPort<AdminProductVisibilityPort>(ctx, 'adminProductVisibilityPort');
+  const adminProductVisibility = createCatalogAdminProductVisibility({
+    isPresent: () => effectiveState.isPresent('product_visibility_rules'),
+    port: () => productVisibilityPort,
+  });
+
   const inventoryStockRead = lazyPort<InventoryStockReadPort>(ctx, 'inventoryStockReadPort');
   const stockFilter: CatalogStockFilterSource = {
     available: () => effectiveState.isPresent('inventory'),
@@ -866,6 +883,8 @@ export function registerModule(ctx: ModuleContext): void {
             copyWarehouseThresholds,
             copySeoProductMeta,
             stockFilter,
+            adminProductVisibility,
+            resolveAdminUserId: (req: FastifyRequest) => cradle().adminContextResolver(req).adminUserId,
           }),
       )
       .singleton(),
@@ -1363,6 +1382,8 @@ export function registerModule(ctx: ModuleContext): void {
       // audited through. Read only when registered: a composition without a bus (the
       // absent-owner harness) still boots, and no mutation tool is offered.
       ...('commandBus' in cradle() ? { commandBus: cradle().commandBus } : {}),
+      // Spec 193 (FR-081, TM-3 (2)) — each tool resolves the invoking admin's scope at execution.
+      adminProductVisibility,
     };
     const registry = cradle().promptActionToolRegistry;
     for (const tool of [
@@ -1384,12 +1405,14 @@ export function registerModule(ctx: ModuleContext): void {
     const service = new CatalogAdminSearchService(
       () => cradle().emFactory(),
       lazyPort<CatalogAttributeReadPort>(ctx, 'catalogAttributeReadPort'),
+      adminProductVisibility,
     );
     const i18n = lazyPort<AdminI18nTranslatePort>(ctx, 'adminI18nService');
     const registry = lazyPort<AdminSearchProviderRegistryPort>(ctx, 'adminSearchProviderRegistry');
     registry.register(
       createProductAdminSearchProvider({
-        search: (query) => service.searchProducts(query),
+        // Spec 193 (T040, FR-034) — the searching admin's scope, per search.
+        search: async (query) => service.searchProducts(await adminProductVisibility.scopeFor(query.adminUserId), query),
         translate: (key, language) => i18n.translate('catalog', key, language),
       }),
     );

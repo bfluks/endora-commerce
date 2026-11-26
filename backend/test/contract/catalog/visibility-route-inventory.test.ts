@@ -99,13 +99,26 @@ interface Sample {
 const NIL = () => randomUUID();
 const SAMPLES: Readonly<Record<string, Sample>> = {
   'PATCH /api/v1/admin/catalog/products/:id': { body: { name: 'Renamed by a probe' }, semantic: { status: 'no-such-status' } },
-  'PUT /api/v1/admin/catalog/products/:id/editor-preference': { body: { channelId: null, languageCode: null } },
+  'GET /api/v1/admin/catalog/products/:id': { query: { channelId: NIL(), languageCode: 'en-US' } },
+  'PATCH /api/v1/admin/catalog/products/:id/scopes': { body: { channels: [] } },
+  'PUT /api/v1/admin/catalog/products/:id/scoped-values': { body: { scope: {}, version: '0', changes: {} } },
+  'POST /api/v1/admin/catalog/products/:id/scoped-values/copy': {
+    body: { field: 'name', from: { channelId: NIL(), languageCode: 'en-US' }, toChannelIds: [NIL()], version: '0' },
+  },
+  'PUT /api/v1/admin/catalog/products/:id/content/:attributeKey': { body: { content: null }, semantic: { content: { languages: 7 } } },
+  'PUT /api/v1/admin/catalog/products/:id/editor-preference': { body: { lastChannelId: null, lastLanguageCode: null } },
+  'POST /api/v1/admin/catalog/products/:id/links': { body: { links: [{ targetProductId: NIL(), kind: 'related' }] } },
+  'PUT /api/v1/admin/catalog/products/:id/links/:kind/order': { body: { linkIds: [NIL()] } },
+  'POST /api/v1/admin/catalog/products/:id/grouped-items': { body: { childProductId: NIL(), quantity: 1 } },
+  'POST /api/v1/admin/catalog/products/:id/bundle-slots': { body: { name: { 'en-US': 'Probe' }, maxQuantity: 1 } },
+  'POST /api/v1/admin/catalog/products/:id/bundle-slots/:slotId/options': { body: { optionProductId: NIL() } },
+  'POST /api/v1/admin/catalog/products/:productId/attachments': { body: { assetId: NIL(), attachmentTypeId: NIL(), name: 'Probe' } },
+  'POST /api/v1/admin/catalog/products/:productId/gallery': { body: { assetId: NIL() } },
+  'PUT /api/v1/admin/catalog/products/:productId/gallery/order': { body: { orderedGalleryItemIds: [NIL()] } },
+  'POST /api/v1/admin/catalog/products/:productId/packaging-units': { body: { name: 'Probe', baseQuantity: 2 } },
+  'PATCH /api/v1/admin/catalog/products/:productId/packaging-units/reorder': { body: { orderedIds: [NIL()] } },
   'POST /api/v1/admin/catalog/products/:productId/variants': { body: { sku: `PROBE-${Date.now()}`, variantAttributeValues: { color: 'red' } } },
   'PATCH /api/v1/admin/catalog/products/:productId/variants/:variantId': { body: { stockLevel: 3 } },
-  'POST /api/v1/admin/catalog/products/:id/links': { body: { targetProductId: NIL(), kind: 'related' } },
-  'POST /api/v1/admin/catalog/products/:id/grouped-items': { body: { childProductId: NIL(), defaultQuantity: 1 } },
-  'POST /api/v1/admin/catalog/products/:id/bundle-slots': { body: { label: 'Probe', required: false } },
-  'GET /api/v1/admin/catalog/products/:id': { query: { channelId: NIL(), languageCode: 'en-US' } },
 };
 
 interface MountedRoute {
@@ -278,7 +291,9 @@ describe('catalog admin routes — a hidden product answers as a non-existent on
         } catch {
           differences.push(`${route.key} [${shape.name}] hidden=${JSON.stringify(hidden).slice(0, 300)} absent=${JSON.stringify(absent).slice(0, 300)}`);
         }
-        if (shape.name === 'valid' && absent.status === 400 && route.method !== 'GET') neverReached.push(route.key);
+        // A schema refusal carries `details`; a handler's own 400 (a link the product does not hold) does not.
+        const refusedBySchema = (absent.body as { error?: { details?: unknown } } | null)?.error?.details !== undefined;
+        if (shape.name === 'valid' && absent.status === 400 && refusedBySchema && route.method !== 'GET') neverReached.push(route.key);
       }
     }
     expect(differences, 'routes whose hidden answer differs from the non-existent one').toEqual([]);

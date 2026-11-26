@@ -97,7 +97,16 @@ describe('catalog admin search providers — mapping', () => {
     }));
     const provider = createProductAdminSearchProvider({ search, translate });
     const { hits } = await provider.search(query());
-    expect(search).toHaveBeenCalledWith({ text: 'chair', likeEscaped: 'chair', isUuid: false, fields: ['sku', 'name'], limit: 5 });
+    // Spec 193 (T040, FR-034) — the calling admin travels with the query, so the product search
+    // can narrow by that admin's visibility scope inside its statement.
+    expect(search).toHaveBeenCalledWith({
+      text: 'chair',
+      likeEscaped: 'chair',
+      isUuid: false,
+      fields: ['sku', 'name'],
+      limit: 5,
+      adminUserId: 'admin-1',
+    });
     expect(hits).toEqual([
       {
         id: 'p1',

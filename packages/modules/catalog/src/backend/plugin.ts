@@ -78,6 +78,8 @@ import { UrlKeyResolutionService } from './services/url-key-resolution.service.j
 import type { ResolveSeoProductMeta } from './services/catalog-query.service.js';
 import type { ReadSeoProductScoped } from './services/scoped-values-read.service.js';
 import { registerCatalogAdminRoutes } from './routes.admin.js';
+import type { CatalogAdminProductVisibility } from './services/admin-product-visibility.js';
+import { createCatalogRequestVisibility, installHiddenProductGuard } from './hidden-product-guard.js';
 import { registerCatalogApiKeyRoutes } from './routes.api-key.js';
 import { registerCatalogExternalRoutes } from './routes.external.js';
 import {
@@ -115,6 +117,11 @@ export interface CatalogModuleOptions {
   requireAdmin?: RequireAdminFactory;
   /** Audit-log writer; if provided, mutations land an AuditLogEntry. */
   auditLogService?: AuditPort;
+  /**
+   * Spec 193 — the acting administrator's id, for the visibility scope; refuses (401) a caller
+   * that is not an administrator. Optional with {@link CatalogModuleOptions.adminProductVisibility}.
+   */
+  resolveAdminUserId?: (req: FastifyRequest) => string;
   /** Resolver for who's acting — used for audit attribution. */
   resolveAdminAuditContext?: (req: FastifyRequest) => {
     actorAdminUserId: string;
@@ -241,6 +248,12 @@ export interface CatalogModuleOptions {
    * answers 503 rather than being ignored.
    */
   stockFilter?: CatalogStockFilterSource;
+  /**
+   * Spec 193 (R-7, TM-3, TM-5) — `product_visibility_rules`' admin scope, the owner's absence
+   * decided in front of its port. Optional so fixtures keep composing the module: without it
+   * every admin read is the system scope, and a narrowed scope reaching a service refuses.
+   */
+  adminProductVisibility?: CatalogAdminProductVisibility;
   /**
    * Feature 022 / 163 / 174 — the platform's languages: read by the value
    * resolver, the scope overview (the active languages of a product in no
@@ -432,6 +445,7 @@ export function catalogModule(options: CatalogModuleOptions) {
       options.assets,
       options.copySeoProductMeta,
       options.stockFilter,
+      options.adminProductVisibility,
     );
     // Feature 163 — scoped values per channel and channel × language. Needs the
     // membership accessor for FR-014 and the C4 warning, like the overrides.
@@ -681,8 +695,22 @@ export function catalogModule(options: CatalogModuleOptions) {
         ? new ProductContentService(options.emFactory, options.commandBus, attributeReadService, options.assets)
         : undefined;
 
+    // Spec 193 (R-7, TM-5) — the hidden-product guard, on this plugin's own scope: after schema
+    // validation, before any route-level preHandler and the API interceptor dispatcher.
+    const requestVisibility = createCatalogRequestVisibility({
+      visibility: options.adminProductVisibility,
+      resolveAdminUserId: options.resolveAdminUserId,
+      emFactory: options.emFactory,
+    });
+    installHiddenProductGuard(app, {
+      visibility: options.adminProductVisibility,
+      requestVisibility,
+      emFactory: options.emFactory,
+    });
+
     await registerCatalogAdminRoutes(app, {
       adminService,
+      requestVisibility,
       categoryAdminService,
       ...(productContentService ? { productContentService } : {}),
       attributeSetService,

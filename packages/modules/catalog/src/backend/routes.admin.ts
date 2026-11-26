@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 import {
   SCOPED_VALUES_BODY_LIMIT,
@@ -117,6 +117,19 @@ import type { CatalogAttributeView } from './services/catalog-attribute-read.ser
 import type { AttributeOptionResult } from './commands/attribute-commands.js';
 import type { Category } from './entities/category.entity.js';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import type { CatalogRequestVisibility } from './hidden-product-guard.js';
+import { adminProductListVisibility } from '@endora-commerce/contracts';
+
+/**
+ * Spec 193 (FR-036, TM-14) — the admin product list answers are never stored by a browser or a
+ * proxy: one administrator's answer is not another's. Sent whatever the visibility module's state.
+ */
+const ADMIN_PRODUCT_LIST_CACHE_CONTROL = 'private, no-store';
+
+/** Set on the request, so an error answer — a missing or a hidden product alike — carries it too. */
+const noStore = async (_request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  reply.header('cache-control', ADMIN_PRODUCT_LIST_CACHE_CONTROL);
+};
 
 /**
  * Admin write surface for the catalog. Every route is gated by an admin session
@@ -242,6 +255,11 @@ export interface CatalogAdminDeps {
    */
   requireAdmin: RequireAdminFactory;
   /**
+   * Spec 193 (R-7) — the caller's product visibility scope, once per request, and the
+   * in-handler hidden check for the routes the guard abstains on (`hidden-product-guard.ts`).
+   */
+  requestVisibility: CatalogRequestVisibility;
+  /**
    * Resolves an admin actor (admin user id, optional impersonated customer)
    * for audit-log entries — passed through to the catalog admin service.
    */
@@ -262,7 +280,7 @@ export async function registerCatalogAdminRoutes(
   app: FastifyInstance,
   deps: CatalogAdminDeps,
 ): Promise<void> {
-  const { adminService, requireAdmin } = deps;
+  const { adminService, requireAdmin, requestVisibility } = deps;
 
   /**
    * Feature 002 T155 — fire-and-forget audit log helper used by the
@@ -600,7 +618,8 @@ export async function registerCatalogAdminRoutes(
 
   app.get(
     '/api/v1/admin/catalog/products',
-    { preHandler: requireAdmin('catalog:read') },
+    // Spec 193 (FR-036, TM-14) — never cached, whatever the visibility module's state.
+    { onRequest: noStore, preHandler: requireAdmin('catalog:read') },
     async (request) => {
       const q = (request.query ?? {}) as Record<string, string | undefined>;
       // Feature 163 (FR-112, FR-113, R30.4) — the status is `active` | `inactive`;
@@ -657,7 +676,9 @@ export async function registerCatalogAdminRoutes(
           field,
         });
       }
-      const result = await adminService.listProducts({
+      const scope = await requestVisibility.scopeOf(request);
+      const listVisibility = adminProductListVisibility(scope);
+      const result = await adminService.listProducts(scope, {
         archived,
         ...(status ? { status } : {}),
         ...(type ? { type } : {}),
@@ -684,6 +705,8 @@ export async function registerCatalogAdminRoutes(
         // Issue #1624 — `false` while `inventory` is off: a `stock` filter would
         // then be refused, so the admin does not offer it.
         stockFilterAvailable: adminService.stockFilterAvailable(),
+        // Spec 193 (FR-023) — only for a restricted caller; absent otherwise (SC-003).
+        ...(listVisibility ? { visibility: listVisibility } : {}),
       };
     },
   );
@@ -691,6 +714,7 @@ export async function registerCatalogAdminRoutes(
   app.post(
     '/api/v1/admin/catalog/products/resolve-ids',
     {
+      onRequest: noStore,
       preHandler: requireAdmin('catalog:read'),
       schema: { body: resolveProductIdsRequestSchema },
     },
@@ -699,7 +723,7 @@ export async function registerCatalogAdminRoutes(
       // Feature 163 (R30.4) — the list's `archived` mode; without it the legacy
       // `includeArchived` decides, and the selection's default stays "include".
       const archived = body.archived ?? ((body.includeArchived ?? true) ? 'include' : 'exclude');
-      const result = await adminService.resolveProductIds({
+      const result = await adminService.resolveProductIds(await requestVisibility.scopeOf(request), {
         archived,
         ...(body.status ? { status: body.status } : {}),
         ...(body.type ? { type: body.type } : {}),
@@ -828,6 +852,8 @@ export async function registerCatalogAdminRoutes(
           throw parsed.error;
         }
         const body = parsed.data;
+        // Spec 193 — checked at the lookup, after the body: a hidden product answers as a missing one.
+        await requestVisibility.refuseHiddenProduct(request, request.params.id);
         return {
           data: await contentService.replace(request.params.id, request.params.attributeKey, body.content),
         };
@@ -852,6 +878,7 @@ export async function registerCatalogAdminRoutes(
       { preHandler: requireAdmin('catalog:write') },
       async (request) => {
         const body = patchProductScopesRequestSchema.parse(request.body);
+        await requestVisibility.refuseHiddenProduct(request, request.params.id);
         // Feature 163 (FR-060) — an operator's status write runs the completeness gate
         // in the platform's mode, read once for the request.
         const writesStatus = body.channels.some(
@@ -873,6 +900,7 @@ export async function registerCatalogAdminRoutes(
       { preHandler: requireAdmin('catalog:read') },
       async (request) => {
         const query = scopedValuesQuerySchema.parse(request.query ?? {});
+        await requestVisibility.refuseHiddenProduct(request, request.params.id);
         return { data: await scopedSvc.read(request.params.id, query) };
       },
     );
@@ -890,6 +918,7 @@ export async function registerCatalogAdminRoutes(
           }
           throw new ZodError(parsed.error.issues);
         }
+        await requestVisibility.refuseHiddenProduct(request, request.params.id);
         return scopedSvc.save(request.params.id, parsed.data);
       },
     );
@@ -897,7 +926,11 @@ export async function registerCatalogAdminRoutes(
     app.post<{ Params: { id: string } }>(
       '/api/v1/admin/catalog/products/:id/scoped-values/copy',
       { preHandler: requireAdmin('catalog:write'), bodyLimit: SCOPED_VALUES_COPY_BODY_LIMIT },
-      async (request) => scopedSvc.copy(request.params.id, copyScopedValueRequestSchema.parse(request.body)),
+      async (request) => {
+        const body = copyScopedValueRequestSchema.parse(request.body);
+        await requestVisibility.refuseHiddenProduct(request, request.params.id);
+        return scopedSvc.copy(request.params.id, body);
+      },
     );
   }
 
@@ -923,7 +956,7 @@ export async function registerCatalogAdminRoutes(
     );
   }
   if (deps.urlKeyService) {
-    await registerCatalogUrlKeyAdminRoutes(app, { urlKeyService: deps.urlKeyService, requireAdmin });
+    await registerCatalogUrlKeyAdminRoutes(app, { urlKeyService: deps.urlKeyService, requireAdmin, requestVisibility });
   }
 
   // -------------------------------------------------------------------------
@@ -1004,6 +1037,7 @@ export async function registerCatalogAdminRoutes(
       { preHandler: requireAdmin('catalog:read') },
       async (request) => {
         const body = productEditorPreferenceRequestSchema.parse(request.body);
+        await requestVisibility.refuseHiddenProduct(request, request.params.id);
         const scope = await scopedSvc.resolveScope(request.params.id, {
           channelId: body.lastChannelId ?? undefined,
           languageCode: body.lastLanguageCode ?? undefined,
@@ -1020,12 +1054,13 @@ export async function registerCatalogAdminRoutes(
   app.post(
     '/api/v1/admin/catalog/products/batch-by-id',
     {
+      onRequest: noStore,
       preHandler: requireAdmin('catalog:read'),
       schema: { body: batchByIdProductsRequestSchema },
     },
     async (request) => {
       const body = batchByIdProductsRequestSchema.parse(request.body);
-      const result = await adminService.listProductsByIds({
+      const result = await adminService.listProductsByIds(await requestVisibility.scopeOf(request), {
         ids: body.ids,
         ...(body.page !== undefined ? { page: body.page } : {}),
         ...(body.pageSize !== undefined ? { pageSize: body.pageSize } : {}),
@@ -1705,8 +1740,11 @@ export async function registerCatalogAdminRoutes(
   // answers an inactive product 410 and an out-of-channel one 404.
   app.get<{ Params: { productId: string } }>(
     '/api/v1/admin/catalog/products/:productId/variants',
-    { preHandler: requireAdmin('catalog:read') },
-    async (request) => ({ data: (await adminService.listVariants(request.params.productId)).map(serializeAdminVariant) }),
+    { onRequest: noStore, preHandler: requireAdmin('catalog:read') },
+    async (request) => {
+      const variants = await adminService.listVariants(await requestVisibility.scopeOf(request), request.params.productId);
+      return { data: variants.map(serializeAdminVariant) };
+    },
   );
 
   app.post<{ Params: { productId: string } }>(
@@ -1768,6 +1806,8 @@ export async function registerCatalogAdminRoutes(
         const kind = request.query.kind
           ? productLinkKindSchema.parse(request.query.kind)
           : undefined;
+        // Spec 193 — a missing product lists no links; a hidden one answers the same.
+        if (await requestVisibility.isProductHidden(request, request.params.id)) return { data: [] };
         const rows = await links.listForAdmin(request.params.id, kind);
         return { data: rows };
       },
@@ -1822,6 +1862,14 @@ export async function registerCatalogAdminRoutes(
       async (request) => {
         const kind = productLinkKindSchema.parse(request.params.kind);
         const body = reorderLinksRequestSchema.parse(request.body);
+        // Spec 193 — a missing product holds no link, so its first id is refused; a hidden one alike.
+        if (await requestVisibility.isProductHidden(request, request.params.id)) {
+          throw new HttpError(
+            400,
+            ERROR_CODES.VALIDATION_FAILED,
+            `Link "${body.linkIds[0]}" is not part of (${request.params.id}, ${kind}).`,
+          );
+        }
         await links.reorderForKind(request.params.id, kind, body.linkIds);
         await auditEmit(request, {
           action: 'product_link.reorder',
