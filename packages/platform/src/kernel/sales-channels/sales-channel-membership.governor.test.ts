@@ -428,3 +428,82 @@ describe('isGoverned — the read a caller asks before a write it does not route
     await expect(service.isGoverned('product', G)).resolves.toBeNull();
   });
 });
+
+/**
+ * A governed write that enlists in the caller's open transaction (issue #1926): the token write
+ * records its audit on the caller's manager and defers the access-cache drop to the enclosing
+ * scope; a refused or skipped pair leaves nothing behind. Organization pairs, because the access
+ * cache is only ever dropped for an Organization.
+ */
+describe('membership governor — enlisted in the caller’s transaction', () => {
+  const ORG = 'org-1';
+
+  function enlisted(initial: Record<string, string[]> = {}) {
+    const rows = new Map(Object.entries(initial).map(([k, v]) => [k, new Set(v)]));
+    const log: string[] = [];
+    const deferred: Array<() => Promise<void>> = [];
+    const bridges = new ChannelBridgeRegistry();
+    bridges.register({ entityType: 'organization', table: 'sales_channel_organizations', entityIdColumn: 'organization_id' });
+    const registry = new ChannelMembershipGovernorRegistry();
+    const token = registry.register({
+      moduleId: 'governing_module',
+      entityTypes: ['organization'],
+      governs: async (_em, channelId) => (channelId === G ? { ruleLabel: RULE } : null),
+    });
+    registry.seal();
+    const callerEm = { ...fakeEm(rows), isInTransaction: () => true } as unknown as EntityManager;
+    const audit = {
+      record: async () => void log.push('audit:own'),
+      recordWithin: (em: EntityManager, entry: { stateAfter: { source?: string } }) =>
+        void log.push(`audit:within:${em === callerEm ? 'caller' : 'other'}:${entry.stateAfter.source ?? '-'}`),
+    } as unknown as AuditPort;
+    const eventBus = {
+      emit: (name: string) => void log.push(`emit:${name}`),
+      afterScope: async (work: () => Promise<void>) => {
+        log.push('afterScope');
+        deferred.push(work);
+      },
+    } as unknown as EventBus;
+    const cache = {
+      invalidateAfterWrite: async (id: string) => (log.push(`drop:${id}`), 1),
+      invalidateAllAfterWrite: async () => 1,
+    };
+    const service = new SalesChannelMembershipService(() => fakeEm(rows), eventBus, audit, bridges, cache, registry);
+    return { service, rows, log, deferred, token, callerEm };
+  }
+
+  it('a token write records audit through recordWithin and defers the cache drop through afterScope', async () => {
+    const h = enlisted({ [ORG]: [DEFAULT] });
+    const result = await h.service.addToChannel(G, 'organization', ORG, { em: h.callerEm, governorToken: h.token, source: 'rule:1' });
+    expect(result).toEqual({ changed: true });
+    expect(h.log).toEqual(['audit:within:caller:rule:1', 'afterScope', 'emit:sales_channels.membership_changed']);
+    expect(h.deferred).toHaveLength(1);
+    await h.deferred[0]!();
+    expect(h.log.at(-1)).toBe(`drop:${ORG}`);
+  });
+
+  it('a token removal records audit through recordWithin and defers the cache drop through afterScope', async () => {
+    const h = enlisted({ [ORG]: [DEFAULT, G] });
+    expect(await h.service.removeFromChannel(G, 'organization', ORG, { em: h.callerEm, governorToken: h.token })).toEqual({ changed: true });
+    expect(h.log).toEqual(['audit:within:caller:-', 'afterScope', 'emit:sales_channels.membership_changed']);
+    await h.deferred[0]!();
+    expect(h.log.at(-1)).toBe(`drop:${ORG}`);
+  });
+
+  it('a refusal leaves no audit, no cache drop and no event', async () => {
+    const h = enlisted({ [ORG]: [DEFAULT] });
+    const error = await refusal(h.service.addToChannel(G, 'organization', ORG, { em: h.callerEm, onGoverned: 'refuse' }));
+    expect(error.code).toBe(ERROR_CODES.CHANNEL_MEMBERSHIP_GOVERNED);
+    expect(h.log).toEqual([]);
+    expect(h.deferred).toEqual([]);
+    expect([...h.rows.get(ORG)!]).toEqual([DEFAULT]);
+  });
+
+  it('a skip-only call reports changed: false, with no audit and no drop', async () => {
+    const h = enlisted({ [ORG]: [DEFAULT, G] });
+    expect(await h.service.addToChannel(G, 'organization', 'org-2', { em: h.callerEm })).toEqual({ changed: false, skippedGovernedChannelIds: [G] });
+    expect(await h.service.removeFromChannel(G, 'organization', ORG, { em: h.callerEm })).toEqual({ changed: false, skippedGovernedChannelIds: [G] });
+    expect(h.log).toEqual([]);
+    expect(h.deferred).toEqual([]);
+  });
+});

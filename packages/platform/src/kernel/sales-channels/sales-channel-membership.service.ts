@@ -342,6 +342,8 @@ export class SalesChannelMembershipService {
     // a product from its only channel, and it stays on none until the rule admits it.
     const wouldOrphan = totalChannels === 1 && decision !== 'token';
     // A fallback onto a governed default is no fallback (R-10): the default's own rule decides.
+    // The probe omits `onGoverned` on purpose: it must answer 'skip' rather than throw the caller's
+    // 409, so a governed default becomes the 422 zero-channels refusal below.
     const defaultId = wouldOrphan && options.fallbackToDefault ? await this.requireSystemDefaultId(em) : null;
     const fallbackGoverned =
       defaultId !== null && (await this.decide(em, entityType, defaultId, options.governorToken !== undefined ? { governorToken: options.governorToken } : {})) === 'skip';
