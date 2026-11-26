@@ -4,6 +4,7 @@ import { ERROR_CODES, type PatchProductScopesRequest } from '@endora-commerce/co
 import { HttpError } from '@endora-commerce/platform/http';
 import { CatalogBulkUpdateService, scopedStatusPatch, type BulkScopedStatusWriter } from './catalog-bulk-update.service.js';
 import type { CatalogAdminService } from './catalog-admin.service.js';
+import { SYSTEM_PRODUCT_SCOPE } from './admin-product-visibility.js';
 
 /**
  * Feature 163, Phase 10 (T074, FR-050, FR-051) — bulk scoped status: the request a
@@ -48,7 +49,7 @@ describe('CatalogBulkUpdateService — fields.scopedStatus', () => {
     const em = { findOne: async (_entity: unknown, where: { id: string }) => ({ id: where.id, attributeSetId: 'set' }) };
     const svc = new CatalogBulkUpdateService(
       () => em as unknown as EntityManager,
-      { hasCommandBus: () => true, completenessMode: async () => 'warn' } as unknown as CatalogAdminService,
+      { hasCommandBus: () => true, isProductHidden: async () => false, completenessMode: async () => 'warn' } as unknown as CatalogAdminService,
       undefined,
       undefined,
       {
@@ -63,7 +64,7 @@ describe('CatalogBulkUpdateService — fields.scopedStatus', () => {
 
   it('writes the one scope per product and reports changedFields [scopedStatus]', async () => {
     const { svc, calls } = service(async () => ({ changedFields: ['scopedStatus'], warnings: [] }));
-    const result = await svc.bulkUpdate({
+    const result = await svc.bulkUpdate(SYSTEM_PRODUCT_SCOPE, {
       productIds: [P1, P2],
       fields: { scopedStatus: { channelId: C, languageCode: 'de-DE', value: 'inactive' } },
     });
@@ -79,7 +80,7 @@ describe('CatalogBulkUpdateService — fields.scopedStatus', () => {
 
   it('a product already holding the value succeeds with changedFields []', async () => {
     const { svc } = service(async () => ({ changedFields: [], warnings: [] }));
-    const result = await svc.bulkUpdate({
+    const result = await svc.bulkUpdate(SYSTEM_PRODUCT_SCOPE, {
       productIds: [P1],
       fields: { scopedStatus: { channelId: C, languageCode: null, value: 'active' } },
     });
@@ -93,7 +94,7 @@ describe('CatalogBulkUpdateService — fields.scopedStatus', () => {
     const { svc } = service(async () => {
       throw new HttpError(422, ERROR_CODES.SCOPE_INVALID, 'The product is not a member of this sales channel.', details);
     });
-    const result = await svc.bulkUpdate({
+    const result = await svc.bulkUpdate(SYSTEM_PRODUCT_SCOPE, {
       productIds: [P1],
       fields: { scopedStatus: { channelId: C, languageCode: 'de-DE', value: 'active' } },
     });
@@ -112,7 +113,7 @@ describe('CatalogBulkUpdateService — fields.scopedStatus', () => {
     const { svc } = service(async () => {
       throw new HttpError(409, ERROR_CODES.VERSION_CONFLICT, 'changed by another request');
     });
-    const result = await svc.bulkUpdate({
+    const result = await svc.bulkUpdate(SYSTEM_PRODUCT_SCOPE, {
       productIds: [P1],
       fields: { scopedStatus: { channelId: C, languageCode: null, value: 'inactive' } },
     });
@@ -123,9 +124,9 @@ describe('CatalogBulkUpdateService — fields.scopedStatus', () => {
     const em = { findOne: async (_entity: unknown, where: { id: string }) => ({ id: where.id, attributeSetId: 'set' }) };
     const svc = new CatalogBulkUpdateService(
       () => em as unknown as EntityManager,
-      { hasCommandBus: () => true, completenessMode: async () => undefined } as unknown as CatalogAdminService,
+      { hasCommandBus: () => true, isProductHidden: async () => false, completenessMode: async () => undefined } as unknown as CatalogAdminService,
     );
-    const result = await svc.bulkUpdate({
+    const result = await svc.bulkUpdate(SYSTEM_PRODUCT_SCOPE, {
       productIds: [P1],
       fields: { scopedStatus: { channelId: C, languageCode: null, value: 'inactive' } },
     });
@@ -146,7 +147,7 @@ describe('CatalogBulkUpdateService — the completeness gate (FR-061, US6 #4)', 
     const svc = new CatalogBulkUpdateService(
       () => em as unknown as EntityManager,
       {
-        hasCommandBus: () => true,
+        hasCommandBus: () => true, isProductHidden: async () => false,
         completenessMode: async () => {
           reads += 1;
           return 'refuse';
@@ -161,7 +162,7 @@ describe('CatalogBulkUpdateService — the completeness gate (FR-061, US6 #4)', 
         },
       },
     );
-    await svc.bulkUpdate({
+    await svc.bulkUpdate(SYSTEM_PRODUCT_SCOPE, {
       productIds: [P1, P2],
       fields: { scopedStatus: { channelId: C, languageCode: 'de-DE', value: 'active' } },
     });
@@ -172,7 +173,7 @@ describe('CatalogBulkUpdateService — the completeness gate (FR-061, US6 #4)', 
   it('refuse: a failing product is skipped as completeness_gate, the passing one changes', async () => {
     const svc = new CatalogBulkUpdateService(
       () => em as unknown as EntityManager,
-      { hasCommandBus: () => true, completenessMode: async () => 'refuse' } as unknown as CatalogAdminService,
+      { hasCommandBus: () => true, isProductHidden: async () => false, completenessMode: async () => 'refuse' } as unknown as CatalogAdminService,
       undefined,
       undefined,
       {
@@ -182,7 +183,7 @@ describe('CatalogBulkUpdateService — the completeness gate (FR-061, US6 #4)', 
         },
       },
     );
-    const result = await svc.bulkUpdate({
+    const result = await svc.bulkUpdate(SYSTEM_PRODUCT_SCOPE, {
       productIds: [P1, P2],
       fields: { scopedStatus: { channelId: C, languageCode: 'de-DE', value: 'active' } },
     });
@@ -200,7 +201,7 @@ describe('CatalogBulkUpdateService — the completeness gate (FR-061, US6 #4)', 
   it('warn: the product succeeds and its result carries details.code SCOPE_INCOMPLETE', async () => {
     const svc = new CatalogBulkUpdateService(
       () => em as unknown as EntityManager,
-      { hasCommandBus: () => true, completenessMode: async () => 'warn' } as unknown as CatalogAdminService,
+      { hasCommandBus: () => true, isProductHidden: async () => false, completenessMode: async () => 'warn' } as unknown as CatalogAdminService,
       undefined,
       undefined,
       {
@@ -210,7 +211,7 @@ describe('CatalogBulkUpdateService — the completeness gate (FR-061, US6 #4)', 
         }),
       },
     );
-    const result = await svc.bulkUpdate({
+    const result = await svc.bulkUpdate(SYSTEM_PRODUCT_SCOPE, {
       productIds: [P1],
       fields: { scopedStatus: { channelId: C, languageCode: 'de-DE', value: 'active' } },
     });
@@ -225,7 +226,7 @@ describe('CatalogBulkUpdateService — the completeness gate (FR-061, US6 #4)', 
     const svc = new CatalogBulkUpdateService(
       () => em as unknown as EntityManager,
       {
-        hasCommandBus: () => true,
+        hasCommandBus: () => true, isProductHidden: async () => false,
         completenessMode: async () => {
           reads += 1;
           return 'refuse';
@@ -237,7 +238,7 @@ describe('CatalogBulkUpdateService — the completeness gate (FR-061, US6 #4)', 
         },
       } as unknown as CatalogAdminService,
     );
-    const result = await svc.bulkUpdate({ productIds: [P1, P2], fields: { status: 'active' } });
+    const result = await svc.bulkUpdate(SYSTEM_PRODUCT_SCOPE, { productIds: [P1, P2], fields: { status: 'active' } });
     expect(reads).toBe(1);
     expect(gates).toEqual(['refuse', 'refuse']);
     expect(result.results[0]).toMatchObject({ productId: P1, status: 'skipped', reason: 'completeness_gate' });
@@ -249,7 +250,7 @@ describe('CatalogBulkUpdateService — the completeness gate (FR-061, US6 #4)', 
     const svc = new CatalogBulkUpdateService(
       () => em as unknown as EntityManager,
       {
-        hasCommandBus: () => true,
+        hasCommandBus: () => true, isProductHidden: async () => false,
         completenessMode: async () => {
           reads += 1;
           return 'refuse';
@@ -257,7 +258,7 @@ describe('CatalogBulkUpdateService — the completeness gate (FR-061, US6 #4)', 
         updateProductAudited: async () => ({}),
       } as unknown as CatalogAdminService,
     );
-    await svc.bulkUpdate({ productIds: [P1], fields: { visibility: 'public' } });
+    await svc.bulkUpdate(SYSTEM_PRODUCT_SCOPE, { productIds: [P1], fields: { visibility: 'public' } });
     expect(reads).toBe(0);
   });
 });
@@ -271,7 +272,7 @@ describe('CatalogBulkUpdateService — every product write is the audited Comman
     const svc = new CatalogBulkUpdateService(
       () => em as unknown as EntityManager,
       {
-        hasCommandBus: () => true,
+        hasCommandBus: () => true, isProductHidden: async () => false,
         completenessMode: async () => 'warn',
         updateProductAudited: async (id: string, req: unknown, gate: unknown) => {
           audited.push({ id, req, gate });
@@ -284,6 +285,7 @@ describe('CatalogBulkUpdateService — every product write is the audited Comman
       } as unknown as CatalogAdminService,
     );
     const result = await svc.bulkUpdate(
+      SYSTEM_PRODUCT_SCOPE,
       { productIds: [P1, P2], fields: { status: 'inactive', visibility: 'logged_in_only' } },
       { actorAdminUserId: 'admin-1' },
     );
@@ -316,10 +318,38 @@ describe('CatalogBulkUpdateService — fails closed without a Command Bus (issue
         },
       } as unknown as CatalogAdminService,
     );
-    await expect(svc.bulkUpdate({ productIds: [P1, P2], fields: { visibility: 'public' } })).rejects.toThrow(
+    await expect(svc.bulkUpdate(SYSTEM_PRODUCT_SCOPE, { productIds: [P1, P2], fields: { visibility: 'public' } })).rejects.toThrow(
       /Command Bus/,
     );
     expect(reads).toEqual([]);
     expect(writes).toEqual([]);
+  });
+});
+
+describe('CatalogBulkUpdateService — a product hidden from the scope is re-checked at its write (spec 193, TM-3 (2))', () => {
+  it('skips a hidden product as not found and writes only the visible one', async () => {
+    const em = { findOne: async (_entity: unknown, where: { id: string }) => ({ id: where.id, attributeSetId: 'set' }) };
+    const written: string[] = [];
+    const asked: Array<{ scope: unknown; id: string }> = [];
+    const restricted = { kind: 'restricted', roleId: 'r', category: { id: 'c', name: 'C' }, conditions: [] } as const;
+    const svc = new CatalogBulkUpdateService(
+      () => em as unknown as EntityManager,
+      {
+        hasCommandBus: () => true,
+        isProductHidden: async (scope: unknown, id: string) => {
+          asked.push({ scope, id });
+          return id === P2;
+        },
+        completenessMode: async () => undefined,
+        updateProductAudited: async (id: string) => {
+          written.push(id);
+          return {};
+        },
+      } as unknown as CatalogAdminService,
+    );
+    const result = await svc.bulkUpdate(restricted, { productIds: [P1, P2], fields: { visibility: 'public' } });
+    expect(written).toEqual([P1]);
+    expect(result.results.find((r) => r.productId === P2)).toMatchObject({ status: 'skipped', reason: 'product_not_found' });
+    expect(asked.map((a) => a.scope)).toEqual([restricted, restricted]);
   });
 });

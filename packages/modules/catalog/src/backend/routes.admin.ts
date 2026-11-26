@@ -452,7 +452,11 @@ export async function registerCatalogAdminRoutes(
         schema: { body: bulkUpdateProductsRequestSchema },
       },
       async (request, reply) => {
-        const body = bulkUpdateProductsRequestSchema.parse(request.body);
+        const parsed = bulkUpdateProductsRequestSchema.parse(request.body);
+        // Spec 193 (FR-033, TM-1) — a restricted caller's selection is narrowed before it is
+        // applied or queued: a hidden id goes the way a missing one does, and is never stored.
+        const scope = await requestVisibility.scopeOf(request);
+        const body = { ...parsed, productIds: await adminService.narrowProductIds(scope, parsed.productIds) };
         const auditCtx = deps.resolveAdminAuditContext?.(request);
 
         if (bulkOperationService && body.productIds.length > BULK_ASYNC_THRESHOLD) {
@@ -483,7 +487,7 @@ export async function registerCatalogAdminRoutes(
               requestId: request.id,
             }
           : undefined;
-        const result = await bulkUpdateService.bulkUpdate(body, ctx);
+        const result = await bulkUpdateService.bulkUpdate(scope, body, ctx);
         return { data: result };
       },
     );
@@ -510,7 +514,7 @@ export async function registerCatalogAdminRoutes(
         const status = rawStatuses.filter(isBulkOperationStatus);
         const limit = q.limit ? Number.parseInt(q.limit, 10) : 25;
         const offset = q.offset ? Number.parseInt(q.offset, 10) : 0;
-        const res = await bulkOperationService.list({
+        const res = await bulkOperationService.list(await requestVisibility.scopeOf(request), {
           ...(status.length ? { status } : {}),
           limit: Number.isFinite(limit) ? limit : 25,
           offset: Number.isFinite(offset) ? offset : 0,
@@ -531,7 +535,7 @@ export async function registerCatalogAdminRoutes(
       { preHandler: requireAdmin('catalog:read') },
       async (request) => {
         const { id } = request.params as { id: string };
-        const op = await bulkOperationService.get(id);
+        const op = await bulkOperationService.get(await requestVisibility.scopeOf(request), id);
         if (!op) {
           throw new HttpError(404, ERROR_CODES.NOT_FOUND, `bulk operation ${id} not found`);
         }
@@ -549,7 +553,7 @@ export async function registerCatalogAdminRoutes(
       { preHandler: requireAdmin('catalog:write') },
       async (request) => {
         const { id } = request.params as { id: string };
-        const outcome = await bulkOperationService.undo(id);
+        const outcome = await bulkOperationService.undo(await requestVisibility.scopeOf(request), id);
         if (!outcome.ok) {
           if (outcome.code === 'NOT_FOUND') {
             throw new HttpError(404, ERROR_CODES.NOT_FOUND, `bulk operation ${id} not found`);

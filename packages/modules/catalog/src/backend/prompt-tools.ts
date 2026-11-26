@@ -172,10 +172,15 @@ export function catalogPromptResolverTools(deps: CatalogPromptToolsDeps): Prompt
 // US2 — bulk category assignment (mutation) + delegated-progress resolver
 // ---------------------------------------------------------------------------
 
-function buildBulkServices(deps: CatalogPromptToolsDeps): {
+interface BulkServices {
   bulkOperationService: BulkOperationService;
   bulkUpdateService: CatalogBulkUpdateService;
-} {
+  adminService: CatalogAdminService;
+  /** Spec 193 — the invoking admin's scope, resolved at execution. */
+  scopeFor(adminUserId: string): Promise<AdminProductReadScope>;
+}
+
+function buildBulkServices(deps: CatalogPromptToolsDeps): BulkServices {
   // Issue #241 — the bus is what audits each product a bulk mutation writes: the
   // bulk edit runs the `product.update` Command per product, and without a bus that
   // Command falls back to the unaudited write.
@@ -185,6 +190,14 @@ function buildBulkServices(deps: CatalogPromptToolsDeps): {
     deps.auditLogService,
     deps.salesChannelMembership,
     deps.commandBus,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    deps.adminProductVisibility,
   );
   const bulkUpdateService = new CatalogBulkUpdateService(
     deps.emFactory,
@@ -194,6 +207,7 @@ function buildBulkServices(deps: CatalogPromptToolsDeps): {
   );
   const queue = deps.redis ? createBulkOperationQueue(deps.redis) : undefined;
   const bulkOperationService = new BulkOperationService(deps.emFactory, bulkUpdateService, {
+    ...(deps.adminProductVisibility ? { visibility: deps.adminProductVisibility } : {}),
     ...(queue
       ? {
           onEnqueued: async (operationId: string): Promise<void> => {
@@ -202,25 +216,29 @@ function buildBulkServices(deps: CatalogPromptToolsDeps): {
         }
       : {}),
   });
-  return { bulkOperationService, bulkUpdateService };
+  return { bulkOperationService, bulkUpdateService, adminService, scopeFor: (adminUserId) => toolScope(deps, adminUserId) };
 }
 
 /** Shared bulk-fields execution: ≤ threshold runs sync; larger delegates to the queue. */
 async function runBulkFieldsUpdate(
-  services: { bulkOperationService: BulkOperationService; bulkUpdateService: CatalogBulkUpdateService },
+  services: BulkServices,
   fields: Record<string, unknown>,
   productIds: string[],
   ctx: ToolContext,
 ): Promise<unknown> {
-  const request = { productIds, fields };
-  if (productIds.length > BULK_ASYNC_THRESHOLD) {
+  // Spec 193 (FR-081, TM-3 (2)) — the invoking admin's scope at execution: a hidden id goes the
+  // way a missing one does, before the threshold and the queue.
+  const scope = await services.scopeFor(ctx.adminUserId);
+  const visibleIds = await services.adminService.narrowProductIds(scope, productIds);
+  const request = { productIds: visibleIds, fields };
+  if (visibleIds.length > BULK_ASYNC_THRESHOLD) {
     const op = await services.bulkOperationService.create({
       requestedByAdminUserId: ctx.adminUserId,
       payload: request,
     });
     return { delegated: true, bulkOperationId: op.id };
   }
-  const result = await services.bulkUpdateService.bulkUpdate(request, {
+  const result = await services.bulkUpdateService.bulkUpdate(scope, request, {
     actorAdminUserId: ctx.adminUserId,
     impersonatedCustomerAccountId: null,
     ipAddress: ctx.auditCtx.ipAddress ?? null,
@@ -259,7 +277,7 @@ async function previewProducts(
 
 export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): PromptActionTool[] {
   const services = buildBulkServices(deps);
-  const { bulkOperationService, bulkUpdateService } = services;
+  const { bulkOperationService, bulkUpdateService, adminService } = services;
 
   const assignToCategory: PromptActionTool<AssignProductsToCategoryParams> = {
     id: 'catalog.assign_products_to_category',
@@ -299,18 +317,21 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
       };
     },
     execute: async (params, ctx: ToolContext) => {
+      // Spec 193 (FR-081, TM-3 (2)) — narrowed for the invoking admin at execution.
+      const scope = await services.scopeFor(ctx.adminUserId);
+      const productIds = await adminService.narrowProductIds(scope, params.productIds);
       const request = {
-        productIds: params.productIds,
+        productIds,
         fields: { categories: { mode: 'add' as const, categoryIds: [params.categoryId] } },
       };
-      if (params.productIds.length > BULK_ASYNC_THRESHOLD) {
+      if (productIds.length > BULK_ASYNC_THRESHOLD) {
         const op = await bulkOperationService.create({
           requestedByAdminUserId: ctx.adminUserId,
           payload: request,
         });
         return { delegated: true, bulkOperationId: op.id };
       }
-      const result = await bulkUpdateService.bulkUpdate(request, {
+      const result = await bulkUpdateService.bulkUpdate(scope, request, {
         actorAdminUserId: ctx.adminUserId,
         impersonatedCustomerAccountId: null,
         ipAddress: ctx.auditCtx.ipAddress ?? null,
@@ -567,7 +588,9 @@ function archiveRestoreTools(
 export function catalogBulkProgressReader(deps: CatalogPromptToolsDeps): BulkProgressReader {
   const { bulkOperationService } = buildBulkServices(deps);
   return async (bulkOperationId): Promise<BulkProgressSnapshot | null> => {
-    const op = await bulkOperationService.get(bulkOperationId);
+    // The operation was queued by a tool for the invoking admin, its selection narrowed for them
+    // then; this reads its progress for `prompt_actions`, which owns who may see the request.
+    const op = await bulkOperationService.get(SYSTEM_PRODUCT_SCOPE, bulkOperationId);
     if (!op) return null;
     return {
       total: op.total,

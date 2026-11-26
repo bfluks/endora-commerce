@@ -164,6 +164,7 @@ import { globalScopeFields } from './product-availability.service.js';
 import { toChannelRecord, toLanguageRecord } from './product-scopes.service.js';
 import type { ScopeCompletenessGate } from './scope-completeness.js';
 import {
+  isProductHidden,
   predicateClause,
   requireVisibility,
   type AdminProductReadScope,
@@ -1840,6 +1841,28 @@ export class CatalogAdminService {
     }
 
     return { items, page, pageSize, total, counts: await this.#productListCounts(em, visible) };
+  }
+
+  /**
+   * Spec 193 (FR-033, TM-1) — a selection as a narrowed caller may name it: the ids that exist and
+   * are visible, in their order. A hidden id goes the way a missing one does. Unchanged for a scope
+   * that narrows nothing (SC-003).
+   */
+  async narrowProductIds(scope: AdminProductReadScope, productIds: readonly string[]): Promise<string[]> {
+    const visible = this.#visibleProductsClause(scope, '"products"."id"');
+    if (visible === null) return [...productIds];
+    if (visible === false || productIds.length === 0) return [];
+    const rows = await this.emFactory().execute<Array<{ id: string }>>(
+      `select "id" from "products" where "id" = any(?::uuid[]) and "deleted_at" is null and ${visible.sql}`,
+      [uuidArrayLiteral(productIds.filter(isUuidShape)), ...visible.params],
+    );
+    const kept = new Set(rows.map((r) => r.id));
+    return productIds.filter((id) => kept.has(id));
+  }
+
+  /** Spec 193 — the product exists and `scope` does not let it through (a write's per-product re-check). */
+  async isProductHidden(scope: AdminProductReadScope, productId: string): Promise<boolean> {
+    return isProductHidden(this.emFactory(), this.visibility, scope, productId);
   }
 
   /**

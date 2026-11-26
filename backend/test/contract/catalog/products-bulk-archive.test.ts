@@ -18,6 +18,7 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
+import { SYSTEM_PRODUCT_SCOPE } from '../../../../packages/modules/catalog/dist/backend/services/admin-product-visibility.js';
 
 /**
  * Feature 163, Phase 9b (T156k) — bulk Archive / Restore on the existing bulk-update
@@ -204,7 +205,7 @@ describe('POST /products/bulk-update — fields.archived (spec 163, T156k)', () 
 
       const { events, bulkOps, run } = chain();
       await run(() => bulkOps.processById(opId));
-      const op = await bulkOps.get(opId);
+      const op = await bulkOps.get(SYSTEM_PRODUCT_SCOPE, opId);
       expect(op?.status).toBe('completed');
       expect(op?.succeeded).toBe(60);
       expect(op?.reversible).toBe(true);
@@ -230,7 +231,7 @@ describe('POST /products/bulk-update — fields.archived (spec 163, T156k)', () 
       const rearchivedAt = (await rows([changed])).get(changed)?.archivedAt;
 
       const seen = capture(events, ids);
-      const undo = await run(() => bulkOps.undo(opId));
+      const undo = await run(() => bulkOps.undo(SYSTEM_PRODUCT_SCOPE, opId));
       seen.stop();
       expect(undo.ok).toBe(true);
       if (undo.ok) {
@@ -261,7 +262,7 @@ describe('POST /products/bulk-update — fields.archived (spec 163, T156k)', () 
       for (const id of ids) expect((await rows([id])).get(id)?.archivedAt).toBeNull();
 
       const seen = capture(events, ids);
-      const undo = await run(() => bulkOps.undo(opId));
+      const undo = await run(() => bulkOps.undo(SYSTEM_PRODUCT_SCOPE, opId));
       seen.stop();
       expect(undo.ok).toBe(true);
       const after = await rows(ids);
@@ -281,11 +282,11 @@ describe('POST /products/bulk-update — fields.archived (spec 163, T156k)', () 
       expect(res.statusCode).toBe(202);
       const opId = (res.json() as { data: { bulkOperationId: string } }).data.bulkOperationId;
       await run(() => bulkOps.processById(opId));
-      const op = await bulkOps.get(opId);
+      const op = await bulkOps.get(SYSTEM_PRODUCT_SCOPE, opId);
       expect(op?.reversible).toBe(true);
 
       const seen = capture(events, ids);
-      const undo = await run(() => bulkOps.undo(opId));
+      const undo = await run(() => bulkOps.undo(SYSTEM_PRODUCT_SCOPE, opId));
       seen.stop();
       expect(undo.ok).toBe(true);
       const after = await rows(ids);

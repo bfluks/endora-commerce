@@ -1,3 +1,5 @@
+import type { EntityManager } from '@mikro-orm/postgresql';
+import { uuidArrayLiteral } from './sql-id-arrays.js';
 import type {
   AdminProductVisibilityPort,
   AdminProductVisibilityScope,
@@ -100,4 +102,61 @@ export function requireVisibility(
     throw new Error('catalog: a narrowed admin product scope reached a service composed without product visibility.');
   }
   return visibility;
+}
+
+/**
+ * The product exists (not deleted) and `scope` does not let it through — "hidden", as opposed to
+ * "missing". `false` for a scope that narrows nothing.
+ */
+export async function isProductHidden(
+  em: EntityManager,
+  visibility: CatalogAdminProductVisibility | undefined,
+  scope: AdminProductReadScope,
+  productId: string,
+): Promise<boolean> {
+  return (await hiddenProductIds(em, visibility, scope, [productId])).size > 0;
+}
+
+/** Which of `productIds` exist (not deleted) and are hidden from `scope`; empty for a scope that narrows nothing. */
+export async function hiddenProductIds(
+  em: EntityManager,
+  visibility: CatalogAdminProductVisibility | undefined,
+  scope: AdminProductReadScope,
+  productIds: readonly string[],
+): Promise<ReadonlySet<string>> {
+  const narrowing = requireVisibility(visibility, scope);
+  if (!narrowing || productIds.length === 0) return new Set();
+  const clause = predicateClause(narrowing.productPredicate(scope, { productId: '"products"."id"' }));
+  if (clause === null) return new Set();
+  const rows = await em.execute<Array<{ id: string }>>(
+    `select "id" from "products"
+      where "id" = any(?::uuid[]) and "deleted_at" is null${clause === false ? '' : ` and not ${clause.sql}`}`,
+    [uuidArrayLiteral(productIds.filter(isUuid)), ...(clause === false ? [] : clause.params)],
+  );
+  return new Set(rows.map((r) => r.id));
+}
+
+/** The variant exists under its parent (not deleted) and `scope` does not let it through. */
+export async function isVariantHidden(
+  em: EntityManager,
+  visibility: CatalogAdminProductVisibility | undefined,
+  scope: AdminProductReadScope,
+  productId: string,
+  variantId: string,
+): Promise<boolean> {
+  const narrowing = requireVisibility(visibility, scope);
+  if (!narrowing) return false;
+  const clause = predicateClause(narrowing.variantPredicate(scope, { variantId: '"product_variants"."id"' }));
+  if (clause === null) return false;
+  const rows = await em.execute<Array<{ id: string }>>(
+    `select "id" from "product_variants"
+      where "id" = ? and "parent_product_id" = ? and "deleted_at" is null${clause === false ? '' : ` and not ${clause.sql}`}`,
+    [variantId, productId, ...(clause === false ? [] : clause.params)],
+  );
+  return rows.length > 0;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isUuid(value: string): boolean {
+  return UUID.test(value);
 }

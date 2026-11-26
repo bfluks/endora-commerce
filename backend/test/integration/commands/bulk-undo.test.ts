@@ -19,6 +19,7 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
+import { SYSTEM_PRODUCT_SCOPE } from '../../../../packages/modules/catalog/dist/backend/services/admin-product-visibility.js';
 
 /**
  * US2 (T021) — bulk-edit undo against a real DB.
@@ -84,7 +85,7 @@ describe('bulk-edit undo (feature 054, US2) [real DB]', () => {
     const off = events.on('product.updated.v1' as never, ((p: { productId: string; changedFields: string[] }) => {
       announced.push({ productId: p.productId, changedFields: p.changedFields });
     }) as never);
-    const res = await withSystemScope('bulk undo test', () => bulkOps.undo(opId));
+    const res = await withSystemScope('bulk undo test', () => bulkOps.undo(SYSTEM_PRODUCT_SCOPE, opId));
     off();
     expect(res.ok).toBe(true);
     expect(announced.sort((a, b) => a.productId.localeCompare(b.productId))).toEqual(
@@ -121,7 +122,7 @@ describe('bulk-edit undo (feature 054, US2) [real DB]', () => {
     await orm.em.fork().nativeUpdate(Product, { id: SEED_PRODUCT_101_ID }, { visibility: 'organization_restricted' });
 
     try {
-      const res = await bulkOps.undo(opId);
+      const res = await bulkOps.undo(SYSTEM_PRODUCT_SCOPE, opId);
       expect(res.ok).toBe(true);
       if (res.ok) {
         expect(res.reverted).toEqual([SEED_PRODUCT_102_ID]);
@@ -145,15 +146,15 @@ describe('bulk-edit undo (feature 054, US2) [real DB]', () => {
       { id: opId },
     );
     expect(op?.reversible).toBe(false);
-    const res = await bulkOps.undo(opId);
+    const res = await bulkOps.undo(SYSTEM_PRODUCT_SCOPE, opId);
     expect(res).toEqual({ ok: false, code: 'NOT_REVERSIBLE' });
   });
 
   it('is idempotent-safe: a second undo after a full revert is refused as already reverted (FR-014)', async () => {
     const opId = await runBulk([SEED_PRODUCT_102_ID], { status: 'inactive' });
-    const first = await bulkOps.undo(opId);
+    const first = await bulkOps.undo(SYSTEM_PRODUCT_SCOPE, opId);
     expect(first.ok).toBe(true);
-    const second = await bulkOps.undo(opId);
+    const second = await bulkOps.undo(SYSTEM_PRODUCT_SCOPE, opId);
     expect(second).toEqual({ ok: false, code: 'ALREADY_REVERTED' });
   });
 });

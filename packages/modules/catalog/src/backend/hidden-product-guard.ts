@@ -4,7 +4,8 @@ import { ERROR_CODES, isUuidShape } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import {
   isNarrowed,
-  predicateClause,
+  isProductHidden as hiddenFrom,
+  isVariantHidden,
   SYSTEM_PRODUCT_SCOPE,
   type AdminProductReadScope,
   type CatalogAdminProductVisibility,
@@ -132,7 +133,7 @@ export function createCatalogRequestVisibility(deps: {
   const isProductHidden = async (request: FastifyRequest, productId: string): Promise<boolean> => {
     if (!isUuidShape(productId)) return false;
     const scope = await scopeOf(request);
-    return isNarrowed(scope) && (await hiddenProduct(deps, scope, productId));
+    return isNarrowed(scope) && (await hiddenFrom(deps.emFactory(), deps.visibility, scope, productId));
   };
   return {
     scopeOf,
@@ -144,38 +145,6 @@ export function createCatalogRequestVisibility(deps: {
       }
     },
   };
-}
-
-/** The product exists (not deleted) and the scope does not let it through. */
-async function hiddenProduct(
-  deps: { visibility: CatalogAdminProductVisibility | undefined; emFactory: () => EntityManager },
-  scope: AdminProductReadScope,
-  productId: string,
-): Promise<boolean> {
-  const clause = predicateClause(deps.visibility!.productPredicate(scope, { productId: '"products"."id"' }));
-  if (clause === null) return false;
-  const rows = await deps.emFactory().execute<Array<{ visible: boolean }>>(
-    `select ${clause === false ? 'false' : clause.sql} as "visible" from "products" where "id" = ? and "deleted_at" is null`,
-    [...(clause === false ? [] : clause.params), productId],
-  );
-  return rows.length > 0 && rows[0]!.visible !== true;
-}
-
-/** The variant exists under the parent (not deleted) and the scope does not let it through. */
-async function hiddenVariant(
-  deps: { visibility: CatalogAdminProductVisibility | undefined; emFactory: () => EntityManager },
-  scope: AdminProductReadScope,
-  productId: string,
-  variantId: string,
-): Promise<boolean> {
-  const clause = predicateClause(deps.visibility!.variantPredicate(scope, { variantId: '"product_variants"."id"' }));
-  if (clause === null) return false;
-  const rows = await deps.emFactory().execute<Array<{ visible: boolean }>>(
-    `select ${clause === false ? 'false' : clause.sql} as "visible" from "product_variants"
-      where "id" = ? and "parent_product_id" = ? and "deleted_at" is null`,
-    [...(clause === false ? [] : clause.params), variantId, productId],
-  );
-  return rows.length > 0 && rows[0]!.visible !== true;
 }
 
 /**
@@ -205,11 +174,12 @@ export function installHiddenProductGuard(
     const scope = await deps.requestVisibility.scopeOf(request);
     if (!isNarrowed(scope)) return;
     let hidden: HiddenAnswer | null = null;
-    if (await hiddenProduct(deps, scope, productId)) hidden = answer;
+    const em = deps.emFactory();
+    if (await hiddenFrom(em, deps.visibility, scope, productId)) hidden = answer;
     else {
       const variantId = params['variantId'];
       const variantAnswer = HIDDEN_VARIANT_ANSWERS[key];
-      if (variantAnswer && variantId !== undefined && isUuidShape(variantId) && (await hiddenVariant(deps, scope, productId, variantId))) {
+      if (variantAnswer && variantId !== undefined && isUuidShape(variantId) && (await isVariantHidden(em, deps.visibility, scope, productId, variantId))) {
         hidden = variantAnswer;
       }
     }

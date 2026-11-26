@@ -15,6 +15,7 @@ import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kerne
 import type { CatalogAdminService} from './catalog-admin.service.js';
 import { type AdminAuditContext } from './catalog-admin.service.js';
 import { Product } from '../entities/product.entity.js';
+import type { AdminProductReadScope } from './admin-product-visibility.js';
 import type { ScopeWriteOptions } from './product-scopes.service.js';
 
 /**
@@ -147,6 +148,7 @@ export class CatalogBulkUpdateService {
    *   - failed,  validation_failed         → any other write rejection
    */
   async bulkUpdate(
+    scope: AdminProductReadScope,
     req: BulkUpdateProductsRequest,
     auditCtx?: AdminAuditContext,
     opts?: BulkUpdateOptions,
@@ -195,7 +197,7 @@ export class CatalogBulkUpdateService {
     let skipped = 0;
     let failed = 0;
     for (const productId of req.productIds) {
-      const outcome = await this.applyToOneProduct(productId, req, completeness);
+      const outcome = await this.applyToOneProduct(scope, productId, req, completeness);
       results.push(outcome);
       processed += 1;
       if (outcome.status === 'succeeded') succeeded += 1;
@@ -244,6 +246,7 @@ export class CatalogBulkUpdateService {
   }
 
   private async applyToOneProduct(
+    scope: AdminProductReadScope,
     productId: string,
     req: BulkUpdateProductsRequest,
     completeness: ScopeCompletenessGateMode | undefined,
@@ -254,6 +257,11 @@ export class CatalogBulkUpdateService {
     }
     const product = await em.findOne(Product, { id: productId });
     if (!product) {
+      return { productId, status: 'skipped', reason: 'product_not_found' };
+    }
+    // Spec 193 (FR-033, TM-3 (2)) — re-checked per product at its write, for the caller (or, in
+    // the worker, the requester) as of now: a product hidden from them is a product not found.
+    if (await this.catalogAdmin.isProductHidden(scope, productId)) {
       return { productId, status: 'skipped', reason: 'product_not_found' };
     }
 

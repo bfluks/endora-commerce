@@ -11,6 +11,7 @@ import {
 } from '../../../../packages/modules/catalog/dist/backend/services/catalog-admin.service.js';
 import { CatalogBulkUpdateService } from '../../../../packages/modules/catalog/dist/backend/services/catalog-bulk-update.service.js';
 import { BulkOperationService } from '../../../../packages/modules/catalog/dist/backend/services/bulk-operation.service.js';
+import { SYSTEM_PRODUCT_SCOPE } from '../../../../packages/modules/catalog/dist/backend/services/admin-product-visibility.js';
 import { Product } from '../../helpers/package-entities.js';
 import {
   setupBackendServer,
@@ -107,7 +108,7 @@ describe('bulk edit through the product.update Command (issue #241)', () => {
     const ids = await seedProducts(3, 'cmd');
     const { bulkUpdate, events, ran, run } = chain();
     const seen = capture(events, ids);
-    const result = await run(() => bulkUpdate.bulkUpdate({ productIds: ids, fields: { visibility: 'logged_in_only' } }));
+    const result = await run(() => bulkUpdate.bulkUpdate(SYSTEM_PRODUCT_SCOPE, { productIds: ids, fields: { visibility: 'logged_in_only' } }));
     seen.stop();
     expect(result.summary).toEqual({ succeeded: 3, skipped: 0, failed: 0, total: 3 });
     expect(ran).toEqual(ids.map((objectId) => ({ action: 'product.update', objectId })));
@@ -162,7 +163,7 @@ describe('bulk edit through the product.update Command (issue #241)', () => {
 
     const { bulkOps, ran, run } = chain();
     await run(() => bulkOps.processById(opId));
-    const op = await bulkOps.get(opId);
+    const op = await bulkOps.get(SYSTEM_PRODUCT_SCOPE, opId);
     expect(op?.status).toBe('completed');
     expect(op?.reversible).toBe(true);
     expect(ran.filter((c) => c.action === 'product.update').map((c) => c.objectId)).toEqual(ids);
@@ -170,7 +171,7 @@ describe('bulk edit through the product.update Command (issue #241)', () => {
     expect(entries).toHaveLength(60);
     expect(new Set(entries.map((row) => row.actorAdminUserId))).toEqual(new Set([op?.requestedByAdminUserId]));
 
-    const undo = await run(() => bulkOps.undo(opId));
+    const undo = await run(() => bulkOps.undo(SYSTEM_PRODUCT_SCOPE, opId));
     expect(undo.ok).toBe(true);
     if (undo.ok) expect(undo.reverted).toHaveLength(60);
     const after = await h.em().fork().find(Product, { id: { $in: ids } });

@@ -21,6 +21,7 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
+import { SYSTEM_PRODUCT_SCOPE } from '../../../../packages/modules/catalog/dist/backend/services/admin-product-visibility.js';
 
 /**
  * Feature 155, Phase 5 (T028) — the catalogue writes of the order rules
@@ -326,7 +327,7 @@ describe('155 — catalogue writes of minOrderQuantity and returnable [contract]
       const bulkOps = new BulkOperationService(em, bulkUpdate, {}, commandBus);
       await bulkOps.processById(opId);
 
-      const op = await bulkOps.get(opId);
+      const op = await bulkOps.get(SYSTEM_PRODUCT_SCOPE, opId);
       expect(op?.status).toBe('completed');
       expect(op?.succeeded).toBe(200);
       expect(await returnableOf(ids)).toEqual(ids.map(() => true));
@@ -344,7 +345,7 @@ describe('155 — catalogue writes of minOrderQuantity and returnable [contract]
       expect(outcomes).toHaveLength(200);
       for (const outcome of outcomes) expect(outcome.changedFields).toContain('returnable');
 
-      const undo = await bulkOps.undo(opId);
+      const undo = await bulkOps.undo(SYSTEM_PRODUCT_SCOPE, opId);
       expect(undo.ok).toBe(true);
       expect(await returnableOf(ids)).toEqual(ids.map(() => false));
     }, 120_000);

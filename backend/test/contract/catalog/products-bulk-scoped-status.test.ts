@@ -19,6 +19,7 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
+import { SYSTEM_PRODUCT_SCOPE } from '../../../../packages/modules/catalog/dist/backend/services/admin-product-visibility.js';
 
 /**
  * Feature 163, Phase 10 (T073, US5, FR-050–FR-052, FR-053) — bulk scoped status on the
@@ -287,7 +288,7 @@ describe('POST /products/bulk-update — fields.scopedStatus (spec 163, T073)', 
 
       const { events, bulkOps, run } = chain();
       await run(() => bulkOps.processById(opId));
-      const op = await bulkOps.get(opId);
+      const op = await bulkOps.get(SYSTEM_PRODUCT_SCOPE, opId);
       expect(op?.status).toBe('completed');
       expect(op?.succeeded).toBe(60);
       expect(op?.reversible).toBe(true);
@@ -310,7 +311,7 @@ describe('POST /products/bulk-update — fields.scopedStatus (spec 163, T073)', 
       ).toBe(200);
 
       const seen = capture(events, ids);
-      const undo = await run(() => bulkOps.undo(opId));
+      const undo = await run(() => bulkOps.undo(SYSTEM_PRODUCT_SCOPE, opId));
       seen.stop();
       expect(undo.ok).toBe(true);
       if (undo.ok) {
@@ -338,7 +339,7 @@ describe('POST /products/bulk-update — fields.scopedStatus (spec 163, T073)', 
       const opId = (res.json() as { data: { bulkOperationId: string } }).data.bulkOperationId;
       const { bulkOps, run } = chain();
       await run(() => bulkOps.processById(opId));
-      const undo = await run(() => bulkOps.undo(opId));
+      const undo = await run(() => bulkOps.undo(SYSTEM_PRODUCT_SCOPE, opId));
       expect(undo.ok && undo.conflicts).toEqual([]);
       expect(await channelStatus(ids[0]!, b2b)).toBeNull();
       const [kept] = await conn().execute<Array<{ min_order_quantity: number }>>(
@@ -356,8 +357,8 @@ describe('POST /products/bulk-update — fields.scopedStatus (spec 163, T073)', 
       const opId = (res.json() as { data: { bulkOperationId: string } }).data.bulkOperationId;
       const { bulkOps, run } = chain();
       await run(() => bulkOps.processById(opId));
-      expect((await bulkOps.get(opId))?.succeeded).toBe(1000);
-      const undo = await run(() => bulkOps.undo(opId));
+      expect((await bulkOps.get(SYSTEM_PRODUCT_SCOPE, opId))?.succeeded).toBe(1000);
+      const undo = await run(() => bulkOps.undo(SYSTEM_PRODUCT_SCOPE, opId));
       expect(undo.ok).toBe(true);
       if (undo.ok) {
         expect(undo.reverted).toHaveLength(1000);

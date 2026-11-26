@@ -10,6 +10,7 @@ import {
   type SearchReindexRunner,
 } from '../../../../packages/modules/catalog/dist/backend/services/bulk-operation.service.js';
 import type { CatalogBulkUpdateService } from '../../../../packages/modules/catalog/dist/backend/services/catalog-bulk-update.service.js';
+import { SYSTEM_PRODUCT_SCOPE } from '../../../../packages/modules/catalog/dist/backend/services/admin-product-visibility.js';
 
 /**
  * Flipping an attribute's `searchable` flag must enqueue a full Meilisearch
@@ -143,7 +144,7 @@ describe('Attribute searchable flip → search_reindex bulk operation', () => {
 
     await svc.processPending();
 
-    const after = await svc.get(op.id);
+    const after = await svc.get(SYSTEM_PRODUCT_SCOPE, op.id);
     // processPending drains every pending row (including any queued by the
     // trigger tests above), so the runner may fire more than once — what
     // matters is that it ran and this op completed with the runner's counts.
@@ -167,7 +168,7 @@ describe('Attribute searchable flip → search_reindex bulk operation', () => {
       payload: { productIds: [], fields: {} },
     });
     await svc.processPending();
-    const after = await svc.get(op.id);
+    const after = await svc.get(SYSTEM_PRODUCT_SCOPE, op.id);
     expect(after?.status).toBe('failed');
     expect(after?.error).toMatch(/not configured/i);
   });

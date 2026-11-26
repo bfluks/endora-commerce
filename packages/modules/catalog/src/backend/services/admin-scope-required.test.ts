@@ -21,9 +21,21 @@ const BACKEND = dirname(dirname(fileURLToPath(import.meta.url)));
 
 /** `<file under backend/>` → the methods whose first parameter is the scope. */
 const SCOPED_METHODS: Readonly<Record<string, readonly string[]>> = {
-  'services/catalog-admin.service.ts': ['listProducts', 'resolveProductIds', 'listProductsByIds', 'listVariants'],
+  'services/catalog-admin.service.ts': [
+    'listProducts',
+    'resolveProductIds',
+    'listProductsByIds',
+    'listVariants',
+    'narrowProductIds',
+    'isProductHidden',
+  ],
   'services/catalog-admin-search.service.ts': ['searchProducts'],
+  'services/catalog-bulk-update.service.ts': ['bulkUpdate'],
+  'services/bulk-operation.service.ts': ['list', 'get', 'undo'],
 };
+
+/** Names too common to find their call sites by name alone (`Map.get`); their signatures are held above. */
+const CALL_SITE_SCAN_SKIPS: ReadonlySet<string> = new Set(['list', 'get', 'undo']);
 
 const SCOPE_TYPE = 'AdminProductReadScope';
 
@@ -67,7 +79,7 @@ describe('the admin product scope is required (spec 193 T039, TM-3 (1))', () => 
   });
 
   it('every call site in this module passes a scope first', () => {
-    const scoped = new Set(Object.values(SCOPED_METHODS).flat());
+    const scoped = new Set(Object.values(SCOPED_METHODS).flat().filter((m) => !CALL_SITE_SCAN_SKIPS.has(m)));
     const findings: string[] = [];
     let calls = 0;
     for (const file of walk(BACKEND)) {

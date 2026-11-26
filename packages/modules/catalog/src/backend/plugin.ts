@@ -485,6 +485,7 @@ export function catalogModule(options: CatalogModuleOptions) {
       ...(options.mailer ? { mailer: options.mailer } : {}),
       ...(options.adminUsers ? { adminUsers: options.adminUsers } : {}),
       ...(options.permissionChecker ? { permissionChecker: options.permissionChecker } : {}),
+      ...(options.adminProductVisibility ? { visibility: options.adminProductVisibility } : {}),
       ...(options.reindexSearchIndexes
         ? { reindexRunner: options.reindexSearchIndexes }
         : {}),

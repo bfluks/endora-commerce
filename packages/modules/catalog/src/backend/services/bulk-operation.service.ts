@@ -16,6 +16,13 @@ import type { Command, CommandBus } from '@endora-commerce/platform/commands';
 import { applyUndo, type RevertRecord } from '@endora-commerce/platform/commands';
 import { withSystemScopeActingFor } from '@endora-commerce/platform/tenancy';
 import { Product } from '../entities/product.entity.js';
+import {
+  predicateClause,
+  requireVisibility,
+  SYSTEM_PRODUCT_SCOPE,
+  type AdminProductReadScope,
+  type CatalogAdminProductVisibility,
+} from './admin-product-visibility.js';
 import type { CatalogEventBus } from './catalog-admin.service.js';
 import {
   BulkOperation,
@@ -217,6 +224,13 @@ export class BulkOperationService {
        * Absent only in compositions that queue nothing for an admin (some tests).
        */
       permissionChecker?: AdminPermissionChecker;
+      /**
+       * Spec 193 (FR-033, TM-1, TM-3 (2)) — `product_visibility_rules`' admin scope, presence-decided
+       * by the wiring. A restricted caller sees, and may undo, only operations whose selection holds
+       * no product hidden from them; a queued run resolves its requester's scope at execution.
+       * Without it every scope is the system's.
+       */
+      visibility?: CatalogAdminProductVisibility;
     } = {},
     /**
      * Feature 054 — when injected, product bulk edits capture per-product revert
@@ -303,11 +317,31 @@ export class BulkOperationService {
     return rows.map((r) => r.id);
   }
 
-  async list(input: ListBulkOperationsInput = {}): Promise<ListBulkOperationsResult> {
+  async list(scope: AdminProductReadScope, input: ListBulkOperationsInput = {}): Promise<ListBulkOperationsResult> {
     const em = this.emFactory();
     const where = input.status && input.status.length > 0 ? { status: { $in: input.status } } : {};
     const limit = Math.min(Math.max(input.limit ?? 25, 1), 100);
     const offset = Math.max(input.offset ?? 0, 0);
+    const clean = this.#selectionWithoutHidden(scope, '"o"');
+    if (clean) {
+      // Spec 193 (TM-1) — filtered in the statement that pages, so `total` counts what is shown.
+      const statuses = input.status && input.status.length > 0 ? input.status : null;
+      const filter = `${clean.sql}${statuses ? ' and "o"."status" = any(?::text[])' : ''}`;
+      const params = [...clean.params, ...(statuses ? [`{${statuses.join(',')}}`] : [])];
+      const [counted] = await em.execute<Array<{ n: number }>>(
+        `select count(*)::int as "n" from "catalog_bulk_operations" "o" where ${filter}`,
+        params,
+      );
+      const ids = await em.execute<Array<{ id: string }>>(
+        `select "o"."id" from "catalog_bulk_operations" "o" where ${filter}
+          order by "o"."created_at" desc, "o"."id" desc limit ? offset ?`,
+        [...params, limit, offset],
+      );
+      const found = ids.length === 0 ? [] : await em.find(BulkOperation, { id: { $in: ids.map((r) => r.id) } });
+      const byId = new Map(found.map((op) => [op.id, op]));
+      const items = ids.map((r) => byId.get(r.id)).filter((op): op is BulkOperation => op !== undefined);
+      return { items: items.map(serialize), total: counted!.n };
+    }
     const [rows, total] = await em.findAndCount(BulkOperation, where, {
       orderBy: { createdAt: 'desc', id: 'desc' },
       limit,
@@ -316,11 +350,42 @@ export class BulkOperationService {
     return { items: rows.map(serialize), total };
   }
 
-  async get(id: string): Promise<SerializedBulkOperation | null> {
+  async get(scope: AdminProductReadScope, id: string): Promise<SerializedBulkOperation | null> {
     const em = this.emFactory();
     if (!isUuidShape(id)) return null;
     const op = await em.findOne(BulkOperation, { id });
-    return op ? serialize(op) : null;
+    if (!op || (await this.#touchesHidden(scope, id))) return null;
+    return serialize(op);
+  }
+
+  /**
+   * Spec 193 (TM-1) — a clause over the operation alias that holds when its selection names no
+   * product hidden from `scope`; `null` for a scope that narrows nothing. A missing id in the
+   * selection hides nothing; for a `deny` scope every existing product is hidden.
+   */
+  #selectionWithoutHidden(scope: AdminProductReadScope, alias: '"o"'): { sql: string; params: unknown[] } | null {
+    const visibility = requireVisibility(this.deps.visibility, scope);
+    if (!visibility) return null;
+    const clause = predicateClause(visibility.productPredicate(scope, { productId: '"p"."id"' }));
+    if (clause === null) return null;
+    return {
+      sql: `not exists (
+        select 1 from jsonb_array_elements_text(coalesce(${alias}."payload"->'productIds', '[]'::jsonb)) as "x"("pid")
+          join "products" "p" on "p"."id"::text = "x"."pid"
+         where "p"."deleted_at" is null${clause === false ? '' : ` and not ${clause.sql}`})`,
+      params: clause === false ? [] : clause.params,
+    };
+  }
+
+  /** Whether the operation's selection names a product hidden from `scope`. */
+  async #touchesHidden(scope: AdminProductReadScope, operationId: string): Promise<boolean> {
+    const clean = this.#selectionWithoutHidden(scope, '"o"');
+    if (!clean) return false;
+    const rows = await this.emFactory().execute<Array<{ id: string }>>(
+      `select "o"."id" from "catalog_bulk_operations" "o" where "o"."id" = ? and ${clean.sql}`,
+      [operationId, ...clean.params],
+    );
+    return rows.length === 0;
   }
 
   /**
@@ -413,7 +478,11 @@ export class BulkOperationService {
       // server-side at `create()`. A run with no known requester never gets here: the
       // re-check below fails it (S-L3).
       await this.#assertRequesterMayWrite(op.requestedByAdminUserId);
+      // Spec 193 (TM-3 (2)) — the requester's scope as of now, never the one they had when queuing;
+      // the bulk update re-checks each product against it at its write.
+      const scope = this.deps.visibility ? await this.deps.visibility.scopeFor(op.requestedByAdminUserId) : SYSTEM_PRODUCT_SCOPE;
       const result = await withSystemScopeActingFor(op.requestedByAdminUserId, `catalog bulk operation ${id} for its requester`, () => this.bulkUpdateService.bulkUpdate(
+        scope,
         req,
         { actorAdminUserId: op.requestedByAdminUserId },
         {
@@ -667,11 +736,14 @@ export class BulkOperationService {
    * never clobber) any product changed since. Runs as an audited `bulk.undo`
    * Command and is idempotent-safe on re-invocation (FR-006/FR-007/FR-014).
    */
-  async undo(operationId: string): Promise<UndoOutcome> {
+  async undo(scope: AdminProductReadScope, operationId: string): Promise<UndoOutcome> {
     const em = this.emFactory();
     if (!isUuidShape(operationId)) return { ok: false, code: 'NOT_FOUND' };
     const op = await em.findOne(BulkOperation, { id: operationId });
     if (!op) return { ok: false, code: 'NOT_FOUND' };
+    // Spec 193 (FR-033, TM-1) — an operation that affected a product hidden from the caller is,
+    // to them, an operation that does not exist.
+    if (await this.#touchesHidden(scope, operationId)) return { ok: false, code: 'NOT_FOUND' };
     // Issue #501 — an operation still in flight is its own refusal, not "cannot be undone":
     // the admin hides Undo until completion, and the API says why when it is reached anyway.
     if (op.status === 'pending' || op.status === 'running') return { ok: false, code: 'RUNNING' };
