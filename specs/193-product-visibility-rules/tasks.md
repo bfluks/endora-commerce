@@ -274,7 +274,7 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
   TM-14); **FR-079** (admin side): no visibility rule ever resurfaces an inactive, archived or deleted
   product on any admin read (each state × restricted / unrestricted). The governed-channel side of
   FR-079 is stream B's (T055, T056, T068 — N5).
-  *Open*: the Cache-Control case "absent from the composition" is not tested (on and off are); the header is set unconditionally by the route.
+  *Build note*: Cache-Control is held on and off (both axes) in this test; "absent from the composition" is held at the wiring by `CAT/backend/services/admin-product-visibility.test.ts` (the port is never resolved, every scope is the system's) — the harness cannot compose the app without the module. Written after the code it holds.
 - [x] T038 [A] `CAT/backend/index.ts`: resolve `adminProductVisibilityPort` per request behind
   `effectiveState.isPresent('product_visibility_rules')` (absent ⇒ `systemScope`-equivalent
   `unrestricted`; present and throwing ⇒ propagates, **TM-3 (4)**); `CAT/manifest.ts`
