@@ -20,7 +20,7 @@ import { ProductPackagingUnit } from '../entities/product-packaging-unit.entity.
 import { ProductValueOverride } from '../entities/product-value-override.entity.js';
 import { ProductVariant } from '../entities/product-variant.entity.js';
 import { uuidArrayLiteral } from './sql-id-arrays.js';
-import { predicateClause, requireVisibility, type CatalogAdminProductVisibility } from './admin-product-visibility.js';
+import { predicateClause, requireVisibility, SYSTEM_PRODUCT_SCOPE, type CatalogAdminProductVisibility } from './admin-product-visibility.js';
 
 /**
  * The row-level read model `catalog` publishes (feature 075, Phase P).
@@ -300,8 +300,9 @@ export class CatalogProductReadService implements CatalogProductReadPort {
     const em = this.emFactory();
     const term = query.search?.trim() ?? '';
     // Spec 193 (T043, FR-030) — the caller's visibility, inside every statement: page and total.
-    const narrowing = requireVisibility(this.#visibility, query.scope);
-    const visible = narrowing ? predicateClause(narrowing.productPredicate(query.scope, { productId: '"p"."id"' })) : null;
+    const scope = query.scope ?? SYSTEM_PRODUCT_SCOPE;
+    const narrowing = requireVisibility(this.#visibility, scope);
+    const visible = narrowing ? predicateClause(narrowing.productPredicate(scope, { productId: '"p"."id"' })) : null;
     if (visible === false) return { ids: [], total: query.withTotal === false && term.length === 0 ? null : 0 };
     const member = `(p."id" in (${query.membership.sql})) is true${visible ? ` and ${visible.sql}` : ''}`;
     const memberParams = [...query.membership.params, ...(visible ? visible.params : [])];

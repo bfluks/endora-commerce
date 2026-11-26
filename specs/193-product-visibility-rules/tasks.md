@@ -296,7 +296,7 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
   keyed on `request.routeOptions.url`; when hidden it makes the route answer **its own** not-found
   (a per-route not-found map derived and checked by T036), never a generic 404. Hidden-vs-absent may be
   logged server-side at debug only.
-  *Build note*: routes that parse their own body or query before the product is read (scoped values, scopes, editor preference, URL keys, content, links and their order) are `'in-handler'` in `HIDDEN_ANSWERS`: the guard abstains and the handler asks at its lookup, after parsing — an API pre-interceptor on those eight routes does see a hidden id (documented in `hidden-product-guard.ts`).
+  *Build note*: routes that parse their own body or query before the product is read (scoped values, scopes, editor preference, URL keys, content, links and their order) are `'in-handler'` in `HIDDEN_ANSWERS`: the guard abstains and the handler asks at its lookup, after parsing — an API pre-interceptor on those routes does see a hidden id (documented in `hidden-product-guard.ts`). **Known item for the checkpoint security review** (coordinator decision: not changed now).
 - [x] T042 [A] Bulk operations (**FR-033**, **TM-1**, `CAT/backend/routes.admin.ts:479-560`,
   `catalog-bulk-update.service.ts`, bulk-operation worker): request-time narrowing of ids and of the
   select-all set; operation **list / detail** for a restricted caller show only operations whose
@@ -308,13 +308,13 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
 - [x] T043 [A] Price book grid (spec edge): `catalog`'s `pageProductsByAdminName` port takes the caller's
   scope (required, TM-3) and applies `productPredicate` in its statement, count included
   (`PL/backend/services/price-book-reads.ts:426-440`).
-  *Build note*: `CatalogAdminNamePageQuery.scope` is required — an incompatible change to a stable port input under `contract-surface.md`; the changeset says it needs the owner's sanctioned-break ruling (D-293.7) before release.
+  *Build note*: `CatalogAdminNamePageQuery.scope` is **optional** (coordinator decision): absent = the system scope, so the port change is compatible (no D-293.7 break). `price_lists/…/admin-name-page-scope.test.ts` holds that every `pageProductsByAdminName` call there passes it.
 - [x] T044 [A] `PL/backend/services/price-book-reads.ts` `lines` page: pass the scope to T043, drop
   non-qualifying variant lines through `adminProductVisibilityPort.filterVisible`; `PL/manifest.ts`
   `degrades-without` entry (stream A owns `PL/manifest.ts` for this). Row **edits** stay unrestricted
   (FR-038). Test `BT/integration/price_lists/book-lines-visibility.test.ts`, including the **off
   state** (M3): module off ⇒ the grid's pages and counts identical to module-absent.
-  *Open leak*: `GET /price-books/:id/rows` (labels name hidden products) and `GET …/product-lines` are **not** narrowed — the test asserts `rows` answers 200 to a restricted caller (FR-038 reading); FR-030 needs a decision for `rows`.
+  *Open leak*: `GET /price-books/:id/rows` (labels name hidden products) and `GET …/product-lines` are **not** narrowed — the test asserts `rows` answers 200 to a restricted caller (FR-038 reading); FR-030 needs a decision for `rows` (asked of the owner — unchanged until then). `GET …/product-lines` stays as it is (coordinator decision): addressed by product id, FR-038.
 
 **Verification (5a)**: `pnpm --filter backend exec vitest run test/contract/catalog/visibility-route-inventory.test.ts test/integration/catalog/visibility-list.test.ts test/integration/catalog/bulk-operations-visibility.test.ts test/integration/price_lists/book-lines-visibility.test.ts test/contract/catalog/admin-list-routes.test.ts test/contract/catalog/products-resolve-ids.test.ts test/contract/catalog/products-admin-list-filters.test.ts test/contract/catalog/admin-product-variants-read.test.ts test/contract/catalog/admin-variants.test.ts`;
 `pnpm --filter @endora-commerce/mod-catalog exec vitest run src/backend/admin-search-provider.test.ts src/backend/services/admin-scope-required.test.ts`;

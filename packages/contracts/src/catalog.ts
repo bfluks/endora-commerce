@@ -2814,10 +2814,11 @@ export interface CatalogAdminNamePageQuery {
   readonly membership: CatalogProductMembership;
   /**
    * Spec 193 (T043, TM-3) — whose products the page may name: the caller's admin visibility
-   * scope, applied inside the statement (page and total). **Required**: a system caller passes
-   * `{ kind: 'system' }` explicitly.
+   * scope, applied inside the statement (page and total). Optional so the port stays compatible:
+   * absent reads as the system scope (nothing narrowed). An admin caller always passes it —
+   * `price_lists` holds that with a test.
    */
-  readonly scope: AdminProductVisibilityScope;
+  readonly scope?: AdminProductVisibilityScope;
   readonly search?: string | null;
   readonly offset: number;
   readonly limit: number;
