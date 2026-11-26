@@ -16,6 +16,8 @@ import { WarehouseChannelAssignment } from '../entities/warehouse-channel-assign
 import { StockLevel } from '../entities/stock-level.entity.js';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { InventoryAuditContext } from '../plugin.js';
+import type { VisibilityPredicate } from '@endora-commerce/contracts';
+import { NO_PRODUCT_PREDICATE, clauseSql } from './admin-product-visibility.js';
 
 export interface WarehouseContact {
   name?: string | null | undefined;
@@ -85,6 +87,11 @@ export class WarehouseService {
     pageSize?: number;
     activeOnly?: boolean;
     withTotals?: boolean;
+    /**
+     * Spec 193 (FR-083, checkpoint 1) — the caller's product predicate over
+     * `"stock_levels"."product_id"`: the totals sum only the levels it lets through.
+     */
+    visible?: VisibilityPredicate;
   } = {}): Promise<{ items: WarehouseDTO[]; page: number; pageSize: number; total: number }> {
     const em = this.emFactory();
     const page = Math.max(0, options.page ?? 0);
@@ -100,7 +107,7 @@ export class WarehouseService {
 
     let totalsByWarehouse = new Map<string, WarehouseTotals>();
     if (options.withTotals && rows.length > 0) {
-      totalsByWarehouse = await this.collectTotals(em, rows.map((r) => r.id));
+      totalsByWarehouse = await this.collectTotals(em, rows.map((r) => r.id), options.visible ?? NO_PRODUCT_PREDICATE);
     }
 
     return {
@@ -111,13 +118,13 @@ export class WarehouseService {
     };
   }
 
-  async getById(id: string, options: { withTotals?: boolean } = {}): Promise<WarehouseDTO | null> {
+  async getById(id: string, options: { withTotals?: boolean; visible?: VisibilityPredicate } = {}): Promise<WarehouseDTO | null> {
     const em = this.emFactory();
     if (!isUuidShape(id)) return null;
     const row = await em.findOne(Warehouse, { id });
     if (!row) return null;
     if (!options.withTotals) return this.toDTO(row);
-    const totals = await this.collectTotals(em, [row.id]);
+    const totals = await this.collectTotals(em, [row.id], options.visible ?? NO_PRODUCT_PREDICATE);
     return this.toDTO(row, totals.get(row.id));
   }
 
@@ -301,8 +308,9 @@ export class WarehouseService {
     await em.remove(row).flush();
   }
 
-  private async collectTotals(em: EntityManager, ids: string[]): Promise<Map<string, WarehouseTotals>> {
+  private async collectTotals(em: EntityManager, ids: string[], visible: VisibilityPredicate): Promise<Map<string, WarehouseTotals>> {
     if (ids.length === 0) return new Map();
+    const only = clauseSql(visible, 'and');
     // `em.execute`, not `em.getKnex()`: a knex handle carries no transaction
     // context, so the totals shown next to a warehouse a caller has just
     // written inside a transaction would be read from before that write
@@ -312,9 +320,9 @@ export class WarehouseService {
       em.execute(
         `select warehouse_id, count(*) as products, sum(on_hand) as on_hand
            from stock_levels
-          where warehouse_id in (${placeholders})
+          where warehouse_id in (${placeholders})${only.sql}
           group by warehouse_id`,
-        [...ids],
+        [...ids, ...only.params],
       ),
       em.execute(
         `select warehouse_id, count(*) as default_count

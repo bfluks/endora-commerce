@@ -112,6 +112,19 @@ describe('off state — the other admin reads with the module off are as never i
     }
   });
 
+  it('the warehouse totals are the platform administrator\'s (FR-083, checkpoint 1)', async () => {
+    const totals = async (cookies: Record<string, string>) => ({
+      listed: ((await get('/api/v1/admin/warehouses?pageSize=200', cookies)).body.items as Array<{ id: string; totals: unknown }>).find(
+        (w) => w.id === warehouseId,
+      )?.totals,
+      detail: (await get(`/api/v1/admin/warehouses/${warehouseId}`, cookies)).body.data.totals,
+    });
+    const admin = await totals(ADMIN);
+    for (const axis of AXES) {
+      expect(await withModuleOff('product_visibility_rules', axis, () => totals(reader.cookies))).toEqual(admin);
+    }
+  });
+
   it('the products export is not refused', async () => {
     for (const axis of AXES) {
       const off = await withModuleOff('product_visibility_rules', axis, () =>

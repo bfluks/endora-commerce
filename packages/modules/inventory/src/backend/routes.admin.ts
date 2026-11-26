@@ -231,6 +231,8 @@ export async function registerInventoryAdminRoutes(
         ...(q['pageSize'] ? { pageSize: Number.parseInt(q['pageSize'], 10) } : {}),
         activeOnly: q['activeOnly'] === 'true',
         withTotals: q['withTotals'] !== 'false',
+        // Spec 193 (FR-083) — the totals sum the levels of products the caller can see.
+        ...(q['withTotals'] !== 'false' ? { visible: await visibleOf(request, '"stock_levels"."product_id"') } : {}),
       });
       return data;
     },
@@ -241,7 +243,7 @@ export async function registerInventoryAdminRoutes(
     { preHandler: requireAdmin('inventory:read') },
     async (request, reply) => {
       const { id } = request.params as { id: string };
-      const data = await warehouseService.getById(id, { withTotals: true });
+      const data = await warehouseService.getById(id, { withTotals: true, visible: await visibleOf(request, '"stock_levels"."product_id"') });
       if (!data) {
         reply.status(404);
         return {

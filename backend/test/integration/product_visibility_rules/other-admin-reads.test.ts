@@ -231,6 +231,29 @@ describe('other admin product reads — narrowed by the visibility category (spe
       expect(sum(kpis.perWarehouseTotals)).toBe(kpis.totalOnHand);
     });
 
+    it('the warehouse totals sum visible products only, in the list and the detail (checkpoint 1)', async () => {
+      type Totals = { products: number; onHand: number; isDefaultForChannelCount: number };
+      const listed = async (cookies: Record<string, string>) =>
+        ((await get('/api/v1/admin/warehouses?pageSize=200', cookies)).body.items as Array<{ id: string; totals: Totals }>).find(
+          (w) => w.id === warehouseId,
+        )!.totals;
+      const detail = async (cookies: Record<string, string>) => (await get(`/api/v1/admin/warehouses/${warehouseId}`, cookies)).body.data.totals as Totals;
+      const admin = await listed(ADMIN);
+      const mine = await listed(reader.cookies);
+      expect(mine.products).toBeLessThanOrEqual(admin.products - 1);
+      expect(mine.onHand).toBeLessThanOrEqual(admin.onHand - 2);
+      expect(mine.isDefaultForChannelCount).toBe(admin.isDefaultForChannelCount);
+      expect(await detail(reader.cookies)).toEqual(mine);
+      expect(await detail(ADMIN)).toEqual(admin);
+      // The same numbers the landing KPIs give the same caller for this warehouse.
+      const kpis = (await get(INV, reader.cookies)).body.data as { perWarehouseTotals: Array<{ warehouseId: string; onHand: number }> };
+      const kpi = kpis.perWarehouseTotals.find((w) => w.warehouseId === warehouseId);
+      if (kpi) expect(kpi.onHand).toBe(mine.onHand);
+      const none = await roleWith(h, ['rfqs:handle', 'inventory:read'], 'cvw');
+      expect(await listed(none.cookies)).toEqual(expect.objectContaining({ products: 0, onHand: 0 }));
+      expect(await detail(none.cookies)).toEqual(expect.objectContaining({ products: 0, onHand: 0 }));
+    });
+
     it('a role with no category sees no stock at all', async () => {
       const none = await roleWith(h, ['rfqs:handle', 'inventory:read'], 'cvi');
       const kpis = (await get(INV, none.cookies)).body.data;
