@@ -122,7 +122,8 @@ describe('off state — catalog cross-references and refusals are as never insta
   });
 
   it('FR-082: a URL key a hidden product holds names its holder', async () => {
-    const [{ slug }] = await h.em().getConnection().execute<Array<{ slug: string }>>(`select "slug" from "products" where "id" = ?`, [fx.hidden.id]);
+    const [row] = await h.em().getConnection().execute<Array<{ slug: string }>>(`select "slug" from "products" where "id" = ?`, [fx.hidden.id]);
+    const slug = row!.slug;
     const taken = () => inject('PUT', `${P}/${fx.visible.id}/url-keys`, editor.cookies, { globalKey: slug });
     const on = await taken();
     expect(on.status, on.raw).toBe(409);
