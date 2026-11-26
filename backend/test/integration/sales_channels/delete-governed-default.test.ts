@@ -15,8 +15,9 @@ import {
  * rebinds its orphans to the system default straight in the bridge tables. When the default is
  * governed for products by a website rule, that rebind would admit products the rule never
  * admitted, so it is no fallback (R-10): the delete is refused with
- * `ENTITY_WOULD_HAVE_ZERO_CHANNELS` before any write, naming the rule and a count — never a
- * product id (FR-082). Non-product bridges are never governed and rebind as before.
+ * `ENTITY_WOULD_HAVE_ZERO_CHANNELS` before any write, naming the rule — never a product id
+ * nor a count, which would include products the caller cannot see (FR-082). Non-product bridges
+ * are never governed and rebind as before.
  */
 const ADMIN = { b2b_session: 'stub-admin-session' };
 
@@ -124,16 +125,18 @@ describe('channel delete onto a governed default (spec 193, T100)', () => {
 
     expect(res.status, res.raw).toBe(422);
     expect(res.body.error.code).toBe(ERROR_CODES.ENTITY_WOULD_HAVE_ZERO_CHANNELS);
-    expect(res.body.error.details).toEqual({ code: 'default_channel_governed', entityType: 'product', count: 2, rule: rule.name });
+    expect(res.body.error.details).toEqual({ code: 'default_channel_governed', entityType: 'product', rule: rule.name });
     expect(res.body.error.message).toBe(
-      en['errors.ENTITY_WOULD_HAVE_ZERO_CHANNELS.default_channel_governed'].replace('{count}', '2').replace('{rule}', rule.name),
+      en['errors.ENTITY_WOULD_HAVE_ZERO_CHANNELS.default_channel_governed'].replace('{rule}', rule.name),
     );
     expect(res.body.error.message).not.toMatch(/fallbackToDefault/);
+    // The orphan count includes products the caller may not see, so no sentence carries it.
+    expect(res.body.error.message).not.toMatch(/\b2\b/);
     await setPreferredLanguage('pl');
     try {
       const polish = await deleteChannel(doomed, true);
       expect(polish.body.error.message).toBe(
-        pl['errors.ENTITY_WOULD_HAVE_ZERO_CHANNELS.default_channel_governed'].replace('{count}', '2').replace('{rule}', rule.name),
+        pl['errors.ENTITY_WOULD_HAVE_ZERO_CHANNELS.default_channel_governed'].replace('{rule}', rule.name),
       );
     } finally {
       await setPreferredLanguage(null);
