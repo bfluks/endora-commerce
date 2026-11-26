@@ -614,6 +614,19 @@ import_export, contracts, spec).
   included).
 - [x] F1-3 A URL key held by a hidden product's redirect is taken for a narrowed operator, no
   takeover (Edge Cases); `BT/integration/catalog/url-key-takeover-visibility.test.ts`.
+- [x] F1-4 Warehouse totals (`GET /warehouses`, `/warehouses/:id`) narrowed (FR-083 note);
+  `other-admin-reads.test.ts` + `off-state.other-admin-reads.test.ts`.
+- [x] F1-5 Changesets: `193-inventory-admin-visibility.md` added; import-export, price-book grid and
+  catalog changesets amended (stock CSV, book counts, URL-key detail fields as a type change).
+- [x] F1-8 T043 guard walks every `pageProductsByAdminName` caller in `packages/`
+  (`admin-name-page-scope.test.ts`).
+- [x] F1-9 T041 — `catalog/src/backend/hidden-product-guard.interceptors.test.ts`: no `phase: 'pre'`
+  registration targets an in-handler route; residual risk in research R-20.
+- [x] F1-10 `PRICE_BOOK_ROW_LIMIT` / `PRICE_BOOK_ROW_OVERLAP` accepted oracles (spec Edge Cases,
+  research R-20).
+- [x] F1-11 QA W1 — `catalogue-prices-changed-event.test.ts` records at emission; 3 isolated runs green.
+- [x] F1-12 QA G3 — `off-state.catalog-references.test.ts` (FR-080 grouped / bundle, FR-082 holder
+  naming, redirect takeover, FR-094 header count, with the module off).
 
 ---
 
