@@ -93,8 +93,9 @@ export interface SalesChannelsKernel {
    */
   readonly bridgeRegistry: ChannelBridgeRegistry;
   /**
-   * Spec 193 (R-10, TM-10) — the membership governors of this composition. A composition root
-   * contributes it as `salesChannelMembershipGovernors` (a module registers from a boot hook) and
+   * The membership governors of this composition (R-10). A composition root contributes its
+   * register-only {@link ChannelMembershipGovernorRegistry.registrationPort} as
+   * `salesChannelMembershipGovernors` (a module registers from a boot hook; TM-10) and
    * **seals** it after `runBootHooks()`; one per composition, so composing twice in a process —
    * the test harness — never meets the previous composition's governors.
    */

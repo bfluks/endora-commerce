@@ -964,8 +964,9 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
     // refuses at the membership call instead of reaching a relation an
     // instance that omits that module does not have.
     salesChannelBridgeRegistry: salesChannels.bridgeRegistry,
-    // Spec 193 (R-10, TM-10) — the membership-governor contribution point; sealed after boot.
-    salesChannelMembershipGovernors: salesChannels.membershipGovernors,
+    // The membership-governor contribution point (R-10): a register-only facade, so no module can
+    // reach `seal`, `tokenModule` or `governing` through the cradle (TM-10); sealed after boot.
+    salesChannelMembershipGovernors: salesChannels.membershipGovernors.registrationPort(),
     // The kernel-reserved membership port. `payment_methods` and
     // `delivery_methods` resolve it to auto-bind a new method to the system
     // default channel; both read it when their routes register.

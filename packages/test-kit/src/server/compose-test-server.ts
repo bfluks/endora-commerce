@@ -549,8 +549,8 @@ export async function composeTestServer(
     composed.contribute({
       salesChannelsCache: salesChannels.cache,
       salesChannelBridgeRegistry: salesChannels.bridgeRegistry,
-      // Spec 193 (R-10, TM-10) — the membership-governor contribution point; sealed after boot.
-      salesChannelMembershipGovernors: salesChannels.membershipGovernors,
+      // The membership-governor contribution point: a register-only facade (TM-10); sealed after boot.
+      salesChannelMembershipGovernors: salesChannels.membershipGovernors.registrationPort(),
       salesChannelMembershipPort: salesChannels.membershipService,
       salesChannelResolutionPort: salesChannels.resolver,
       // The channel a **channel-scoped** settings read resolves against outside

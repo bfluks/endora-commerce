@@ -82,6 +82,7 @@ export class ChannelMembershipGovernorRegistry implements ChannelMembershipGover
   readonly #governors: ChannelMembershipGovernor[] = [];
   readonly #tokens = new WeakMap<object, string>();
   #sealed = false;
+  #registrationPort: ChannelMembershipGovernorRegistryPort | undefined;
 
   constructor(options: ChannelMembershipGovernorRegistryOptions = {}) {
     this.#isPresent = options.isPresent ?? ((): boolean => true);
@@ -105,6 +106,21 @@ export class ChannelMembershipGovernorRegistry implements ChannelMembershipGover
     const token = Object.freeze(Object.create(null) as object);
     this.#tokens.set(token, governor.moduleId);
     return token as GovernorWriteToken;
+  }
+
+  /**
+   * What a composition root contributes as `salesChannelMembershipGovernors`: a frozen object
+   * holding `register` alone. The cradle is every module's, so `seal`, `tokenModule` and
+   * `governing` stay on the registry, which only the composition and the membership service hold.
+   *
+   * The registering module's id is not checked against the caller: the contribution is one
+   * platform-wide value, so the composition cannot tell which module resolved it.
+   */
+  registrationPort(): ChannelMembershipGovernorRegistryPort {
+    this.#registrationPort ??= Object.freeze({
+      register: (governor: ChannelMembershipGovernor): GovernorWriteToken => this.register(governor),
+    });
+    return this.#registrationPort;
   }
 
   /** Close registration. Called by the composition roots after the boot hooks ran. */
