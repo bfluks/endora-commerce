@@ -175,6 +175,23 @@ describe('channel delete onto a governed default (spec 193, T100)', () => {
     expect(await isMember(h, defaultId, product)).toBe(true);
   });
 
+  it('a delete emits `sales_channels.lifecycle_changed` — the event the website rule sweeps a deleted channel on', async () => {
+    // `product_visibility_rules` subscribes to this name to drop a deleted channel's attachment
+    // and admissions (there is no dedicated delete event); renaming it here would leave them.
+    const doomed = await createChannel(h, 'del-evt');
+    const code = await channelCode(doomed);
+    const seen: Array<{ channelCode?: string }> = [];
+    const off = h.eventBus.on('sales_channels.lifecycle_changed', async (payload) => void seen.push(payload as { channelCode?: string }));
+    try {
+      expect((await deleteChannel(doomed, false)).status).toBe(204);
+      // Dispatched once the request's scope has committed, so it may land after the response.
+      for (let i = 0; i < 40 && !seen.some((p) => p.channelCode === code); i += 1) await new Promise((r) => setTimeout(r, 50));
+    } finally {
+      off();
+    }
+    expect(seen.map((p) => p.channelCode)).toContain(code);
+  });
+
   it('(4) rebinds as today when the deleted channel is governed and the default is not', async () => {
     const doomed = await createChannel(h, 'del-govd');
     await attachRuleBySql(h, [doomed]);
