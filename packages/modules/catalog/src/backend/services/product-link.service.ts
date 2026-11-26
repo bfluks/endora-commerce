@@ -1,3 +1,4 @@
+import type { HiddenProducts } from './admin-product-visibility.js';
 import type { EntityManager } from '@mikro-orm/postgresql';
 
 import {
@@ -208,17 +209,21 @@ export class ProductLinkService {
     return w.result;
   }
 
+  /** Spec 193 (FR-080) — a target hidden from the caller (`hidden`) is left out. */
   async listForAdmin(
     sourceProductId: string,
-    kind?: ProductLinkKind,
+    kind: ProductLinkKind | undefined,
+    hidden: HiddenProducts,
   ): Promise<ProductLinkRow[]> {
     const em = this.emFactory();
     if (!isUuidShape(sourceProductId)) return [];
     const where: Record<string, unknown> = { sourceProductId };
     if (kind) where['kind'] = kind;
-    const rows = await em.find(ProductLink, where, {
+    const all = await em.find(ProductLink, where, {
       orderBy: { position: 'asc', id: 'asc' },
     });
+    const hiddenTargets = await hidden([...new Set(all.map((r) => r.targetProductId))]);
+    const rows = all.filter((r) => !hiddenTargets.has(r.targetProductId));
     return rows.map((r) => ({
       id: r.id,
       sourceProductId: r.sourceProductId,
@@ -228,9 +233,11 @@ export class ProductLinkService {
     }));
   }
 
+  /** Spec 193 (FR-080) — a target hidden from the caller (`hidden`) is a target not found. */
   async bulkCreate(
     sourceProductId: string,
     inputs: CreateLinkInput[],
+    hidden: HiddenProducts,
   ): Promise<ProductLinkRow[]> {
     const em = this.emFactory();
     // 1) Source must exist and not be archived/deleted (404 PRODUCT_NOT_FOUND).
@@ -266,7 +273,8 @@ export class ProductLinkService {
     // findIn keeps it to one query.
     const targetIds = [...new Set(inputs.map((i) => i.targetProductId))];
     const targets = await em.find(Product, { id: { $in: targetIds } });
-    const foundIds = new Set(targets.filter((t) => !t.deletedAt).map((t) => t.id));
+    const hiddenTargets = await hidden(targetIds);
+    const foundIds = new Set(targets.filter((t) => !t.deletedAt && !hiddenTargets.has(t.id)).map((t) => t.id));
     for (const id of targetIds) {
       if (!foundIds.has(id)) {
         throw new HttpError(

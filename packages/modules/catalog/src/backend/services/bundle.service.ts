@@ -1,3 +1,4 @@
+import type { HiddenProducts } from './admin-product-visibility.js';
 import { randomUUID } from 'node:crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
 
@@ -84,7 +85,8 @@ export class BundleService {
     return w.result;
   }
 
-  async listSlots(parentProductId: string): Promise<BundleSlotRow[]> {
+  /** Spec 193 (FR-080) — an option hidden from the caller (`hidden`) is left out. */
+  async listSlots(parentProductId: string, hidden: HiddenProducts): Promise<BundleSlotRow[]> {
     const em = this.emFactory();
     await this.assertBundleParent(em, parentProductId);
     const slots = await em.find(
@@ -94,11 +96,13 @@ export class BundleService {
     );
     if (slots.length === 0) return [];
     const slotIds = slots.map((s) => s.id);
-    const options = await em.find(
+    const allOptions = await em.find(
       BundleSlotOption,
       { slotId: { $in: slotIds } },
       { orderBy: { position: 'asc', id: 'asc' } },
     );
+    const hiddenOptions = await hidden([...new Set(allOptions.map((o) => o.optionProductId))]);
+    const options = allOptions.filter((o) => !hiddenOptions.has(o.optionProductId));
     const optsBySlot = new Map<string, BundleSlotOption[]>();
     for (const opt of options) {
       const list = optsBySlot.get(opt.slotId) ?? [];
@@ -254,6 +258,7 @@ export class BundleService {
     });
   }
 
+  /** Spec 193 (FR-080) — an option hidden from the caller (`hidden`) is an option not found. */
   async addOption(
     parentProductId: string,
     slotId: string,
@@ -262,6 +267,7 @@ export class BundleService {
       defaultQuantity?: number | undefined;
       position?: number | undefined;
     },
+    hidden: HiddenProducts,
   ): Promise<BundleSlotOptionRow> {
     const em = this.emFactory();
     await this.assertBundleParent(em, parentProductId);
@@ -288,7 +294,7 @@ export class BundleService {
       );
     }
     const option = await em.findOne(Product, { id: input.optionProductId });
-    if (!option || option.deletedAt) {
+    if (!option || option.deletedAt || (await hidden([option.id])).has(option.id)) {
       throw new HttpError(
         404,
         ERROR_CODES.PRODUCT_NOT_FOUND,

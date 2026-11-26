@@ -118,6 +118,7 @@ import type { AttributeOptionResult } from './commands/attribute-commands.js';
 import type { Category } from './entities/category.entity.js';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import type { CatalogRequestVisibility } from './hidden-product-guard.js';
+import type { HiddenProducts } from './services/admin-product-visibility.js';
 import { adminProductListVisibility } from '@endora-commerce/contracts';
 
 /**
@@ -281,6 +282,11 @@ export async function registerCatalogAdminRoutes(
   deps: CatalogAdminDeps,
 ): Promise<void> {
   const { adminService, requireAdmin, requestVisibility } = deps;
+  /** Spec 193 (FR-080) — which named products are hidden from this request's caller. */
+  const hiddenFor =
+    (request: FastifyRequest): HiddenProducts =>
+    async (productIds) =>
+      adminService.hiddenProductIds(await requestVisibility.scopeOf(request), productIds);
 
   /**
    * Feature 002 T155 — fire-and-forget audit log helper used by the
@@ -1812,7 +1818,7 @@ export async function registerCatalogAdminRoutes(
           : undefined;
         // Spec 193 — a missing product lists no links; a hidden one answers the same.
         if (await requestVisibility.isProductHidden(request, request.params.id)) return { data: [] };
-        const rows = await links.listForAdmin(request.params.id, kind);
+        const rows = await links.listForAdmin(request.params.id, kind, hiddenFor(request));
         return { data: rows };
       },
     );
@@ -1825,7 +1831,7 @@ export async function registerCatalogAdminRoutes(
       },
       async (request, reply) => {
         const body = bulkCreateLinksRequestSchema.parse(request.body);
-        const rows = await links.bulkCreate(request.params.id, body.links);
+        const rows = await links.bulkCreate(request.params.id, body.links, hiddenFor(request));
         reply.status(201);
         for (const row of rows) {
           await auditEmit(request, {
@@ -1895,7 +1901,7 @@ export async function registerCatalogAdminRoutes(
       '/api/v1/admin/catalog/products/:id/grouped-items',
       { preHandler: requireAdmin('catalog:read') },
       async (request) => {
-        const rows = await grouped.list(request.params.id);
+        const rows = await grouped.list(request.params.id, hiddenFor(request));
         return { data: rows };
       },
     );
@@ -1908,11 +1914,15 @@ export async function registerCatalogAdminRoutes(
       },
       async (request, reply) => {
         const body = createGroupedItemRequestSchema.parse(request.body);
-        const row = await grouped.addItem(request.params.id, {
-          childProductId: body.childProductId,
-          quantity: body.quantity,
-          ...(body.position !== undefined ? { position: body.position } : {}),
-        });
+        const row = await grouped.addItem(
+          request.params.id,
+          {
+            childProductId: body.childProductId,
+            quantity: body.quantity,
+            ...(body.position !== undefined ? { position: body.position } : {}),
+          },
+          hiddenFor(request),
+        );
         reply.status(201);
         await auditEmit(request, {
           action: 'grouped_item.create',
@@ -1977,7 +1987,7 @@ export async function registerCatalogAdminRoutes(
       '/api/v1/admin/catalog/products/:id/bundle-slots',
       { preHandler: requireAdmin('catalog:read') },
       async (request) => {
-        const rows = await bundle.listSlots(request.params.id);
+        const rows = await bundle.listSlots(request.params.id, hiddenFor(request));
         return { data: rows };
       },
     );
@@ -2065,6 +2075,7 @@ export async function registerCatalogAdminRoutes(
               : {}),
             ...(body.position !== undefined ? { position: body.position } : {}),
           },
+          hiddenFor(request),
         );
         reply.status(201);
         await auditEmit(request, {

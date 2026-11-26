@@ -14,7 +14,7 @@ import {
 } from '@endora-commerce/contracts';
 import type { AuditReferenceRegistryPort } from '@endora-commerce/contracts';
 import type { AdminProductVisibilityPort } from '@endora-commerce/contracts';
-import { createCatalogAdminProductVisibility } from './services/admin-product-visibility.js';
+import { createCatalogAdminProductVisibility, NO_PRODUCT_HIDDEN } from './services/admin-product-visibility.js';
 import type {
   AdminI18nTranslatePort,
   AdminSearchProviderRegistryPort,
@@ -1273,35 +1273,57 @@ export function registerModule(ctx: ModuleContext): void {
   ctx.di.providePort<CatalogProductLinkPort>(
     'productLinkService',
     ctx
-      .asFunction(
-        ({ emFactory, commandBus }: CatalogCradle) =>
-          new ProductLinkService(
-            emFactory,
-            commandBus,
-            lazyPort<ListingPricePort>(ctx, 'pricingService'),
-            lazyPort<AssetReadPort>(ctx, 'assetReadPort'),
-            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
-            lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
-          ),
-      )
+      .asFunction(({ emFactory, commandBus }: CatalogCradle): CatalogProductLinkPort => {
+        const links = new ProductLinkService(
+          emFactory,
+          commandBus,
+          lazyPort<ListingPricePort>(ctx, 'pricingService'),
+          lazyPort<AssetReadPort>(ctx, 'assetReadPort'),
+          lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
+          lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
+        );
+        // Spec 193 (FR-080) — the published port answers as the system: no administrator's
+        // visibility narrows a caller that holds no admin scope. The admin routes pass theirs.
+        return {
+          listForAdmin: (sourceProductId, kind) => links.listForAdmin(sourceProductId, kind, NO_PRODUCT_HIDDEN),
+          bulkCreate: (sourceProductId, inputs) => links.bulkCreate(sourceProductId, inputs, NO_PRODUCT_HIDDEN),
+          removeLink: (sourceProductId, linkId) => links.removeLink(sourceProductId, linkId),
+        };
+      })
       .singleton(),
   );
 
   ctx.di.providePort<CatalogGroupedPort>(
     'groupedService',
     ctx
-      .asFunction(
-        ({ emFactory, commandBus }: CatalogCradle) => new GroupedService(emFactory, commandBus),
-      )
+      .asFunction(({ emFactory, commandBus }: CatalogCradle): CatalogGroupedPort => {
+        const grouped = new GroupedService(emFactory, commandBus);
+        // Spec 193 (FR-080) — the published port answers as the system (see `productLinkService`).
+        return {
+          list: (parentProductId) => grouped.list(parentProductId, NO_PRODUCT_HIDDEN),
+          addItem: (parentProductId, input) => grouped.addItem(parentProductId, input, NO_PRODUCT_HIDDEN),
+          updateItem: (parentProductId, itemId, input) => grouped.updateItem(parentProductId, itemId, input),
+          removeItem: (parentProductId, itemId) => grouped.removeItem(parentProductId, itemId),
+        };
+      })
       .singleton(),
   );
 
   ctx.di.providePort<CatalogBundlePort>(
     'bundleService',
     ctx
-      .asFunction(
-        ({ emFactory, commandBus }: CatalogCradle) => new BundleService(emFactory, commandBus),
-      )
+      .asFunction(({ emFactory, commandBus }: CatalogCradle): CatalogBundlePort => {
+        const bundles = new BundleService(emFactory, commandBus);
+        // Spec 193 (FR-080) — the published port answers as the system (see `productLinkService`).
+        return {
+          listSlots: (parentProductId) => bundles.listSlots(parentProductId, NO_PRODUCT_HIDDEN),
+          createSlot: (parentProductId, input) => bundles.createSlot(parentProductId, input),
+          updateSlot: (parentProductId, slotId, input) => bundles.updateSlot(parentProductId, slotId, input),
+          deleteSlot: (parentProductId, slotId) => bundles.deleteSlot(parentProductId, slotId),
+          addOption: (parentProductId, slotId, input) => bundles.addOption(parentProductId, slotId, input, NO_PRODUCT_HIDDEN),
+          removeOption: (parentProductId, slotId, optionId) => bundles.removeOption(parentProductId, slotId, optionId),
+        };
+      })
       .singleton(),
   );
 

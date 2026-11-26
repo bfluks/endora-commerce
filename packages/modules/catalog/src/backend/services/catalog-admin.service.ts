@@ -164,6 +164,7 @@ import { globalScopeFields } from './product-availability.service.js';
 import { toChannelRecord, toLanguageRecord } from './product-scopes.service.js';
 import type { ScopeCompletenessGate } from './scope-completeness.js';
 import {
+  hiddenProductIds,
   isProductHidden,
   predicateClause,
   requireVisibility,
@@ -1858,6 +1859,11 @@ export class CatalogAdminService {
     );
     const kept = new Set(rows.map((r) => r.id));
     return productIds.filter((id) => kept.has(id));
+  }
+
+  /** Spec 193 (FR-080) — which of `productIds` exist and are hidden from `scope`. */
+  async hiddenProductIds(scope: AdminProductReadScope, productIds: readonly string[]): Promise<ReadonlySet<string>> {
+    return hiddenProductIds(this.emFactory(), this.visibility, scope, productIds);
   }
 
   /** Spec 193 — the product exists and `scope` does not let it through (a write's per-product re-check). */

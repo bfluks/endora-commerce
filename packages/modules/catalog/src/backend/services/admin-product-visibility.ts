@@ -105,6 +105,15 @@ export function requireVisibility(
 }
 
 /**
+ * Spec 193 (FR-080) — which of the named products are hidden from the caller, for a service that
+ * answers about other products (a link's target, a grouped child, a bundle option). Bound to the
+ * caller's scope by the route; {@link NO_PRODUCT_HIDDEN} for a caller that narrows nothing.
+ */
+export type HiddenProducts = (productIds: readonly string[]) => Promise<ReadonlySet<string>>;
+
+export const NO_PRODUCT_HIDDEN: HiddenProducts = async () => new Set();
+
+/**
  * The product exists (not deleted) and `scope` does not let it through — "hidden", as opposed to
  * "missing". `false` for a scope that narrows nothing.
  */

@@ -1,3 +1,4 @@
+import type { HiddenProducts } from './admin-product-visibility.js';
 import { randomUUID } from 'node:crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
 
@@ -49,7 +50,8 @@ export class GroupedService {
     return w.result;
   }
 
-  async list(parentProductId: string): Promise<GroupedItemRow[]> {
+  /** Spec 193 (FR-080) — a child hidden from the caller (`hidden`) is left out. */
+  async list(parentProductId: string, hidden: HiddenProducts): Promise<GroupedItemRow[]> {
     const em = this.emFactory();
     await this.assertGroupedParent(em, parentProductId);
     const rows = await em.find(
@@ -57,12 +59,15 @@ export class GroupedService {
       { parentProductId },
       { orderBy: { position: 'asc', id: 'asc' } },
     );
-    return rows.map((r) => this.toRow(r));
+    const hiddenChildren = await hidden([...new Set(rows.map((r) => r.childProductId))]);
+    return rows.filter((r) => !hiddenChildren.has(r.childProductId)).map((r) => this.toRow(r));
   }
 
+  /** Spec 193 (FR-080) — a child hidden from the caller (`hidden`) is a child not found. */
   async addItem(
     parentProductId: string,
     input: { childProductId: string; quantity: number; position?: number | undefined },
+    hidden: HiddenProducts,
   ): Promise<GroupedItemRow> {
     const em = this.emFactory();
     await this.assertGroupedParent(em, parentProductId);
@@ -82,7 +87,7 @@ export class GroupedService {
       );
     }
     const child = await em.findOne(Product, { id: input.childProductId });
-    if (!child || child.deletedAt) {
+    if (!child || child.deletedAt || (await hidden([child.id])).has(child.id)) {
       throw new HttpError(
         404,
         ERROR_CODES.PRODUCT_NOT_FOUND,
