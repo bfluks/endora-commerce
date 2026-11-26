@@ -63,10 +63,12 @@ describe('sales_channels refusals name no product but the addressed one (spec 19
     expectNoOtherProduct(res.body);
   });
 
-  it('a channel delete that would orphan products reports counts, never ids', async () => {
+  it('a channel delete that would orphan products names the type, never a count or an id', async () => {
     const res = await h.app.inject({ method: 'DELETE', url: `/api/v1/admin/sales-channels/${code}`, headers: COOKIE });
     expect(res.statusCode).toBe(422);
-    expect((res.json() as { error: { details: unknown } }).error.details).toEqual([{ path: 'product', issue: String(others.length + 1) }]);
+    expect((res.json() as { error: { details: unknown } }).error.details).toEqual([{ path: 'product', issue: 'orphaned' }]);
+    // The orphans may include products this caller cannot see, so no number describes them.
+    expect((res.json() as { error: { message: string } }).error.message).not.toMatch(/\d/);
     expectNoOtherProduct(res.body);
     expect(res.body).not.toContain(addressed);
   });

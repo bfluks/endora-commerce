@@ -203,16 +203,25 @@ describe('channel delete onto a governed default (spec 193, T100)', () => {
     expect(await isMember(h, defaultId, product)).toBe(true);
   });
 
-  it('names no product in the plain refusal without fallback either — a count per entity type (FR-082)', async () => {
+  it('names and counts no product in the plain refusal without fallback; other types keep their count (FR-082)', async () => {
     const doomed = await createChannel(h, 'del-plain');
     const product = await productOnlyOn(doomed);
+    await categoryOnlyOn(doomed);
 
     const res = await deleteChannel(doomed, false);
 
     expect(res.status, res.raw).toBe(422);
     expect(res.body.error.code).toBe(ERROR_CODES.ENTITY_WOULD_HAVE_ZERO_CHANNELS);
-    expect(res.body.error.details).toEqual([{ path: 'product', issue: '1' }]);
+    // Products: named, never counted — the orphans may include products the caller cannot see.
+    expect(res.body.error.details).toEqual(
+      expect.arrayContaining([
+        { path: 'product', issue: 'orphaned' },
+        { path: 'category', issue: '1' },
+      ]),
+    );
+    expect(res.body.error.details).toHaveLength(2);
     expect(res.raw).not.toContain(product);
     await sql(`delete from "sales_channel_products" where "sales_channel_id" = ?`, [doomed]);
+    await sql(`delete from "sales_channel_categories" where "sales_channel_id" = ?`, [doomed]);
   });
 });
