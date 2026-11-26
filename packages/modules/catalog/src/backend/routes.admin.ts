@@ -466,6 +466,8 @@ export async function registerCatalogAdminRoutes(
         const auditCtx = deps.resolveAdminAuditContext?.(request);
 
         if (bulkOperationService && body.productIds.length > BULK_ASYNC_THRESHOLD) {
+          // Spec 193 T067 — a governed sales channel is refused before anything is queued.
+          await bulkUpdateService.assertNoGovernedChannel(body.fields);
           // Final security review S-L3 — the queued run acts for, and is re-checked
           // against, the admin recorded here; a request no admin is resolved for is not
           // queued at all (`requireAdmin` above makes this a composition defect).

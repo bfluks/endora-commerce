@@ -530,7 +530,7 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   `sales_channels.lifecycle_changed` (a delete emits it; no dedicated delete event exists) sweeping
   the rows of every channel that no longer resolves, and the same sweep at the start of the hourly
   reconcile.
-- [ ] T067 [A] (after T063 is on the shared branch) `CAT/backend/services/catalog-bulk-update.service.ts:562,570,576`:
+- [x] T067 [A] (after T063 is on the shared branch) `CAT/backend/services/catalog-bulk-update.service.ts:562,570,576`:
   `onGoverned: 'refuse'` + enqueue-time refusal when the patch names a governed channel; test in
   `BT/integration/catalog/bulk-update-governed-channel.test.ts`.
 - [x] T068 [B] (after T049, T058, T066 and T070 — not parallel) Failing integration test

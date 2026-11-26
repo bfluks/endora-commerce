@@ -173,6 +173,10 @@ export class CatalogBulkUpdateService {
       );
     }
 
+    // Spec 193 T067 — a channel a website rule governs is refused before any write. The queued
+    // worker skips it: a channel governed since the enqueue fails per product (`onGoverned`).
+    if (!opts?.skipBatchLimit) await this.assertNoGovernedChannel(req.fields);
+
     // Pre-flight: every attributeValues key MUST be flagged mass_editable=true.
     // This is a client-side bug (the dialog should never offer a non-flagged
     // attribute), so the whole batch is rejected before any per-product write.
@@ -554,6 +558,26 @@ export class CatalogBulkUpdateService {
     );
   }
 
+  /**
+   * Spec 193 T067 (FR-055, R-10) — the enqueue-time refusal: a request whose sales-channel edit
+   * names a channel a membership governor governs is `409 CHANNEL_MEMBERSHIP_GOVERNED` before
+   * anything is applied or queued. Details carry the channel and the rule's label, never a product
+   * (FR-082). The kernel answers "not governed" while the governing module is off (FR-073).
+   */
+  async assertNoGovernedChannel(fields: BulkUpdateProductsRequest['fields']): Promise<void> {
+    if (!fields.salesChannels || !this.salesChannelMembership) return;
+    for (const channelId of new Set(fields.salesChannels.channelIds)) {
+      const governed = await this.salesChannelMembership.isGoverned('product', channelId);
+      if (governed === null) continue;
+      throw new HttpError(
+        409,
+        ERROR_CODES.CHANNEL_MEMBERSHIP_GOVERNED,
+        `This sales channel's product membership follows the rule "${governed.ruleLabel}"; it cannot be changed by hand.`,
+        { channelId, rule: governed.ruleLabel },
+      );
+    }
+  }
+
   private async applySalesChannels(
     productId: string,
     mode: 'add' | 'replace',
@@ -567,7 +591,7 @@ export class CatalogBulkUpdateService {
     if (mode === 'add') {
       for (const id of targetChannelIds) {
         if (!currentIds.has(id)) {
-          const r = await svc.addToChannel(id, 'product', productId);
+          const r = await svc.addToChannel(id, 'product', productId, { onGoverned: 'refuse' });
           if (r.changed) changed = true;
         }
       }
@@ -575,7 +599,7 @@ export class CatalogBulkUpdateService {
       // replace
       for (const id of targetChannelIds) {
         if (!currentIds.has(id)) {
-          const r = await svc.addToChannel(id, 'product', productId);
+          const r = await svc.addToChannel(id, 'product', productId, { onGoverned: 'refuse' });
           if (r.changed) changed = true;
         }
       }
@@ -583,6 +607,7 @@ export class CatalogBulkUpdateService {
         if (!targetSet.has(id)) {
           const r = await svc.removeFromChannel(id, 'product', productId, {
             fallbackToDefault: true,
+            onGoverned: 'refuse',
           });
           if (r.changed) changed = true;
         }
