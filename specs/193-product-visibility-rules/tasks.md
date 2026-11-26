@@ -249,7 +249,7 @@ OQ-A **A** (decided): ≤ 60 s targeted, ≤ 150 s catalogue-wide or designation
 
 Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-reads.ts`.
 
-- [ ] T036 [P] [A] Failing contract test `BT/contract/catalog/visibility-route-inventory.test.ts`
+- [x] T036 [P] [A] Failing contract test `BT/contract/catalog/visibility-route-inventory.test.ts`
   (**TM-1, TM-5**): derive **every** registered `/api/v1/admin/catalog/**` route from the app;
   each is either exercised or on an allow-list of routes proven product-free (the allow-list is in the
   test, reviewed). For each product-bearing route and method: a hidden product (and a hidden variant)
@@ -259,7 +259,8 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
   HEAD/OPTIONS); a **spy pre-interceptor** registered on a product route is **not invoked** for a
   hidden id; bulk-operations list / detail / undo (`CAT/backend/routes.admin.ts:479-560`) included;
   unrestricted unchanged. Price-book and SEO edits outside `catalog` unaffected (FR-038, US1-10).
-- [ ] T037 [P] [A] Failing integration test `BT/integration/catalog/visibility-list.test.ts`: list both
+  *Build note*: the route table comes from the OpenAPI document; `PRODUCT_FREE` and `COLLECTION_ROUTES` (each naming the test that covers it) are two-way. Bulk-operation list / detail / undo are held in T042's test (named there), price-book / SEO edits (FR-038) in T044's. Answers are compared with the ids the caller sent masked (a route echoing its own id tells nothing).
+- [x] T037 [P] [A] Failing integration test `BT/integration/catalog/visibility-list.test.ts`: list both
   branches, `total`, `counts` (incl. early-empty return), paging 30/12 → pages 10 + 2 (US1-4, SC-002),
   `resolve-ids`, `batch-by-id`, `/variants`, `visibility` flag and no-category message (US1-6, US1-11),
   admin global search incl. `hasMore` (FR-034); platform admin and unrestricted **byte-identical**
@@ -273,11 +274,11 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
   TM-14); **FR-079** (admin side): no visibility rule ever resurfaces an inactive, archived or deleted
   product on any admin read (each state × restricted / unrestricted). The governed-channel side of
   FR-079 is stream B's (T055, T056, T068 — N5).
-- [ ] T038 [A] `CAT/backend/index.ts`: resolve `adminProductVisibilityPort` per request behind
+- [x] T038 [A] `CAT/backend/index.ts`: resolve `adminProductVisibilityPort` per request behind
   `effectiveState.isPresent('product_visibility_rules')` (absent ⇒ `systemScope`-equivalent
   `unrestricted`; present and throwing ⇒ propagates, **TM-3 (4)**); `CAT/manifest.ts`
   `nonBindingDependencies` entry kind `degrades-without` with `whenAbsent` + reason.
-- [ ] T039 [A] `CAT/backend/services/catalog-admin.service.ts`: the scope is a **required** parameter
+- [x] T039 [A] `CAT/backend/services/catalog-admin.service.ts`: the scope is a **required** parameter
   of the named type (`AdminProductReadScope`, incl. the `system` member) on every read and write the
   admin routes use — `listProducts` (restricted ⇒ statement branch), `#adminListFilters`,
   `#productListCounts`, `resolveProductIds`, `listProductsByIds`, `listVariants`, product detail and
@@ -285,25 +286,29 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
   an architecture test `CAT/backend/services/admin-scope-required.test.ts` fails on a call site that
   omits it (**TM-3 (1)**); `Cache-Control: private, no-store` on the list routes **regardless of the module's state** (FR-036,
   TM-14).
-- [ ] T040 [A] `CAT/backend/services/catalog-admin-search.service.ts` + `admin-search-provider.ts`:
+  *Build note*: the admin product detail carries no variant-derived aggregate (only `GET …/variants` lists variants), so TM-6 is held on that list; no admin route regenerates variants from options. Scope type is `AdminProductReadScope` (= contracts' `AdminProductVisibilityScope`); the architecture test also covers `narrowProductIds`, `isProductHidden`, `searchProducts`, `bulkUpdate` and the bulk-operation `list` / `get` / `undo`.
+- [x] T040 [A] `CAT/backend/services/catalog-admin-search.service.ts` + `admin-search-provider.ts`:
   predicate inside the search statement; the provider passes `adminUserId` (`CON/admin-search.ts:267`).
-- [ ] T041 [A] Guard (**TM-5**, R-7): a plugin-scope `addHook('preHandler')` on the plugin that mounts
+- [x] T041 [A] Guard (**TM-5**, R-7): a plugin-scope `addHook('preHandler')` on the plugin that mounts
   the catalog admin routes — runs after schema validation and before the route-level `preHandler` chain
   and the API interceptor dispatcher (`packages/platform/src/http/interceptors/dispatch.ts:19-98`),
   keyed on `request.routeOptions.url`; when hidden it makes the route answer **its own** not-found
   (a per-route not-found map derived and checked by T036), never a generic 404. Hidden-vs-absent may be
   logged server-side at debug only.
-- [ ] T042 [A] Bulk operations (**FR-033**, **TM-1**, `CAT/backend/routes.admin.ts:479-560`,
+  *Build note*: routes that parse their own body or query before the product is read (scoped values, scopes, editor preference, URL keys, content, links and their order) are `'in-handler'` in `HIDDEN_ANSWERS`: the guard abstains and the handler asks at its lookup, after parsing — an API pre-interceptor on those eight routes does see a hidden id (documented in `hidden-product-guard.ts`).
+- [x] T042 [A] Bulk operations (**FR-033**, **TM-1**, `CAT/backend/routes.admin.ts:479-560`,
   `catalog-bulk-update.service.ts`, bulk-operation worker): request-time narrowing of ids and of the
   select-all set; operation **list / detail** for a restricted caller show only operations whose
   selection has no hidden product (hidden ids never appear in `payload` or results); **undo** answers
   not-found when any affected product is hidden from the caller; the worker resolves
   `resolveScope(requestedByAdminUserId)` at execution and re-checks **per product at write time**
   (**TM-3 (2)**). Test `BT/integration/catalog/bulk-operations-visibility.test.ts`.
-- [ ] T043 [A] Price book grid (spec edge): `catalog`'s `pageProductsByAdminName` port takes the caller's
+  *Build note*: for a restricted caller the selection is narrowed to existing visible ids before it is applied or queued (a missing id is dropped as a hidden one is, so the two cannot be told apart); the per-product write-time re-check answers `product_not_found`.
+- [x] T043 [A] Price book grid (spec edge): `catalog`'s `pageProductsByAdminName` port takes the caller's
   scope (required, TM-3) and applies `productPredicate` in its statement, count included
   (`PL/backend/services/price-book-reads.ts:426-440`).
-- [ ] T044 [A] `PL/backend/services/price-book-reads.ts` `lines` page: pass the scope to T043, drop
+  *Build note*: `CatalogAdminNamePageQuery.scope` is required — an incompatible change to a stable port input under `contract-surface.md`; the changeset says it needs the owner's sanctioned-break ruling (D-293.7) before release.
+- [x] T044 [A] `PL/backend/services/price-book-reads.ts` `lines` page: pass the scope to T043, drop
   non-qualifying variant lines through `adminProductVisibilityPort.filterVisible`; `PL/manifest.ts`
   `degrades-without` entry (stream A owns `PL/manifest.ts` for this). Row **edits** stay unrestricted
   (FR-038). Test `BT/integration/price_lists/book-lines-visibility.test.ts`, including the **off
