@@ -618,6 +618,10 @@ import_export, contracts, spec).
   `other-admin-reads.test.ts` + `off-state.other-admin-reads.test.ts`.
 - [x] F1-5 Changesets: `193-inventory-admin-visibility.md` added; import-export, price-book grid and
   catalog changesets amended (stock CSV, book counts, URL-key detail fields as a type change).
+- [x] F1-6 One shared `degrades-without` shell: `createDegradingAdminProductVisibility` (contracts);
+  catalog, price_lists and inventory adapters keep only their extras (behaviour unchanged).
+- [x] F1-7 URL_KEY_* detail fields optional stated as a type change in
+  `.changeset/193-catalog-admin-visibility.md` (minor: `0.x`, D-225); admin readers already guard.
 - [x] F1-8 T043 guard walks every `pageProductsByAdminName` caller in `packages/`
   (`admin-name-page-scope.test.ts`).
 - [x] F1-9 T041 — `catalog/src/backend/hidden-product-guard.interceptors.test.ts`: no `phase: 'pre'`
