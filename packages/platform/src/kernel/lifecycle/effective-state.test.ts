@@ -49,6 +49,19 @@ describe('ModuleEffectiveState', () => {
     state = new ModuleEffectiveState(cache);
   });
 
+  describe('onPresenceInstalled', () => {
+    it('tells a listener of every install, with the presence installed readable, until unsubscribed', () => {
+      const seen: boolean[] = [];
+      const off = state.onPresenceInstalled(() => seen.push(state.isPresent('fixture_control')));
+      cache.__setEnabledForTesting(['fixture_control'], { deactivated: ['fixture_control'] });
+      cache.__setEnabledForTesting(['fixture_control']);
+      cache.__setEnabledForTesting(['fixture_control']);
+      off();
+      cache.__setEnabledForTesting([]);
+      expect(seen).toEqual([false, true, true]);
+    });
+  });
+
   describe('the conjunction, across all four axis combinations', () => {
     it('platform available + operator activated ⇒ present', () => {
       cache.__setEnabledForTesting(['fixture_control']);

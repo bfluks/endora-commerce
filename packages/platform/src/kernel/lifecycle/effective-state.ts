@@ -43,6 +43,14 @@ export interface EffectiveModuleState {
    */
   presenceVersion(): number;
   /**
+   * Call `listener` after every presence install in this process — the refresh on a
+   * `b2b:module:state-changed` message, the degraded-mode timer, a test seam. Level-triggered and
+   * synchronous: it fires on every install, not only when presence moved, so a listener must be
+   * idempotent and cheap, and its errors are contained. For a module that has to remember it was
+   * off here (its gated subscribers dropped work meanwhile). Answers the unsubscribe.
+   */
+  onPresenceInstalled(listener: () => void): () => void;
+  /**
    * The module whose activation control is stored under `settingCode`, or
    * `undefined` when the code is an ordinary setting. The settings write path
    * asks this so an activation code cannot be flipped through the generic
@@ -95,6 +103,10 @@ export class ModuleEffectiveState implements EffectiveModuleState {
    */
   isPresent(moduleId: string): boolean {
     return this.cache.isEnabled(moduleId) && this.operatorActivated(moduleId);
+  }
+
+  onPresenceInstalled(listener: () => void): () => void {
+    return this.cache.onPresenceInstalled(listener);
   }
 
   presence(moduleId: string): ModulePresenceState | undefined {
