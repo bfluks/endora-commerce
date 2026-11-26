@@ -338,7 +338,13 @@ export class UrlKeyService {
       const retried = await this.lockAndCheck(em, productId, kept, options);
       return { ...retried, issues: [...issues, ...retried.issues] };
     }
-    const current = conflicts.filter((conflict) => conflict.kind === 'current');
+    // Spec 193 (FR-082, owner ruling 2026-11-26) — to an operator who cannot see it, a key a hidden
+    // product's redirect holds is simply taken: answered with the current holders, never offered
+    // (or, confirmed, given) as a takeover, and named by key and channel only.
+    const redirectHolders = [...new Set(conflicts.filter((conflict) => conflict.kind === 'redirect').map((conflict) => conflict.holderId))];
+    const hiddenRedirectHolders =
+      redirectHolders.length > 0 ? await (options.hidden ?? NO_PRODUCT_HIDDEN)(redirectHolders) : new Set<string>();
+    const current = conflicts.filter((conflict) => conflict.kind === 'current' || hiddenRedirectHolders.has(conflict.holderId));
     if (current.length > 0) {
       const names = await this.#names(em, current.map((conflict) => conflict.holderId));
       const hidden = await (options.hidden ?? NO_PRODUCT_HIDDEN)(current.map((conflict) => conflict.holderId));
@@ -354,7 +360,7 @@ export class UrlKeyService {
       };
       throw new HttpError(409, ERROR_CODES.URL_KEY_TAKEN, 'This URL key is used by another product.', details);
     }
-    const redirectConflicts = conflicts.filter((conflict) => conflict.kind === 'redirect');
+    const redirectConflicts = conflicts.filter((conflict) => conflict.kind === 'redirect' && !hiddenRedirectHolders.has(conflict.holderId));
     const unconfirmed = redirectConflicts.filter((conflict) => !confirm.has(conflict.key));
     if (unconfirmed.length > 0) {
       const names = await this.#names(em, unconfirmed.map((conflict) => conflict.holderId));
