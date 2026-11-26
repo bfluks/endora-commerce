@@ -225,6 +225,7 @@ export function registerModule(ctx: ModuleContext): void {
       processRunsWorkers: cradle.processRunsWorkers,
       moduleQueueRedis: cradle.moduleQueueRedis,
       work: cradle.productVisibilityWebsiteRules,
+      clock: cradle.productVisibilityWebsiteRulesProducer,
       log: ctx.log,
       attach: (worker) => ctx.worker(worker, { logger: app.log }),
       onClose: (close) => app.addHook('onClose', close),

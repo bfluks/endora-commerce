@@ -27,6 +27,13 @@ export const WR_EVALUATE_JOB = 'evaluate';
 export const WR_RECONCILE_JOB = 'reconcile';
 export const WR_EVALUATE_DEBOUNCE_MS = 30_000;
 export const WR_RECONCILE_PATTERN = '41 * * * *';
+/**
+ * An evaluation poll that finds the previous one longer ago than this reconciles first (R-15):
+ * the module was off (its worker paused, its event subscriber silent) or no worker ran, so
+ * changes made meanwhile were never marked.
+ */
+export const WR_REENABLE_GAP_MS = 4 * WR_EVALUATE_DEBOUNCE_MS;
+const LAST_EVALUATION_KEY = 'product_visibility_rules.website_rule:last-evaluation';
 
 const SCOPE_REASON = 'product_visibility_rules: website rule';
 
@@ -37,7 +44,13 @@ export interface WebsiteRuleWork {
   reconcileAll(): Promise<{ changed: number }>;
 }
 
-export interface WebsiteRuleProducer extends WebsiteRuleJobs {
+/** When the evaluation poll last ran, across processes. */
+export interface EvaluationClock {
+  /** Milliseconds since the previous evaluation poll, recording this one; `null` = none recorded. */
+  sinceLastEvaluation(): Promise<number | null>;
+}
+
+export interface WebsiteRuleProducer extends WebsiteRuleJobs, EvaluationClock {
   close(): Promise<void>;
 }
 
@@ -66,6 +79,12 @@ export function createWebsiteRuleProducer(redis: Redis | undefined): WebsiteRule
       const delay = Math.max(0, at.getTime() - Date.now());
       await q()?.add(WR_RECONCILE_JOB, {}, { jobId: `window-${key.replace(/[^A-Za-z0-9_.-]/g, '_')}`, delay });
     },
+    async sinceLastEvaluation() {
+      if (redis === undefined) return null;
+      const now = Date.now();
+      const previous = await redis.getset(LAST_EVALUATION_KEY, String(now));
+      return previous === null ? null : now - Number(previous);
+    },
     async close() {
       await queue?.close();
       queue = undefined;
@@ -74,7 +93,13 @@ export function createWebsiteRuleProducer(redis: Redis | undefined): WebsiteRule
 }
 
 /** What one job does, by its name — exported for the tests, which run it without a queue. */
-export async function runWebsiteRuleJob(name: string, data: { previewId?: string }, work: WebsiteRuleWork, log: PlatformLogger): Promise<void> {
+export async function runWebsiteRuleJob(
+  name: string,
+  data: { previewId?: string },
+  work: WebsiteRuleWork,
+  log: PlatformLogger,
+  clock: EvaluationClock,
+): Promise<void> {
   await enterSystemScope(SCOPE_REASON, async () => {
     if (name === WR_PREVIEW_JOB && data.previewId) return work.runPreview(data.previewId);
     if (name === WR_APPLY_JOB && data.previewId) {
@@ -83,6 +108,11 @@ export async function runWebsiteRuleJob(name: string, data: { previewId?: string
       return;
     }
     if (name === WR_EVALUATE_JOB) {
+      const gap = await clock.sinceLastEvaluation();
+      if (gap === null || gap > WR_REENABLE_GAP_MS) {
+        const reconciled = await work.reconcileAll();
+        log.info({ gapMs: gap, ...reconciled }, 'product_visibility_rules: website rule reconciled after a pause');
+      }
       const result = await work.evaluateMarked();
       if (result.changed > 0) log.info(result, 'product_visibility_rules: website rule re-evaluated marked products');
       return;
@@ -98,6 +128,7 @@ export async function startWebsiteRuleWorker(input: {
   readonly processRunsWorkers: boolean;
   readonly moduleQueueRedis: Redis | undefined;
   readonly work: WebsiteRuleWork;
+  readonly clock: EvaluationClock;
   readonly log: PlatformLogger;
   readonly attach: (worker: Worker) => void;
   readonly onClose: (close: () => Promise<void>) => void;
@@ -105,7 +136,7 @@ export async function startWebsiteRuleWorker(input: {
   if (!input.processRunsWorkers || input.moduleQueueRedis === undefined) return false;
   const worker = new Worker(
     WEBSITE_RULE_QUEUE,
-    (job: Job<{ previewId?: string }>) => runWebsiteRuleJob(job.name, job.data ?? {}, input.work, input.log),
+    (job: Job<{ previewId?: string }>) => runWebsiteRuleJob(job.name, job.data ?? {}, input.work, input.log, input.clock),
     { connection: input.moduleQueueRedis, concurrency: 1 },
   );
   worker.on('failed', (job, err) => {

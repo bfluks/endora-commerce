@@ -453,7 +453,7 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
 - [x] T060 [B] `productRuleGovernancePort` (FR-055) via `ctx.di.providePort`; test
   `PVR/backend/services/product-rule-governance-port.test.ts` (`governedChannels`, `meetsRule`, owner
   off ⇒ 503).
-- [ ] T061 [B] Off-state test `…/off-state.website-rule.test.ts`: no evaluation, jobs left waiting,
+- [x] T061 [B] Off-state test `…/off-state.website-rule.test.ts`: no evaluation, jobs left waiting,
   memberships as last computed; on again ⇒ reconcile enqueued.
 
 **Verification**: `pnpm --filter @endora-commerce/mod-product-visibility-rules exec vitest run src/backend/services/product-rule-evaluator.test.ts src/backend/services/product-rule-governance-port.test.ts`;
