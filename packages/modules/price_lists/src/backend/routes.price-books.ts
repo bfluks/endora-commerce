@@ -31,7 +31,7 @@ import {
   type SettingsAdminPort,
   isUuidShape,
 } from '@endora-commerce/contracts';
-import type { AdminProductVisibilityScope } from '@endora-commerce/contracts';
+import type { AdminProductVisibilityScope, VisibilityPredicate } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { orgConstraintFor } from '@endora-commerce/platform/tenancy';
 import type { CommandBus } from '@endora-commerce/platform/commands';
@@ -66,6 +66,10 @@ export interface PriceBookRoutesDeps {
    * when `product_visibility_rules` is absent).
    */
   productScopeOf(request: FastifyRequest): Promise<AdminProductVisibilityScope>;
+  /** Spec 193 (T053) — the caller's product predicate over `column`, per request. */
+  productPredicateOf(request: FastifyRequest, column: string): Promise<VisibilityPredicate>;
+  /** Spec 193 (T053) — whether the scope does not let the product through (a missing one included). */
+  productHiddenFrom(scope: AdminProductVisibilityScope, productId: string): Promise<boolean>;
   priceBookService: PriceBookService;
   reads: PriceBookReads;
   /** Issue #470 stage 3 — the reader over a book's own price-change history. */
@@ -556,6 +560,12 @@ export async function registerPriceBookRoutes(app: FastifyInstance, deps: PriceB
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Product not found.');
       }
       const query = parseOr400(priceBookHistoryQuerySchema, request.query);
+      // Spec 193 (T053, FR-084) — a product hidden from the caller has, to them, no history: the
+      // answer a product with none gets, after the book is read through its scope.
+      if (await deps.productHiddenFrom(await deps.productScopeOf(request), request.params.productId)) {
+        await deps.reads.header(request.params.id, scope);
+        return { data: [], pagination: { cursor: null, hasMore: false, limit: query.limit } };
+      }
       return deps.history.productLines(request.params.id, request.params.productId, query, scope);
     },
   );
@@ -571,7 +581,13 @@ export async function registerPriceBookRoutes(app: FastifyInstance, deps: PriceB
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Price change not found.');
       }
       const query = parseOr400(priceBookHistoryQuerySchema, request.query);
-      return deps.history.lines(request.params.id, request.params.changeId, query, scope);
+      return deps.history.lines(
+        request.params.id,
+        request.params.changeId,
+        query,
+        scope,
+        await deps.productPredicateOf(request, '"l"."product_id"'),
+      );
     },
   );
 

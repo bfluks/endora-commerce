@@ -34,6 +34,7 @@ import { registerStorefrontPricingRoutes } from './routes.storefront.js';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { RequireAdminFactory, SettingsReadPort } from '@endora-commerce/platform/kernel';
 import { SYSTEM_PRODUCT_SCOPE, type PriceBookProductVisibility } from './services/admin-product-visibility.js';
+import type { AdminProductVisibilityScope } from '@endora-commerce/contracts';
 import {
   effectiveState,
   enterSystemScope,
@@ -333,11 +334,19 @@ export function priceListsModule(options: PriceListsModuleOptions): {
     },
     plugin: async (app: FastifyInstance) => {
       await registerPricingRoutes(app, { priceListService, requireAdmin: options.requireAdmin });
+      // Spec 193 — the caller's admin product visibility, per request (system without the wiring).
+      const productScopeOf = async (request: FastifyRequest): Promise<AdminProductVisibilityScope> =>
+        options.productVisibility && options.resolveAdminUserId
+          ? options.productVisibility.scopeFor(options.resolveAdminUserId(request))
+          : SYSTEM_PRODUCT_SCOPE;
       await registerPriceBookRoutes(app, {
-        productScopeOf: async (request) =>
-          options.productVisibility && options.resolveAdminUserId
-            ? options.productVisibility.scopeFor(options.resolveAdminUserId(request))
-            : SYSTEM_PRODUCT_SCOPE,
+        productScopeOf,
+        productPredicateOf: async (request, column) =>
+          options.productVisibility
+            ? options.productVisibility.productPredicate(await productScopeOf(request), column)
+            : { kind: 'none' },
+        productHiddenFrom: async (scope, productId) =>
+          options.productVisibility ? options.productVisibility.productHidden(scope, productId) : false,
         priceBookService,
         reads: priceBookReads,
         history: priceBookHistory,

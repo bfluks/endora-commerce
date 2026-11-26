@@ -1,3 +1,4 @@
+import type { VisibilityPredicate } from '@endora-commerce/contracts';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { z } from 'zod';
 import {
@@ -136,6 +137,18 @@ function priceOf(type: string | null, amount: string | null, percent: string | n
   return null;
 }
 
+/** Spec 193 — a line naming no product is always kept; one naming a product, only when visible. */
+function lineVisibility(visible: VisibilityPredicate): { sql: string; params: unknown[] } {
+  switch (visible.kind) {
+    case 'none':
+      return { sql: '', params: [] };
+    case 'deny':
+      return { sql: ' and l."product_id" is null', params: [] };
+    case 'sql':
+      return { sql: ` and (l."product_id" is null or (${visible.fragment.sql}))`, params: [...visible.fragment.params] };
+  }
+}
+
 function lineOf(row: LineRow): PriceBookHistoryLine {
   return {
     seq: Number(row.seq),
@@ -236,6 +249,12 @@ export class PriceBookHistory {
     changeId: string,
     query: PriceBookHistoryQuery,
     scope: PriceBookScope,
+    /**
+     * Spec 193 (T053, FR-084) — the caller's admin product visibility over `"l"."product_id"`: a
+     * line naming a product hidden from them is left out, in the statement that pages; a line
+     * naming no product (category, attribute, all) is kept.
+     */
+    visible: VisibilityPredicate,
   ): Promise<PriceBookHistoryLinesResponse> {
     await this.deps.reads.header(bookId, scope);
     const after = readCursor(lineCursor, query.cursor);
@@ -248,10 +267,10 @@ export class PriceBookHistory {
     const rows = (await em.execute(
       `select ${LINE_COLUMNS}
          from "price_list_row_value_changes" l
-        where l."change_id" = ? and l."price_list_id" = ? ${after ? 'and l."seq" > ?' : ''}
+        where l."change_id" = ? and l."price_list_id" = ? ${after ? 'and l."seq" > ?' : ''}${lineVisibility(visible).sql}
         order by l."seq"
         limit ?`,
-      [changeId, bookId, ...(after ? [after.seq] : []), query.limit + 1],
+      [changeId, bookId, ...(after ? [after.seq] : []), ...lineVisibility(visible).params, query.limit + 1],
     )) as LineRow[];
     const page = rows.slice(0, query.limit);
     const last = page[page.length - 1];
