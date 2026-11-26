@@ -690,6 +690,17 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   — until the rule admits it, or after the rule removed it from its only channel. It is never moved
   to a default channel instead. Outside governed channels the "at least one channel" floor holds as
   today (FR-059).
+- **URL key held by a hidden product's redirect** (owner ruling 2026-11-26): for a restricted user
+  the key is simply taken — `URL_KEY_TAKEN` by key and channel, exactly as a key a hidden product
+  holds as its current key; no takeover is offered, and a `confirmTakeover` naming the key is
+  refused the same way, without naming the holder (FR-082). Unrestricted users keep the takeover.
+- **Accepted row-write oracles** (checkpoint 1): a restricted user's price-book rows write (or its
+  dry run) is refused or reported with `PRICE_BOOK_ROW_LIMIT` counting every row of the book, hidden
+  ones included, and with `PRICE_BOOK_ROW_OVERLAP` for a row that overlaps a hidden product's row
+  (without naming that row, FR-082). Both tell the writer that rows they cannot list exist; they are accepted, like the bare
+  SKU / URL-key "already taken" answer (FR-082), because the writes stay accepted on hidden
+  products (FR-038) and the alternative would let the book exceed its limit or hold overlapping
+  rows.
 - **Feature off**: see FR-073.
 
 ## Requirements *(mandatory)*
@@ -964,20 +975,25 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   name a product hidden from them other than the one they addressed (OQ-E; threat model TM-2).
 - **FR-083**: The inventory admin lists (stock list, levels, low stock, the legacy list and
   availability notifications) MUST contain only products visible to a restricted user, with counts
-  and paging of what they can see (OQ-H).
+  and paging of what they can see (OQ-H). This includes the warehouse totals (`GET /warehouses`
+  and `GET /warehouses/:id`, `products` and `onHand`; checkpoint 1): they sum only the stock levels
+  of products the user can see.
 - **FR-084**: A restricted user's read of a hidden product's price history MUST answer as for a
   product that does not exist; the lines of a price change MUST leave out products hidden from the
   user. Price-book row writes stay accepted (FR-038); price-book row reads are covered by the price
   book grid narrowing (FR-030) (OQ-H).
 - **FR-085**: Products export and products import through `import_export` MUST be refused with `403`
   for a restricted user. This is a refusal of the operation for the user's scope, not a per-product
-  answer, so FR-033's "absent, never forbidden" does not apply to it (OQ-H).
+  answer, so FR-033's "absent, never forbidden" does not apply to it (OQ-H). The stock CSV export
+  and import (`stock` entity: product SKU, variant, on hand) are refused the same way (owner ruling
+  2026-11-26, checkpoint 1): a whole-catalogue file of product-keyed rows. A user with no category
+  (FR-023) is refused too; with the feature off, nobody is.
 - **FR-086**: The audit log and admin notifications that name products are accepted as they are (not
   narrowed); the feature's configuration overview MUST warn when a role mapped to a category (or
   fail-closed) holds `audit_logs:read` (OQ-H). This is the only permission warning: the threat
   model's further warnings for `import_export:*` and `inventory:read` are not needed, because the
-  products import and export are refused (FR-085) and the inventory lists are narrowed (FR-083) for
-  restricted users.
+  products and stock CSV imports and exports are refused (FR-085) and the inventory lists, the
+  warehouse totals included, are narrowed (FR-083) for restricted users.
 - **FR-087**: Product feeds and the product inputs and references of CMS, blog, CRM, projects and
   tasks (for example mentions and opportunity links) are accepted as they are, not narrowed
   (FR-038; OQ-H; client analyze N4). Creating an order or a quote from such a module (for example
@@ -1036,8 +1052,14 @@ storefront listing, type-ahead, search and product URL within 5 minutes.
   write with `mode: 'replace'` from a restricted user, "rows not in the file are deleted" MUST apply
   only to rows of visible products; rows of hidden products are kept unchanged. Merge, upsert by id
   and explicit `delete` stay unrestricted (FR-038). Neither the export's counts nor a dry-run's
-  answer MAY reveal how many rows were kept hidden. Unrestricted users, and every user while the
-  feature is off, behave exactly as today.
+  answer MAY reveal how many rows were kept hidden. The same holds for every other number a book
+  publishes (owner ruling 2026-11-26, checkpoint 1): the book header's and the book list's
+  `rowCount` and `tierStarts`, and a price-history entry's `lineCount`, are recomputed over the
+  rows (lines) the restricted user can list — the same rule as the export, so a header never counts
+  more rows than the export lists, a tier only hidden rows start is not published, and an entry's
+  `lineCount` equals what its lines read lists to them. A book a restricted user duplicates is
+  copied with all its rows (FR-038), and its counts follow the same rule. Unrestricted users, and
+  every user while the feature is off, behave exactly as today.
 
 ### Key Entities
 

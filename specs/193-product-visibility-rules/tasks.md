@@ -434,7 +434,7 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   one nesting level, boolean / choice / price conditions, missing value ⇒ not met (FR-057), inactive /
   archived / deleted never member (FR-079); **TM-11**: an attribute deleted or re-scoped after save evaluates
   "not met"; no definition value reaches SQL or a JSON path.
-- [ ] T056 [P] [B] Failing integration tests `BT/integration/product_visibility_rules/website-rule.test.ts`:
+- [x] T056 [P] [B] Failing integration tests `BT/integration/product_visibility_rules/website-rule.test.ts`:
   attach requires preview (FR-053); counts per channel; confirm applies **exactly** the snapshot
   (SC-004); stale preview refused; second rule on a channel refused, one rule on two channels (US4-7);
   detach leaves membership and deletes the channel's `website_rule_admissions` rows (FR-058); no rule ⇒ membership unchanged on install/enable (US4-1, FR-052);
@@ -444,6 +444,8 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   created the preview ⇒ not found; per-admin cap on concurrent previews (3) and a size cap on
   `website_rule_preview_changes` (2 000 000 rows) ⇒ `409 WEBSITE_RULE_PREVIEW_LIMIT`; Zod bounds on `sales_channel_ids` (≤ 50),
   conditions (≤ 20), option keys (≤ 100), string lengths, under the route `bodyLimit`.
+  *(Checkpoint 1 fix round F1, 2026-11-26: the file exists and passes — 19/19, run alone on a
+  fresh database; ticked late, the box had not followed the tree.)*
 - [x] T057 [B] `PVR/backend/services/product-rule-evaluator.ts` (pure, re-validates attribute keys at
   evaluation) + rule Commands and routes (create/update/delete; attribute validation through
   `catalogAttributeReadPort`).
@@ -597,6 +599,21 @@ checks the **ungated** backend FRs — FR-001 – FR-036, FR-038, FR-050 – FR-
 FR-075, FR-077 – FR-088, FR-092, FR-093 — traceability (M5, L6; FR-074 and FR-076 are UI strings and
 the activation text, accepted at checkpoint 2). FR-037, FR-039 – FR-043, FR-090, FR-091 are gated on spec 192 and
 are reviewed at checkpoint 3 only. Gate: findings closed before Phase 8.
+
+### Checkpoint 1 fix round — F1
+
+Owner rulings and coordinator decisions of 2026-11-26 (catalog, price_lists, inventory,
+import_export, contracts, spec).
+
+- [x] F1-1 Price-book header and list `rowCount` / `tierStarts` and a price-history entry's
+  `lineCount` recounted over the rows a narrowed admin can list (FR-094 amended);
+  `BT/integration/price_lists/book-header-count-visibility.test.ts` (the two `it.fails` flipped;
+  tier starts, history and duplicate cases added).
+- [x] F1-2 Stock CSV export and import refused `403` to a restricted or no-category admin (FR-085,
+  FR-086 amended); `BT/integration/import_export/stock-csv-visibility.test.ts` (module-off case
+  included).
+- [x] F1-3 A URL key held by a hidden product's redirect is taken for a narrowed operator, no
+  takeover (Edge Cases); `BT/integration/catalog/url-key-takeover-visibility.test.ts`.
 
 ---
 
