@@ -394,7 +394,7 @@ Accepted rows of the signed-off table (inventory writes by id, price-book row wr
 notifications, feeds, CMS / blog / CRM / tasks — FR-086, FR-087) have no task here; they go into the
 FR-088 docs table (T094).
 
-- [ ] T051 [P] [A] Failing tests `BT/integration/product_visibility_rules/other-admin-reads.test.ts`,
+- [x] T051 [P] [A] Failing tests `BT/integration/product_visibility_rules/other-admin-reads.test.ts`,
   one block per narrowed / refused row: inventory admin lists with counts and paging (FR-083) and the
   set-stock assistant tool (FR-081), price history by product and change lines (FR-084), products
   export / import `403` (FR-085). **SC-009** sweep test `BT/integration/product_visibility_rules/sc-009-surfaces.test.ts`:
@@ -402,7 +402,7 @@ FR-088 docs table (T094).
   no error answer names a hidden product (FR-082) — reuses the fixtures of T045, T046, T048.
   **Off state (M3)**: `BT/integration/product_visibility_rules/off-state.other-admin-reads.test.ts` —
   module off ⇒ every 5c surface identical to module-absent (no narrowing, no `403`).
-  *Build state (wip)*: `other-admin-reads.test.ts` holds the price-history block (green with T053); the export/import block (FR-085, with T054) is green; the inventory block (FR-083 + set-stock tool, with T052) is `it.todo`. `sc-009-surfaces.test.ts` and `off-state.other-admin-reads.test.ts` are **not written**.
+  *Build note*: `other-admin-reads.test.ts` holds the price-history block (T053), the export/import block (FR-085, T054) and the inventory block (FR-083 + the set-stock tool; committed red, then green with T052). `sc-009-surfaces.test.ts` sweeps every FR-080 – FR-085 surface and the FR-094 row export over one fixture (reads clean of hidden ids, SKUs and names, with a non-vacuity check on the administrator's answers; error answers; assistant tools); `off-state.other-admin-reads.test.ts` holds every 5c surface plus the row export equal to the platform administrator's on both off axes. Both were green on their first run: every surface they sweep was built, red first, in T045 – T054 and T102.
 - [x] T052 [A] `inventory` (`packages/modules/inventory/src/backend/routes.admin.ts:124-615`,
   `prompt-tools.ts:86-101`): admin lists narrowed through the port (product predicate on its product
   column); the set-stock tool resolves the product through the scoped lookup (hidden ⇒ not found);
@@ -422,6 +422,7 @@ FR-088 docs table (T094).
 **Verification (5c)**: `pnpm --filter backend exec vitest run test/integration/product_visibility_rules/other-admin-reads.test.ts test/integration/product_visibility_rules/sc-009-surfaces.test.ts test/integration/product_visibility_rules/off-state.other-admin-reads.test.ts test/integration/inventory test/integration/import_export`;
 `pnpm --filter @endora-commerce/mod-import-export exec vitest run src/backend/services/adapters/products.adapter.test.ts`;
 `pnpm --filter backend run check:port-dependencies && pnpm --filter backend run check:port-catches`.
+*Run 2026-11-26* (with T102): all green — the three `product_visibility_rules` files 17/17, `test/integration/inventory` 13 files, `test/integration/import_export` 72/72, `products.adapter.test.ts` 50/50, both checks clean.
 
 ---
 
