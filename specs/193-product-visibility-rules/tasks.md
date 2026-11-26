@@ -632,6 +632,24 @@ import_export, contracts, spec).
 - [x] F1-12 QA G3 — `off-state.catalog-references.test.ts` (FR-080 grouped / bundle, FR-082 holder
   naming, redirect takeover, FR-094 header count, with the module off).
 
+### Checkpoint 1 fix round — F2
+
+- [x] F2-1 Governor enlisted in the caller's transaction: token write audits through `recordWithin`
+  and defers the cache drop through `afterScope`; refuse and skip leave nothing (unit tests).
+- [x] F2-2 The container holds a frozen register-only governor facade, not the registry (both
+  composition roots). The caller's module id is not checked: the contribution is one platform-wide value.
+- [x] F2-3 Channel delete onto a governed default: no orphan count in details or sentences; a
+  composition without the membership port fails closed. `for share` on the attachment row: not done
+  (needs a new port method; the hourly reconcile covers the race).
+- [x] F2-4 Reconcile after a presence change (an epoch every process bumps on a presence transition,
+  through the new `effectiveState.onPresenceInstalled`), not after a worker stall.
+- [x] F2-5 `governedChannels()` resolves channels in one `listAll`; `governingFor(channelId)` for the
+  single-channel questions and the deleted-channel sweep uses the batch.
+- [x] F2-6 A channel delete's `sales_channels.lifecycle_changed` is pinned on the emitting side.
+- [x] F2-7 `WebsiteRuleService.limits` frozen at composition; tests use `withLimits`.
+- [x] F2-8 Bridge-writer ledger scans `backend/src` and any `${….table}` write (no new writer).
+- [x] F2-9 Task-id prefixes dropped from this spec's comments in the owned packages.
+
 ---
 
 ## Phase 8 — Admin UI (US2, US4, FR-023 banner, FR-024, FR-071, FR-074; TM-4, TM-13, TM-14)
