@@ -1293,7 +1293,7 @@ export function registerModule(ctx: ModuleContext): void {
         return {
           listForAdmin: (sourceProductId, kind) => links.listForAdmin(sourceProductId, kind, NO_PRODUCT_HIDDEN),
           bulkCreate: (sourceProductId, inputs) => links.bulkCreate(sourceProductId, inputs, NO_PRODUCT_HIDDEN),
-          removeLink: (sourceProductId, linkId) => links.removeLink(sourceProductId, linkId),
+          removeLink: (sourceProductId, linkId) => links.removeLink(sourceProductId, linkId, NO_PRODUCT_HIDDEN),
         };
       })
       .singleton(),
@@ -1308,8 +1308,8 @@ export function registerModule(ctx: ModuleContext): void {
         return {
           list: (parentProductId) => grouped.list(parentProductId, NO_PRODUCT_HIDDEN),
           addItem: (parentProductId, input) => grouped.addItem(parentProductId, input, NO_PRODUCT_HIDDEN),
-          updateItem: (parentProductId, itemId, input) => grouped.updateItem(parentProductId, itemId, input),
-          removeItem: (parentProductId, itemId) => grouped.removeItem(parentProductId, itemId),
+          updateItem: (parentProductId, itemId, input) => grouped.updateItem(parentProductId, itemId, input, NO_PRODUCT_HIDDEN),
+          removeItem: (parentProductId, itemId) => grouped.removeItem(parentProductId, itemId, NO_PRODUCT_HIDDEN),
         };
       })
       .singleton(),
@@ -1327,7 +1327,8 @@ export function registerModule(ctx: ModuleContext): void {
           updateSlot: (parentProductId, slotId, input) => bundles.updateSlot(parentProductId, slotId, input),
           deleteSlot: (parentProductId, slotId) => bundles.deleteSlot(parentProductId, slotId),
           addOption: (parentProductId, slotId, input) => bundles.addOption(parentProductId, slotId, input, NO_PRODUCT_HIDDEN),
-          removeOption: (parentProductId, slotId, optionId) => bundles.removeOption(parentProductId, slotId, optionId),
+          removeOption: (parentProductId, slotId, optionId) =>
+            bundles.removeOption(parentProductId, slotId, optionId, NO_PRODUCT_HIDDEN),
         };
       })
       .singleton(),

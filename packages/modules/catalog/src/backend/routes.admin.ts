@@ -1859,7 +1859,7 @@ export async function registerCatalogAdminRoutes(
       '/api/v1/admin/catalog/products/:id/links/:linkId',
       { preHandler: requireAdmin('catalog:write') },
       async (request, reply) => {
-        await links.removeLink(request.params.id, request.params.linkId);
+        await links.removeLink(request.params.id, request.params.linkId, hiddenFor(request));
         await auditEmit(request, {
           action: 'product_link.delete',
           objectType: 'product_link',
@@ -1886,7 +1886,7 @@ export async function registerCatalogAdminRoutes(
             `Link "${body.linkIds[0]}" is not part of (${request.params.id}, ${kind}).`,
           );
         }
-        await links.reorderForKind(request.params.id, kind, body.linkIds);
+        await links.reorderForKind(request.params.id, kind, body.linkIds, hiddenFor(request));
         await auditEmit(request, {
           action: 'product_link.reorder',
           objectType: 'product',
@@ -1959,6 +1959,7 @@ export async function registerCatalogAdminRoutes(
             ...(body.quantity !== undefined ? { quantity: body.quantity } : {}),
             ...(body.position !== undefined ? { position: body.position } : {}),
           },
+          hiddenFor(request),
         );
         await auditEmit(request, {
           action: 'grouped_item.update',
@@ -1973,7 +1974,7 @@ export async function registerCatalogAdminRoutes(
       '/api/v1/admin/catalog/products/:id/grouped-items/:itemId',
       { preHandler: requireAdmin('catalog:write') },
       async (request, reply) => {
-        await grouped.removeItem(request.params.id, request.params.itemId);
+        await grouped.removeItem(request.params.id, request.params.itemId, hiddenFor(request));
         await auditEmit(request, {
           action: 'grouped_item.delete',
           objectType: 'grouped_item',
@@ -2101,11 +2102,7 @@ export async function registerCatalogAdminRoutes(
       '/api/v1/admin/catalog/products/:id/bundle-slots/:slotId/options/:optionId',
       { preHandler: requireAdmin('catalog:write') },
       async (request, reply) => {
-        await bundle.removeOption(
-          request.params.id,
-          request.params.slotId,
-          request.params.optionId,
-        );
+        await bundle.removeOption(request.params.id, request.params.slotId, request.params.optionId, hiddenFor(request));
         await auditEmit(request, {
           action: 'bundle_slot_option.delete',
           objectType: 'bundle_slot_option',

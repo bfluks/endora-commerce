@@ -349,6 +349,8 @@ export class BundleService {
     parentProductId: string,
     slotId: string,
     optionId: string,
+    /** Spec 193 (FR-080) — an option hidden from the caller is an option not found. */
+    hidden: HiddenProducts,
   ): Promise<void> {
     await this.#audited('bundle_option.remove', optionId, async (em) => {
       await this.assertBundleParent(em, parentProductId);
@@ -360,7 +362,7 @@ export class BundleService {
         );
       }
       const opt = await em.findOne(BundleSlotOption, { id: optionId, slotId });
-      if (!opt) {
+      if (!opt || (await hidden([opt.optionProductId])).has(opt.optionProductId)) {
         throw new HttpError(
           404,
           ERROR_CODES.BUNDLE_SLOT_OPTION_NOT_FOUND,

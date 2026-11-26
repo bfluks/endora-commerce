@@ -339,7 +339,8 @@ export class ProductLinkService {
     }));
   }
 
-  async removeLink(sourceProductId: string, linkId: string): Promise<void> {
+  /** Spec 193 (FR-080) — a link to a target hidden from the caller (`hidden`) is a link not found. */
+  async removeLink(sourceProductId: string, linkId: string, hidden: HiddenProducts): Promise<void> {
     await this.#audited('product_link.delete', linkId, async (em) => {
       if (!isUuidShape(linkId) || !isUuidShape(sourceProductId)) {
         throw new HttpError(
@@ -349,7 +350,7 @@ export class ProductLinkService {
         );
       }
       const link = await em.findOne(ProductLink, { id: linkId, sourceProductId });
-      if (!link) {
+      if (!link || (await hidden([link.targetProductId])).has(link.targetProductId)) {
         throw new HttpError(
           404,
           ERROR_CODES.PRODUCT_LINK_NOT_FOUND,
@@ -486,11 +487,15 @@ export class ProductLinkService {
     sourceProductId: string,
     kind: ProductLinkKind,
     linkIds: string[],
+    /** Spec 193 (FR-080) — a link to a target hidden from the caller is not part of the set. */
+    hidden: HiddenProducts,
   ): Promise<void> {
     await this.#audited('product_link.reorder', sourceProductId, async (em) => {
       // Fetch all links of this (source, kind) so we can validate the input
       // covers exactly that set.
-      const rows = await em.find(ProductLink, { sourceProductId, kind });
+      const all = await em.find(ProductLink, { sourceProductId, kind });
+      const hiddenTargets = await hidden([...new Set(all.map((r) => r.targetProductId))]);
+      const rows = all.filter((r) => !hiddenTargets.has(r.targetProductId));
       const byId = new Map(rows.map((r) => [r.id, r]));
       for (const id of linkIds) {
         if (!byId.has(id)) {

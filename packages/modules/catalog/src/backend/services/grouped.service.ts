@@ -154,6 +154,8 @@ export class GroupedService {
     parentProductId: string,
     itemId: string,
     input: { quantity?: number | undefined; position?: number | undefined },
+    /** Spec 193 (FR-080) — an item whose child is hidden from the caller is an item not found. */
+    hidden: HiddenProducts,
   ): Promise<GroupedItemRow> {
     const row = await this.#audited('grouped_item.update', itemId, async (em) => {
       await this.assertGroupedParent(em, parentProductId);
@@ -165,7 +167,7 @@ export class GroupedService {
         );
       }
       const r = await em.findOne(GroupedItem, { id: itemId, parentProductId });
-      if (!r) {
+      if (!r || (await hidden([r.childProductId])).has(r.childProductId)) {
         throw new HttpError(
           404,
           ERROR_CODES.GROUPED_ITEM_NOT_FOUND,
@@ -185,7 +187,8 @@ export class GroupedService {
     return this.toRow(row);
   }
 
-  async removeItem(parentProductId: string, itemId: string): Promise<void> {
+  /** Spec 193 (FR-080) — an item whose child is hidden from the caller is an item not found. */
+  async removeItem(parentProductId: string, itemId: string, hidden: HiddenProducts): Promise<void> {
     await this.#audited('grouped_item.delete', itemId, async (em) => {
       await this.assertGroupedParent(em, parentProductId);
       if (!isUuidShape(itemId) || !isUuidShape(parentProductId)) {
@@ -196,7 +199,7 @@ export class GroupedService {
         );
       }
       const row = await em.findOne(GroupedItem, { id: itemId, parentProductId });
-      if (!row) {
+      if (!row || (await hidden([row.childProductId])).has(row.childProductId)) {
         throw new HttpError(
           404,
           ERROR_CODES.GROUPED_ITEM_NOT_FOUND,

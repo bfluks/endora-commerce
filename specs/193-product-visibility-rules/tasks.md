@@ -325,7 +325,7 @@ Stream A owns `packages/modules/catalog/**` and `PL/backend/services/price-book-
 - [x] T045 [A] FR-080 (OQ-D A): links / grouped items / bundle options omit hidden
   targets for restricted callers; adding a hidden target answers target-not-found. Test
   `BT/integration/catalog/visibility-cross-references.test.ts`.
-  *Open*: update / remove / reorder of an existing link, grouped item or bundle option whose target is hidden are not guarded (the restricted caller never sees its id).
+  *Build note*: an existing link, grouped item or bundle option whose target is hidden answers its route's own not-found on update / remove / reorder and is not changed.
 - [ ] T046 [A] FR-082, **TM-2**: `URL_KEY_TAKEN` (`CAT/backend/services/url-key.service.ts:324-337`) and the
   integration-mode issues (`:309-316`) drop `heldByProductId` / `heldByProductName` when the holder is
   hidden from the caller (key and channel only); sweep every `HttpError` message and `details` in
