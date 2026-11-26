@@ -498,13 +498,13 @@ export class SalesChannelsService {
     // pairs that would have zero memberships if this channel were removed.
     const orphans = await this.findOrphansForChannel(em, channel.id);
     if (orphans.length > 0 && !options.fallbackToDefault) {
-      // A count per entity type, never an id (FR-082): an id here could name a product
-      // the caller's visibility scope hides.
+      // Never an id, and never a product count (FR-082): the orphans may include products the
+      // caller's visibility scope hides. Other entity types keep their count.
       throw new HttpError(
         422,
         ERROR_CODES.ENTITY_WOULD_HAVE_ZERO_CHANNELS,
-        `Deleting sales channel "${channel.code}" would orphan ${orphans.length} channel-scoped ` +
-          `entity(ies). Pass fallbackToDefault=true to rebind them to the system default.`,
+        `Deleting sales channel "${channel.code}" would orphan channel-scoped entities. ` +
+          `Pass fallbackToDefault=true to rebind them to the system default.`,
         orphanCounts(orphans),
       );
     }
@@ -798,8 +798,9 @@ function dictionaryReferenceHttpError(err: DictionaryReferenceError, field: stri
 }
 
 /** How many orphans of each entity type a channel delete would leave — counts, never ids. */
+/** Orphans per entity type: a count, except for products, which are only named (FR-082). */
 function orphanCounts(orphans: ReadonlyArray<{ entityType: string }>): Array<{ path: string; issue: string }> {
   const counts = new Map<string, number>();
   for (const o of orphans) counts.set(o.entityType, (counts.get(o.entityType) ?? 0) + 1);
-  return [...counts].map(([entityType, count]) => ({ path: entityType, issue: String(count) }));
+  return [...counts].map(([entityType, count]) => ({ path: entityType, issue: entityType === 'product' ? 'orphaned' : String(count) }));
 }
