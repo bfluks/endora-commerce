@@ -403,11 +403,11 @@ FR-088 docs table (T094).
   **Off state (M3)**: `BT/integration/product_visibility_rules/off-state.other-admin-reads.test.ts` —
   module off ⇒ every 5c surface identical to module-absent (no narrowing, no `403`).
   *Build state (wip)*: `other-admin-reads.test.ts` holds the price-history block (green with T053); the export/import block (FR-085, with T054) is green; the inventory block (FR-083 + set-stock tool, with T052) is `it.todo`. `sc-009-surfaces.test.ts` and `off-state.other-admin-reads.test.ts` are **not written**.
-- [ ] T052 [A] `inventory` (`packages/modules/inventory/src/backend/routes.admin.ts:124-615`,
+- [x] T052 [A] `inventory` (`packages/modules/inventory/src/backend/routes.admin.ts:124-615`,
   `prompt-tools.ts:86-101`): admin lists narrowed through the port (product predicate on its product
   column); the set-stock tool resolves the product through the scoped lookup (hidden ⇒ not found);
   `inventory/manifest.ts` `degrades-without` entry.
-  *Build state*: **not started**.
+  *Build note*: `inventory/backend/services/admin-product-visibility.ts` is the module's adapter (presence probed in `index.ts`, absent = system scope). The landing KPIs, `/levels`, `/low-stock`, `/legacy` and `/availability-notifications` embed the caller's `productPredicate` in their statements (counts, totals and pages included; `deny` answers empty without a statement); a scope that narrows nothing leaves each statement as before. The set-stock tool answers a hidden product with the missing product's `404 PRODUCT_NOT_FOUND` in preview and again at execution, writing nothing. Writes by product id (`PUT /levels`, thresholds, import) stay unrestricted (FR-038).
 - [x] T053 [A] `price_lists` price history (`PL/backend/routes.price-books.ts:536-567`):
   `…/price-history/products/:productId` answers as absent for a hidden product; `…/:changeId/lines`
   drops hidden products' lines. Row **edits** stay unrestricted (FR-038).

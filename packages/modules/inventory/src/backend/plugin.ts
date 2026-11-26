@@ -12,6 +12,7 @@ import { ThresholdAdminService } from './services/threshold-admin-service.js';
 import { LowStockAlertService, type InventoryTemplateEmailPort } from './services/low-stock-alert-service.js';
 import { registerInventoryRoutes } from './routes.js';
 import { registerInventoryAdminRoutes } from './routes.admin.js';
+import type { InventoryProductVisibility } from './services/admin-product-visibility.js';
 import type { SalesChannelResolutionPort } from '@endora-commerce/platform/kernel';
 import type { SettingsReadPort } from '@endora-commerce/platform/kernel';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
@@ -54,6 +55,14 @@ export interface InventoryModuleOptions {
   catalogCategories: CatalogCategoryReadPort;
   catalogCategoryWrites: CatalogCategoryWritePort;
   customerAccounts: CustomerAccountReadPort;
+  /**
+   * Spec 193 (T052, FR-083) — `product_visibility_rules`' scope for the admin
+   * stock lists, presence-decided by the wiring (`degrades-without`). Absent
+   * (fixtures), the lists are not narrowed.
+   */
+  productVisibility?: InventoryProductVisibility;
+  /** Spec 193 — the acting administrator of an admin request, for {@link productVisibility}. */
+  resolveAdminUserId?: (req: FastifyRequest) => string;
   /**
    * `catalogProductAvailabilityPort`, owned by `catalog` (feature 163) — the
    * notify-when-available seam and the storefront stock figure answer only
@@ -243,6 +252,9 @@ export function inventoryModule(options: InventoryModuleOptions): InventoryModul
         requireAdmin: options.requireAdmin,
         ...(options.resolveAdminAuditContext
           ? { resolveAdminAuditContext: options.resolveAdminAuditContext }
+          : {}),
+        ...(options.productVisibility && options.resolveAdminUserId
+          ? { productVisibility: options.productVisibility, resolveAdminUserId: options.resolveAdminUserId }
           : {}),
       });
     }

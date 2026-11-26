@@ -13,6 +13,8 @@ import {
   isUuidShape,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
+import type { VisibilityPredicate } from '@endora-commerce/contracts';
+import { NO_PRODUCT_PREDICATE, productClause } from './admin-product-visibility.js';
 import { currentSalesChannel } from '@endora-commerce/platform/kernel';
 import { AvailabilityNotification } from '../entities/availability-notification.entity.js';
 import { StockLevel } from '../entities/stock-level.entity.js';
@@ -55,6 +57,8 @@ export interface AdminListFilter {
   status?: 'queued' | 'notified' | 'cancelled';
   page?: number;
   pageSize?: number;
+  /** Spec 193 (T052, FR-083) — the caller's product predicate over `"n"."product_id"`. */
+  visible?: VisibilityPredicate;
 }
 
 export interface AdminListRow {
@@ -377,11 +381,24 @@ export class AvailabilityNotificationService {
     if (filter.productId) where['productId'] = filter.productId;
     if (filter.status) where['status'] = filter.status;
 
-    const [rows, total] = await em.findAndCount(AvailabilityNotification, where, {
-      orderBy: { requestedAt: 'desc', id: 'desc' },
-      offset: page * pageSize,
-      limit: pageSize,
-    });
+    // Spec 193 (T052, FR-083) — the caller's product predicate over `"n"."product_id"`: the
+    // queue, its total and its pages are of the products it lets through.
+    const visible = productClause(filter.visible ?? NO_PRODUCT_PREDICATE);
+    if (visible === false) return { items: [], page, pageSize, total: 0 };
+    const [rows, total] = visible
+      ? await em
+          .createQueryBuilder(AvailabilityNotification, 'n')
+          .where(where)
+          .andWhere(visible.sql, visible.params)
+          .orderBy({ requestedAt: 'desc', id: 'desc' })
+          .offset(page * pageSize)
+          .limit(pageSize)
+          .getResultAndCount()
+      : await em.findAndCount(AvailabilityNotification, where, {
+          orderBy: { requestedAt: 'desc', id: 'desc' },
+          offset: page * pageSize,
+          limit: pageSize,
+        });
     if (rows.length === 0) return { items: [], page, pageSize, total };
 
     const productIds = Array.from(new Set(rows.map((r) => r.productId)));

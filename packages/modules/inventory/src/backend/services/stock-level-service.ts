@@ -10,6 +10,8 @@ import type { EventBus } from '@endora-commerce/platform/events';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { InventoryAuditContext } from '../plugin.js';
 import { isUuidShape } from '@endora-commerce/contracts';
+import type { VisibilityPredicate } from '@endora-commerce/contracts';
+import { NO_PRODUCT_PREDICATE, clauseSql, productClause } from './admin-product-visibility.js';
 
 export interface InventoryAdjustedEvent {
   eventId: string;
@@ -107,31 +109,39 @@ export class StockLevelService {
     private readonly auditLog?: AuditPort,
   ) {}
 
-  async listLandingKpis(): Promise<InventoryLandingKpis> {
+  /**
+   * Spec 193 (T052, FR-083) — `visible` is the caller's product predicate over
+   * `"sl"."product_id"`: every count and total is of the products it lets through.
+   */
+  async listLandingKpis(visible: VisibilityPredicate = NO_PRODUCT_PREDICATE): Promise<InventoryLandingKpis> {
     const em = this.emFactory();
+    const only = clauseSql(visible, 'where');
+    const joined = clauseSql(visible, 'and');
 
     // `em.execute`, not `em.getKnex()`: a knex handle takes its own pooled
     // connection, so every KPI here would answer from outside a transaction the
     // caller holds open while the port reads below answer from inside it —
     // one screen, two views of the same rows (issue #207).
     const [productsTracked, totalOnHandRow, perWarehouse] = await Promise.all([
-      em.execute(`select count(distinct product_id) as count from stock_levels`) as Promise<
+      em.execute(`select count(distinct sl.product_id) as count from stock_levels sl${only.sql}`, [...only.params]) as Promise<
         Array<{ count: string }>
       >,
-      em.execute(`select sum(on_hand) as sum from stock_levels`) as Promise<
+      em.execute(`select sum(sl.on_hand) as sum from stock_levels sl${only.sql}`, [...only.params]) as Promise<
         Array<{ sum: string | null }>
       >,
       em.execute(
         `select w.id, w.code, coalesce(sum(sl.on_hand), 0) as on_hand
            from warehouses w
-           left join stock_levels sl on sl.warehouse_id = w.id
+           left join stock_levels sl on sl.warehouse_id = w.id${joined.sql}
           group by w.id, w.code
           order by w.code`,
+        [...joined.params],
       ) as Promise<Array<{ id: string; code: string; on_hand: string | null }>>,
     ]);
 
     const productsByOnHand = (await em.execute(
-      `select product_id, sum(on_hand) as on_hand from stock_levels group by product_id`,
+      `select sl.product_id, sum(sl.on_hand) as on_hand from stock_levels sl${only.sql} group by sl.product_id`,
+      [...only.params],
     )) as Array<{ product_id: string; on_hand: string | null }>;
 
     const products = await this.catalogProducts.findByIds(
@@ -178,6 +188,11 @@ export class StockLevelService {
      *  (and `manageStock = true` — backorderable / unmanaged products
      *  aren't considered out). */
     outOnly?: boolean;
+    /**
+     * Spec 193 (T052, FR-083) — the caller's product predicate over `"p"."id"`: the roster,
+     * its total and its pages are of the products it lets through.
+     */
+    visible?: VisibilityPredicate;
   } = {}): Promise<{ items: StockLevelRow[]; page: number; pageSize: number; total: number }> {
     const em = this.emFactory();
     const page = Math.max(0, filter.page ?? 0);
@@ -201,6 +216,12 @@ export class StockLevelService {
     if (filter.warehouseId) {
       where.push('"sl"."warehouse_id" = ?');
       params.push(filter.warehouseId);
+    }
+    const visible = productClause(filter.visible ?? NO_PRODUCT_PREDICATE);
+    if (visible === false) return { items: [], page, pageSize, total: 0 };
+    if (visible) {
+      where.push(visible.sql);
+      params.push(...visible.params);
     }
     if (trimmedQ) {
       const needle = `%${trimmedQ}%`;

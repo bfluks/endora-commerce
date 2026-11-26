@@ -10,9 +10,15 @@ import {
   setStockLevelRequestSchema,
   updateWarehouseRequestSchema,
   type CatalogProductReadPort,
+  type VisibilityPredicate,
 } from '@endora-commerce/contracts';
 import { StockLevel } from './entities/stock-level.entity.js';
 import { DEFAULT_WAREHOUSE_ID } from './entities/warehouse.entity.js';
+import {
+  NO_PRODUCT_PREDICATE,
+  productClause,
+  type InventoryProductVisibility,
+} from './services/admin-product-visibility.js';
 import type { WarehouseService } from './services/warehouse-service.js';
 import type { StockLevelService } from './services/stock-level-service.js';
 import type { WarehouseChannelService } from './services/warehouse-channel-service.js';
@@ -65,6 +71,13 @@ export interface InventoryAdminDeps {
   availabilityNotificationService: AvailabilityNotificationService;
   csvStockImporter: CsvStockImporter;
   requireAdmin: RequireAdminFactory;
+  /**
+   * Spec 193 (T052, FR-083) — the admin stock lists, their counts and pages are
+   * of the products the acting administrator may see. Both or neither; absent,
+   * nothing is narrowed. Writes by product id are not narrowed (FR-038).
+   */
+  productVisibility?: InventoryProductVisibility;
+  resolveAdminUserId?: (req: FastifyRequest) => string;
   /** Feature 024 — resolves admin actor identity for audit entries. */
   resolveAdminAuditContext?: (req: FastifyRequest) => {
     actorAdminUserId: string;
@@ -116,6 +129,13 @@ export async function registerInventoryAdminRoutes(
     requireAdmin,
   } = deps;
 
+  /** Spec 193 — the caller's product predicate over `column`; `none` without the wiring. */
+  const visibleOf = async (request: FastifyRequest, column: string): Promise<VisibilityPredicate> => {
+    if (!deps.productVisibility || !deps.resolveAdminUserId) return NO_PRODUCT_PREDICATE;
+    const scope = await deps.productVisibility.scopeFor(deps.resolveAdminUserId(request));
+    return deps.productVisibility.productPredicate(scope, column);
+  };
+
   // ---------------------------------------------------------------------------
   // Inventory landing KPIs (US2)
   // ---------------------------------------------------------------------------
@@ -123,8 +143,8 @@ export async function registerInventoryAdminRoutes(
   app.get(
     '/api/v1/admin/inventory',
     { preHandler: requireAdmin('inventory:read') },
-    async () => {
-      const data = await stockLevelService.listLandingKpis();
+    async (request) => {
+      const data = await stockLevelService.listLandingKpis(await visibleOf(request, '"sl"."product_id"'));
       return { data };
     },
   );
@@ -149,6 +169,7 @@ export async function registerInventoryAdminRoutes(
         ...(search ? { q: search } : {}),
         ...(lowOnly ? { lowOnly: true } : {}),
         ...(outOnly ? { outOnly: true } : {}),
+        visible: await visibleOf(request, '"p"."id"'),
       });
       return data;
     },
@@ -306,8 +327,8 @@ export async function registerInventoryAdminRoutes(
   app.get(
     '/api/v1/admin/inventory/low-stock',
     { preHandler: requireAdmin('inventory:read') },
-    async () => {
-      const items = await lowStockAlertService.listLowStock();
+    async (request) => {
+      const items = await lowStockAlertService.listLowStock(await visibleOf(request, '"sl"."product_id"'));
       return { items };
     },
   );
@@ -392,6 +413,7 @@ export async function registerInventoryAdminRoutes(
         ...(q['status'] ? { status: q['status'] as 'queued' | 'notified' | 'cancelled' } : {}),
         ...(q['page'] ? { page: Number.parseInt(q['page'], 10) } : {}),
         ...(q['pageSize'] ? { pageSize: Number.parseInt(q['pageSize'], 10) } : {}),
+        visible: await visibleOf(request, '"n"."product_id"'),
       });
       return data;
     },
@@ -586,10 +608,21 @@ export async function registerInventoryAdminRoutes(
       if (q['productId']) where['productId'] = q['productId'];
       const limit = Math.min(Math.max(Number.parseInt(q['limit'] ?? '200', 10), 1), 500);
       const em = emFactory();
-      const rows = await em.find(StockLevel, where, {
-        limit,
-        orderBy: { updatedAt: 'desc' },
-      });
+      // Spec 193 (T052, FR-083) — the caller's product predicate over `"s"."product_id"`.
+      const visible = productClause(await visibleOf(request, '"s"."product_id"'));
+      if (visible === false) return { data: [] };
+      const rows = visible
+        ? await em
+            .createQueryBuilder(StockLevel, 's')
+            .where(where)
+            .andWhere(visible.sql, visible.params)
+            .orderBy({ updatedAt: 'desc' })
+            .limit(limit)
+            .getResultList()
+        : await em.find(StockLevel, where, {
+            limit,
+            orderBy: { updatedAt: 'desc' },
+          });
       const productIds = Array.from(new Set(rows.map((r) => r.productId)));
       const products = await catalogProducts.findByIds(productIds);
       const productById = new Map(products.map((p) => [p.id, p]));

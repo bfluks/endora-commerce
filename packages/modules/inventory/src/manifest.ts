@@ -218,6 +218,19 @@ export const manifest = defineModuleManifest({
         'absent host holds a table nobody walks. Declaring the edge would make an ' +
         'optional assistant undeactivatable for as long as stock is tracked.',
     },
+    {
+      moduleId: 'product_visibility_rules',
+      name: 'adminProductVisibilityPort',
+      kind: 'degrades-without',
+      whenAbsent:
+        'the inventory admin lists and the set-stock assistant tool are not narrowed by role: every ' +
+        'administrator sees and addresses every product, exactly as before the feature',
+      reason:
+        'Spec 193 (T052, FR-083, FR-081). The stock lists embed the caller\'s product predicate and ' +
+        'the set-stock tool asks whether the product is hidden. `product_visibility_rules` is ' +
+        'deactivatable and off by default: presence is probed in front of the port (`index.ts`), ' +
+        'absent reads as the system scope, and a call made while present is never caught.',
+    },
   ],
   /**
    * The module's own authority (2026-08-29).

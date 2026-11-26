@@ -8,6 +8,7 @@ import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { EventBus } from '@endora-commerce/platform/events';
 import type {
+  AdminProductVisibilityPort,
   CatalogCategoryReadPort,
   CatalogCategoryWritePort,
   CatalogProductReadPort,
@@ -48,6 +49,7 @@ import { WarehouseChannelService } from './services/warehouse-channel-service.js
 import { WarehouseChannelReconciler } from './services/warehouse-channel-reconciler.js';
 import { AVAILABILITY_BACK_IN_STOCK_DEFAULT, LOW_STOCK_ALERT_DEFAULT } from './email-templates/transactional-defaults.js';
 import { inventoryPromptTools } from './prompt-tools.js';
+import { createInventoryProductVisibility } from './services/admin-product-visibility.js';
 import { registerWarehouseCountryReferences } from './services/warehouse-country-reference.js';
 import { registerInventoryAuditReferences } from './services/audit-references.js';
 import { AvailabilityNotification } from './entities/availability-notification.entity.js';
@@ -119,6 +121,8 @@ export interface InventoryCradle {
       kind: 'paymentMethodIds' | 'deliveryMethodIds' | 'warehouseIds',
     ): Promise<string[] | null>;
   };
+  /** Spec 193 (T052) — the acting administrator of an admin request. */
+  readonly adminContextResolver: (request: FastifyRequest) => { adminUserId: string };
   readonly inventory: ReturnType<typeof inventoryModule>;
   /**
    * Owned by `prompt_actions`: the assistant's tool catalogue. An ungated
@@ -153,6 +157,13 @@ export interface InventoryCradle {
 }
 
 export function registerModule(ctx: ModuleContext): void {
+  // Spec 193 (T052) — `product_visibility_rules` is `degrades-without`: presence is decided here,
+  // in front of the port; absent, the stock lists and the set-stock tool read with the system scope.
+  const productVisibilityPort = lazyPort<AdminProductVisibilityPort>(ctx, 'adminProductVisibilityPort');
+  const productVisibility = createInventoryProductVisibility({
+    isPresent: () => effectiveState.isPresent('product_visibility_rules'),
+    port: () => productVisibilityPort,
+  });
   ctx.di.register({
     inventory: ctx
       .asFunction(({ emFactory, eventBus, auditLogService }: InventoryCradle) =>
@@ -195,6 +206,8 @@ export function registerModule(ctx: ModuleContext): void {
             ctx.cradle<InventoryCradle>().settingsChannelResolver(),
           resolveAdminAuditContext: (req: FastifyRequest) =>
             ctx.cradle<InventoryCradle>().inventoryAdminAuditContext(req),
+          productVisibility,
+          resolveAdminUserId: (req: FastifyRequest) => ctx.cradle<InventoryCradle>().adminContextResolver(req).adminUserId,
           templateEmail: {
             trySend: (input: Parameters<
               NonNullable<InventoryModuleOptions['templateEmail']>['trySend']
@@ -471,6 +484,7 @@ export function registerModule(ctx: ModuleContext): void {
       catalogCategories: lazyPort<CatalogCategoryReadPort>(ctx, 'catalogCategoryReadPort'),
       eventBus: cradle.eventBus,
       auditLogService: cradle.auditLogService,
+      productVisibility,
     })) {
       registry.register(tool);
     }
