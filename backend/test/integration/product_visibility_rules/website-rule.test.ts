@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ERROR_CODES, PRODUCT_VISIBILITY_ERROR_CODES as E } from '@endora-commerce/contracts';
 import { setupBackendServer, teardownBackendServer, type BackendServerHandle } from '../../helpers/test-server.js';
 import { ADMIN, call, forgetTestRoles, roleWith, type TestRole } from './fixtures.js';
@@ -268,6 +268,65 @@ describe('website rule (spec 193, T056)', () => {
       const overview = await call(h, 'GET', '/overview');
       const attached = (overview.body.data.websiteRuleAttachments as Array<{ salesChannelId: string; productRuleId: string }>).filter((x) => x.productRuleId === rule.id);
       expect(attached.map((x) => x.salesChannelId)).toEqual([kept]);
+    });
+
+    it('ignores a governed channel deleted after the attach: change, reconcile and delete of the rule still work', async () => {
+      const kept = await createChannel(h, 'wr-kept2');
+      const gone = await createChannel(h, 'wr-gone2');
+      const blue = await createProduct(h, { color: 'blue' });
+      const red = await createProduct(h, { color: 'red' });
+      const rule = await createRule();
+      await confirmAndApply(await readyPreview({ kind: 'attach', productRuleId: rule.id, salesChannelIds: [kept, gone] }));
+      const code = (await h.orm.em.fork().getConnection().execute<Array<{ code: string }>>(`select "code" from "sales_channels" where "id" = ?`, [gone]))[0]!.code;
+      const del = await h.app.inject({ method: 'DELETE', url: `/api/v1/admin/sales-channels/${code}?fallbackToDefault=true`, cookies: ADMIN });
+      expect(del.statusCode, del.body).toBe(204);
+
+      const change = await readyPreview({ kind: 'change', productRuleId: rule.id, definition: RED });
+      expect(Object.keys((await call(h, 'GET', `/website-rules/previews/${change}`)).body.data.counts)).toEqual([kept]);
+      await confirmAndApply(change);
+      expect(await isMember(h, kept, red)).toBe(true);
+      expect(await isMember(h, kept, blue)).toBe(false);
+      await websiteRules(h).reconcileAll();
+
+      expect((await call(h, 'DELETE', `/website-rules/attachments/${kept}`)).status).toBe(204);
+      const removed = await call(h, 'DELETE', `/product-rules/${rule.id}`);
+      expect(removed.status, JSON.stringify(removed.body)).toBe(204);
+    });
+
+    it('a failed apply batch leaves nothing behind and keeps its snapshot; a retry completes it', async () => {
+      const channel = await createChannel(h, 'wr-rollback');
+      const first = await createProduct(h, { color: 'blue' });
+      const second = await createProduct(h, { color: 'blue' });
+      const rule = await createRule();
+      const id = await readyPreview({ kind: 'attach', productRuleId: rule.id, salesChannelIds: [channel] });
+      const snapshot = await previewChanges(h, id);
+      expect(snapshot).toEqual(expect.arrayContaining([`${channel}:${first}:join`, `${channel}:${second}:join`]));
+      expect((await confirm(id)).status).toBe(202);
+
+      const port = membershipPort(h);
+      const original = port.addToChannel.bind(port);
+      let calls = 0;
+      const spy = vi.spyOn(port, 'addToChannel').mockImplementation(async (...args) => {
+        calls += 1;
+        if (calls === 2) throw new Error('bridge write failed');
+        return original(...args);
+      });
+      const recorder = recordMembershipEvents(h);
+      try {
+        await expect(websiteRules(h).applyPreview(id)).rejects.toThrow('bridge write failed');
+      } finally {
+        spy.mockRestore();
+        recorder.stop();
+      }
+      expect(await channelMembers(h, channel)).toEqual([]);
+      expect(await admissions(h, channel)).toEqual([]);
+      for (const p of [first, second]) expect(await membershipAudit(h, channel, p)).toEqual([]);
+      expect(recorder.events.filter((e) => e.channelId === channel)).toEqual([]);
+      expect(await previewChanges(h, id)).toEqual(snapshot);
+
+      await websiteRules(h).applyPreview(id);
+      expect(await channelMembers(h, channel)).toEqual(expect.arrayContaining([first, second]));
+      expect(await previewChanges(h, id)).toEqual([]);
     });
   });
 

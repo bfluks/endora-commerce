@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ERROR_CODES } from '@endora-commerce/contracts';
 import { setupBackendServer, teardownBackendServer, type BackendServerHandle } from '../../helpers/test-server.js';
+import en from '../../../../packages/modules/sales_channels/i18n/en.json' with { type: 'json' };
+import pl from '../../../../packages/modules/sales_channels/i18n/pl.json' with { type: 'json' };
 import {
   attachRuleBySql,
   clearWebsiteRules,
@@ -87,8 +89,14 @@ describe('channel delete onto a governed default (spec 193, T100)', () => {
     return { status: res.statusCode, body: res.body ? (res.json() as any) : null, raw: res.body }; // eslint-disable-line @typescript-eslint/no-explicit-any -- the envelope as answered
   }
 
+  async function setPreferredLanguage(language: 'en' | 'pl' | null): Promise<void> {
+    const res = await h.app.inject({ method: 'PATCH', url: '/api/v1/admin/me/preferred-language', cookies: ADMIN, payload: { preferredLanguage: language } });
+    expect(res.statusCode).toBe(200);
+  }
+
   beforeAll(async () => {
     h = await setupBackendServer();
+    await setPreferredLanguage('en');
     const [row] = await sql<{ id: string }>(`select "id" from "sales_channels" where "system_default" = true`);
     defaultId = row!.id;
   }, 5 * 60_000);
@@ -98,6 +106,7 @@ describe('channel delete onto a governed default (spec 193, T100)', () => {
   });
 
   afterAll(async () => {
+    await setPreferredLanguage(null);
     await clearWebsiteRules(h);
     await teardownBackendServer(h);
   });
@@ -116,8 +125,19 @@ describe('channel delete onto a governed default (spec 193, T100)', () => {
     expect(res.status, res.raw).toBe(422);
     expect(res.body.error.code).toBe(ERROR_CODES.ENTITY_WOULD_HAVE_ZERO_CHANNELS);
     expect(res.body.error.details).toEqual({ code: 'default_channel_governed', entityType: 'product', count: 2, rule: rule.name });
-    expect(res.body.error.message).toContain(rule.name);
+    expect(res.body.error.message).toBe(
+      en['errors.ENTITY_WOULD_HAVE_ZERO_CHANNELS.default_channel_governed'].replace('{count}', '2').replace('{rule}', rule.name),
+    );
     expect(res.body.error.message).not.toMatch(/fallbackToDefault/);
+    await setPreferredLanguage('pl');
+    try {
+      const polish = await deleteChannel(doomed, true);
+      expect(polish.body.error.message).toBe(
+        pl['errors.ENTITY_WOULD_HAVE_ZERO_CHANNELS.default_channel_governed'].replace('{count}', '2').replace('{rule}', rule.name),
+      );
+    } finally {
+      await setPreferredLanguage(null);
+    }
     expect(res.raw).not.toContain(p1);
     expect(res.raw).not.toContain(p2);
     expect(await channelExists(doomed)).toBe(true);
