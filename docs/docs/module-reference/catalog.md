@@ -49,6 +49,7 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | `inventory` | no | degrades-without `inventoryProductThresholdWritePort` — a duplicated product does not inherit the source’s per-warehouse low-stock thresholds |
 | `inventory` | no | refuses-without `inventoryStockReadPort` — the products list offers no stock filter, and a list or select-all that names one is refused |
 | `product_visibility_rules` | no | degrades-without `adminProductVisibilityPort` — admin product reads and writes are not narrowed by role: every administrator sees and edits every product, exactly as before the feature |
+| `product_visibility_rules` | no | degrades-without `productRuleGovernancePort` — no sales channel is governed by a website rule: a scoped value for a channel the product is not a member of is refused (`SCOPE_INVALID`), exactly as before the feature |
 | `prompt_actions` | no | contributes-to `promptActionBulkProgressRegistry` |
 | `prompt_actions` | no | contributes-to `promptActionToolRegistry` |
 | `search` | no | degrades-without `searchQueryPort` — the storefront product listing is served from PostgreSQL instead of the search index |

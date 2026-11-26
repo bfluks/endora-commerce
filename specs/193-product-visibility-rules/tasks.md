@@ -561,7 +561,7 @@ Stream B owns the files listed in plan.md § *Parallel builders*.
   channel before admission, admitted ≤ 5 min (US4-6, FR-059, SC-005); a product deactivated, archived
   or deleted is never re-admitted while so (FR-079, N5); remove + re-admit keeps
   channel-scoped values.
-- [x] T069 [B] ("hook not run" case pending: it joins with T068) Off-state test `BT/integration/product_visibility_rules/off-state.governance.test.ts`:
+- [x] T069 [B] ("hook not run" case built with T068, 116428c22) Off-state test `BT/integration/product_visibility_rules/off-state.governance.test.ts`:
   module off ⇒ no write refused or skipped, hook not run, pending-admission scoped values refused as
   today (FR-073).
 - [x] T070 [A] (after T060, T063, T066) **FR-093 (I-4)** — the refusal seam is
