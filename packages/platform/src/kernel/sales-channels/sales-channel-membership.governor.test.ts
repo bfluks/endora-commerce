@@ -390,3 +390,41 @@ describe('governor registry (TM-10)', () => {
     expect(await service.addToChannel(G, 'product', P, { governorToken: other })).toEqual({ changed: false, skippedGovernedChannelIds: [G] });
   });
 });
+
+describe('isGoverned — the read a caller asks before a write it does not route through the mutator (T100)', () => {
+  it('names the rule of a governed channel and answers null for an ungoverned one', async () => {
+    const h = harness();
+    await expect(h.service.isGoverned('product', G)).resolves.toEqual({ ruleLabel: RULE });
+    await expect(h.service.isGoverned('product', A)).resolves.toBeNull();
+  });
+
+  it('answers null for an entity type no governor declares', async () => {
+    const h = harness();
+    await expect(h.service.isGoverned('organization', G)).resolves.toBeNull();
+  });
+
+  it('answers null while the governing module is absent (FR-073)', async () => {
+    const h = harness();
+    h.present.clear();
+    await expect(h.service.isGoverned('product', G)).resolves.toBeNull();
+  });
+
+  it('propagates a governor that throws — never "not governed" (TM-10)', async () => {
+    const h = harness({}, { governs: async () => Promise.reject(new Error('attachments unreadable')) });
+    await expect(h.service.isGoverned('product', G)).rejects.toThrow('attachments unreadable');
+  });
+
+  it('asks on the caller’s manager when one is given', async () => {
+    const seen: EntityManager[] = [];
+    const h = harness({}, { governs: async (em) => (seen.push(em), null) });
+    const em = fakeEm(new Map());
+    await h.service.isGoverned('product', G, { em });
+    expect(seen).toEqual([em]);
+  });
+
+  it('answers null on a composition with no governors at all', async () => {
+    const bridges = new ChannelBridgeRegistry();
+    const service = new SalesChannelMembershipService(() => fakeEm(new Map()), {} as EventBus, undefined, bridges);
+    await expect(service.isGoverned('product', G)).resolves.toBeNull();
+  });
+});
