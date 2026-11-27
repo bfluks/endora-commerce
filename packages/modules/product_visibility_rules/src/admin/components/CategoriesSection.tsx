@@ -7,7 +7,6 @@ import { Alert, AlertDescription, Badge, Button, EditorSection, EmptyState, Form
 import { productVisibilityClient } from '../api.js';
 import { refusalMessage, thresholdLabels } from '../lib/labels.js';
 
-const MODULE = 'product_visibility_rules';
 
 interface ConditionDraft {
   currencyCode: string;
@@ -33,7 +32,7 @@ export interface CategoriesSectionProps {
  * conditions; a product qualifies when it meets at least one of them (US2-1).
  */
 export function CategoriesSection({ overview, writable, onChanged, onStatus }: CategoriesSectionProps): ReactNode {
-  const t = useTranslation(MODULE);
+  const t = useTranslation('product_visibility_rules');
   const { confirm, confirmDialog } = useConfirmDialog();
   const [draft, setDraft] = useState<CategoryDraft | null>(null);
 
@@ -141,7 +140,7 @@ interface DraftErrors {
 }
 
 function CategoryDialog({ draft, currencies, onClose, onSaved }: CategoryDialogProps): ReactNode {
-  const t = useTranslation(MODULE);
+  const t = useTranslation('product_visibility_rules');
   const formId = useId();
   const [name, setName] = useState(draft.name);
   const [conditions, setConditions] = useState<ConditionDraft[]>(draft.conditions);

@@ -192,5 +192,6 @@
   "roleZone.unknown": "Tej roli nie ma jeszcze w widoczności produktów. Odśwież stronę.",
   "actions.openWebsiteRules.label": "Reguły witryn",
   "actions.openWebsiteRules.description": "Dołącz reguły produktów do kanałów sprzedaży po podglądzie zmian",
-  "actions.openWebsiteRules.keywords": "reguła witryny, sklep, kanał sprzedaży, reguła produktów"
+  "actions.openWebsiteRules.keywords": "reguła witryny, sklep, kanał sprzedaży, reguła produktów",
+  "rules.building": "Ceny katalogowe są aktualizowane. Kanały sprzedaży z regułą zachowują swoje produkty do końca aktualizacji, a potem w ciągu kilku minut dostosowują się do reguł."
 }

@@ -8,7 +8,6 @@ import { productVisibilityClient } from '../api.js';
 import { channelName, designationReasonLabels, refusalMessage } from '../lib/labels.js';
 import type { SalesChannelRow } from '../lib/use-overview.js';
 
-const MODULE = 'product_visibility_rules';
 
 type Currency = ProductVisibilityOverviewResponse['currencies'][number];
 type BookOption = ProductVisibilityDesignationOptionsResponse['items'][number];
@@ -27,7 +26,7 @@ export interface DesignationsSectionProps {
  * flagged with its reason; a currency whose prices are being rebuilt says so (OQ-A, US2-15).
  */
 export function DesignationsSection({ overview, channels, writable, onChanged, onStatus }: DesignationsSectionProps): ReactNode {
-  const t = useTranslation(MODULE);
+  const t = useTranslation('product_visibility_rules');
   const { language } = useTranslationContext();
   const { confirm, confirmDialog } = useConfirmDialog();
   const [editing, setEditing] = useState<Currency | null>(null);
@@ -166,7 +165,7 @@ interface DesignationDialogProps {
 
 /** US2-8, US2-10 — only the designatable books are offered, and only the channels a book is on. */
 function DesignationDialog({ currency, channels, onClose, onSaved }: DesignationDialogProps): ReactNode {
-  const t = useTranslation(MODULE);
+  const t = useTranslation('product_visibility_rules');
   const { language } = useTranslationContext();
   const formId = useId();
   const [books, setBooks] = useState<readonly BookOption[] | null>(null);

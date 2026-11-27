@@ -13,7 +13,6 @@ import { Alert, AlertDescription, Button, Checkbox, FormField, Input, Label, Sel
 import { productVisibilityClient } from '../api.js';
 import { refusalMessage, thresholdLabels } from '../lib/labels.js';
 
-const MODULE = 'product_visibility_rules';
 
 type Attribute = ProductRuleAttributesResponse['items'][number];
 
@@ -38,7 +37,7 @@ export interface RuleEditorDialogProps {
  * the other would offer choices the API refuses.
  */
 export function RuleEditorDialog({ currencies, onClose, onSaved }: RuleEditorDialogProps): ReactNode {
-  const t = useTranslation(MODULE);
+  const t = useTranslation('product_visibility_rules');
   const { language } = useTranslationContext();
   const formId = useId();
   const [attributes, setAttributes] = useState<readonly Attribute[] | null>(null);
@@ -279,7 +278,7 @@ function AttributeConditionFields({
   readonly error: string | undefined;
   readonly onChange: (next: AttributeDraft) => void;
 }): ReactNode {
-  const t = useTranslation(MODULE);
+  const t = useTranslation('product_visibility_rules');
   const groupId = useId();
   const attribute = attributes?.find((a) => a.key === condition.attributeKey);
   return (

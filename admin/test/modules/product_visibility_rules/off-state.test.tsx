@@ -18,9 +18,6 @@ import { MODULE_ADMIN_CONTRIBUTIONS } from '../../../src/modules.generated.js';
  * Each absence comes after a presence seen in the same file.
  */
 
-let presentModules = new Set<string>();
-let permissions = new Set<string>();
-
 vi.mock('../../../../packages/admin-shell/src/lib/admin-actions/useAdminActions', () => ({
   useAdminActions: () => ({ actions: [], loading: false }),
 }));

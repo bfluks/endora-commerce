@@ -192,5 +192,6 @@
   "roleZone.unknown": "This role is not listed in product visibility yet. Reload the page.",
   "actions.openWebsiteRules.label": "Website rules",
   "actions.openWebsiteRules.description": "Attach product rules to sales channels after previewing what changes",
-  "actions.openWebsiteRules.keywords": "website rule, storefront, sales channel, product rule"
+  "actions.openWebsiteRules.keywords": "website rule, storefront, sales channel, product rule",
+  "rules.building": "Catalogue prices are being updated. Governed sales channels keep their products until the update finishes, then follow their rules within a few minutes."
 }

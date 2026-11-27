@@ -23,7 +23,6 @@ import { RuleEditorDialog } from '../components/RuleEditorDialog.js';
 import { callerIsUnrestricted, channelName, refusalMessage } from '../lib/labels.js';
 import { useOverview, useSalesChannels } from '../lib/use-overview.js';
 
-const MODULE = 'product_visibility_rules';
 const CONFIG_ROUTE = '/product-visibility';
 
 type Rule = ProductVisibilityOverviewResponse['productRules'][number];
@@ -43,7 +42,7 @@ export interface WebsiteRulesPageProps {
  * A rule's name is operator text and is rendered as text only.
  */
 export function WebsiteRulesPage({ pollIntervalMs = 2000 }: WebsiteRulesPageProps): ReactNode {
-  const t = useTranslation(MODULE);
+  const t = useTranslation('product_visibility_rules');
   const { language } = useTranslationContext();
   const { me, hasPermission } = useAuth();
   const { overview, loading, refreshing, failed, reload } = useOverview();
@@ -123,6 +122,13 @@ export function WebsiteRulesPage({ pollIntervalMs = 2000 }: WebsiteRulesPageProp
                   {t('config.retry')}
                 </Button>
               </AlertDescription>
+            </Alert>
+          ) : null}
+          {overview.currencies.some((c) => c.building) ? (
+            // US4-11 (Q-2) — while a currency's catalogue prices are rebuilt, governed channels
+            // keep the products they have; said here so a preview taken now is read with that.
+            <Alert>
+              <AlertDescription>{t('rules.building')}</AlertDescription>
             </Alert>
           ) : null}
           {!permitted ? (
@@ -270,7 +276,7 @@ export function WebsiteRulesPage({ pollIntervalMs = 2000 }: WebsiteRulesPageProp
 
 /** A rule's name changes freely; its conditions, once attached, only through a preview (FR-053). */
 function RenameDialog({ rule, onClose, onSaved }: { readonly rule: Rule; readonly onClose: () => void; readonly onSaved: () => Promise<void> }): ReactNode {
-  const t = useTranslation(MODULE);
+  const t = useTranslation('product_visibility_rules');
   const formId = useId();
   const [name, setName] = useState(rule.name);
   const [error, setError] = useState<string | undefined>();

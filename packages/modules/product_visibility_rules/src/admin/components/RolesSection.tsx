@@ -17,7 +17,6 @@ import { productVisibilityClient } from '../api.js';
 import { isMappable, refusalMessage, roleWarningLabels } from '../lib/labels.js';
 import { RoleEffect } from './RoleEffect.js';
 
-const MODULE = 'product_visibility_rules';
 const UNRESTRICTED = 'unrestricted';
 
 type Overview = ProductVisibilityOverviewResponse;
@@ -48,7 +47,7 @@ function targetOf(value: string): ProductVisibilityMappingTarget | null {
  * saves on change: one choice, one audited write, its result said in the page's status line.
  */
 export function RolesSection({ overview, writable, onChanged, onStatus }: RolesSectionProps): ReactNode {
-  const t = useTranslation(MODULE);
+  const t = useTranslation('product_visibility_rules');
   const [busyRole, setBusyRole] = useState<string | null>(null);
 
   const save = async (role: Role, value: string): Promise<void> => {
@@ -107,7 +106,7 @@ export function RolesSection({ overview, writable, onChanged, onStatus }: RolesS
 
 /** FR-026 (a mapping without effect) and FR-086 (the audit log names products) — in words, with an icon. */
 function RoleWarnings({ role }: { readonly role: Role }): ReactNode {
-  const t = useTranslation(MODULE);
+  const t = useTranslation('product_visibility_rules');
   const lines: string[] = [];
   if (role.effect === 'mapping_without_effect') lines.push(t('roleWarning.mapping_without_effect'));
   for (const warning of role.warnings) lines.push(roleWarningLabels.label(t, warning));
@@ -133,7 +132,7 @@ interface MappingCellProps {
 }
 
 function MappingCell({ role, overview, writable, busy, onChange }: MappingCellProps): ReactNode {
-  const t = useTranslation(MODULE);
+  const t = useTranslation('product_visibility_rules');
   if (role.effect === 'unmappable_unrestricted') {
     return <span className="text-sm text-muted-foreground">{t('config.roles.notMappable')}</span>;
   }

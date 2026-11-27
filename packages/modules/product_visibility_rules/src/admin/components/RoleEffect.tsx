@@ -3,7 +3,6 @@ import type { ProductVisibilityOverviewResponse } from '@endora-commerce/contrac
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { roleEffectLabels } from '../lib/labels.js';
 
-const MODULE = 'product_visibility_rules';
 
 type Overview = ProductVisibilityOverviewResponse;
 
@@ -22,7 +21,7 @@ export function RoleEffect({
   /** Off where a mapping column beside it already names the category. */
   readonly showCategory?: boolean;
 }): ReactNode {
-  const t = useTranslation(MODULE);
+  const t = useTranslation('product_visibility_rules');
   const category = showCategory && role.effect === 'mapped' ? categories.find((c) => c.id === role.categoryId) : undefined;
   return (
     <span className="text-sm">

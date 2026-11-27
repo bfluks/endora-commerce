@@ -8,7 +8,6 @@ import { productVisibilityClient } from '../api.js';
 import { channelName, previewStatusLabels, refusalMessage } from '../lib/labels.js';
 import type { SalesChannelRow } from '../lib/use-overview.js';
 
-const MODULE = 'product_visibility_rules';
 
 type PreviewState =
   | { phase: 'idle' }
@@ -37,7 +36,7 @@ export interface AttachDialogProps {
  * stale or expired preview offers a new one rather than a dead end (Peak-End).
  */
 export function AttachDialog({ rules, channels, governed, pollIntervalMs, onClose, onApplied }: AttachDialogProps): ReactNode {
-  const t = useTranslation(MODULE);
+  const t = useTranslation('product_visibility_rules');
   const { language } = useTranslationContext();
   const [ruleId, setRuleId] = useState('');
   const [channelId, setChannelId] = useState('');

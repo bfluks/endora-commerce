@@ -6,7 +6,6 @@ import { Button, EditorSection, Skeleton } from '@endora-commerce/admin-kit/ui';
 import { RoleEffect } from '../components/RoleEffect.js';
 import { useRoleVisibility } from '../lib/use-role-visibility.js';
 
-const MODULE = 'product_visibility_rules';
 const CONFIG_ROUTE = '/product-visibility';
 
 /**
@@ -15,7 +14,7 @@ const CONFIG_ROUTE = '/product-visibility';
  * the editor's one Save is untouched (research R-14).
  */
 export default function RoleVisibilityPanel({ roleId }: AdminRoleZoneProps): ReactNode {
-  const t = useTranslation(MODULE);
+  const t = useTranslation('product_visibility_rules');
   const visibility = useRoleVisibility(roleId);
   return (
     <EditorSection

@@ -18,7 +18,6 @@ import { RolesSection } from '../components/RolesSection.js';
 import { callerIsUnrestricted } from '../lib/labels.js';
 import { useOverview, useSalesChannels } from '../lib/use-overview.js';
 
-const MODULE = 'product_visibility_rules';
 export const WEBSITE_RULES_ROUTE = '/product-visibility/website-rules';
 
 /**
@@ -32,7 +31,7 @@ export const WEBSITE_RULES_ROUTE = '/product-visibility/website-rules';
  * screen always says that switching the module off lifts every restriction (FR-073, TM-13).
  */
 export function ConfigurationPage(): ReactNode {
-  const t = useTranslation(MODULE);
+  const t = useTranslation('product_visibility_rules');
   const { me, hasPermission } = useAuth();
   const { overview, loading, refreshing, failed, reload } = useOverview();
   const channels = useSalesChannels();
