@@ -578,3 +578,13 @@ overlapping rows. Spec Edge Cases records the same.
 CSV adapters carry no product-keyed data (order headers only; categories; accounts), so FR-085 does
 not reach them. The audit log entry of a price-book delete or duplicate keeps the full `rowCount`
 (audit log is accepted as is, FR-086).
+
+**Price-book reads addressed by a product id (coordinator decision 2026-11-27).** `GET /price-books?productId=`
+(the books holding a product, with that product's `matches` rows and prices), `GET /price-books/:id/product-lines`
+and `GET /price-books/base-prices?productId=` answer a restricted administrator for any product id they name,
+hidden or not. They are accepted as the read side of FR-038 (price-book work addressed by product or variant id
+is not narrowed; owner P4: price books are outside the catalog narrowing except the grid, export and counts of
+FR-030 / FR-094). They list nothing the caller did not name, so they reveal no hidden product's id, name or count;
+their only admin callers sit behind screens (product editor, grid picker) a restricted administrator cannot open
+for a hidden product. The write port's `booksPricingProduct` answers as the system with full counts; it has no
+consumer, and any future consumer that serves an administrator must pass the caller's scope.
