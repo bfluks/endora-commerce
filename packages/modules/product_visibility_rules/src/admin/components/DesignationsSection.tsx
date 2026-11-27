@@ -95,11 +95,23 @@ export function DesignationsSection({ overview, channels, writable, onChanged, o
               </div>
               {writable ? (
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button type="button" size="sm" variant="outline" onClick={(): void => setEditing(currency)}>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    aria-label={t('config.designations.changeFor', { currency: currency.code })}
+                    onClick={(): void => setEditing(currency)}
+                  >
                     {t('config.designations.change')}
                   </Button>
                   {designation ? (
-                    <Button type="button" size="sm" variant="ghost" onClick={(): void => void clear(currency)}>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      aria-label={t('config.designations.clearFor', { currency: currency.code })}
+                      onClick={(): void => void clear(currency)}
+                    >
                       {t('config.designations.clear')}
                     </Button>
                   ) : null}

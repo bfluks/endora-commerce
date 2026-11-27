@@ -1,4 +1,4 @@
-import { useId, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Layers, Pencil, Plus, Trash2, X } from 'lucide-react';
 import type { ProductVisibilityCategory, ProductVisibilityOverviewResponse, VisibilityThreshold } from '@endora-commerce/contracts';
 import { ModalDialog, useConfirmDialog } from '@endora-commerce/admin-kit/components';
@@ -87,7 +87,8 @@ export function CategoriesSection({ overview, writable, onChanged, onStatus }: C
                     <li key={`${condition.currencyCode}:${condition.threshold}`}>
                       <Badge variant="outline">
                         <span className="font-mono">{condition.currencyCode}</span>
-                        <span className="ml-1">{thresholdLabels.label(t, condition.threshold)}</span>
+                        {' · '}
+                        <span>{thresholdLabels.label(t, condition.threshold)}</span>
                       </Badge>
                     </li>
                   ))}
@@ -98,10 +99,10 @@ export function CategoriesSection({ overview, writable, onChanged, onStatus }: C
               </div>
               {writable ? (
                 <div className="flex items-center gap-1">
-                  <Button type="button" size="sm" variant="ghost" aria-label={t('config.categories.edit')} onClick={(): void => open(category)}>
+                  <Button type="button" size="sm" variant="ghost" aria-label={t('config.categories.editNamed', { name: category.name })} onClick={(): void => open(category)}>
                     <Pencil aria-hidden="true" />
                   </Button>
-                  <Button type="button" size="sm" variant="ghost" aria-label={t('config.categories.delete')} onClick={(): void => void remove(category)}>
+                  <Button type="button" size="sm" variant="ghost" aria-label={t('config.categories.deleteNamed', { name: category.name })} onClick={(): void => void remove(category)}>
                     <Trash2 aria-hidden="true" />
                   </Button>
                 </div>
@@ -113,7 +114,7 @@ export function CategoriesSection({ overview, writable, onChanged, onStatus }: C
       {draft ? (
         <CategoryDialog
           draft={draft}
-          currencies={overview.currencies.map((c) => c.code)}
+          currencies={overview.currencies.filter((c) => c.active).map((c) => c.code)}
           onClose={(): void => setDraft(null)}
           onSaved={async (): Promise<void> => {
             setDraft(null);
@@ -147,6 +148,18 @@ function CategoryDialog({ draft, currencies, onClose, onSaved }: CategoryDialogP
   const [errors, setErrors] = useState<DraftErrors | null>(null);
   const [saving, setSaving] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const addRef = useRef<HTMLButtonElement | null>(null);
+  /** After a removal: the index whose remove button takes focus, else "add condition" (SC 2.4.3). */
+  const focusAfterRemoval = useRef<number | null>(null);
+
+  useEffect(() => {
+    const index = focusAfterRemoval.current;
+    if (index === null) return;
+    focusAfterRemoval.current = null;
+    const buttons = [...(formRef.current?.querySelectorAll<HTMLButtonElement>('[data-remove-condition]') ?? [])].filter((b) => !b.disabled);
+    (buttons[index] ?? buttons[index - 1] ?? addRef.current)?.focus();
+  }, [conditions]);
 
   const validate = (): DraftErrors | null => {
     const found: DraftErrors = { conditions: [] };
@@ -211,7 +224,7 @@ function CategoryDialog({ draft, currencies, onClose, onSaved }: CategoryDialogP
         </>
       }
     >
-      <form id={formId} noValidate onSubmit={(e): void => void submit(e)} className="space-y-4">
+      <form ref={formRef} id={formId} noValidate onSubmit={(e): void => void submit(e)} className="space-y-4">
         {refusal ? (
           <Alert variant="destructive">
             <AlertDescription>{refusal}</AlertDescription>
@@ -228,7 +241,8 @@ function CategoryDialog({ draft, currencies, onClose, onSaved }: CategoryDialogP
               <FormField label={t('config.categories.field.currency')} error={errors?.conditions[index]}>
                 <Select value={condition.currencyCode} onChange={(e): void => update(index, { currencyCode: e.target.value })}>
                   <option value="">{t('config.choose')}</option>
-                  {currencies.map((code) => (
+                  {/* An inactive currency a saved condition still names stays shown, so it can be changed. */}
+                  {(condition.currencyCode === '' || currencies.includes(condition.currencyCode) ? currencies : [...currencies, condition.currencyCode]).map((code) => (
                     <option key={code} value={code}>
                       {code}
                     </option>
@@ -248,15 +262,20 @@ function CategoryDialog({ draft, currencies, onClose, onSaved }: CategoryDialogP
                 type="button"
                 variant="ghost"
                 size="sm"
-                aria-label={t('config.categories.removeCondition')}
+                data-remove-condition
+                aria-label={t('config.categories.removeConditionN', { n: index + 1 })}
                 disabled={conditions.length === 1}
-                onClick={(): void => setConditions((prev) => prev.filter((_, i) => i !== index))}
+                onClick={(): void => {
+                  focusAfterRemoval.current = index;
+                  setConditions((prev) => prev.filter((_, i) => i !== index));
+                }}
               >
                 <X aria-hidden="true" />
               </Button>
             </div>
           ))}
           <Button
+            ref={addRef}
             type="button"
             variant="outline"
             size="sm"
