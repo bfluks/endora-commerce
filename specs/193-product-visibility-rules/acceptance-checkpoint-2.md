@@ -60,3 +60,8 @@ Quickstart steps not walked:
 5. `quickstart.md` US2 step 1 says the activation text covers "unmapped quote-handling roles"; check it still matches the shipped activation text and the C2-04 deviation (every mapped role is asked, "if" wording).
 6. `tasks.md` C2-04 records a deviation (confirm for every mapped role because the overview does not say which roles handle quotes). Not in spec.md; fine as a note, but confirm owner knows.
 7. FR-085/FR-086 amendments and FR-094 are present in spec.md (lines ~985, ~991, ~1049) and consistent with T054/T102 and `other-admin-reads.test.ts`. FR-053 text ("or an attached rule is changed") already matches T103. No change needed.
+
+## Owner ruling 2026-11-27
+
+- **C3 closed:** module activation stays one click with no confirmation; the FR-076 / TM-13 consequence text in the module description is enough. No platform hook; FR-076 unchanged.
+- **C2 landed:** walk-through follow-ups a918bef15, eb70de483 (roles stacked below 1024 px, currencies behind a disclosure with the base currency pinned, role-editor panel above the editor). Platform has no confirm-on-enable hook (`ModuleActivationSchema`, `ModuleActivationControl.tsx`).
