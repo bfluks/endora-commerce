@@ -18,6 +18,8 @@ import {
 import { ProductsBulkEditDialog } from '../components/ProductsBulkEditDialog.js';
 import type { ProductLabel } from '../lib/product-labels.js';
 import { ArchivedPill, ProductStatusPill } from '../components/ProductStatusPills.js';
+import { ProductVisibilityBanner } from '../components/ProductVisibilityBanner.js';
+import type { AdminProductListVisibility } from '@endora-commerce/contracts';
 import {
   BULK_EDIT_HARD_MAX,
   productListNarrowing,
@@ -193,6 +195,8 @@ interface ProductsResponse {
   counts: ProductListCounts;
   /** Issue #1624 — whether a `stock` filter would be applied (false while inventory is off). */
   stockFilterAvailable?: boolean;
+  /** Spec 193 — present only when the caller's role narrows the list (FR-023). */
+  visibility?: AdminProductListVisibility;
 }
 
 /** `all` / `active` / `inactive` count non-archived products. */
@@ -245,6 +249,7 @@ export function ProductsList(): ReactNode {
   const [rows, setRows] = useState<AdminProduct[]>([]);
   const [total, setTotal] = useState(0);
   const [counts, setCounts] = useState<ProductListCounts>({ all: 0, active: 0, inactive: 0, archived: 0 });
+  const [listVisibility, setListVisibility] = useState<AdminProductListVisibility | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   // Issue #1749 — a failed load is the list's state (the kit error with Retry);
   // a failed action on it (a bulk delete, a saved view) is a notice above the
@@ -341,6 +346,7 @@ export function ProductsList(): ReactNode {
       setTotal(res.pagination.total);
       setCounts(res.counts);
       setStockFilterAvailable(res.stockFilterAvailable === true);
+      setListVisibility(res.visibility);
       syncTotal(res.pagination.total);
       setLoadedOnce(true);
     } catch (err) {
@@ -643,7 +649,10 @@ export function ProductsList(): ReactNode {
     </Button>
   );
 
-  const emptyList = filtersActive ? (
+  const emptyList = listVisibility?.reason === 'no_category' ? (
+    // Spec 193 FR-023 — the role sees no products; inviting a first product would mislead.
+    <EmptyState icon={<Package size={20} />} title={t('productsList.visibility.noCategoryEmpty')} />
+  ) : filtersActive ? (
     <EmptyState
       variant="no-results"
       title={t('productsList.empty.title')}
@@ -898,6 +907,7 @@ export function ProductsList(): ReactNode {
         onRetry={(): void => void refresh()}
         notice={
           <>
+            <ProductVisibilityBanner visibility={listVisibility} />
             {actionError ? (
               <Alert variant="destructive">
                 <AlertDescription>{actionError}</AlertDescription>
