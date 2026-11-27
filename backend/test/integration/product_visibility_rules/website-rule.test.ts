@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ERROR_CODES, PRODUCT_VISIBILITY_ERROR_CODES as E } from '@endora-commerce/contracts';
 import { setupBackendServer, teardownBackendServer, type BackendServerHandle } from '../../helpers/test-server.js';
+import { TEST_ADMIN_ID } from '../../helpers/test-actors.js';
 import { ADMIN, call, forgetTestRoles, roleWith, type TestRole } from './fixtures.js';
 import {
   admissions,
@@ -72,11 +73,16 @@ describe('website rule (spec 193, T056)', () => {
   }, 5 * 60_000);
 
   beforeEach(async () => {
-    // The stub admin would otherwise leave previews standing across cases and meet the
-    // per-administrator cap, which is asserted on its own.
-    const conn = h.orm.em.fork().getConnection();
-    await conn.execute(`delete from "website_rule_preview_changes"`);
-    await conn.execute(`delete from "website_rule_previews"`);
+    // The administrators this file previews as would otherwise leave previews standing across
+    // cases and meet the per-administrator cap, which is asserted on its own. Only their
+    // previews are removed (changes cascade); other files' previews are not this file's to wipe.
+    await h.orm.em
+      .fork()
+      .getConnection()
+      .execute(`delete from "website_rule_previews" where "created_by_admin_user_id" in (?, ?)`, [
+        TEST_ADMIN_ID,
+        manager.adminUserId,
+      ]);
   });
 
   afterAll(async () => {
