@@ -4,7 +4,7 @@ import { ModalDialog } from '@endora-commerce/admin-kit/components';
 import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import { Button, FormField, Select } from '@endora-commerce/admin-kit/ui';
 import { productVisibilityClient } from '../api.js';
-import { channelName } from '../lib/labels.js';
+import { channelName, INERT_CLASS } from '../lib/labels.js';
 import type { SalesChannelRow } from '../lib/use-overview.js';
 import { usePreviewFlow } from '../lib/use-preview-flow.js';
 import { PreviewPanel } from './PreviewPanel.js';
@@ -12,9 +12,12 @@ import { PreviewPanel } from './PreviewPanel.js';
 export interface AttachDialogProps {
   readonly rules: ProductVisibilityOverviewResponse['productRules'];
   readonly channels: readonly SalesChannelRow[];
+  /** The channel list has loaded (it did not fail and is not in flight). */
+  readonly channelsReady: boolean;
   /** Channels that already have a rule — never offered (FR-051). */
   readonly governed: ReadonlySet<string>;
   readonly pollIntervalMs: number;
+  readonly slowAfterMs?: number;
   readonly onClose: () => void;
   readonly onApplied: () => Promise<void>;
 }
@@ -27,18 +30,19 @@ export interface AttachDialogProps {
  * Changing the rule or the channel discards the preview, which belonged to the old choice. A
  * stale or expired preview offers a new one rather than a dead end (Peak-End).
  */
-export function AttachDialog({ rules, channels, governed, pollIntervalMs, onClose, onApplied }: AttachDialogProps): ReactNode {
+export function AttachDialog({ rules, channels, channelsReady, governed, pollIntervalMs, slowAfterMs, onClose, onApplied }: AttachDialogProps): ReactNode {
   const t = useTranslation('product_visibility_rules');
   const { language } = useTranslationContext();
   const [ruleId, setRuleId] = useState('');
   const [channelId, setChannelId] = useState('');
-  const flow = usePreviewFlow(pollIntervalMs);
+  const flow = usePreviewFlow(pollIntervalMs, slowAfterMs);
   const [errors, setErrors] = useState<{ rule?: string; channel?: string }>({});
 
   const offered = channels.filter((c) => !governed.has(c.id));
   const nameOf = (id: string): string => channelName(channels.find((c) => c.id === id), language, t('config.unknownChannel'));
 
   const startPreview = async (): Promise<void> => {
+    if (flow.busy) return;
     const found: { rule?: string; channel?: string } = {};
     if (ruleId === '') found.rule = t('rules.attach.error.ruleRequired');
     if (channelId === '') found.channel = t('rules.attach.error.channelRequired');
@@ -47,27 +51,45 @@ export function AttachDialog({ rules, channels, governed, pollIntervalMs, onClos
     await flow.start(() => productVisibilityClient.createPreview({ kind: 'attach', productRuleId: ruleId, salesChannelIds: [channelId] }));
   };
 
+  // While applying, every control stays focusable (aria-disabled) and ignores input (WCAG 2.4.3).
   const applying = flow.preview.phase === 'applying';
+  const close = (): void => {
+    if (applying) return;
+    flow.stop();
+    onClose();
+  };
 
   return (
     <ModalDialog
       title={t('rules.attach.title')}
-      onClose={(): void => {
-        flow.stop();
-        onClose();
-      }}
+      onClose={close}
       busy={applying}
       footer={
         <>
-          <Button type="button" variant="outline" onClick={onClose} disabled={applying}>
+          <Button type="button" variant="outline" className={INERT_CLASS} onClick={close} aria-disabled={applying || undefined}>
             {t('config.cancel')}
           </Button>
           {flow.counts ? (
-            <Button type="button" onClick={(): void => void flow.confirm(onApplied)} disabled={applying} aria-busy={applying}>
+            <Button
+              ref={flow.confirmRef}
+              type="button"
+              className={INERT_CLASS}
+              onClick={(): void => {
+                if (!applying) void flow.confirm(onApplied);
+              }}
+              aria-disabled={applying || undefined}
+              aria-busy={applying}
+            >
               {t('rules.attach.confirm')}
             </Button>
           ) : (
-            <Button type="button" onClick={(): void => void startPreview()} disabled={flow.busy} aria-busy={flow.busy}>
+            <Button
+              type="button"
+              className={INERT_CLASS}
+              onClick={(): void => void startPreview()}
+              aria-disabled={flow.busy || undefined}
+              aria-busy={flow.busy}
+            >
               {t('rules.attach.preview')}
             </Button>
           )}
@@ -79,8 +101,10 @@ export function AttachDialog({ rules, channels, governed, pollIntervalMs, onClos
         <FormField label={t('rules.attach.field.rule')} error={errors.rule} required>
           <Select
             value={ruleId}
-            disabled={applying}
+            aria-disabled={applying || undefined}
+            className={INERT_CLASS}
             onChange={(e): void => {
+              if (applying) return;
               setRuleId(e.target.value);
               flow.reset();
             }}
@@ -93,11 +117,18 @@ export function AttachDialog({ rules, channels, governed, pollIntervalMs, onClos
             ))}
           </Select>
         </FormField>
-        <FormField label={t('rules.attach.field.channel')} error={errors.channel} required>
+        <FormField
+          label={t('rules.attach.field.channel')}
+          error={errors.channel}
+          hint={channelsReady && offered.length === 0 ? t('rules.attach.allGoverned') : undefined}
+          required
+        >
           <Select
             value={channelId}
-            disabled={applying}
+            aria-disabled={applying || undefined}
+            className={INERT_CLASS}
             onChange={(e): void => {
+              if (applying) return;
               setChannelId(e.target.value);
               flow.reset();
             }}

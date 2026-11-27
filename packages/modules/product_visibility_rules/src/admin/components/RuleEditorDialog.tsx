@@ -12,7 +12,7 @@ import { ModalDialog } from '@endora-commerce/admin-kit/components';
 import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import { Alert, AlertDescription, Button, Checkbox, FormField, Input, Label, Select } from '@endora-commerce/admin-kit/ui';
 import { productVisibilityClient } from '../api.js';
-import { localized, refusalMessage, thresholdLabels } from '../lib/labels.js';
+import { INERT_CLASS, localized, refusalMessage, thresholdLabels } from '../lib/labels.js';
 import { usePreviewFlow } from '../lib/use-preview-flow.js';
 import { PreviewPanel } from './PreviewPanel.js';
 
@@ -41,6 +41,7 @@ export interface RuleEditorDialogProps {
   readonly channelName?: (id: string) => string;
   /** How often a pending change preview is asked again. */
   readonly pollIntervalMs?: number;
+  readonly slowAfterMs?: number;
   readonly onClose: () => void;
   /** `saved` — written directly; `changed` — an attached rule's change preview was confirmed. */
   readonly onSaved: (outcome: 'saved' | 'changed') => Promise<void>;
@@ -66,7 +67,7 @@ export interface RuleEditorDialogProps {
  * unbounded nesting describe a different tree from `ProductRuleDefinition`, and fitting one to
  * the other would offer choices the API refuses.
  */
-export function RuleEditorDialog({ currencies, ruleId, channelName, pollIntervalMs = 2000, onClose, onSaved }: RuleEditorDialogProps): ReactNode {
+export function RuleEditorDialog({ currencies, ruleId, channelName, pollIntervalMs = 2000, slowAfterMs, onClose, onSaved }: RuleEditorDialogProps): ReactNode {
   const t = useTranslation('product_visibility_rules');
   const { language } = useTranslationContext();
   const formId = useId();
@@ -81,7 +82,7 @@ export function RuleEditorDialog({ currencies, ruleId, channelName, pollInterval
   const [errors, setErrors] = useState<{ name?: string; conditions?: string; each: Array<string | undefined> } | null>(null);
   const [saving, setSaving] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
-  const flow = usePreviewFlow(pollIntervalMs);
+  const flow = usePreviewFlow(pollIntervalMs, slowAfterMs);
   const { reset: resetPreview } = flow;
 
   useEffect(() => {
@@ -186,7 +187,7 @@ export function RuleEditorDialog({ currencies, ruleId, channelName, pollInterval
 
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
-    if (!ready || governed) return;
+    if (!ready || governed || saving || waiting) return;
     const { definition, found } = build();
     setErrors(found);
     if (!definition) return;
@@ -204,7 +205,7 @@ export function RuleEditorDialog({ currencies, ruleId, channelName, pollInterval
   };
 
   const previewChange = async (): Promise<void> => {
-    if (!saved) return;
+    if (!saved || flow.busy || waiting) return;
     const { definition, found } = build();
     setErrors(found);
     if (!definition) return;
@@ -213,33 +214,62 @@ export function RuleEditorDialog({ currencies, ruleId, channelName, pollInterval
 
   const applying = flow.preview.phase === 'applying';
   const locked = saving || applying || !ready;
+  // T103 — until the attribute list answers, a saved attribute condition cannot be shown by its
+  // label nor checked, so Save and Preview wait (aria-disabled, with the reason beside them).
+  const waiting = attributes === null && !attributesFailed;
+  const waitingId = `${formId}-waiting`;
+  const close = (): void => {
+    if (saving || applying) return;
+    flow.stop();
+    onClose();
+  };
 
   return (
     <ModalDialog
       title={editing ? t('rules.editor.editTitle') : t('rules.editor.title')}
-      onClose={(): void => {
-        flow.stop();
-        onClose();
-      }}
+      onClose={close}
       busy={saving || applying}
       widthClassName="max-w-2xl"
       footer={
         <>
-          <Button type="button" variant="outline" onClick={onClose} disabled={saving || applying}>
+          <Button type="button" variant="outline" className={INERT_CLASS} onClick={close} aria-disabled={saving || applying || undefined}>
             {t('config.cancel')}
           </Button>
           {!ready ? null : governed ? (
             flow.counts ? (
-              <Button type="button" onClick={(): void => void flow.confirm(() => onSaved('changed'))} disabled={applying} aria-busy={applying}>
+              <Button
+                ref={flow.confirmRef}
+                type="button"
+                className={INERT_CLASS}
+                onClick={(): void => {
+                  if (!applying) void flow.confirm(() => onSaved('changed'));
+                }}
+                aria-disabled={applying || undefined}
+                aria-busy={applying}
+              >
                 {t('rules.attach.confirm')}
               </Button>
             ) : (
-              <Button type="button" onClick={(): void => void previewChange()} disabled={flow.busy} aria-busy={flow.busy}>
+              <Button
+                type="button"
+                className={INERT_CLASS}
+                onClick={(): void => void previewChange()}
+                aria-disabled={flow.busy || waiting || undefined}
+                aria-busy={flow.busy}
+                aria-describedby={waiting ? waitingId : undefined}
+              >
                 {t('rules.attach.preview')}
               </Button>
             )
           ) : (
-            <Button type="submit" form={formId} disabled={saving} aria-busy={saving}>
+            <Button
+              type="submit"
+              form={formId}
+              className={INERT_CLASS}
+              aria-disabled={saving || waiting || undefined}
+              aria-busy={saving}
+              aria-describedby={waiting ? waitingId : undefined}
+            >
               {t('rules.editor.save')}
             </Button>
           )}

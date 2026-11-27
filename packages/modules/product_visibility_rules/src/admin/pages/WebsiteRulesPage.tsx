@@ -21,6 +21,7 @@ import { productVisibilityClient } from '../api.js';
 import { AttachDialog } from '../components/AttachDialog.js';
 import { RuleEditorDialog } from '../components/RuleEditorDialog.js';
 import { callerIsUnrestricted, channelName, refusalMessage } from '../lib/labels.js';
+import { PREVIEW_SLOW_AFTER_MS } from '../lib/use-preview-flow.js';
 import { useOverview, useSalesChannels } from '../lib/use-overview.js';
 
 const CONFIG_ROUTE = '/product-visibility';
@@ -30,6 +31,8 @@ type Rule = ProductVisibilityOverviewResponse['productRules'][number];
 export interface WebsiteRulesPageProps {
   /** How often a pending preview is asked again. Tests shorten it. */
   readonly pollIntervalMs?: number;
+  /** How long a preview may stay pending before the dialog offers a new one. Tests shorten it. */
+  readonly slowAfterMs?: number;
 }
 
 /**
@@ -41,12 +44,12 @@ export interface WebsiteRulesPageProps {
  *
  * A rule's name is operator text and is rendered as text only.
  */
-export function WebsiteRulesPage({ pollIntervalMs = 2000 }: WebsiteRulesPageProps): ReactNode {
+export function WebsiteRulesPage({ pollIntervalMs = 2000, slowAfterMs = PREVIEW_SLOW_AFTER_MS }: WebsiteRulesPageProps): ReactNode {
   const t = useTranslation('product_visibility_rules');
   const { language } = useTranslationContext();
   const { me, hasPermission } = useAuth();
   const { overview, loading, refreshing, failed, reload } = useOverview();
-  const channels = useSalesChannels();
+  const { channels, ready: channelsReady, failed: channelsFailed } = useSalesChannels();
   const status = useInlineStatus();
   const { show } = status;
   const { confirm, confirmDialog } = useConfirmDialog();
@@ -125,6 +128,11 @@ export function WebsiteRulesPage({ pollIntervalMs = 2000 }: WebsiteRulesPageProp
               </AlertDescription>
             </Alert>
           ) : null}
+          {channelsFailed ? (
+            <Alert variant="warning">
+              <AlertDescription>{t('config.error.channels')}</AlertDescription>
+            </Alert>
+          ) : null}
           {overview.currencies.some((c) => c.building) ? (
             // US4-11 (Q-2) — while a currency's catalogue prices are rebuilt, governed channels
             // keep the products they have; said here so a preview taken now is read with that.
@@ -179,7 +187,13 @@ export function WebsiteRulesPage({ pollIntervalMs = 2000 }: WebsiteRulesPageProp
                       </p>
                     </div>
                     {writable ? (
-                      <Button type="button" size="sm" variant="outline" onClick={(): void => void detach(attachment.salesChannelId)}>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        aria-label={t('rules.detachFrom', { channel: nameOfChannel(attachment.salesChannelId) })}
+                        onClick={(): void => void detach(attachment.salesChannelId)}
+                      >
                         {t('rules.detach')}
                       </Button>
                     ) : null}
@@ -218,13 +232,13 @@ export function WebsiteRulesPage({ pollIntervalMs = 2000 }: WebsiteRulesPageProp
                     </div>
                     {writable ? (
                       <div className="flex items-center gap-1">
-                        <Button type="button" size="sm" variant="ghost" aria-label={t('rules.edit')} onClick={(): void => setDialog({ edit: rule })}>
+                        <Button type="button" size="sm" variant="ghost" aria-label={t('rules.editNamed', { name: rule.name })} onClick={(): void => setDialog({ edit: rule })}>
                           <ListFilter aria-hidden="true" />
                         </Button>
-                        <Button type="button" size="sm" variant="ghost" aria-label={t('rules.rename')} onClick={(): void => setDialog({ rename: rule })}>
+                        <Button type="button" size="sm" variant="ghost" aria-label={t('rules.renameNamed', { name: rule.name })} onClick={(): void => setDialog({ rename: rule })}>
                           <Pencil aria-hidden="true" />
                         </Button>
-                        <Button type="button" size="sm" variant="ghost" aria-label={t('rules.delete')} onClick={(): void => void remove(rule)}>
+                        <Button type="button" size="sm" variant="ghost" aria-label={t('rules.deleteNamed', { name: rule.name })} onClick={(): void => void remove(rule)}>
                           <Trash2 aria-hidden="true" />
                         </Button>
                       </div>
@@ -250,8 +264,10 @@ export function WebsiteRulesPage({ pollIntervalMs = 2000 }: WebsiteRulesPageProp
             <AttachDialog
               rules={overview.productRules}
               channels={channels}
+              channelsReady={channelsReady}
               governed={governed}
               pollIntervalMs={pollIntervalMs}
+              slowAfterMs={slowAfterMs}
               onClose={(): void => setDialog(null)}
               onApplied={async (): Promise<void> => {
                 setDialog(null);
@@ -267,6 +283,7 @@ export function WebsiteRulesPage({ pollIntervalMs = 2000 }: WebsiteRulesPageProp
               currencies={overview.currencies.map((c) => c.code)}
               channelName={nameOfChannel}
               pollIntervalMs={pollIntervalMs}
+              slowAfterMs={slowAfterMs}
               onClose={(): void => setDialog(null)}
               onSaved={async (outcome): Promise<void> => {
                 setDialog(null);

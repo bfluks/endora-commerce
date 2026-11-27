@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import type { WebsiteRulePreviewResponse } from '@endora-commerce/contracts';
+import { ApiError } from '@endora-commerce/admin-kit/lib';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { productVisibilityClient } from '../api.js';
 import { previewStatusLabels, refusalMessage } from './labels.js';
@@ -22,8 +23,14 @@ export interface PreviewFlow {
   readonly busy: boolean;
   /** The counts of a ready (or applying) preview — the only state in which a confirm is offered. */
   readonly counts: PreviewCounts | null;
-  /** What the polite live region says now. */
+  /** What the polite live region says now: the refusal when there is one, else the state. */
   readonly statusText: string;
+  /** Still pending past the ceiling: the panel offers a new preview. */
+  readonly slow: boolean;
+  /** The Confirm button: focus moves to it when the preview is ready. */
+  readonly confirmRef: RefObject<HTMLButtonElement | null>;
+  /** Start the last preview again (after "this is taking longer than usual"). */
+  again(): Promise<void>;
   /** Start a preview with `create`; a running one is dropped first. */
   start(create: () => Promise<{ previewId: string }>): Promise<void>;
   /** Confirm the ready preview, then `onApplied`; a refusal spends the preview (stale, expired, taken). */
@@ -40,10 +47,25 @@ export interface PreviewFlow {
  * answer for a preview that stopped mattering (inputs changed, dialog closed) is dropped. A stale or
  * expired preview ends in a state that offers a new one rather than a dead end (Peak-End).
  */
-export function usePreviewFlow(pollIntervalMs: number): PreviewFlow {
+/**
+ * A failure that carries no answer from the server — the network, or a server error — is worth
+ * one more ask before the preview is given up; a refusal (4xx) is not.
+ */
+function isTransient(err: unknown): boolean {
+  return !(err instanceof ApiError) || err.status >= 500;
+}
+
+/** About 75 s: a preview still pending after that says so and offers a new one (Doherty, Peak-End). */
+export const PREVIEW_SLOW_AFTER_MS = 75_000;
+
+export function usePreviewFlow(pollIntervalMs: number, slowAfterMs: number = PREVIEW_SLOW_AFTER_MS): PreviewFlow {
   const t = useTranslation('product_visibility_rules');
   const [preview, setPreview] = useState<PreviewState>({ phase: 'idle' });
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [slow, setSlow] = useState(false);
+  const confirmRef = useRef<HTMLButtonElement | null>(null);
+  const lastCreate = useRef<(() => Promise<{ previewId: string }>) | null>(null);
+  const startedAt = useRef(0);
   /** Bumped whenever a preview stops mattering. A late answer for an older ticket is dropped. */
   const ticket = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -60,19 +82,22 @@ export function usePreviewFlow(pollIntervalMs: number): PreviewFlow {
     stop();
     setPreview({ phase: 'idle' });
     setRefusal(null);
+    setSlow(false);
   }, [stop]);
 
   const poll = useCallback(
-    (previewId: string, mine: number): void => {
+    (previewId: string, mine: number, retried = false): void => {
       timer.current = setTimeout(() => {
         void productVisibilityClient
           .preview(previewId)
           .then((answer) => {
             if (mine !== ticket.current) return;
             if (answer.status === 'pending') {
+              if (Date.now() - startedAt.current >= slowAfterMs) setSlow(true);
               poll(previewId, mine);
               return;
             }
+            setSlow(false);
             if (answer.status === 'ready') {
               setPreview({ phase: 'ready', previewId, counts: answer.counts });
               return;
@@ -81,19 +106,27 @@ export function usePreviewFlow(pollIntervalMs: number): PreviewFlow {
           })
           .catch((err: unknown) => {
             if (mine !== ticket.current) return;
+            if (!retried && isTransient(err)) {
+              poll(previewId, mine, true);
+              return;
+            }
+            setSlow(false);
             setRefusal(refusalMessage(err, t('rules.attach.previewFailed')));
             setPreview({ phase: 'ended', status: null });
           });
       }, pollIntervalMs);
     },
-    [pollIntervalMs, t],
+    [pollIntervalMs, slowAfterMs, t],
   );
 
   const start = useCallback(
     async (create: () => Promise<{ previewId: string }>): Promise<void> => {
       stop();
       const mine = ticket.current;
+      lastCreate.current = create;
+      startedAt.current = Date.now();
       setRefusal(null);
+      setSlow(false);
       setPreview({ phase: 'creating' });
       try {
         const { previewId } = await create();
@@ -126,16 +159,26 @@ export function usePreviewFlow(pollIntervalMs: number): PreviewFlow {
     [preview, t],
   );
 
+  const again = useCallback(async (): Promise<void> => {
+    if (lastCreate.current) await start(lastCreate.current);
+  }, [start]);
+
+  // A ready preview's next step is Confirm: focus goes there, where the Preview button was.
+  useEffect(() => {
+    if (preview.phase === 'ready') confirmRef.current?.focus();
+  }, [preview.phase]);
+
   const busy = preview.phase === 'creating' || preview.phase === 'pending' || preview.phase === 'applying';
   const counts = preview.phase === 'ready' || preview.phase === 'applying' ? preview.counts : null;
-  const statusText =
-    preview.phase === 'creating' || preview.phase === 'pending'
-      ? previewStatusLabels.label(t, 'pending')
-      : preview.phase === 'ready'
-        ? previewStatusLabels.label(t, 'ready')
-        : preview.phase === 'ended' && preview.status !== null
-          ? previewStatusLabels.label(t, preview.status)
-          : '';
+  const statusText = ((): string => {
+    if (refusal !== null) return refusal;
+    if (preview.phase === 'creating' || preview.phase === 'pending') {
+      return slow && preview.phase === 'pending' ? t('preview.slow') : previewStatusLabels.label(t, 'pending');
+    }
+    if (preview.phase === 'ready') return previewStatusLabels.label(t, 'ready');
+    if (preview.phase === 'ended' && preview.status !== null) return previewStatusLabels.label(t, preview.status);
+    return '';
+  })();
 
-  return { preview, refusal, busy, counts, statusText, start, confirm, reset, stop };
+  return { preview, refusal, busy, counts, statusText, slow: slow && preview.phase === 'pending', confirmRef, again, start, confirm, reset, stop };
 }

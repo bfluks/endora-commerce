@@ -34,7 +34,7 @@ export function ConfigurationPage(): ReactNode {
   const t = useTranslation('product_visibility_rules');
   const { me, hasPermission } = useAuth();
   const { overview, loading, refreshing, failed, reload } = useOverview();
-  const channels = useSalesChannels();
+  const { channels, failed: channelsFailed } = useSalesChannels();
   const status = useInlineStatus();
   const { show } = status;
   const onStatus = useCallback((message: string, tone: 'success' | 'error'): void => show(message, tone), [show]);
@@ -74,6 +74,11 @@ export function ConfigurationPage(): ReactNode {
           <Alert variant="warning">
             <AlertDescription>{t('config.offWarning')}</AlertDescription>
           </Alert>
+          {channelsFailed ? (
+            <Alert variant="warning">
+              <AlertDescription>{t('config.error.channels')}</AlertDescription>
+            </Alert>
+          ) : null}
           {failed ? (
             <Alert variant="destructive">
               <AlertDescription className="flex flex-wrap items-center justify-between gap-3">

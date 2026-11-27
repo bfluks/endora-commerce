@@ -60,26 +60,35 @@ export function useOverview(): OverviewState {
 
 export type SalesChannelRow = SalesChannelListResponse['items'][number];
 
+export interface SalesChannelsState {
+  readonly channels: readonly SalesChannelRow[];
+  /** The read answered. */
+  readonly ready: boolean;
+  /** The read failed: the screen says so once, and each row reads "unknown channel". */
+  readonly failed: boolean;
+}
+
 /**
- * The sales channels, for naming the ones a designation or a website rule points at. An
- * operator without `sales_channels:read` gets an empty list, and each row then reads
- * "unknown channel" rather than failing the screen.
+ * The sales channels, for naming the ones a designation or a website rule points at. A failed
+ * read (an operator without `sales_channels:read` included) is not swallowed: the screen says
+ * once that the channels could not be loaded, and each row then reads "unknown channel" rather
+ * than failing the screen.
  */
-export function useSalesChannels(): readonly SalesChannelRow[] {
-  const [channels, setChannels] = useState<readonly SalesChannelRow[]>([]);
+export function useSalesChannels(): SalesChannelsState {
+  const [state, setState] = useState<SalesChannelsState>({ channels: [], ready: false, failed: false });
   useEffect(() => {
     let live = true;
     productVisibilityClient
       .salesChannels()
       .then((items) => {
-        if (live && Array.isArray(items)) setChannels(items);
+        if (live) setState({ channels: Array.isArray(items) ? items : [], ready: true, failed: false });
       })
       .catch(() => {
-        // Named as unknown below; the screen's own data does not depend on it.
+        if (live) setState({ channels: [], ready: false, failed: true });
       });
     return (): void => {
       live = false;
     };
   }, []);
-  return channels;
+  return state;
 }
