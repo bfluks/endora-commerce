@@ -190,6 +190,7 @@ function MappingCell({ role, overview, writable, pending, onChange }: MappingCel
         size="sm"
         variant="outline"
         className={INERT_CLASS}
+        aria-label={t('config.roles.removeMappingOf', { role: role.name })}
         aria-disabled={busy || undefined}
         aria-busy={busy}
         onClick={(): void => {

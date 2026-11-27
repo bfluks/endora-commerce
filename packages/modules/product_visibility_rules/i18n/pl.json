@@ -102,6 +102,7 @@
   "config.roles.notMappable": "Nie można przypisać",
   "config.roles.notMappableBecause": "Nie można przypisać: ma uprawnienie, które zawsze widzi wszystkie produkty",
   "config.roles.removeMapping": "Usuń przypisanie",
+  "config.roles.removeMappingOf": "Usuń przypisanie roli {role}",
   "config.roles.saved": "Zapisano przypisanie roli {role}",
   "config.roles.nowSeesCategory": "Rola {role} widzi teraz tylko kategorię {category}",
   "config.roles.nowSeesNothing": "Rola {role} nie widzi teraz żadnych produktów",

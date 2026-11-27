@@ -84,6 +84,7 @@ export function AttachDialog({ rules, channels, channelsReady, governed, pollInt
             </Button>
           ) : (
             <Button
+              ref={flow.previewRef}
               type="button"
               className={INERT_CLASS}
               onClick={(): void => void startPreview()}

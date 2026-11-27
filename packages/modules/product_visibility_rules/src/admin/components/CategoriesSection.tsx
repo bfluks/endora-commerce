@@ -158,7 +158,7 @@ function CategoryDialog({ draft, currencies, onClose, onSaved }: CategoryDialogP
     if (index === null) return;
     focusAfterRemoval.current = null;
     const buttons = [...(formRef.current?.querySelectorAll<HTMLButtonElement>('[data-remove-condition]') ?? [])].filter((b) => !b.disabled);
-    (buttons[index] ?? buttons[index - 1] ?? addRef.current)?.focus();
+    (buttons[index] ?? addRef.current)?.focus();
   }, [conditions]);
 
   const validate = (): DraftErrors | null => {

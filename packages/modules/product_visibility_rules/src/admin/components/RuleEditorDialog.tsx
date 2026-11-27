@@ -91,6 +91,8 @@ export function RuleEditorDialog({ currencies, ruleId, channelName, pollInterval
   const [conflict, setConflict] = useState(false);
   /** Bumped to read the saved rule again ("Load the current version"). */
   const [readTicket, setReadTicket] = useState(0);
+  /** The outcome of the last re-read, for the status line and focus: the ticket it answered. */
+  const [reread, setReread] = useState<{ ticket: number; ok: boolean } | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
   const addAttributeRef = useRef<HTMLButtonElement | null>(null);
   /** After a removal: the index whose remove button takes focus, else "add condition". */
@@ -127,18 +129,30 @@ export function RuleEditorDialog({ currencies, ruleId, channelName, pollInterval
         // A grouped definition (API only) is not something this editor builds; it is not opened.
         setConditions(rule.definition.conditions.flatMap((c) => (c.kind === 'group' ? [] : [toDraft(c)])));
         setConflict(false);
-        if (readTicket > 0) showStatus(t('rules.editor.reloaded'), 'info');
+        if (readTicket > 0) setReread({ ticket: readTicket, ok: true });
       })
       .catch(() => {
         if (!live) return;
         // A first read that fails leaves nothing to edit; a re-read keeps what is on screen.
         if (readTicket === 0) setSavedFailed(true);
-        else showStatus(t('rules.editor.loadFailed'), 'error');
+        else setReread({ ticket: readTicket, ok: false });
       });
     return (): void => {
       live = false;
     };
-  }, [ruleId, readTicket, showStatus, t]);
+  }, [ruleId, readTicket]);
+
+  // A re-read is said in the polite region; on success "Load the current version" leaves, so
+  // focus goes to the form's first field rather than the page (SC 2.4.3).
+  useEffect(() => {
+    if (reread === null) return;
+    if (!reread.ok) {
+      showStatus(t('rules.editor.loadFailed'), 'error');
+      return;
+    }
+    showStatus(t('rules.editor.reloaded'), 'info');
+    formRef.current?.querySelector<HTMLElement>('select:not([disabled]), input:not([disabled])')?.focus();
+  }, [reread, showStatus, t]);
 
   // Focus after a removal: the next condition's remove button, else "add condition" (SC 2.4.3).
   useEffect(() => {
@@ -146,7 +160,7 @@ export function RuleEditorDialog({ currencies, ruleId, channelName, pollInterval
     if (index === null) return;
     focusAfterRemoval.current = null;
     const buttons = formRef.current?.querySelectorAll<HTMLButtonElement>('[data-remove-condition]');
-    (buttons?.[index] ?? buttons?.[index - 1] ?? addAttributeRef.current)?.focus();
+    (buttons?.[index] ?? addAttributeRef.current)?.focus();
   }, [conditions]);
 
   // Focus after a refused validation: the first invalid field (SC 3.3.1).
@@ -300,6 +314,7 @@ export function RuleEditorDialog({ currencies, ruleId, channelName, pollInterval
               </Button>
             ) : (
               <Button
+                ref={flow.previewRef}
                 type="button"
                 className={INERT_CLASS}
                 onClick={(): void => void previewChange()}

@@ -31,6 +31,8 @@ export interface PreviewFlow {
   readonly slow: boolean;
   /** The Confirm button: focus moves to it when the preview is ready. */
   readonly confirmRef: RefObject<HTMLButtonElement | null>;
+  /** The Preview button: "New preview" hands focus to it as it leaves. */
+  readonly previewRef: RefObject<HTMLButtonElement | null>;
   /** Start the last preview again (after "this is taking longer than usual"). */
   again(): Promise<void>;
   /** Start a preview with `create`; a running one is dropped first. */
@@ -73,6 +75,7 @@ export function usePreviewFlow(pollIntervalMs: number, slowAfterMs: number = PRE
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [slow, setSlow] = useState(false);
   const confirmRef = useRef<HTMLButtonElement | null>(null);
+  const previewRef = useRef<HTMLButtonElement | null>(null);
   const lastCreate = useRef<(() => Promise<{ previewId: string }>) | null>(null);
   const startedAt = useRef(0);
   /** Bumped whenever a preview stops mattering. A late answer for an older ticket is dropped. */
@@ -169,7 +172,11 @@ export function usePreviewFlow(pollIntervalMs: number, slowAfterMs: number = PRE
   );
 
   const again = useCallback(async (): Promise<void> => {
-    if (lastCreate.current) await start(lastCreate.current);
+    if (!lastCreate.current) return;
+    // "New preview" unmounts with the slow state; focus goes to the Preview button, which waits
+    // (aria-disabled) while the new preview is counted.
+    previewRef.current?.focus();
+    await start(lastCreate.current);
   }, [start]);
 
   // A ready preview's next step is Confirm: focus goes there, where the Preview button was.
@@ -189,5 +196,5 @@ export function usePreviewFlow(pollIntervalMs: number, slowAfterMs: number = PRE
     return '';
   })();
 
-  return { preview, refusal: refusal?.message ?? null, refusalCode: refusal?.code ?? null, busy, counts, statusText, slow: slow && preview.phase === 'pending', confirmRef, again, start, confirm, reset, stop };
+  return { preview, refusal: refusal?.message ?? null, refusalCode: refusal?.code ?? null, busy, counts, statusText, slow: slow && preview.phase === 'pending', confirmRef, previewRef, again, start, confirm, reset, stop };
 }
