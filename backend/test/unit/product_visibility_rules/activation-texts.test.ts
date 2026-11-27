@@ -62,5 +62,8 @@ describe('product_visibility_rules — activation texts (T077; FR-076, TM-13)', 
     }
     expect(bundle('en')[key]).toMatch(/see none until mapped/);
     expect(bundle('en')[key]).toMatch(/Off: every restriction is lifted/);
+    // The Polish description states both consequences too, not just a non-empty string (QA).
+    expect(bundle('pl')[key]).toMatch(/nic do czasu przypisania/);
+    expect(bundle('pl')[key]).toMatch(/Wyłączony: bez ograniczeń/);
   });
 });

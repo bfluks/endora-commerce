@@ -249,6 +249,30 @@ describe('ConfigurationPage (T071)', () => {
     expect(screen.queryByText('ROLE_NOT_MAPPABLE')).toBeNull();
   });
 
+  it('puts a refused mapping back as it was, and reads the configuration again (QA)', async () => {
+    state.refuse = { url: '/role-mappings/', status: 409, code: 'ROLE_NOT_MAPPABLE', message: 'This role always sees every product, so it cannot be mapped.' };
+    render();
+    await screen.findByRole('region', { name: k('config.roles.title') });
+    const reads = (): number => state.calls.filter((c) => c.method === 'GET' && c.url.endsWith('/overview')).length;
+    expect(reads()).toBe(1);
+    const select = within(roleRow('Sales rep')).getByRole('combobox', { name: k('config.roles.mappingFor') }) as HTMLSelectElement;
+    expect(select.value).toBe('');
+    fireEvent.change(select, { target: { value: CAT_EXPORT } });
+    await screen.findByText('This role always sees every product, so it cannot be mapped.');
+    await waitFor(() => expect(reads()).toBe(2));
+    const after = within(roleRow('Sales rep')).getByRole('combobox', { name: k('config.roles.mappingFor') }) as HTMLSelectElement;
+    await waitFor(() => expect(after.value).toBe(''));
+    expect(after).not.toBeDisabled();
+  });
+
+  it('reads the configuration again after a mapping is saved (QA)', async () => {
+    render();
+    await screen.findByRole('region', { name: k('config.roles.title') });
+    fireEvent.change(within(roleRow('Sales rep')).getByRole('combobox', { name: k('config.roles.mappingFor') }), { target: { value: CAT_DOMESTIC } });
+    await waitFor(() => expect(state.calls.filter((c) => c.method === 'GET' && c.url.endsWith('/overview'))).toHaveLength(2));
+    expect(await screen.findByText(k('config.roles.saved'))).toBeInTheDocument();
+  });
+
   it('creates a category from its name and conditions, and refuses an empty name in its own words', async () => {
     render();
     const section = await screen.findByRole('region', { name: k('config.categories.title') });
@@ -301,6 +325,17 @@ describe('ConfigurationPage (T071)', () => {
     expect(screen.getByText(k('config.readOnly.restricted'))).toBeInTheDocument();
     expect(screen.queryByRole('combobox')).toBeNull();
     expect(screen.queryByRole('button', { name: k('config.categories.add') })).toBeNull();
+  });
+
+  it('is read-only when the overview does not list the caller\'s own role (TM-4 c, fail closed) (QA)', async () => {
+    const o = overview();
+    o.roles = o.roles.filter((r) => r.roleId !== SELF_ROLE);
+    state.overview = o;
+    render();
+    await screen.findByRole('region', { name: k('config.roles.title') });
+    expect(screen.getByText(k('config.readOnly.restricted'))).toBeInTheDocument();
+    expect(screen.queryByRole('combobox')).toBeNull();
+    expect(screen.queryByRole('button', { name: k('config.designations.change') })).toBeNull();
   });
 
   it('shows a skeleton while loading, and an error with a retry when the read fails', async () => {

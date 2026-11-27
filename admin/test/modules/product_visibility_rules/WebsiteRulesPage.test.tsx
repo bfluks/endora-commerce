@@ -26,12 +26,13 @@ const PREVIEW = '00000000-0000-4000-8000-0000000000d1';
 const EVIL = '<img src=x onerror="window.__pwned=1">';
 
 let building = false;
+let selfEffect: ProductVisibilityOverviewResponse['roles'][number]['effect'] = 'unmappable_unrestricted';
 
 function overview(): ProductVisibilityOverviewResponse {
   return {
     currencies: [{ code: 'PLN', active: true, designation: null, designationStatus: null, servedGeneration: 1, building }],
     categories: [],
-    roles: [{ roleId: SELF_ROLE, code: 'test_role', name: 'Admin', effect: 'unmappable_unrestricted', warnings: [] }],
+    roles: [{ roleId: SELF_ROLE, code: 'test_role', name: 'Admin', effect: selfEffect, warnings: [] }],
     productRules: [
       { id: RULE_A, name: 'Flag A', version: 2 },
       { id: RULE_EVIL, name: EVIL, version: 1 },
@@ -145,6 +146,7 @@ describe('WebsiteRulesPage (T073)', () => {
       { status: 'ready', counts: { [CHANNEL_Y]: { join: 12, leave: 3 } } },
     ];
     state.refuse = null;
+    selfEffect = 'unmappable_unrestricted';
     delete (window as unknown as { __pwned?: number }).__pwned;
   });
   afterEach(() => cleanup());
@@ -264,6 +266,61 @@ describe('WebsiteRulesPage (T073)', () => {
     expect(within(dialog).queryByRole('button', { name: k('rules.attach.confirm') })).toBeNull();
   });
 
+  it('offers a new preview when the confirm answers that the channel got another rule meanwhile (FR-051) (QA)', async () => {
+    state.refuse = { method: 'POST', url: '/confirm', status: 409, code: 'CHANNEL_ALREADY_GOVERNED', message: 'This sales channel already follows another product rule.' };
+    const dialog = await openAttach();
+    fireEvent.click(within(dialog).getByRole('button', { name: k('rules.attach.preview') }));
+    fireEvent.click(await within(dialog).findByRole('button', { name: k('rules.attach.confirm') }));
+    expect(await within(dialog).findByText('This sales channel already follows another product rule.')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: k('rules.attach.confirm') })).toBeNull();
+    expect(within(dialog).getByRole('button', { name: k('rules.attach.preview') })).toBeEnabled();
+  });
+
+  it('stops asking for a pending preview once the dialog is closed (polling cleanup) (QA)', async () => {
+    state.previewAnswers = [{ status: 'pending', counts: {} }];
+    const dialog = await openAttach();
+    fireEvent.click(within(dialog).getByRole('button', { name: k('rules.attach.preview') }));
+    const polls = (): number => state.calls.filter((c) => c.method === 'GET' && c.url.includes('/website-rules/previews/')).length;
+    await waitFor(() => expect(polls()).toBeGreaterThanOrEqual(2));
+    fireEvent.click(within(dialog).getByRole('button', { name: k('config.cancel') }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    const settled = polls() + 1; // one answer may already be in flight
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(polls()).toBeLessThanOrEqual(settled);
+  });
+
+  it('stops asking for a pending preview when the whole screen unmounts (sign-out) (QA)', async () => {
+    state.previewAnswers = [{ status: 'pending', counts: {} }];
+    const view = render();
+    const governed = await screen.findByRole('region', { name: k('rules.channels.title') });
+    fireEvent.click(within(governed).getByRole('button', { name: k('rules.attach.open') }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(k('rules.attach.field.rule'), { exact: false }), { target: { value: RULE_A } });
+    fireEvent.change(within(dialog).getByLabelText(k('rules.attach.field.channel'), { exact: false }), { target: { value: CHANNEL_Y } });
+    fireEvent.click(within(dialog).getByRole('button', { name: k('rules.attach.preview') }));
+    const polls = (): number => state.calls.filter((c) => c.method === 'GET' && c.url.includes('/website-rules/previews/')).length;
+    await waitFor(() => expect(polls()).toBeGreaterThanOrEqual(2));
+    view.unmount();
+    const settled = polls() + 1;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(polls()).toBeLessThanOrEqual(settled);
+  });
+
+  it('drops a preview when the channel is changed while it is pending: nothing to confirm (QA)', async () => {
+    state.previewAnswers = [
+      { status: 'pending', counts: {} },
+      { status: 'ready', counts: { [CHANNEL_Y]: { join: 12, leave: 3 } } },
+    ];
+    const dialog = await openAttach();
+    fireEvent.click(within(dialog).getByRole('button', { name: k('rules.attach.preview') }));
+    const channel = within(dialog).getByLabelText(k('rules.attach.field.channel'), { exact: false });
+    fireEvent.change(channel, { target: { value: '' } });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(within(dialog).queryByRole('button', { name: k('rules.attach.confirm') })).toBeNull();
+    expect(within(dialog).queryByText('12')).toBeNull();
+    expect(state.calls.some((c) => c.url.endsWith('/confirm'))).toBe(false);
+  });
+
   it('does not offer a channel that already has a rule (FR-051)', async () => {
     render();
     const governed = await screen.findByRole('region', { name: k('rules.channels.title') });
@@ -311,5 +368,17 @@ describe('WebsiteRulesPage (T073)', () => {
     expect(screen.queryByRole('button', { name: k('rules.editor.new') })).toBeNull();
     expect(screen.queryByRole('button', { name: k('rules.attach.open') })).toBeNull();
     expect(screen.queryByRole('button', { name: k('rules.detach') })).toBeNull();
+  });
+
+  it('is read-only for a manage holder whose own role is restricted (TM-4 c) (QA)', async () => {
+    selfEffect = 'mapped';
+    render();
+    await screen.findByRole('region', { name: k('rules.list.title') });
+    expect(screen.getByText(k('config.readOnly.restricted'))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: k('rules.editor.new') })).toBeNull();
+    expect(screen.queryByRole('button', { name: k('rules.attach.open') })).toBeNull();
+    expect(screen.queryByRole('button', { name: k('rules.detach') })).toBeNull();
+    expect(screen.queryByRole('button', { name: k('rules.delete') })).toBeNull();
+    expect(screen.queryByRole('button', { name: k('rules.rename') })).toBeNull();
   });
 });
