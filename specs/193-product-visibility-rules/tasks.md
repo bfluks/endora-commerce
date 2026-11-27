@@ -654,35 +654,44 @@ import_export, contracts, spec).
 
 ## Phase 8 — Admin UI (US2, US4, FR-023 banner, FR-024, FR-071, FR-074; TM-4, TM-13, TM-14)
 
-- [ ] T071 [P] Failing component tests `admin/test/modules/product_visibility_rules/ConfigurationPage.test.tsx`:
+- [x] T071 [P] Failing component tests `admin/test/modules/product_visibility_rules/ConfigurationPage.test.tsx`:
   categories, designations (only designatable books offered; not-in-force reason shown), role mapping
   (target `unrestricted` offered; `platform_admin` and self-lifting roles shown "unrestricted — cannot
   be mapped"; "sees no products" listed; `mapping_without_effect` and FR-086 warnings shown),
   read-only for `:read` and for a non-unrestricted caller (TM-4 c).
-- [ ] T072 `PVR/admin/pages/ConfigurationPage.tsx` + API client; admin-kit primitives only (IX).
-- [ ] T073 [P] Failing tests `…/WebsiteRulesPage.test.tsx`: rule editor (attribute picker limited to
+  *(Done: 13 cases; read-only also for a manage holder whose own role is restricted.)*
+- [x] T072 `PVR/admin/pages/ConfigurationPage.tsx` + API client; admin-kit primitives only (IX).
+  *(Done: page + sections, API client, enum labels; module's admin layer and generated registry.)*
+- [x] T073 [P] Failing tests `…/WebsiteRulesPage.test.tsx`: rule editor (attribute picker limited to
   boolean/choice non-scoped), attach flow with mandatory preview → confirm, stale/expired/capped
   handling, detach; the rule label rendered as text only.
-- [ ] T074 `PVR/admin/pages/WebsiteRulesPage.tsx` (+ preview polling).
-- [ ] T075 Role screens (R-14): zones `admin_users.roles.list.columns` and
+  *(Done: 13 cases incl. the rebuild notice of T079.)*
+- [x] T074 `PVR/admin/pages/WebsiteRulesPage.tsx` (+ preview polling).
+  *(Done: new rules and renames only — no read of a saved rule's definition exists, so a `change` preview of an attached rule is not offered; see report.)*
+- [x] T075 Role screens (R-14): zones `admin_users.roles.list.columns` and
   `admin_users.roles.editor.aside` in `AdminZoneNameSchema` + props map, rendered in
   `packages/modules/admin_users/src/admin/pages/AdminRolesPage.tsx`; module contributions; test
   `admin/test/modules/admin_users/AdminRolesPage.visibility-zone.test.tsx`.
-- [ ] T076 Product list banner for no-category / restricted callers from the list response's
+  *(Done: one overview read serves every row; text-only list zone inside the row button.)*
+- [x] T076 Product list banner for no-category / restricted callers from the list response's
   `visibility` field (catalog admin, stream A file `CAT/admin/…` — coordinate); test
   `admin/test/modules/catalog/ProductList.visibility-banner.test.tsx` (LOW 15); **TM-14**: confirm the
   admin SPA query cache is dropped on sign-out and on a `401` (admin-shell; fix there if not).
-- [ ] T077 Failing test first (L3): `BT/unit/product_visibility_rules/activation-texts.test.ts` (moved
+  *(Done: `CAT/admin/components/ProductVisibilityBanner.tsx`; TM-14 confirmed by inspection, no fix needed — no query cache, `App` unmounts the signed-in tree on logout and on the 401 trap.)*
+- [x] T077 Failing test first (L3): `BT/unit/product_visibility_rules/activation-texts.test.ts` (moved
   from T078) and the palette-coverage case for the two actions; then palette actions (two), nav entry
   with `requiredPermission`, i18n pl+en for every string incl.
   the FR-073 warning; **TM-13**: the module's activation description and deactivation consequence
   text on `/platform/modules` state that every restricted role becomes unrestricted while off;
   **FR-076 (M10)**: the activation text states that turning it on applies FR-023 at once (unmapped
   roles holding `rfqs:handle` see no products until mapped).
-- [ ] T078 Off-state UI test: no nav, palette, zone contribution, banner while off; **TM-14** test that
+  *(Done: activation texts pinned in en/pl; `open-website-rules`; module reference re-pinned.)*
+- [x] T078 Off-state UI test: no nav, palette, zone contribution, banner while off; **TM-14** test that
   a second admin signing in on the same tab sees no list rows cached from the first.
-- [ ] T079 UX pass against `.claude/skills/ux-laws/SKILL.md` (states: loading, empty, error, refused,
+  *(Done: `admin/test/modules/product_visibility_rules/off-state.test.tsx`, `…/second-admin-same-tab.test.tsx`; both green on first run — behaviour predates the change.)*
+- [x] T079 UX pass against `.claude/skills/ux-laws/SKILL.md` (states: loading, empty, error, refused,
   building generation).
+  *(Done: loading skeleton, empty states, load/refresh errors with retry, refusals as the server's sentence, read-only notices, building notices on both screens.)*
 
 **Verification**: `pnpm --filter admin exec vitest run test/modules/product_visibility_rules test/modules/admin_users/AdminRolesPage.visibility-zone.test.tsx test/modules/catalog/ProductList.visibility-banner.test.tsx test/unit/palette-coverage.test.ts`;
 `pnpm --filter backend exec vitest run test/unit/product_visibility_rules/activation-texts.test.ts`;
