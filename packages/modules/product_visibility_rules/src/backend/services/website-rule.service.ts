@@ -10,6 +10,7 @@ import {
   type ProductRuleAttributesResponse,
   type ProductRuleCreateBody,
   type ProductRuleDefinition,
+  type ProductRuleDetail,
   type ProductRuleUpdateBody,
   type ProductRuleView,
   type ProductGlobalStatus,
@@ -192,7 +193,7 @@ export class WebsiteRuleService {
             labelDefault: a.labelDefault,
             label: a.label,
             kind: kind.kind,
-            options: kind.kind === 'choice' ? a.options.map((o) => o.value) : [],
+            options: kind.kind === 'choice' ? a.options.map((o) => ({ key: o.value, labelDefault: o.labelDefault, label: o.label })) : [],
           };
         })
         .sort((a, b) => a.key.localeCompare(b.key)),
@@ -204,6 +205,21 @@ export class WebsiteRuleService {
     if (issues.length > 0) {
       throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'The rule names an attribute or option it cannot use.', [...issues]);
     }
+  }
+
+  /**
+   * T103 — a saved rule with the channels it governs, for the rule editor. A channel deleted while
+   * governed is left out, as a change preview leaves it out.
+   */
+  async getRule(id: string): Promise<ProductRuleDetail> {
+    const em = this.#em();
+    const rule = await em.findOne(ProductRule, { id });
+    if (!rule) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Product rule not found.');
+    const dead = new Set(await this.#deadAttachments(id));
+    const attachments = (await em.find(WebsiteRuleAttachment, { productRuleId: id }, { orderBy: { salesChannelId: 'asc' } }))
+      .filter((a) => !dead.has(a.salesChannelId))
+      .map((a) => ({ salesChannelId: a.salesChannelId, attachedAt: a.attachedAt.toISOString() }));
+    return { ...view(rule), attachments };
   }
 
   async createRule(body: ProductRuleCreateBody): Promise<ProductRuleView> {
@@ -230,11 +246,22 @@ export class WebsiteRuleService {
 
   // ── Previews (FR-053, TM-11) ─────────────────────────────────────────────────────
 
-  /** Enqueue a preview of attaching or changing a rule; the job evaluates it. */
-  async createPreview(adminUserId: string, body: WebsiteRulePreviewCreateBody): Promise<{ previewId: string }> {
+  /**
+   * Enqueue a preview of attaching or changing a rule; the job evaluates it. With
+   * `expectedVersion` (the `If-Match` of the version the administrator read) a rule that moved
+   * since is refused, so a change drafted on an older definition cannot replace a newer one (T103).
+   */
+  async createPreview(
+    adminUserId: string,
+    body: WebsiteRulePreviewCreateBody,
+    expectedVersion?: number,
+  ): Promise<{ previewId: string }> {
     const em = this.#em();
     const rule = await em.findOne(ProductRule, { id: body.productRuleId });
     if (!rule) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Product rule not found.');
+    if (expectedVersion !== undefined && rule.version !== expectedVersion) {
+      throw new HttpError(409, ERROR_CODES.VERSION_CONFLICT, 'The product rule changed since it was read.', { currentVersion: rule.version });
+    }
     const now = this.#now();
 
     let salesChannelIds: string[];

@@ -1,6 +1,7 @@
 import type {
   ProductRuleAttributesResponse,
   ProductRuleCreateBody,
+  ProductRuleDetail,
   ProductRuleUpdateBody,
   ProductRuleView,
   ProductVisibilityCategory,
@@ -60,6 +61,11 @@ export const productVisibilityClient = {
     return (await apiClient.get<{ data: ProductRuleAttributesResponse }>(`${BASE}/attributes`)).data;
   },
 
+  /** A saved rule with the channels it governs; its `version` is what a save or change preview sends. */
+  async rule(id: string): Promise<ProductRuleDetail> {
+    return (await apiClient.get<{ data: ProductRuleDetail }>(`${BASE}/product-rules/${seg(id)}`)).data;
+  },
+
   createRule(body: ProductRuleCreateBody): Promise<{ data: ProductRuleView }> {
     return apiClient.post(`${BASE}/product-rules`, body);
   },
@@ -72,8 +78,10 @@ export const productVisibilityClient = {
     return apiClient.delete(`${BASE}/product-rules/${seg(rule.id)}`, ifMatch(rule.version));
   },
 
-  async createPreview(body: WebsiteRulePreviewCreateBody): Promise<{ previewId: string }> {
-    return (await apiClient.post<{ data: { previewId: string } }>(`${BASE}/website-rules/previews`, body)).data;
+  /** `version` — the rule version the administrator read; a rule that moved since is refused. */
+  async createPreview(body: WebsiteRulePreviewCreateBody, version?: number): Promise<{ previewId: string }> {
+    const path = `${BASE}/website-rules/previews`;
+    return (await (version === undefined ? apiClient.post<{ data: { previewId: string } }>(path, body) : apiClient.post<{ data: { previewId: string } }>(path, body, ifMatch(version)))).data;
   },
 
   async preview(previewId: string): Promise<WebsiteRulePreviewResponse> {

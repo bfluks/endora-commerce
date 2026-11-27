@@ -692,6 +692,14 @@ import_export, contracts, spec).
 - [x] T079 UX pass against `.claude/skills/ux-laws/SKILL.md` (states: loading, empty, error, refused,
   building generation).
   *(Done: loading skeleton, empty states, load/refresh errors with retry, refusals as the server's sentence, read-only notices, building notices on both screens.)*
+- [x] T103 [B] **Read and edit a saved rule (FR-053 change, US4-5) + choice option labels** (gap left by T074). Failing tests first in
+  `BT/integration/product_visibility_rules/website-rule.test.ts` (read, direct save with a stale `If-Match`, stale change preview,
+  option labels), `…/off-state.website-rule.test.ts` (the new route absent while off) and
+  `admin/test/modules/product_visibility_rules/WebsiteRulesPage.test.tsx`; then `GET …/product-rules/:id` (`product_visibility:read`;
+  definition, version as `ETag`, live attachments), `If-Match` on `POST …/website-rules/previews` (409 `VERSION_CONFLICT` when the rule
+  moved), `/attributes` options as `{ key, labelDefault, label }`, and the rule editor opening a saved rule: unattached ⇒ `PATCH` with
+  `If-Match`; attached ⇒ `change` preview → confirm (shared preview flow with the attach dialog). contracts/admin-api.md updated.
+  *(Done: a rule with grouped conditions — API only — is not opened, so a save cannot drop its groups.)*
 
 **Verification**: `pnpm --filter admin exec vitest run test/modules/product_visibility_rules test/modules/admin_users/AdminRolesPage.visibility-zone.test.tsx test/modules/catalog/ProductList.visibility-banner.test.tsx test/unit/palette-coverage.test.ts`;
 `pnpm --filter backend exec vitest run test/unit/product_visibility_rules/activation-texts.test.ts`;

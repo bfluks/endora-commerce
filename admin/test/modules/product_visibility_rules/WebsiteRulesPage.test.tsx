@@ -577,6 +577,25 @@ describe('WebsiteRulesPage (T073)', () => {
       expect(within(dialog).queryByRole('button', { name: k('rules.attach.preview') })).toBeNull();
     });
 
+    it('does not open a rule whose conditions are grouped (API only), so a save cannot drop its groups', async () => {
+      const kept = savedRules[RULE_EVIL];
+      savedRules[RULE_EVIL] = {
+        ...(kept as object),
+        definition: {
+          match: 'all',
+          conditions: [{ kind: 'group', match: 'any', conditions: [{ kind: 'attribute_boolean', attributeKey: 'flag_a', value: true }] }],
+        },
+      };
+      try {
+        const dialog = await openEditor(EVIL);
+        expect(await within(dialog).findByText(k('rules.editor.grouped'))).toBeInTheDocument();
+        expect(within(dialog).queryByRole('button', { name: k('rules.editor.save') })).toBeNull();
+        expect(within(dialog).queryByLabelText(k('rules.editor.field.match'))).toBeNull();
+      } finally {
+        savedRules[RULE_EVIL] = kept;
+      }
+    });
+
     it('offers no edit to an operator holding only the read permission', async () => {
       render(['product_visibility:read']);
       await screen.findByRole('region', { name: k('rules.list.title') });

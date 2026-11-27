@@ -515,6 +515,16 @@ export const productRuleSchema = z.object({
 });
 export type ProductRuleView = z.infer<typeof productRuleSchema>;
 
+/**
+ * `GET /product-rules/:id` — a saved rule with the sales channels it governs (T103, FR-053): what
+ * the rule editor opens, and the version its save or change preview sends as `If-Match`. A
+ * channel deleted while governed is not listed.
+ */
+export const productRuleDetailSchema = productRuleSchema.extend({
+  attachments: z.array(z.object({ salesChannelId: uuidSchema, attachedAt: isoDateTimeSchema })),
+});
+export type ProductRuleDetail = z.infer<typeof productRuleDetailSchema>;
+
 /** `GET /attributes` — the attributes a rule may name (FR-050): global boolean or choice ones. */
 export const productRuleAttributesResponseSchema = z.object({
   items: z.array(
@@ -523,8 +533,12 @@ export const productRuleAttributesResponseSchema = z.object({
       labelDefault: z.string(),
       label: z.record(z.string(), z.string()),
       kind: z.enum(['boolean', 'choice']),
-      /** Option keys of a choice attribute; empty for a boolean one. */
-      options: z.array(z.string()),
+      /**
+       * Options of a choice attribute, in the catalogue's order; empty for a boolean one. A rule
+       * names an option by `key`; `label` (per language) and `labelDefault` are for display, read
+       * as the attribute's own label is.
+       */
+      options: z.array(z.object({ key: z.string(), labelDefault: z.string(), label: z.record(z.string(), z.string()) })),
     }),
   ),
 });

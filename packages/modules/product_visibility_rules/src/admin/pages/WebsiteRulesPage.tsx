@@ -50,7 +50,7 @@ export function WebsiteRulesPage({ pollIntervalMs = 2000 }: WebsiteRulesPageProp
   const status = useInlineStatus();
   const { show } = status;
   const { confirm, confirmDialog } = useConfirmDialog();
-  const [dialog, setDialog] = useState<'new' | 'attach' | { rename: Rule } | null>(null);
+  const [dialog, setDialog] = useState<'new' | 'attach' | { rename: Rule } | { edit: Rule } | null>(null);
 
   const permitted = hasPermission(PRODUCT_VISIBILITY_PERMISSIONS.MANAGE);
   const unrestricted = overview !== null && callerIsUnrestricted(overview, me?.role?.id);
@@ -58,6 +58,7 @@ export function WebsiteRulesPage({ pollIntervalMs = 2000 }: WebsiteRulesPageProp
 
   const governed = useMemo(() => new Set(overview?.websiteRuleAttachments.map((a) => a.salesChannelId) ?? []), [overview]);
   const ruleName = (id: string): string => overview?.productRules.find((r) => r.id === id)?.name ?? t('rules.unknownRule');
+  const nameOfChannel = (id: string): string => channelName(channels.find((c) => c.id === id), language, t('config.unknownChannel'));
   const governs = (id: string): number => overview?.websiteRuleAttachments.filter((a) => a.productRuleId === id).length ?? 0;
 
   const act = useCallback(
@@ -167,7 +168,7 @@ export function WebsiteRulesPage({ pollIntervalMs = 2000 }: WebsiteRulesPageProp
                   <li key={attachment.salesChannelId} data-attachment-row className="flex flex-wrap items-center justify-between gap-3 py-3">
                     <div className="min-w-0 space-y-0.5">
                       <p className="font-medium">
-                        {channelName(channels.find((c) => c.id === attachment.salesChannelId), language, t('config.unknownChannel'))}
+                        {nameOfChannel(attachment.salesChannelId)}
                       </p>
                       <p className="text-sm">
                         <span className="text-muted-foreground">{t('rules.channels.governedBy')} </span>
@@ -217,6 +218,9 @@ export function WebsiteRulesPage({ pollIntervalMs = 2000 }: WebsiteRulesPageProp
                     </div>
                     {writable ? (
                       <div className="flex items-center gap-1">
+                        <Button type="button" size="sm" variant="ghost" aria-label={t('rules.edit')} onClick={(): void => setDialog({ edit: rule })}>
+                          <ListFilter aria-hidden="true" />
+                        </Button>
                         <Button type="button" size="sm" variant="ghost" aria-label={t('rules.rename')} onClick={(): void => setDialog({ rename: rule })}>
                           <Pencil aria-hidden="true" />
                         </Button>
@@ -256,7 +260,22 @@ export function WebsiteRulesPage({ pollIntervalMs = 2000 }: WebsiteRulesPageProp
               }}
             />
           ) : null}
-          {dialog !== null && typeof dialog === 'object' ? (
+          {dialog !== null && typeof dialog === 'object' && 'edit' in dialog ? (
+            <RuleEditorDialog
+              key={dialog.edit.id}
+              ruleId={dialog.edit.id}
+              currencies={overview.currencies.map((c) => c.code)}
+              channelName={nameOfChannel}
+              pollIntervalMs={pollIntervalMs}
+              onClose={(): void => setDialog(null)}
+              onSaved={async (outcome): Promise<void> => {
+                setDialog(null);
+                show(outcome === 'changed' ? t('rules.editor.changeApplied') : t('rules.saved'), 'success');
+                await reload();
+              }}
+            />
+          ) : null}
+          {dialog !== null && typeof dialog === 'object' && 'rename' in dialog ? (
             <RenameDialog
               rule={dialog.rename}
               onClose={(): void => setDialog(null)}

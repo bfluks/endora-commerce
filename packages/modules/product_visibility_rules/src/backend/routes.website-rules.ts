@@ -26,7 +26,7 @@ export interface WebsiteRuleRouteDeps {
   readonly callerScopeKind: (adminUserId: string) => Promise<AdminProductVisibilityScope['kind']>;
   readonly websiteRules: Pick<
     WebsiteRuleService,
-    'listAttributes' | 'createRule' | 'updateRule' | 'deleteRule' | 'createPreview' | 'getPreview' | 'confirmPreview' | 'detach'
+    'listAttributes' | 'getRule' | 'createRule' | 'updateRule' | 'deleteRule' | 'createPreview' | 'getPreview' | 'confirmPreview' | 'detach'
   >;
 }
 
@@ -49,7 +49,7 @@ function ruleId(raw: string): string {
   return raw;
 }
 
-function withEtag(reply: FastifyReply, rule: ProductRuleView): { data: ProductRuleView } {
+function withEtag<T extends ProductRuleView>(reply: FastifyReply, rule: T): { data: T } {
   void reply.header('etag', `"${rule.version}"`);
   return { data: rule };
 }
@@ -67,6 +67,10 @@ export async function registerWebsiteRuleAdminRoutes(app: FastifyInstance, deps:
   }
 
   app.get(`${BASE}/attributes`, { preHandler: READ }, async () => ({ data: await websiteRules.listAttributes() }));
+
+  app.get<{ Params: { id: string } }>(`${BASE}/product-rules/:id`, { preHandler: READ }, async (request, reply) =>
+    withEtag(reply, await websiteRules.getRule(ruleId(request.params.id))),
+  );
 
   app.post(
     `${BASE}/product-rules`,
@@ -99,7 +103,7 @@ export async function registerWebsiteRuleAdminRoutes(app: FastifyInstance, deps:
     async (request, reply) => {
       const body = websiteRulePreviewCreateBodySchema.parse(request.body);
       reply.status(202);
-      return { data: await websiteRules.createPreview(deps.resolveAdminUserId(request), body) };
+      return { data: await websiteRules.createPreview(deps.resolveAdminUserId(request), body, expectedVersionOf(request)) };
     },
   );
 

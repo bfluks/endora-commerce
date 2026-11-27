@@ -24,11 +24,12 @@ mapped or fail-closed role holding `audit_logs:read` (FR-086).
 | PUT | `/designations/:currencyCode` | `{ priceListId, salesChannelId }`; 422 `DESIGNATION_INVALID` with the `designationStatus` reason when it is `not_found`, `currency_mismatch`, `not_regular`, `audience_restricted` or `not_on_channel` (RQ-1 A, US2-8); `not_active` / `outside_schedule` are accepted |
 | DELETE | `/designations/:currencyCode` | back to the base book |
 | GET | `/designations/:currencyCode/options` | `designatableBooks` |
-| GET | `/attributes` | boolean/choice, non-scoped attributes with options (rule editor) |
+| GET | `/attributes` | boolean/choice, non-scoped attributes with options (rule editor); each option `{ key, labelDefault, label }` — a rule names an option by `key`, the editor shows its label in the admin's language, else `labelDefault` (T103) |
 | POST | `/product-rules` | `{ name, definition }` → 201 |
-| PATCH | `/product-rules/:id` | `{ name?, definition? }` — a definition change on an **attached** rule is refused here (409 `WEBSITE_RULE_PREVIEW_REQUIRED`); it goes through a preview |
+| GET | `/product-rules/:id` | `{ id, name, version, definition, attachments[{ salesChannelId, attachedAt }] }`, `ETag` = `version` (T103; `product_visibility:read`); a channel deleted while governed is not listed; unknown id ⇒ 404 `NOT_FOUND` |
+| PATCH | `/product-rules/:id` | `{ name?, definition? }` — a definition change on an **attached** rule is refused here (409 `WEBSITE_RULE_PREVIEW_REQUIRED`); it goes through a preview; a stale `If-Match` ⇒ 409 `VERSION_CONFLICT` |
 | DELETE | `/product-rules/:id` | 409 `PRODUCT_RULE_ATTACHED` |
-| POST | `/website-rules/previews` | `{ kind: 'attach', productRuleId, salesChannelIds[] }` or `{ kind: 'change', productRuleId, definition }` → 202 `{ previewId }` |
+| POST | `/website-rules/previews` | `{ kind: 'attach', productRuleId, salesChannelIds[] }` or `{ kind: 'change', productRuleId, definition }` → 202 `{ previewId }`; optional `If-Match` = the rule version read — a rule that moved since ⇒ 409 `VERSION_CONFLICT` (T103: a change drafted on an older definition cannot replace a newer one) |
 | GET | `/website-rules/previews/:id` | `{ status, counts: { [channelId]: { join, leave } }, expiresAt }` |
 | POST | `/website-rules/previews/:id/confirm` | applies (attach / change Command); 409 `WEBSITE_RULE_PREVIEW_STALE` (expired, rule version moved, or a channel got another rule); 409 `CHANNEL_ALREADY_GOVERNED` (FR-051) |
 | DELETE | `/website-rules/attachments/:salesChannelId` | detach (FR-058) |
