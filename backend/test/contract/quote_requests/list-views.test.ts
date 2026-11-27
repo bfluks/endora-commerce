@@ -84,7 +84,8 @@ describe('Quote Request saved views — names, ownership and the gate (spec 147)
 
   /** Replays a view's captured filters on the list, as the page does, and answers the ids returned. */
   async function replay(who: Who, filters: Record<string, unknown>): Promise<string[]> {
-    const params = new URLSearchParams();
+    // The largest page (issue #317): these cases are about the reach, not the paging.
+    const params = new URLSearchParams({ pageSize: '200' });
     if (typeof filters['scope'] === 'string') params.set('assignmentScope', filters['scope']);
     if (typeof filters['organizationId'] === 'string') params.set('organizationId', filters['organizationId']);
     const res = await h.app.inject({ method: 'GET', url: `${LIST_URL}?${params.toString()}`, ...who });
@@ -130,7 +131,7 @@ describe('Quote Request saved views — names, ownership and the gate (spec 147)
       if (!widenedRoles.has(code)) widenedRoles.set(code, [...role.permissions]);
       role.permissions = Array.from(new Set([...role.permissions, ...permissions]));
     }
-    await em.persistAndFlush(role);
+    await em.persist(role).flush();
     return role.id;
   }
 
@@ -147,7 +148,7 @@ describe('Quote Request saved views — names, ownership and the gate (spec 147)
     const em = h.em();
     const existing = await em.findOne(OrganizationSalesRepAssignment, { adminUserId, organizationId });
     if (!existing) {
-      await em.persistAndFlush(em.create(OrganizationSalesRepAssignment, { adminUserId, organizationId }));
+      await em.persist(em.create(OrganizationSalesRepAssignment, { adminUserId, organizationId })).flush();
     }
   }
 
@@ -180,7 +181,7 @@ describe('Quote Request saved views — names, ownership and the gate (spec 147)
         organizationId: OTHER_TEST_ORGANIZATION_ID,
         customerAccountId: randomUUID(),
       });
-      await em.persistAndFlush([ownOrg, otherOrg]);
+      await em.persist([ownOrg, otherOrg]).flush();
       ownOrgRfqId = ownOrg.id;
       otherOrgRfqId = otherOrg.id;
     });
@@ -197,7 +198,7 @@ describe('Quote Request saved views — names, ownership and the gate (spec 147)
           { adminUserId: HANDLER_ID, organizationId: OTHER_TEST_ORGANIZATION_ID },
         ],
       });
-      if (rows.length > 0) await em.removeAndFlush(rows);
+      if (rows.length > 0) await em.remove(rows).flush();
       await restoreWidenedRoles();
     });
     await teardownBackendServer(h);

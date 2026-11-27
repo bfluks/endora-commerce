@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import {
   ERROR_CODES,
+  roundHalfUp,
   type PaymentMethodUpsert,
   type PaymentReadPort,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import type { Command } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -89,7 +91,7 @@ export function makeUpsertPaymentMethodCommand(
         row.kind = body.kind;
         row.adapter = input.adapter;
         if (body.status !== undefined) row.status = body.status;
-        if (body.additionalPrice !== undefined) row.additionalPrice = body.additionalPrice.toFixed(2);
+        if (body.additionalPrice !== undefined) row.additionalPrice = roundHalfUp(body.additionalPrice);
         if (body.statusOnPending !== undefined) row.statusOnPending = body.statusOnPending;
         if (body.statusOnSuccess !== undefined) row.statusOnSuccess = body.statusOnSuccess;
         if (body.statusOnFailure !== undefined) row.statusOnFailure = body.statusOnFailure;
@@ -101,7 +103,7 @@ export function makeUpsertPaymentMethodCommand(
           kind: body.kind,
           adapter: input.adapter,
           status: body.status ?? 'active',
-          additionalPrice: (body.additionalPrice ?? 0).toFixed(2),
+          additionalPrice: roundHalfUp(body.additionalPrice ?? 0),
           statusOnPending: body.statusOnPending ?? 'new',
           statusOnSuccess: body.statusOnSuccess ?? 'paid',
           // Feature 085 (FR-003) — a declined payment holds the order, it does
@@ -151,6 +153,9 @@ export function makeSetPaymentMethodStatusCommand(
     objectType: 'payment_method',
     objectId: id,
     run: async ({ em }) => {
+      if (!isUuidShape(id)) {
+        throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Payment method not found.');
+      }
       const row = await em.findOne(PaymentMethod, { id });
       if (!row) {
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Payment method not found.');
@@ -201,6 +206,9 @@ export function makeDeletePaymentMethodCommand(
     objectType: 'payment_method',
     objectId: id,
     run: async ({ em }) => {
+      if (!isUuidShape(id)) {
+        throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Payment method not found.');
+      }
       const row = await em.findOne(PaymentMethod, { id });
       if (!row) {
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Payment method not found.');
@@ -214,22 +222,24 @@ export function makeDeletePaymentMethodCommand(
       if (paymentRead === null) {
         throw new HttpError(
           409,
-          ERROR_CODES.VALIDATION_FAILED,
+          ERROR_CODES.PAYMENT_METHOD_USAGE_UNKNOWN,
           'Cannot delete payment method: the payments module is switched off, so the payments ' +
             'that may reference it cannot be counted. Switch payments back on, or set this ' +
             'method\'s status to "inactive" instead.',
+          { paymentMethodId: row.id, module: 'payments' },
         );
       }
       const referencing = await paymentRead.countByPaymentMethod(row.id);
       if (referencing > 0) {
         throw new HttpError(
           409,
-          ERROR_CODES.VALIDATION_FAILED,
+          ERROR_CODES.PAYMENT_METHOD_IN_USE,
           `Cannot delete payment method: ${referencing} payment(s) reference it. Set status to "inactive" instead.`,
+          { paymentMethodId: row.id, paymentMethodCode: row.code, paymentCount: referencing },
         );
       }
       const before = paymentMethodAuditState(row);
-      await em.removeAndFlush(row);
+      await em.remove(row).flush();
       return { result: undefined, before, after: null };
     },
   };
@@ -259,11 +269,12 @@ export function makeWithdrawCreatedPaymentMethodCommand(id: string): Command<voi
     objectType: 'payment_method',
     objectId: id,
     run: async ({ em }) => {
+      if (!isUuidShape(id)) return { result: undefined, skipAudit: true };
       const row = await em.findOne(PaymentMethod, { id });
       // Already gone: there is nothing left to take back, and nothing to audit.
       if (!row) return { result: undefined, skipAudit: true };
       const before = paymentMethodAuditState(row);
-      await em.removeAndFlush(row);
+      await em.remove(row).flush();
       return { result: undefined, before, after: null };
     },
   };
@@ -285,6 +296,7 @@ export function makeDeactivateCreatedPaymentMethodCommand(id: string): Command<v
     objectType: 'payment_method',
     objectId: id,
     run: async ({ em }) => {
+      if (!isUuidShape(id)) return { result: undefined, skipAudit: true };
       const row = await em.findOne(PaymentMethod, { id });
       if (!row || row.status === 'inactive') return { result: undefined, skipAudit: true };
       const before = paymentMethodAuditState(row);

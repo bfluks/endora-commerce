@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { useConfirmDialog } from '@endora-commerce/admin-kit/components';
 import { ChevronDown, ChevronRight, Search } from 'lucide-react';
 import type {
   SalesChannelListResponse,
@@ -28,6 +29,7 @@ import {
   parseValue,
   type SettingDraft,
 } from '../components/SettingRowEditor.js';
+import { SettingsSectionTabs } from '../components/SettingsSectionTabs.js';
 /**
  * List sales channels (feature 091, P6).
  *
@@ -61,6 +63,7 @@ function listSalesChannels(activeOnly: boolean, pageSize: number): Promise<Sales
  */
 export function SettingsPage(): ReactNode {
   const t = useTranslation('settings');
+  const { confirm, confirmDialog } = useConfirmDialog();
   const labels = useSettingLabels();
   const [groups, setGroups] = useState<SettingGroupDto[]>([]);
   const [allChannels, setAllChannels] = useState<SalesChannelSummary[]>([]);
@@ -307,6 +310,42 @@ export function SettingsPage(): ReactNode {
 
   const saveAll = useCallback(async (): Promise<void> => {
     if (allDirtySettings.length === 0) return;
+    // Issue #349, E-349-1 — the owning module may ask before a value is written
+    // (switching `mfa.admin.totp_enforced` on signs administrators out). Asked
+    // before anything is saved, so declining saves nothing. The setting is
+    // re-read first, so the question carries the count in force now rather
+    // than the one the screen loaded with; a re-read that asks nothing saves
+    // without asking.
+    const confirmed: SettingDto[] = [];
+    for (const s of allDirtySettings) {
+      const draft = drafts[s.code];
+      if (!draft || !s.confirmation) continue;
+      let value: unknown;
+      try {
+        value = parseValue(s.valueType, draft.text);
+      } catch {
+        continue; // the save below reports the unparsable value
+      }
+      if (JSON.stringify(value) !== JSON.stringify(s.confirmation.whenValue)) continue;
+      let fresh: SettingDto;
+      try {
+        fresh = await settingsClient.getByCode(s.code);
+      } catch (err) {
+        setError(err instanceof ApiError ? err.envelope.error.message : 'Save failed.');
+        return;
+      }
+      if (
+        !fresh.confirmation ||
+        JSON.stringify(value) !== JSON.stringify(fresh.confirmation.whenValue)
+      ) {
+        continue;
+      }
+      const question = labels.settingConfirmation(fresh);
+      if (question === null) continue;
+      const ok = await confirm({ message: question, confirmLabel: t('actions.saveAll') });
+      if (!ok) return;
+      confirmed.push(fresh);
+    }
     setSaving(true);
     setError(null);
     setInfo(null);
@@ -354,21 +393,37 @@ export function SettingsPage(): ReactNode {
 
     setConflicts((prev) => ({ ...prev, ...newConflicts }));
     if (savedCodes.size > 0) {
-      setInfo(t('editor.savedNotice', { count: savedCodes.size }));
+      // What an accepted confirmation set in motion, in the owner's words
+      // (`settingLabels.<code>.confirmed.<token>`): one line, with no count —
+      // the sign-out runs after the commit, so no number is known yet. It
+      // replaces the saved-count line rather than sitting beside it.
+      const followUps = confirmed
+        .filter((setting) => savedCodes.has(setting.code))
+        .map((setting) => labels.settingConfirmed(setting))
+        .filter((line): line is string => line !== null);
+      setInfo(
+        followUps.length > 0
+          ? followUps.join(' ')
+          : t('editor.savedNotice', { count: savedCodes.size }),
+      );
     }
     await refresh();
     setSaving(false);
-  }, [allDirtySettings, channelContext, drafts, refresh, t]);
+  }, [allDirtySettings, channelContext, drafts, labels, refresh, t, confirm]);
 
   const resetSetting = useCallback(
     async (code: string): Promise<void> => {
       const setting = findSetting(code);
       if (!setting) return;
       const isChannelMode = channelContext !== null;
-      const confirmMsg = isChannelMode
-        ? `Reset "${code}" override for channel "${channelContext}"?`
-        : `Reset all per-channel values for "${code}"?`;
-      if (!confirm(confirmMsg)) return;
+      const ok = await confirm({
+        message: isChannelMode
+          ? t('actions.resetConfirm.channel', { code, channel: channelContext ?? '' })
+          : t('actions.resetConfirm.global', { code }),
+        confirmLabel: t('actions.reset'),
+        destructive: true,
+      });
+      if (!ok) return;
       setResettingCode(code);
       setError(null);
       try {
@@ -383,48 +438,31 @@ export function SettingsPage(): ReactNode {
         setResettingCode(null);
       }
     },
-    [channelContext, findSetting, refresh],
+    [channelContext, findSetting, refresh, confirm, t],
   );
 
   return (
     <>
-      <PageHeader
-        title={t('page.title')}
-        description={t('page.description')}
-      />
+      <PageHeader title={t('page.title')} />
+      <SettingsSectionTabs className="mb-4" />
       {error && (
         <Alert variant="destructive" className="mb-4">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
       {info && (
-        <Alert className="mb-4">
+        <Alert live="polite" className="mb-4">
           <AlertDescription>{info}</AlertDescription>
         </Alert>
       )}
 
-      <Card className="mb-4">
-        <CardContent className="flex flex-col gap-2 py-4 sm:flex-row sm:items-center sm:gap-4">
-          <Label htmlFor="settings-channel-context" className="shrink-0 text-sm font-medium">
-            {t('context.label')}:
-          </Label>
-          <Select
-            id="settings-channel-context"
-            className="sm:max-w-sm"
-            value={channelContext ?? ''}
-            onChange={(e) => switchChannelContext(e.target.value === '' ? null : e.target.value)}
-          >
-            <option value="">{t('context.allChannels')}</option>
-            {channelOptions.map((c) => (
-              <option key={c.code} value={c.code}>
-                {c.label}
-              </option>
-            ))}
-          </Select>
-        </CardContent>
-      </Card>
-
-      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      {/* Issue #1518 (SHELL-09) — one toolbar: the search, the channel the
+          screen edits for, and expand/collapse. The channel context used to be
+          a card of its own around one select. */}
+      <div
+        data-settings-toolbar=""
+        className="mb-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center"
+      >
         <div className="relative w-full sm:max-w-sm">
           <Search
             aria-hidden="true"
@@ -436,6 +474,7 @@ export function SettingsPage(): ReactNode {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={t('search.placeholder')}
+            aria-label={t('search.placeholder')}
             aria-keyshortcuts="Control+Shift+K Meta+Shift+K"
             className="pl-8 pr-16"
           />
@@ -446,8 +485,26 @@ export function SettingsPage(): ReactNode {
             {t('search.shortcut')}
           </kbd>
         </div>
+        <div className="flex items-center gap-2">
+          <Label htmlFor="settings-channel-context" className="shrink-0 text-sm text-muted-foreground">
+            {t('context.label')}
+          </Label>
+          <Select
+            id="settings-channel-context"
+            className="sm:w-64"
+            value={channelContext ?? ''}
+            onChange={(e) => switchChannelContext(e.target.value === '' ? null : e.target.value)}
+          >
+            <option value="">{t('context.allChannels')}</option>
+            {channelOptions.map((c) => (
+              <option key={c.code} value={c.code}>
+                {c.label}
+              </option>
+            ))}
+          </Select>
+        </div>
         {filteredGroups.length > 0 && (
-          <Button variant="outline" size="sm" onClick={toggleAll}>
+          <Button variant="outline" size="sm" className="sm:ml-auto" onClick={toggleAll}>
             {allCollapsed ? t('groups.expandAll') : t('groups.collapseAll')}
           </Button>
         )}
@@ -467,6 +524,14 @@ export function SettingsPage(): ReactNode {
           filteredGroups.map((group) => {
             const isCollapsed = !!collapsed[group.code];
             const dirtyCount = dirtyCountFor(group);
+            // Issue #1518 (SHELL-09) — a switched-off module's settings are
+            // read-only, and the group says why once; each read-only row's
+            // control is described by this one sentence.
+            const readOnlyReasonId = group.settings.some(
+              (s) => s.editable === false && s.activationControl !== true,
+            )
+              ? `settings-group-${group.code}-read-only`
+              : undefined;
             return (
               <Card key={group.code} id={`settings-group-${group.code}`}>
                 <CardHeader>
@@ -483,11 +548,6 @@ export function SettingsPage(): ReactNode {
                     )}
                     <CardTitle className="flex items-center gap-2">
                       {labels.groupName(group)}
-                      {group.isSystemProtected && (
-                        <span className="rounded bg-muted px-2 py-0.5 text-xs">
-                          system
-                        </span>
-                      )}
                       <span className="text-xs font-normal text-muted-foreground">
                         ({group.settings.length})
                       </span>
@@ -501,12 +561,18 @@ export function SettingsPage(): ReactNode {
                 </CardHeader>
                 {!isCollapsed && (
                   <CardContent>
+                    {readOnlyReasonId !== undefined ? (
+                      <p id={readOnlyReasonId} className="mb-1 text-xs text-muted-foreground">
+                        {t('editor.readOnlyReason')}
+                      </p>
+                    ) : null}
                     {group.settings.length === 0 ? (
                       <p className="text-sm text-muted-foreground">
                         {t('groups.empty')}
                       </p>
                     ) : (
-                      <div className="space-y-3">
+                      // Issue #1437 (DS-03): the group's settings are rows divided by a rule.
+                      <div className="divide-y">
                         {group.settings.map((s) => {
                           const draft = drafts[s.code] ?? baselineDraft(s, channelContext);
                           const conflict = conflicts[s.code];
@@ -539,6 +605,7 @@ export function SettingsPage(): ReactNode {
                                   isCopied={copiedCode === s.code}
                                   resetting={resettingCode === s.code}
                                   readOnly={s.editable === false}
+                                  {...(readOnlyReasonId !== undefined ? { readOnlyReasonId } : {})}
                                   onChange={(patch) => patchDraft(s.code, patch)}
                                   onCopyCode={() => void onCopyCode(s.code)}
                                   onReset={() => void resetSetting(s.code)}
@@ -586,6 +653,7 @@ export function SettingsPage(): ReactNode {
           </Button>
         </div>
       )}
+      {confirmDialog}
     </>
   );
 }

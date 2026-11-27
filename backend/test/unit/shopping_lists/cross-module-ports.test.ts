@@ -1,7 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { describe, expect, it } from 'vitest';
 import type {
-  CartWithItems,
   CartWritePort,
   CatalogProductReadPort,
   CatalogProductRecord,
@@ -39,8 +38,8 @@ function productRecord(
     slug: `slug-${id}`,
     type: 'simple',
     status: 'active',
-    name: { en: `Product ${id}` },
-    description: {},
+    name: `Product ${id}`,
+    description: null,
     stockMode: null,
     visibility: 'public',
     attributeValues: {},
@@ -58,6 +57,8 @@ function productRecord(
     lowStockThresholdMode: 'cumulative',
     fulfilmentStrategy: null,
     fulfilmentStrategyWarehouseOrder: null,
+    minOrderQuantity: null,
+    returnable: false,
     ...overrides,
   };
 }
@@ -81,7 +82,7 @@ function fakeEm(handlers: Record<string, unknown>): () => EntityManager {
     find: async (entity: { name?: string }) => dispatch(entity, []),
     count: async () => 0,
     create: (_entity: unknown, data: Record<string, unknown>) => ({ id: 'row-1', ...data }),
-    persistAndFlush: async () => undefined,
+    persist: () => ({ flush: async () => undefined }),
     flush: async () => undefined,
   };
   return () => em as unknown as EntityManager;
@@ -123,7 +124,9 @@ const refusingRfq = new Proxy(
   },
 ) as RfqCustomerPort;
 
-const LIST = { id: 'list-1', isDefault: false, updatedAt: new Date('2026-01-01T00:00:00.000Z') };
+// A uuid: a malformed id names no list and is refused before any read (issue #753).
+const LIST_ID = '00000000-0000-4000-8000-0000000000e3';
+const LIST = { id: LIST_ID, isDefault: false, updatedAt: new Date('2026-01-01T00:00:00.000Z') };
 
 describe('shopping_lists — product rows arrive over catalogProductReadPort', () => {
   it('checks a new item against the port, and never the catalog table', async () => {
@@ -143,7 +146,7 @@ describe('shopping_lists — product rows arrive over catalogProductReadPort', (
       refusingChannelMembership,
     );
 
-    const item = await service.addItem(CTX, 'list-1', { productId: 'prod-9', quantity: 3 });
+    const item = await service.addItem(CTX, LIST_ID, { productId: 'prod-9', quantity: 3 });
 
     expect(asked).toEqual(['prod-9']);
     expect(item.productId).toBe('prod-9');
@@ -163,7 +166,7 @@ describe('shopping_lists — product rows arrive over catalogProductReadPort', (
     );
 
     await expect(
-      service.addItem(CTX, 'list-1', { productId: 'prod-9', quantity: 1 }),
+      service.addItem(CTX, LIST_ID, { productId: 'prod-9', quantity: 1 }),
     ).rejects.toMatchObject({ statusCode: 404 });
   });
 });
@@ -180,16 +183,23 @@ describe('shopping_lists — conversion partitions by the port, and writes throu
       ids
         .filter((id) => id !== 'prod-gone')
         .map((id) =>
-          id === 'prod-archived' ? productRecord(id, { status: 'inactive' }) : productRecord(id),
+          // Spec 163 — archived is `archivedAt`, whatever the status says.
+          id === 'prod-archived' ? productRecord(id, { status: 'active', archivedAt: new Date() }) : productRecord(id),
         ),
   } as unknown as CatalogProductReadPort;
 
   it('adds only the live lines to the cart, over cartWritePort', async () => {
     const added: string[] = [];
+    const basketChannels: string[] = [];
     const carts = {
-      addItem: async (_actor: unknown, input: { productId: string }) => {
-        added.push(input.productId);
-        return {} as CartWithItems;
+      // Feature 155 (R8) — the batch list → cart goes through; every line admitted.
+      addItems: async (
+        actor: { customer?: { salesChannelId: string } },
+        lines: ReadonlyArray<{ productId: string }>,
+      ) => {
+        added.push(...lines.map((line) => line.productId));
+        basketChannels.push(actor.customer!.salesChannelId);
+        return { cart: {}, items: [], outcomes: lines.map((_line, index) => ({ index, status: 'added' })) };
       },
     } as unknown as CartWritePort;
 
@@ -201,14 +211,78 @@ describe('shopping_lists — conversion partitions by the port, and writes throu
       refusingChannelMembership,
     );
 
-    const result = await service.convertToCart(CTX, 'list-1', undefined);
+    const result = await service.convertToCart(CTX, LIST_ID, undefined, 'channel-b');
 
     expect(added).toEqual(['prod-live']);
+    // The basket of the caller's channel (`specs/154-sales-channel-access/`).
+    expect(basketChannels).toEqual(['channel-b']);
     expect(result.added).toBe(1);
     expect(result.skipped).toEqual([
       { itemId: 'item-2', productId: 'prod-archived', reason: 'product_archived' },
       { itemId: 'item-3', productId: 'prod-gone', reason: 'product_not_found' },
     ]);
+  });
+
+  it('a product switched off but not archived is not product_archived (spec 163, FR-010)', async () => {
+    const offItems = [{ id: 'item-off', productId: 'prod-off', quantity: 1, variantId: null, note: null }];
+    const offCatalog = {
+      findByIds: async (ids: readonly string[]) =>
+        ids.map((id) => productRecord(id, { status: 'inactive', archivedAt: null })),
+    } as unknown as CatalogProductReadPort;
+    const added: string[] = [];
+    const carts = {
+      addItems: async (_actor: unknown, lines: ReadonlyArray<{ productId: string }>) => {
+        added.push(...lines.map((line) => line.productId));
+        return { cart: {}, items: [], outcomes: lines.map((_line, index) => ({ index, status: 'added' })) };
+      },
+    } as unknown as CartWritePort;
+    const service = new ShoppingListService(
+      fakeEm({ ShoppingList: LIST, ShoppingListItem: offItems }),
+      carts,
+      refusingRfq,
+      offCatalog,
+      refusingChannelMembership,
+    );
+
+    const result = await service.convertToCart(CTX, LIST_ID, undefined, 'channel-b');
+
+    // Outside a request channel nothing here judges availability; the cart does.
+    expect(result.skipped.map((s) => s.reason)).not.toContain('product_archived');
+    expect(added).toEqual(['prod-off']);
+  });
+
+  it('re-raises a batch refusal other than the unknown-id answer with its code, message and details', async () => {
+    const carts = {
+      addItems: async () => ({
+        cart: {},
+        items: [],
+        outcomes: [
+          {
+            index: 0,
+            status: 'failed',
+            error: {
+              status: 400,
+              code: 'CART_PRODUCT_QUOTE_ONLY',
+              message: 'This product is sold on request only and cannot be added to the cart.',
+              details: { productId: 'prod-live' },
+            },
+          },
+        ],
+      }),
+    } as unknown as CartWritePort;
+    const service = new ShoppingListService(
+      fakeEm({ ShoppingList: LIST, ShoppingListItem: [items[0]] }),
+      carts,
+      refusingRfq,
+      catalogProducts,
+      refusingChannelMembership,
+    );
+    await expect(service.convertToCart(CTX, LIST_ID, undefined, 'channel-b')).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'CART_PRODUCT_QUOTE_ONLY',
+      message: 'This product is sold on request only and cannot be added to the cart.',
+      details: { productId: 'prod-live' },
+    });
   });
 
   it('quotes only the live lines, over rfqCustomerPort', async () => {
@@ -228,7 +302,7 @@ describe('shopping_lists — conversion partitions by the port, and writes throu
       refusingChannelMembership,
     );
 
-    const result = await service.convertToRfq(CTX, 'list-1', undefined);
+    const result = await service.convertToRfq(CTX, LIST_ID, undefined);
 
     expect(quoted).toEqual(['prod-live']);
     expect(result.rfqId).toBe('rfq-1');

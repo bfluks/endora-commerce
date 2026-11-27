@@ -1,0 +1,14 @@
+{
+  "settingGroups.admin_feedback.name": "Feedback",
+  "settingLabels.admin_feedback.module_enabled.name": "Feedback module enabled",
+  "settingLabels.admin_feedback.module_enabled.description": "Shows the “Send feedback” link, which sends feedback to Endora.",
+  "settingLabels.admin_feedback.relay_url.name": "Feedback relay address",
+  "settingLabels.admin_feedback.relay_url.description": "Where feedback is sent. Keep the default to reach Endora support; leave empty to stop sending.",
+  "actions.openAdminFeedbackSettings.label": "Feedback settings",
+  "actions.openAdminFeedbackSettings.description": "Decide whether administrators can send feedback to Endora, and where it goes",
+  "errors.ADMIN_FEEDBACK_NOT_CONFIGURED": "Sending feedback is switched off on this instance.",
+  "errors.ADMIN_FEEDBACK_DELIVERY_FAILED": "Your feedback could not be delivered. Try again later.",
+  "actions.openAdminFeedbackSettings.keywords": "feedback, report, support",
+  "module.name": "Feedback",
+  "module.description": "Send feedback from the admin to the makers of Endora Commerce: a message, a contact address and what the instance knows about itself, relayed as one e-mail and stored nowhere."
+}

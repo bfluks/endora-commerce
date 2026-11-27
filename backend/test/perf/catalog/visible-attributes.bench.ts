@@ -116,7 +116,7 @@ describe.skipIf(!shouldRun)('catalog visibleAttributes — p95 latency', () => {
 
     // Wire every attribute into the Default set so the position lookup
     // in buildVisibleAttributesProjection has work to do.
-    await em.persistAndFlush(
+    await em.persist(
       attrs.map((a, idx) =>
         em.create(AttributeSetAttribute, {
           attributeSetId: DEFAULT_SET_ID,
@@ -124,7 +124,7 @@ describe.skipIf(!shouldRun)('catalog visibleAttributes — p95 latency', () => {
           position: idx,
         }),
       ),
-    );
+    ).flush();
 
     // Seed 10 products carrying values for every attribute.
     for (let i = 0; i < productCount; i++) {
@@ -141,8 +141,8 @@ describe.skipIf(!shouldRun)('catalog visibleAttributes — p95 latency', () => {
         slug: `bench-product-${i}`,
         type: 'simple',
         status: 'active',
-        name: { 'en-US': `Bench product ${i}` },
-        description: { 'en-US': 'Perf bench fixture.' },
+        name: `Bench product ${i}`,
+        description: 'Perf bench fixture.',
         visibility: 'public',
         attributeValues: values,
         attributeSetId: DEFAULT_SET_ID,
@@ -172,7 +172,6 @@ describe.skipIf(!shouldRun)('catalog visibleAttributes — p95 latency', () => {
     const resolvedChannel = {
       id: def.id,
       code: def.code,
-      isPublic: def.isPublic,
       defaultCurrency: def.defaultCurrency,
       defaultLanguage: def.defaultLanguage,
     };

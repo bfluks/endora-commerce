@@ -1,11 +1,25 @@
-import type { MfaDeactivationGuardPort, MfaEnrolmentCountPort } from '@endora-commerce/contracts';
+import type {
+  AdminI18nTranslatePort,
+  MfaDeactivationGuardPort,
+  MfaEnrolmentCountPort,
+} from '@endora-commerce/contracts';
 import type { ModuleContext } from '../kernel/index.js';
 import { lazyPort } from '../kernel/index.js';
 import type { ApiInterceptorRegistry } from '../http/interceptors/index.js';
+import type { FastifyInstance } from 'fastify';
+import type { EntityManager } from '@mikro-orm/postgresql';
+import type { Redis } from 'ioredis';
+import type { CommandHookRegistry } from '../commands/hooks/registry.js';
+import type { CommandBus } from '../commands/command-bus.js';
+import { startCommandOutboxDrain } from '../commands/outbox/drain-worker.js';
+import { PostgresOutboxStore } from '../commands/outbox/store.js';
+import { registerApiDescriptionRoutes } from './routes.api-description.js';
 import { registerPlatformInfoRoutes } from '../http/platform-info.js';
 import type { RequireAdminFactory } from '../kernel/ports/require-admin.js';
 import {
   registerApiInterceptorAdminRoutes,
+  registerCommandHookAdminRoutes,
+  registerCommandOutboxAdminRoutes,
   registerLifecycleAdminRoutes,
   registerModulePresenceRoutes,
   type LifecycleAdminDeps,
@@ -48,6 +62,14 @@ export interface LifecycleCradle {
   readonly requireAdmin: RequireAdminFactory;
   readonly apiInterceptors: ApiInterceptorRegistry;
   /**
+   * The composition's command-hook registry (176 P2), registered by both roots
+   * beside `commandBus`. Read only when the root registered it: a composition
+   * that wires no hooks serves no execution plan.
+   */
+  readonly commandHookRegistry?: CommandHookRegistry;
+  /** The Command Bus every root registers; the outbox retry runs through it. */
+  readonly commandBus: CommandBus;
+  /**
    * How a committed activation flip reaches the rest of the deployment:
    * refreshing local state, publishing to other processes, dropping the
    * storefront's cache. Root-shaped because the harness refreshes through the
@@ -63,6 +85,44 @@ export interface LifecycleCradle {
    * correct navigation must not depend on being able to install anything.
    */
   readonly lifecycleOrchestrator: LifecycleAdminDeps['orchestrator'] | undefined;
+  /** The scoped-EM factory every root registers with the ORM. */
+  readonly emFactory: () => EntityManager;
+  /** Whether this process runs queue consumers; read only when the root registered it. */
+  readonly processRunsWorkers?: boolean;
+  /** The connection a consumer is built on; read only when the root registered it. */
+  readonly moduleQueueRedis?: Redis | undefined;
+}
+
+/**
+ * Start the command outbox drain (`specs/176-command-hooks-outbox/` P3,
+ * research R-18) where this process runs workers and the root offers a queue
+ * connection and a command-hook registry. `_lifecycle` is the platform's
+ * resident, non-deactivatable module, so `ctx.worker` gives the consumer the
+ * platform's shutdown and reconcile path without it ever being switched off
+ * with a feature. Per-row presence is the **handler's** module's, decided
+ * inside the drain.
+ *
+ * Each value is asked of the container rather than resolved, because the roots
+ * differ in what they register: the shared test server registers no queue
+ * connection and runs no worker, and a root with no registry has no handler
+ * to deliver to.
+ */
+async function startOutboxDrain(ctx: ModuleContext, app: FastifyInstance): Promise<void> {
+  const cradle = ctx.cradle<LifecycleCradle>();
+  if (!('commandHookRegistry' in cradle) || !('processRunsWorkers' in cradle) || !('moduleQueueRedis' in cradle)) {
+    return;
+  }
+  await startCommandOutboxDrain({
+    processRunsWorkers: cradle.processRunsWorkers === true,
+    moduleQueueRedis: cradle.moduleQueueRedis,
+    store: new PostgresOutboxStore(cradle.emFactory),
+    handlers: cradle.commandHookRegistry as CommandHookRegistry,
+    log: ctx.log,
+    attach: (worker) => ctx.worker(worker, { logger: app.log }),
+    onClose: (close) => {
+      app.addHook('onClose', close);
+    },
+  });
 }
 
 export function registerModule(ctx: ModuleContext): void {
@@ -86,6 +146,22 @@ export function registerModule(ctx: ModuleContext): void {
         requireAdmin: cradle.requireAdmin,
       });
 
+      // `'commandHookRegistry' in cradle` asks the container rather than
+      // resolving: a root that wires no hooks registers no registry.
+      if ('commandHookRegistry' in cradle) {
+        registerCommandHookAdminRoutes(app, {
+          registry: cradle.commandHookRegistry as CommandHookRegistry,
+          requireAdmin: cradle.requireAdmin,
+        });
+        // The outbox is the registry's afterCommit half: a composition that
+        // wires no hooks writes no rows, so it serves no operator list either.
+        registerCommandOutboxAdminRoutes(app, {
+          requireAdmin: cradle.requireAdmin,
+          commandBus: cradle.commandBus,
+          em: cradle.emFactory,
+        });
+      }
+
       registerModulePresenceRoutes(app, {
         requireAdmin: cradle.requireAdmin,
         activation: cradle.lifecycleActivationPropagation,
@@ -108,10 +184,22 @@ export function registerModule(ctx: ModuleContext): void {
         await registerLifecycleAdminRoutes(app, {
           orchestrator,
           requireAdmin: cradle.requireAdmin,
+          // Issue #1809 — each module's name, description and lock reason in the
+          // reader's language. `_i18n` is non-deactivatable; a refusal still
+          // answers the manifest's English, since this route is ungated.
+          translate: (moduleId, key, language) =>
+            lazyPort<AdminI18nTranslatePort>(ctx, 'adminI18nService').translate(moduleId, key, language),
         });
       }
     },
   );
+
+  // The command outbox drain's consumer and schedule. Attached where `app.log`
+  // exists, as every worker in the tree is — this is where a
+  // `BACKEND_ROLE=worker` process reaches too.
+  ctx.routes(async (app) => {
+    await startOutboxDrain(ctx, app);
+  });
 
   ctx.ungatedRoutes(
     'Which release this platform is: a fact about the platform itself, read by the admin ' +
@@ -121,6 +209,19 @@ export function registerModule(ctx: ModuleContext): void {
     (app) => {
       registerPlatformInfoRoutes(app, {
         requireAdmin: ctx.cradle<LifecycleCradle>().requireAdmin,
+      });
+    },
+  );
+
+  ctx.ungatedRoutes(
+    'The API description: a fact about the platform itself, generated from every route this ' +
+      'server registered. No module owns it, and gating it on one would take the description ' +
+      'of every other module away with it. Who reads it is decided by its own permission, ' +
+      'platform.api_description.read, not by module presence.',
+    (app) => {
+      registerApiDescriptionRoutes(app, {
+        requireAdmin: ctx.cradle<LifecycleCradle>().requireAdmin,
+        document: () => app.apiDescription(),
       });
     },
   );

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, waitFor, type RenderResult } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AdminZone } from '@endora-commerce/admin-kit/zones';
+import { INERT_SAVE_SESSION } from '@endora-commerce/admin-kit/lib';
 import type { AdminZoneName } from '@endora-commerce/contracts';
 import { renderWithI18n } from '../../helpers/render-with-i18n';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
@@ -75,7 +76,6 @@ const NEGOTIATION_KEYS = [
   'negotiation.organization.label',
   'negotiation.organization.description',
   'negotiation.customer.label',
-  'negotiation.customer.description',
   'negotiation.override.inherit',
   'negotiation.override.allowed',
   'negotiation.override.not_allowed',
@@ -89,7 +89,6 @@ const NEGOTIATION_KEYS = [
   'negotiation.loadError',
   'negotiation.retry',
   'negotiation.saving',
-  'negotiation.saved',
   'negotiation.saveError',
   'negotiation.readOnlyHint',
 ] as const;
@@ -133,7 +132,7 @@ function zoneTree(options: ZoneOptions): ReactElement {
               the cast is the harness's and not a host's. */}
           <AdminZone
             name={options.name as 'organization.detail.after'}
-            props={options.props as { organizationId: string }}
+            props={{ ...(options.props as { organizationId: string }), saveSession: INERT_SAVE_SESSION }}
           />
         </MemoryRouter>,
         {
@@ -223,31 +222,23 @@ describe('quote_requests contributes the price-negotiation lock to two detail zo
     it('reads its own state and shows it on a labelled control', async () => {
       const container = renderOrganization();
       await waitFor(() => expect(container.textContent).toContain('Members may propose prices'));
-      expect(getSpy).toHaveBeenCalledWith(ORG_ROUTE);
+      // The label is in the commit that mounts the panel, and the panel starts its
+      // read from that commit's effect: wait for it (issue #418).
+      await waitFor(() => expect(getSpy).toHaveBeenCalledWith(ORG_ROUTE));
       await waitFor(() => expect(organizationToggle(container).checked).toBe(false));
       const label = container.querySelector(`label[for="quote-price-negotiation-org-${ORG_ID}"]`);
       expect(label?.textContent).toContain('Members may propose prices');
     });
 
-    it('writes through PUT and confirms the save', async () => {
+    it('writes nothing on change: the organization detail\'s one Save writes it (feature 180, WP-7)', async () => {
+      // The write itself, through the host's session, is
+      // `negotiation.participant.test.tsx`'s subject; this harness hands the inert handle.
       const container = renderOrganization();
       await waitFor(() => expect(organizationToggle(container).disabled).toBe(false));
       fireEvent.click(organizationToggle(container));
-      await waitFor(() => expect(putSpy).toHaveBeenCalledTimes(1));
-      expect(putSpy).toHaveBeenCalledWith(ORG_ROUTE, { priceProposalsAllowed: true });
-      await waitFor(() => expect(container.textContent).toContain('Saved.'));
-      expect(organizationToggle(container).checked).toBe(true);
-    });
-
-    it('rolls the control back and says so when the write fails', async () => {
-      putSpy.mockRejectedValueOnce(new Error('boom'));
-      const container = renderOrganization();
-      await waitFor(() => expect(organizationToggle(container).disabled).toBe(false));
-      fireEvent.click(organizationToggle(container));
-      await waitFor(() =>
-        expect(container.querySelector('[role="alert"]')?.textContent).toBeTruthy(),
-      );
-      expect(organizationToggle(container).checked).toBe(false);
+      await waitFor(() => expect(organizationToggle(container).checked).toBe(true));
+      expect(putSpy).not.toHaveBeenCalled();
+      expect(container.textContent).not.toContain('Saved.');
     });
 
     it('is visible but disabled, with a hint, without customers:manage', async () => {
@@ -293,14 +284,13 @@ describe('quote_requests contributes the price-negotiation lock to two detail zo
         view.container.querySelector<HTMLInputElement>(`#quote-price-negotiation-org-${id}`);
       await waitFor(() => expect(toggleOf(ORG_ID)?.disabled).toBe(false));
       fireEvent.click(toggleOf(ORG_ID)!);
-      await waitFor(() => expect(view.container.textContent).toContain('Saved.'));
+      await waitFor(() => expect(toggleOf(ORG_ID)?.checked).toBe(false));
 
       view.rerender(zoneTree({ name: 'organization.detail.after', props: { organizationId: OTHER_ORG_ID } }));
       await waitFor(() => expect(getSpy).toHaveBeenCalledWith(OTHER_ORG_ROUTE));
       const pending = toggleOf(OTHER_ORG_ID);
       expect(pending?.checked).toBe(false);
       expect(pending?.disabled).toBe(true);
-      expect(view.container.textContent).not.toContain('Saved.');
 
       releaseOther?.();
       await waitFor(() => expect(toggleOf(OTHER_ORG_ID)?.disabled).toBe(false));
@@ -322,16 +312,15 @@ describe('quote_requests contributes the price-negotiation lock to two detail zo
       expect(container.textContent).toContain('Effective: not allowed (from the organization)');
     });
 
-    it('writes the override through PUT and shows the new source', async () => {
+    it('writes nothing on change: the customer detail\'s one Save writes it (feature 180)', async () => {
+      // The write itself, through the host's session, is
+      // `negotiation.participant.test.tsx`'s subject; this harness hands the inert handle.
       const container = renderCustomer();
       await waitFor(() => expect(overrideRadio(container, 'allowed').disabled).toBe(false));
       fireEvent.click(overrideRadio(container, 'allowed'));
-      await waitFor(() => expect(putSpy).toHaveBeenCalledTimes(1));
-      expect(putSpy).toHaveBeenCalledWith(CUSTOMER_ROUTE, { override: 'allowed' });
-      await waitFor(() =>
-        expect(container.textContent).toContain('Effective: allowed (from this customer account)'),
-      );
-      expect(overrideRadio(container, 'allowed').checked).toBe(true);
+      await waitFor(() => expect(overrideRadio(container, 'allowed').checked).toBe(true));
+      expect(putSpy).not.toHaveBeenCalled();
+      expect(container.textContent).not.toContain('Saved.');
     });
 
     it('names the default as the source when neither level is set', async () => {
@@ -426,5 +415,17 @@ describe('quote_requests contributes the price-negotiation lock to two detail zo
     }
     expect(pl['negotiation.organization.label']).not.toBe(en['negotiation.organization.label']);
     expect(pl['negotiation.effective']).not.toBe(en['negotiation.effective']);
+  });
+
+  // Issue #1542 (UX audit 2026-11-17, SALES-16 text pass) — the line under a panel's control
+  // is read in passing: one line, the 80-character budget of `specs/conventions/module-i18n.md`.
+  it('keeps each one-line description and hint within 80 characters in English', () => {
+    const en = readBundle('en');
+    for (const key of [
+      'negotiation.organization.description',
+          'negotiation.readOnlyHint',
+    ]) {
+      expect(en[key]!.length, key).toBeLessThanOrEqual(80);
+    }
   });
 });

@@ -2,15 +2,18 @@ import { randomUUID } from 'crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   ERROR_CODES,
+  MEGAMENU_EVERYONE_AUDIENCE,
   type MegamenuDetail,
   type MegamenuItem,
   type PutItemsRequest,
 } from '@endora-commerce/contracts';
+import type { CommandBus } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { MegamenuCacheInvalidation } from './megamenu-invalidator.js';
-import type { MegamenuService } from './megamenu-service.js';
-import { validateTarget } from './target-validator.js';
+import { MEGAMENU_OBJECT_TYPE, type MegamenuService } from './megamenu-service.js';
+import { validateAudience, validateTarget } from './target-validator.js';
 import type { MegamenuCrossModulePorts } from './cross-module-ports.js';
+import { checkTreeRules, type TreeRuleWarning } from './tree-rules.js';
 
 const SOFT_DEPTH_WARN_AT = 4;
 
@@ -24,7 +27,7 @@ type NormalisedItem = MegamenuItem & {
 };
 
 export interface SetTreeWarning {
-  code: 'MEGAMENU_DEPTH_EXCEEDED';
+  code: 'MEGAMENU_DEPTH_EXCEEDED' | TreeRuleWarning['code'];
   message: string;
 }
 
@@ -43,13 +46,14 @@ export interface SetTreeResult {
 export class MegamenuItemService {
   constructor(
     private readonly emFactory: () => EntityManager,
+    /** Required: an optional bus is a write path whose absent form audits nothing. */
+    private readonly commandBus: CommandBus,
     private readonly menuService: MegamenuService,
     private readonly ports: MegamenuCrossModulePorts,
     private readonly cache?: MegamenuCacheInvalidation,
   ) {}
 
   async setTree(menuId: string, body: PutItemsRequest): Promise<SetTreeResult> {
-    const em = this.emFactory();
     const menuRow = await this.menuService.findRow(menuId);
     if (!menuRow) throw new HttpError(404, ERROR_CODES.MEGAMENU_NOT_FOUND, 'Megamenu not found.');
     if (body.version !== menuRow.version) {
@@ -57,7 +61,9 @@ export class MegamenuItemService {
     }
 
     const normalised = this.normalise(body.items);
-    const warnings: SetTreeWarning[] = [];
+    // Feature 168 — the navigation bar's tree rules, before any cross-module
+    // read: an editor's structural mistake costs no query.
+    const warnings: SetTreeWarning[] = [...checkTreeRules(normalised)];
     if (normalised.some((item) => item.depth > SOFT_DEPTH_WARN_AT)) {
       warnings.push({
         code: 'MEGAMENU_DEPTH_EXCEEDED',
@@ -72,42 +78,56 @@ export class MegamenuItemService {
     for (const item of normalised) {
       await validateTarget(item, channelIds, this.ports);
     }
+    await validateAudience(normalised, this.ports);
 
-    await em.transactional(async (tx) => {
-      // `tx.execute`, not `tx.getConnection().execute`: a connection carries no
-      // transaction context, so this delete used to commit on its own connection
-      // the moment it ran. A re-insert the database then refused — a child item
-      // listed before its parent is enough — rolled a transaction back that had
-      // never held the delete, and the operator's whole menu was gone (issue
-      // #200). `test/integration/megamenu/write-atomicity.test.ts` is that case.
-      await tx.execute(
-        `delete from megamenu_items where megamenu_id = ?`,
-        [menuId],
-      );
-      for (const item of normalised) {
-        const now = new Date();
+    await this.commandBus.run<void>({
+      action: 'megamenu.items.set',
+      objectType: MEGAMENU_OBJECT_TYPE,
+      objectId: menuId,
+      run: async ({ em: tx }) => {
+        const before = await this.treeAuditState(tx, menuId);
+        // `tx.execute`, not `tx.getConnection().execute`: a connection carries no
+        // transaction context, so this delete used to commit on its own connection
+        // the moment it ran. A re-insert the database then refused — a child item
+        // listed before its parent is enough — rolled a transaction back that had
+        // never held the delete, and the operator's whole menu was gone (issue
+        // #200). `test/integration/megamenu/write-atomicity.test.ts` is that case.
         await tx.execute(
-          `insert into megamenu_items
-             (id, megamenu_id, parent_id, position, kind, labels, descriptions, target, created_at, updated_at)
-           values (?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?, ?)`,
-          [
-            item.id,
-            menuId,
-            item.parentId,
-            item.position,
-            item.kind,
-            JSON.stringify(item.labels),
-            JSON.stringify(item.descriptions ?? null),
-            JSON.stringify(item.target),
-            now,
-            now,
-          ],
+          `delete from megamenu_items where megamenu_id = ?`,
+          [menuId],
         );
-      }
-      await tx.execute(
-        `update megamenus set version = version + 1, updated_at = now() where id = ?`,
-        [menuId],
-      );
+        for (const item of normalised) {
+          const now = new Date();
+          const isTab = item.parentId === null;
+          await tx.execute(
+            `insert into megamenu_items
+               (id, megamenu_id, parent_id, position, kind, labels, descriptions, target,
+                presentation, alignment, audience, click_navigates, created_at, updated_at)
+             values (?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?, ?, ?::jsonb, ?, ?, ?)`,
+            [
+              item.id,
+              menuId,
+              item.parentId,
+              item.position,
+              item.kind,
+              JSON.stringify(item.labels),
+              JSON.stringify(item.descriptions ?? null),
+              JSON.stringify(item.target),
+              isTab ? item.presentation : null,
+              isTab ? (item.alignment ?? 'start') : null,
+              JSON.stringify(item.audience ?? MEGAMENU_EVERYONE_AUDIENCE),
+              isTab && item.clickNavigates === true,
+              now,
+              now,
+            ],
+          );
+        }
+        await tx.execute(
+          `update megamenus set version = version + 1, updated_at = now() where id = ?`,
+          [menuId],
+        );
+        return { result: undefined, before, after: await this.treeAuditState(tx, menuId) };
+      },
     });
 
     if (this.cache) await this.cache.invalidateAll();
@@ -193,6 +213,22 @@ export class MegamenuItemService {
     }
 
     return expanded;
+  }
+
+  /**
+   * What an audit entry keeps of a tree (data-model §4): the structure, the
+   * targets, the labels and who sees each item. Descriptions stay out, as
+   * `cms` keeps page content out of its entries.
+   */
+  private async treeAuditState(em: EntityManager, menuId: string): Promise<{ items: unknown[] }> {
+    const rows = (await em.execute(
+      `select id::text as id, parent_id::text as "parentId", position, kind, presentation, alignment,
+              click_navigates as "clickNavigates", audience, labels, target
+         from megamenu_items where megamenu_id = ?
+        order by parent_id nulls first, position asc, id asc`,
+      [menuId],
+    )) as unknown[];
+    return { items: rows };
   }
 
   private async fetchChannelIdsForMenu(menuId: string): Promise<string[]> {

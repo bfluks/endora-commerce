@@ -4,10 +4,13 @@ import {
   type AuthSessionPort,
   type CustomerAccountReadPort,
   type CustomerAccountRecord,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { AdminUser } from '../entities/admin-user.entity.js';
+import { ImpersonationReason } from '../entities/impersonation-reason.entity.js';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
+import { impersonationStartAuditState } from './impersonation-audit-state.js';
 
 /**
  * ImpersonationService (T189). Implements the switch-user pattern:
@@ -19,9 +22,14 @@ import type { AuditPort } from '@endora-commerce/platform/kernel';
  *   - end(impersonationSessionId, adminShadowSessionId) — destroys the
  *     impersonation session, returns the (still alive) admin session id.
  *
- * AuditPort.record is called BEFORE the cookie is minted (T179
+ * The start's audit entry is committed BEFORE the cookie is minted (T179
  * "audit-before-cookie") so a partial failure can never leave an
  * impersonation cookie without an audit row.
+ *
+ * Issue #470 (D-288, `specs/conventions/audit-state.md`): the entry carries
+ * the reason's shape and whether the start named an Organization — never the
+ * reason or the Organization. The reason goes to `admin_impersonation_reasons`
+ * in the same transaction as the entry, so neither row lands without the other.
  */
 
 export interface ImpersonationStartResult {
@@ -65,38 +73,62 @@ export class ImpersonationService {
   }): Promise<ImpersonationStartResult> {
     const em = this.emFactory();
 
+    if (!isUuidShape(input.adminUserId)) {
+      throw new HttpError(401, ERROR_CODES.UNAUTHORIZED, 'Admin session required.');
+    }
     const admin = await em.findOne(AdminUser, { id: input.adminUserId, deletedAt: null });
     if (!admin) {
       throw new HttpError(401, ERROR_CODES.UNAUTHORIZED, 'Admin session required.');
     }
     // `findInOrganization` is the two-argument form of the same lookup: the
     // membership check and the identity read in one query, which is what stops
-    // the check being forgotten. `activeOnly` carries the `deletedAt: null`
-    // half of the read this replaced.
+    // the check being forgotten. The read includes soft-deleted accounts so a
+    // deleted target in scope can be refused with its own code (issue #814);
+    // the scope is decided first, so a deleted account outside it still reads
+    // as absent. Both refusals come before the audit and the session: fail closed.
     const target =
       input.organizationId != null
         ? await this.customerAccounts.findInOrganization(
             input.customerAccountId,
             input.organizationId,
-            { activeOnly: true },
           )
-        : await this.customerAccounts.findById(input.customerAccountId, { activeOnly: true });
+        : await this.customerAccounts.findById(input.customerAccountId);
     if (!target) {
-      throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Target customer not found.');
+      throw new HttpError(404, ERROR_CODES.CUSTOMER_NOT_FOUND, 'Customer not found.');
+    }
+    if (target.deletedAt !== null) {
+      throw new HttpError(409, ERROR_CODES.CUSTOMER_ALREADY_DELETED, 'Customer is deleted.');
     }
 
-    // Audit FIRST — partial failure leaves no dangling cookie.
-    await this.auditLog.record({
-      actorAdminUserId: admin.id,
-      impersonatedCustomerAccountId: target.id,
-      action: 'impersonation.start',
-      objectType: 'customer_account',
-      objectId: target.id,
-      stateBefore: null,
-      stateAfter: { reason: input.reason ?? null, organizationId: input.organizationId ?? null },
-      ...(input.ip !== undefined ? { ipAddress: input.ip } : {}),
-      ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
-      ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+    // Audit FIRST — partial failure leaves no dangling cookie. The reason row
+    // and the audit entry commit together, or neither does.
+    const reason = input.reason !== undefined && input.reason.length > 0 ? input.reason : null;
+    await em.transactional(async (tx) => {
+      const stored =
+        reason === null
+          ? null
+          : tx.create(ImpersonationReason, {
+              customerAccountId: target.id,
+              organizationId: target.organizationId,
+              actorAdminUserId: admin.id,
+              reason,
+            });
+      this.auditLog.recordWithin(tx, {
+        actorAdminUserId: admin.id,
+        impersonatedCustomerAccountId: target.id,
+        action: 'impersonation.start',
+        objectType: 'customer_account',
+        objectId: target.id,
+        stateBefore: null,
+        stateAfter: impersonationStartAuditState({
+          reason,
+          reasonId: stored?.id ?? null,
+          organizationScoped: input.organizationId != null,
+        }),
+        ...(input.ip !== undefined ? { ipAddress: input.ip } : {}),
+        ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
+        ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+      });
     });
 
     const session = await this.sessionPort.createSession({

@@ -6,8 +6,9 @@ import type {
   FeedDeliveryFailureReason,
   FeedFieldSourceCatalogue,
   FeedFieldSourceKind,
-  FeedFieldTransform,
   FeedOutputFormat,
+  FeedTemplateField,
+  FeedTemplateSaveWarning,
   FeedItemGranularity,
   FeedProviderCode,
   FeedRunStatus,
@@ -81,6 +82,11 @@ export interface FeedRunSummary {
   skippedCount: number;
   warningCount: number;
   failureCode: string | null;
+  /**
+   * Feature 160 (FR-029), owner ruling 2026-10-23 — on a `withdrawn` run, why
+   * the pinned price book did not apply; `null` on every other run.
+   */
+  withdrawalReason: PinnedPriceBookWarning | null;
 }
 
 /**
@@ -145,9 +151,35 @@ export interface ProductFeedDto {
   publishedAt: string | null;
   isRunning: boolean;
   scheduleTooTightWarning: boolean;
+  /**
+   * Feature 160 (FR-029) — why the pinned price book publishes no prices now;
+   * `null` when the feed is not pinned or the book publishes.
+   */
+  pinnedPriceBookWarning: PinnedPriceBookWarning | null;
   version: number;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Mirrors `pinnedPriceBookUnpublishableReasonSchema` in `@endora-commerce/contracts`. */
+export type PinnedPriceBookWarning =
+  | 'not_found'
+  | 'currency_mismatch'
+  | 'not_active'
+  | 'outside_schedule'
+  | 'not_on_channel'
+  | 'audience_restricted';
+
+/**
+ * Issue #414 — one book the settings tab offers to pin the feed to; mirrors
+ * `productFeedPriceBookOptionSchema` in `@endora-commerce/contracts`.
+ * `unpublishableReason` is why it would publish no prices for this feed now.
+ */
+export interface FeedPriceBookOption {
+  id: string;
+  name: string;
+  isBase: boolean;
+  unpublishableReason: PinnedPriceBookWarning | null;
 }
 
 export interface IssuedFeedToken {
@@ -173,30 +205,15 @@ export interface FeedTemplateSummary {
   updatedAt: string;
 }
 
-export interface FeedTemplateFieldDto {
-  id: string;
-  outputName: string;
-  sourceKind: FeedFieldSourceKind;
-  sourceKey: string | null;
-  constantValue: string | null;
-  fallbackValue: string | null;
-  providerRequired: boolean;
-  transform: FeedFieldTransform | null;
-  transformArg: string | null;
-  sortOrder: number;
-  helpKey: string | null;
-  unbound: boolean;
-}
+/** One template field as the admin API answers it — the published `feedTemplateFieldSchema` (issue #599). */
+export type FeedTemplateFieldDto = FeedTemplateField;
 
 export interface FeedTemplateDetail extends FeedTemplateSummary {
   fields: FeedTemplateFieldDto[];
 }
 
-/** FR-074 — what the operator has to acknowledge before a save goes through. */
-export interface TemplateSaveWarning {
-  code: 'provider_required_field_removed';
-  outputName: string;
-}
+/** FR-074 — what the operator has to acknowledge before a save goes through (`feedTemplateSaveWarningSchema`). */
+export type TemplateSaveWarning = FeedTemplateSaveWarning;
 
 export interface TemplateWriteBody {
   name?: string;
@@ -304,6 +321,11 @@ export const productFeedsClient = {
 
   update(id: string, body: UpdateFeedBody): Promise<{ data: ProductFeedDto }> {
     return apiClient.patch<{ data: ProductFeedDto }>(`${BASE}/${id}`, body);
+  },
+
+  /** Issue #414 — needs `price_lists:read` beside `product_feeds:read`. */
+  priceBookOptions(id: string): Promise<{ data: FeedPriceBookOption[] }> {
+    return apiClient.get<{ data: FeedPriceBookOption[] }>(`${BASE}/${id}/price-book-options`);
   },
 
   duplicate(

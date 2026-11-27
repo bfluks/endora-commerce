@@ -6,6 +6,14 @@ import {
   ResetValueQuerySchema,
   SetValueRequestSchema,
   SettingsListQuerySchema,
+  type SettingDto,
+  type SettingGroupDto,
+  type SettingGroupRowsResponse,
+  type SettingGroupSummaryDto,
+  type SettingNotice,
+  type SettingNoticeInput,
+  type SettingsListResponse,
+  type SettingWriteConfirmation,
 } from '@endora-commerce/contracts';
 import type { SettingsAdminService, AdminAuditContext } from './services/settings-admin.service.js';
 import type { Setting } from '@endora-commerce/platform/kernel';
@@ -37,6 +45,16 @@ export interface SettingsAdminDeps {
   adminService: SettingsAdminService;
   requireAdmin: RequireAdminFactory;
   resolveAdminAuditContext?: (req: FastifyRequest) => AdminAuditContext;
+  /**
+   * Issue #930 — the owning module's notice for a setting whose stored value
+   * is not in force. Absent in a composition without the registry: no notice.
+   */
+  noticeFor?: (input: SettingNoticeInput) => Promise<SettingNotice | null>;
+  /**
+   * Issue #349, E-349-1 — the owning module's question before a write. Absent
+   * in a composition without the registry: nothing is asked.
+   */
+  confirmationFor?: (input: SettingNoticeInput) => Promise<SettingWriteConfirmation | null>;
 }
 
 interface SetValueWithVersion {
@@ -47,16 +65,20 @@ export async function registerSettingsAdminRoutes(
   app: FastifyInstance,
   deps: SettingsAdminDeps,
 ): Promise<void> {
-  const { adminService, requireAdmin, resolveAdminAuditContext } = deps;
+  const { adminService, requireAdmin, resolveAdminAuditContext, noticeFor, confirmationFor } = deps;
 
   const auditContext = (request: FastifyRequest): AdminAuditContext => {
     const ctx = resolveAdminAuditContext?.(request) ?? {
       actorAdminUserId: null,
     };
     const rid = request.headers['x-request-id'];
+    // Issue #349, E-349-1 — the session the write was made from, so a
+    // `settings.value_changed` subscriber that ends sessions can spare it.
+    const actor = request.actor;
     return {
       ...ctx,
       requestId: typeof rid === 'string' ? rid : null,
+      ...(actor?.kind === 'admin' && actor.sessionId !== undefined ? { actorSessionId: actor.sessionId } : {}),
     };
   };
 
@@ -73,13 +95,40 @@ export async function registerSettingsAdminRoutes(
   interface SettingClassification {
     editable: boolean;
     activationControl: boolean;
+    /** Issue #930 — computed by {@link commentaryOf}; absent means no `notice` key at all. */
+    notice?: SettingNotice | undefined;
+    /** Issue #349, E-349-1 — computed by {@link commentaryOf}; absent means no `confirmation` key. */
+    confirmation?: SettingWriteConfirmation | undefined;
+  }
+
+  /**
+   * Issue #930 — asks the owning module whether the platform-wide value in
+   * force is what the stored value says; and (issue #349, E-349-1) what to ask
+   * before a write. A `secret` value is never handed out.
+   */
+  async function commentaryOf(
+    setting: Setting,
+  ): Promise<{ notice?: SettingNotice; confirmation?: SettingWriteConfirmation }> {
+    const input: SettingNoticeInput = {
+      code: setting.code,
+      ownerModuleId: setting.ownerModule,
+      value: setting.valueType === 'secret' ? null : setting.globalValue ?? setting.defaultValue,
+    };
+    const [notice, confirmation] = await Promise.all([
+      noticeFor ? noticeFor(input) : null,
+      confirmationFor ? confirmationFor(input) : null,
+    ]);
+    return {
+      ...(notice ? { notice } : {}),
+      ...(confirmation ? { confirmation } : {}),
+    };
   }
 
   function serializeSetting(
     setting: Setting,
     values: SettingValue[],
     classification: SettingClassification = { editable: true, activationControl: false },
-  ): Record<string, unknown> {
+  ): SettingDto {
     // Secret settings are write-only (feature 043, FR-021): every read
     // replaces stored values with null + isSet indicators. The plaintext (or
     // its ciphertext envelope) never leaves the backend through this API.
@@ -108,10 +157,12 @@ export async function registerSettingsAdminRoutes(
       version: adminService.computeSettingVersion(setting, values),
       editable: classification.editable,
       activationControl: classification.activationControl,
+      ...(classification.notice ? { notice: classification.notice } : {}),
+      ...(classification.confirmation ? { confirmation: classification.confirmation } : {}),
     };
   }
 
-  function serializeGroup(
+  async function serializeGroup(
     group: SettingGroup,
     settings: Array<{
       setting: Setting;
@@ -119,7 +170,8 @@ export async function registerSettingsAdminRoutes(
       editable: boolean;
       activationControl: boolean;
     }>,
-  ): Record<string, unknown> {
+  ): Promise<SettingGroupDto> {
+    const commentary = await Promise.all(settings.map((s) => commentaryOf(s.setting)));
     return {
       id: group.id,
       code: group.code,
@@ -127,10 +179,11 @@ export async function registerSettingsAdminRoutes(
       isSystemProtected: group.isSystemProtected,
       ownerModule: group.ownerModule,
       salesChannelCodes: group.salesChannels.getItems().map((c) => c.code),
-      settings: settings.map((s) =>
+      settings: settings.map((s, i) =>
         serializeSetting(s.setting, s.values, {
           editable: s.editable,
           activationControl: s.activationControl,
+          ...commentary[i],
         }),
       ),
     };
@@ -143,22 +196,28 @@ export async function registerSettingsAdminRoutes(
   app.get(
     '/api/v1/admin/settings',
     { preHandler: requireAdmin('settings:read') },
-    async (request) => {
+    async (request): Promise<SettingsListResponse> => {
       const q = SettingsListQuerySchema.parse(request.query ?? {});
       const filter = q.groupCode ? { groupCode: q.groupCode } : undefined;
       const result = await adminService.listGroups(filter);
-      return { groups: result.groups.map((g) => serializeGroup(g.group, g.settings)) };
+      return {
+        groups: await Promise.all(result.groups.map((g) => serializeGroup(g.group, g.settings))),
+      };
     },
   );
 
   app.get<{ Params: { code: string } }>(
     '/api/v1/admin/settings/:code',
     { preHandler: requireAdmin('settings:read') },
-    async (request, reply) => {
+    async (request, reply): Promise<SettingDto> => {
       const { setting, values, version, editable, activationControl } =
         await adminService.getSettingByCode(request.params.code);
       setEtag(reply, version);
-      return serializeSetting(setting, values, { editable, activationControl });
+      return serializeSetting(setting, values, {
+        editable,
+        activationControl,
+        ...(await commentaryOf(setting)),
+      });
     },
   );
 
@@ -169,7 +228,7 @@ export async function registerSettingsAdminRoutes(
   app.put<{ Params: { code: string } }>(
     '/api/v1/admin/settings/:code/value',
     { preHandler: requireAdmin('settings:write') },
-    async (request, reply) => {
+    async (request, reply): Promise<SettingDto> => {
       const body = SetValueRequestSchema.parse(request.body);
       const expectedVersion =
         ((request.body ?? {}) as SetValueWithVersion).expectedVersion ??
@@ -198,6 +257,7 @@ export async function registerSettingsAdminRoutes(
       return serializeSetting(detail.setting, detail.values, {
         editable: detail.editable,
         activationControl: detail.activationControl,
+        ...(await commentaryOf(detail.setting)),
       });
     },
   );
@@ -205,7 +265,7 @@ export async function registerSettingsAdminRoutes(
   app.delete<{ Params: { code: string } }>(
     '/api/v1/admin/settings/:code/values',
     { preHandler: requireAdmin('settings:write') },
-    async (request, reply) => {
+    async (request, reply): Promise<SettingDto> => {
       const q = ResetValueQuerySchema.parse(request.query ?? {});
       const channelCodes = q.salesChannelCodes
         ? q.salesChannelCodes.split(',').map((c) => c.trim()).filter(Boolean)
@@ -221,6 +281,7 @@ export async function registerSettingsAdminRoutes(
       return serializeSetting(detail.setting, detail.values, {
         editable: detail.editable,
         activationControl: detail.activationControl,
+        ...(await commentaryOf(detail.setting)),
       });
     },
   );
@@ -232,7 +293,7 @@ export async function registerSettingsAdminRoutes(
   app.get(
     '/api/v1/admin/settings/groups',
     { preHandler: requireAdmin('settings:read') },
-    async () => {
+    async (): Promise<SettingGroupRowsResponse> => {
       const result = await adminService.listGroups();
       return {
         groups: result.groups.map((g) => ({
@@ -252,7 +313,7 @@ export async function registerSettingsAdminRoutes(
   app.post(
     '/api/v1/admin/settings/groups',
     { preHandler: requireAdmin('settings:write') },
-    async (request, reply) => {
+    async (request, reply): Promise<SettingGroupSummaryDto> => {
       const body = GroupCreateRequestSchema.parse(request.body);
       const ctx = auditContext(request);
       const created = await adminService.createGroup(
@@ -281,7 +342,7 @@ export async function registerSettingsAdminRoutes(
   app.patch<{ Params: { code: string } }>(
     '/api/v1/admin/settings/groups/:code',
     { preHandler: requireAdmin('settings:write') },
-    async (request, reply) => {
+    async (request, reply): Promise<SettingGroupSummaryDto> => {
       const body = GroupUpdateRequestSchema.parse(request.body);
       const expectedVersion =
         ((request.body ?? {}) as { expectedVersion?: string }).expectedVersion ??

@@ -15,6 +15,7 @@ import {
   type QuoteRequestPdfSendResult,
   type SalesRepAssignmentPort,
   type TransactionalEmailSender,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -25,9 +26,11 @@ import {
 } from '../commands/document-template-commands.js';
 import { QuoteRequest } from '../entities/quote-request.entity.js';
 import { QuoteRequestEvent } from '../entities/quote-request-event.entity.js';
-import { QuoteRequestItem } from '../entities/quote-request-item.entity.js';
+import { loadArrangedQuoteLines, toLineGroup } from '../services/line-order.js';
 import type { AdminContext } from '../services/rfq-admin-service.js';
+import type { QuoteRequestOperator } from '../commands/quote-request-admin-commands.js';
 import { submissionRecordProposals } from '../services/draft-guard.js';
+import { adminCanSeeOrganization } from '../services/admin-org-visibility.js';
 import { formatQuoteDate } from './blocks/types.js';
 import type { QuoteDocumentDataBuilder } from './data-builder.js';
 
@@ -73,11 +76,13 @@ export function quotePdfFileName(businessId: string): string {
 export class QuoteRequestDocumentService {
   constructor(private readonly deps: QuoteRequestDocumentServiceDeps) {}
 
-  private async findVisible(em: EntityManager, ctx: AdminContext, id: string): Promise<QuoteRequest> {
+  private async findVisible(em: EntityManager, ctx: Pick<QuoteRequestOperator, 'adminUserId'>, id: string): Promise<QuoteRequest> {
     const notFound = () => new HttpError(404, ERROR_CODES.NOT_FOUND, 'Quote Request not found.');
+    if (!isUuidShape(id)) throw notFound();
     const quote = await em.findOne(QuoteRequest, { id });
     if (!quote) throw notFound();
-    if (!ctx.isPlatformAdmin && !(await this.deps.salesRepScope.canSeeOrganization(ctx.adminUserId, quote.organizationId))) {
+    // Only a sales representative is narrowed (issue #957), as on the detail.
+    if (!(await adminCanSeeOrganization(this.deps.salesRepScope, ctx.adminUserId, quote.organizationId))) {
       throw notFound();
     }
     return quote;
@@ -135,7 +140,7 @@ export class QuoteRequestDocumentService {
    * explicit, else the remembered, else the default template.
    */
   async render(
-    ctx: AdminContext,
+    ctx: Pick<QuoteRequestOperator, 'adminUserId'>,
     id: string,
     input: { readonly templateId?: string | undefined; readonly language?: string | undefined },
   ): Promise<RenderedQuotePdf & { quote: QuoteRequest; language: string; data: QuoteRequestDocumentData }> {
@@ -152,14 +157,16 @@ export class QuoteRequestDocumentService {
     }
     const templateId = input.templateId ?? quote.documentTemplateId ?? undefined;
 
-    const [items, events] = await Promise.all([
-      em.find(QuoteRequestItem, { quoteRequestId: quote.id }, { orderBy: { createdAt: 'asc', id: 'asc' } }),
+    const [arranged, events] = await Promise.all([
+      loadArrangedQuoteLines(em, quote.id),
       em.find(QuoteRequestEvent, { quoteRequestId: quote.id }, { orderBy: { createdAt: 'asc' } }),
     ]);
+    const items = arranged.lines;
     const language = input.language ?? (await this.deps.builder.suggestedLanguage(quote.salesChannelId));
     const data = await this.deps.builder.build({
       quote,
       lines: items,
+      groups: arranged.groups.map(toLineGroup),
       language,
       proposals: await submissionRecordProposals(em, items, events),
     });
@@ -191,8 +198,18 @@ export class QuoteRequestDocumentService {
     return { result, fileName: quotePdfFileName(quote.businessId), templateName, quote, language, data };
   }
 
-  /** Route Q4 — e-mail the PDF to 1–5 recipients through the *Quote request PDF* e-mail (owner answer Q4). */
-  async send(ctx: AdminContext, id: string, body: QuoteRequestPdfSendRequest): Promise<QuoteRequestPdfSendResult> {
+  /**
+   * Route Q4 — e-mail the PDF to 1–5 recipients through the *Quote request PDF*
+   * e-mail (owner answer Q4). Also `quoteRequestCommandPort.sendDocument`
+   * (issue #1824), whose caller may be the system (`adminUserId: null`) and may
+   * name its `source` and command-hook `extensions`.
+   */
+  async send(
+    ctx: QuoteRequestOperator,
+    id: string,
+    body: QuoteRequestPdfSendRequest,
+    options: { source?: string | undefined; extensions?: Readonly<Record<string, unknown>> | undefined } = {},
+  ): Promise<QuoteRequestPdfSendResult> {
     const rendered = await this.render(ctx, id, {
       ...(body.templateId !== undefined ? { templateId: body.templateId } : {}),
       ...(body.language !== undefined ? { language: body.language } : {}),
@@ -221,6 +238,8 @@ export class QuoteRequestDocumentService {
           recipients: body.recipients,
           message,
           roleLabel: ctx.roleLabel,
+          ...(options.source !== undefined ? { source: options.source } : {}),
+          ...(options.extensions ? { extensions: options.extensions } : {}),
           // Nested, as the e-mail's `{{var quote.number}}` directives read them.
           variables: {
             quote: {

@@ -4,7 +4,12 @@ import { Setting } from './setting.entity.js';
 import { SettingValue } from './setting-value.entity.js';
 import type { SalesChannel } from '../sales-channels/sales-channel.entity.js';
 import type { SettingsCache } from './settings-cache.js';
-import { decryptSecretValue, isSecretEnvelope } from './secret-value-codec.js';
+import {
+  decryptSecretValue,
+  encryptSecretValue,
+  isSecretEnvelope,
+} from './secret-value-codec.js';
+import { isUuidShape } from '@endora-commerce/contracts';
 
 /**
  * SettingsService — the universal getter (US3 / T049).
@@ -98,7 +103,6 @@ export class SettingsChannelIdInvalid extends Error {
  * rejected as a *spelling of platform-wide*, not as a malformed id, and it is
  * `check-channel-resolution.ts` — which can see the literal — that says so.
  */
-const CHANNEL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class SettingValueShapeMismatch extends Error {
   override readonly name = 'SettingValueShapeMismatch';
@@ -174,7 +178,7 @@ export class SettingsService {
           });
 
     const resolved = resolveEffectiveValue(setting, value);
-    if (this.cache) await this.cache.set(code, salesChannelId, resolved);
+    await this.cacheResolved(setting, salesChannelId, resolved);
     return this.validate(code, this.maybeDecrypt(resolved), schema);
   }
 
@@ -250,7 +254,7 @@ export class SettingsService {
             salesChannel: { id: salesChannelId } as Partial<SalesChannel>,
           });
     const resolved = resolveEffectiveValue(setting, value);
-    if (this.cache) await this.cache.set(code, salesChannelId, resolved);
+    await this.cacheResolved(setting, salesChannelId, resolved);
     return this.maybeDecrypt(resolved);
   }
 
@@ -261,7 +265,7 @@ export class SettingsService {
    */
   private assertChannelId(code: string, salesChannelId: string | null): void {
     if (salesChannelId === null) return;
-    if (!CHANNEL_ID_PATTERN.test(salesChannelId)) {
+    if (!isUuidShape(salesChannelId)) {
       throw new SettingsChannelIdInvalid(code, salesChannelId);
     }
   }
@@ -270,6 +274,33 @@ export class SettingsService {
     const r = schema.safeParse(value);
     if (!r.success) throw new SettingValueShapeMismatch(code, r.error.issues);
     return r.data;
+  }
+
+  /**
+   * Cache what was resolved — except that a `secret` is never cached as
+   * plaintext (issue #700). A legacy secret stored as a plain string (one the
+   * boot backfill has not reached, for want of a key) is cached as the envelope
+   * of its value when a key is configured, and not cached at all otherwise:
+   * Redis and the per-process LRU outlive the request, and a plaintext entry
+   * there is a copy no re-save of the setting would ever have removed.
+   */
+  private async cacheResolved(
+    setting: Setting,
+    salesChannelId: string | null,
+    resolved: unknown,
+  ): Promise<void> {
+    if (!this.cache) return;
+    let cacheable = resolved;
+    if (setting.valueType === 'secret' && typeof resolved === 'string' && resolved.length > 0) {
+      if (!this.secretEncryptionKey) return;
+      try {
+        cacheable = encryptSecretValue(resolved, this.secretEncryptionKey);
+      } catch {
+        // A malformed key: the read still answers, it just is not cached.
+        return;
+      }
+    }
+    await this.cache.set(setting.code, salesChannelId, cacheable);
   }
 
   /**

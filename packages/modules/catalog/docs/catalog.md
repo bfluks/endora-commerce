@@ -1,13 +1,14 @@
 ---
-title: catalog
+title: Catalog
 sidebar_label: Catalog
 description: Products, variants, categories, attributes, sales channels
 ---
 
-# `catalog`
+# Catalog (`catalog`)
 
 The product catalog: Products, ProductVariants, Categories,
-ProductAttributes, and SalesChannels. Owns all read paths the storefront
+ProductAttributes, and the products' per-Sales-Channel scopes (the Sales
+Channel itself is the platform's). Owns all read paths the storefront
 depends on and the admin-side authoring surface.
 
 ## Public surface
@@ -24,43 +25,291 @@ otherwise; every price names its currency either way. A malformed code is refuse
 | Verb + Path | Audience | Purpose |
 | --- | --- | --- |
 | `GET /api/v1/catalog/products` | storefront / API key | List/search/filter products in the active Sales Channel |
-| `GET /api/v1/catalog/products/:idOrSlug` | storefront | Product detail (price omitted on non-public Sales Channels) |
+| `GET /api/v1/catalog/products/:idOrSlug` | storefront | Product detail (no amount where the viewer's price display mode is *None*); `?include=content` adds the product's Page Builder content ([Product content](./catalog/product-content.md)) |
 | `GET /api/v1/catalog/categories` | storefront | Nested category tree |
 | `GET /api/v1/catalog/categories/:id/content` | storefront | One category's page content, resolved to the caller's language |
-| `GET /api/v1/catalog/filters` | storefront | Filterable attributes for the active Sales Channel |
+| `GET /api/v1/catalog/filters?q` | storefront | Filterable attributes for the active Sales Channel, with option counts over the products the caller may see; with `q`, over the products that text query matches (the same matches as `GET /api/v1/catalog/products?q`) |
 | `GET /api/v1/catalog/sitemap.xml` | crawlers | SEO sitemap |
-| `GET /api/v1/admin/catalog/products?includeArchived` | admin | Admin product list (includes drafts; archived rows opt-in) |
+| `GET /api/v1/admin/catalog/products?status&archived&categoryId&salesChannelId&stock` | admin | Admin product list. `status` is `active` or `inactive` (any other value: `400 VALIDATION_FAILED`); `archived` is `exclude` (default), `include` or `only` — the legacy `includeArchived=1` means `include`. `counts` is `{ all, active, inactive, archived }` — see *Product status and archiving*. `categoryId`, `salesChannelId` and `stock` narrow the list — see *Filtering the product list* |
 | `GET /api/v1/admin/catalog/products/:id` | admin | Product detail |
 | `POST /api/v1/admin/catalog/products` | admin | Create product (`type` immutable post-create; `sku` is editable) |
-| `PATCH /api/v1/admin/catalog/products/:id` | admin | Update (incl. `sku`); writes an audit row with stateBefore / stateAfter; refuses with `409 sku_in_use` if the new SKU already belongs to another product |
-| `DELETE /api/v1/admin/catalog/products/:id` | admin | Archive (soft) |
+| `PATCH /api/v1/admin/catalog/products/:id` | admin | Update (incl. `sku`); writes an audit row with stateBefore / stateAfter; refuses with `409 SKU_ALREADY_EXISTS` (token `held_by_product` or `held_by_variant`, `details.sku`) if the new SKU already belongs to another product or a variant |
+| `DELETE /api/v1/admin/catalog/products/:id` | admin | Delete (soft) — not the Archive action; frees the SKUs of the product and its variants ([below](#a-deleted-product-frees-its-sku)) |
+| `POST /api/v1/admin/catalog/products/:id/archive` | admin (`catalog:write`) | Archive one product — see *Product status and archiving* |
+| `POST /api/v1/admin/catalog/products/:id/restore` | admin (`catalog:write`) | Restore one archived product |
 | `GET`, `POST /api/v1/admin/catalog/products/list-views`; `PATCH`, `DELETE …/list-views/:id` | admin | Saved views on the product list — see *Saved views* below |
+| `GET /api/v1/admin/catalog/bulk-operations`, `GET …/bulk-operations/:id` | admin (`catalog:read`) | The background bulk operations and one operation's per-product outcome |
+| `POST /api/v1/admin/catalog/bulk-operations/:id/undo` | admin (`catalog:write`) | Undo a finished bulk operation; refused with `409 BULK_OPERATION_RUNNING` while it is pending or running, `409 BULK_OPERATION_ALREADY_REVERTED` once undone and `409 BULK_OPERATION_NOT_REVERSIBLE` when there is nothing to restore (until issue #501 all three were `409 VERSION_CONFLICT`) |
 | `GET /api/v1/admin/catalog/attributes` | admin | List attributes |
 | `GET /api/v1/admin/catalog/attributes/by-flag?flag=isPromoRule\|isComparable\|...` | admin | Picker payload — every attribute carrying the requested flag |
 | `GET /api/v1/admin/catalog/attributes/:idOrKey` | admin | Single attribute read |
 | `POST /api/v1/admin/catalog/attributes` | admin | Create attribute (accepts the new flags + inline `options[]` for select-style types) |
 | `PATCH /api/v1/admin/catalog/attributes/:key` | admin | Hot-toggle `isFilterable` / `isSearchable` / `isVariantAxis` / `isPromoRule` / `isPriceRule` / `isComparable` / `isVisibleOnProductPage` / `isRequired` / `filterPosition` (re-emits `attribute.updated.v1`) |
-| `DELETE /api/v1/admin/catalog/attributes/:idOrKey` | admin | Delete; refused with `409 attribute_in_use_by_set` while any Attribute Set still references it |
+| `GET /api/v1/admin/catalog/attributes/:idOrKey/usage` | admin | What deleting the attribute would meet — set memberships, product values, product content ([Attributes](./catalog/attributes.md#deleting-an-attribute)) |
+| `DELETE /api/v1/admin/catalog/attributes/:idOrKey` | admin | Delete an attribute of any type; refused with `409` while an Attribute Set contains it or a live product holds a value for it (on the product, per sales channel or on a variant) |
 | `GET /api/v1/admin/catalog/attributes/:idOrKey/options` | admin | List option-list rows for select/enum/multiselect attributes |
 | `POST /api/v1/admin/catalog/attributes/:idOrKey/options` | admin | Append an option |
-| `PATCH /api/v1/admin/catalog/attribute-options/:optionId` | admin | Patch label / labelDefault / isDefault / sortOrder (option `value` is immutable) |
-| `DELETE /api/v1/admin/catalog/attribute-options/:optionId` | admin | Remove; refused with `409 option_in_use` while any product still carries the value |
-| `POST /api/v1/admin/catalog/attribute-set-preview` | admin | Preview which Set's attributes will be edited / hidden when an operator switches a product's Attribute Set |
+| `PATCH /api/v1/admin/catalog/attributes/:attributeId/options/:optionId` | admin | Patch label / labelDefault / isDefault / sortOrder (option `value` is immutable) |
+| `DELETE /api/v1/admin/catalog/attributes/:attributeId/options/:optionId` | admin | Remove; refused with `409 ATTRIBUTE_OPTION_IN_USE` while any product still carries the value |
+| `POST /api/v1/admin/catalog/products/:id/attribute-set-preview` | admin (`catalog:write`) | Preview which Set's attributes will be edited / hidden when an operator switches a product's Attribute Set |
 | `GET /api/v1/admin/catalog/categories` | admin | Flat list, the UI folds into a tree |
-| `POST /api/v1/admin/catalog/categories` | admin | Create (parent must exist) |
-| `PATCH /api/v1/admin/catalog/categories/:id` | admin | Update; reparenting walks the new parent's chain to refuse cycles (409) |
-| `DELETE /api/v1/admin/catalog/categories/:id` | admin | Soft-delete; rejects with 409 if any active child still references the row |
+| `POST /api/v1/admin/catalog/categories` | admin | Create (parent must exist); a slug a sibling already holds is `409 CATEGORY_SLUG_TAKEN` (`details.slug`, `parentCategoryId`), on create and on update. `customFieldValues` are checked against the category custom-field definitions and stored with the category; a refused value is `422 CUSTOM_FIELD_VALUE_INVALID` (`details` entries `{ path, issue }`) and creates nothing. A **required** category field is enforced on every create, also when the request sends no values |
+| `PATCH /api/v1/admin/catalog/categories/:id` | admin | Update (incl. `customFieldValues`, refused as on create); reparenting walks the new parent's chain to refuse cycles (`409 CATEGORY_MOVE_CYCLE`, `details.categoryId`, `parentCategoryId`) |
+| `DELETE /api/v1/admin/catalog/categories/:id` | admin | Soft-delete; rejects with `409 CATEGORY_HAS_CHILDREN` (`details.categoryId`, `childCount`) if any active child still references the row |
 | `GET /api/v1/admin/catalog/categories/:id/content` | admin | The category's page content — one Page Builder document per language ([Category page content](./catalog/category-content.md)) |
 | `PUT /api/v1/admin/catalog/categories/:id/content` | admin | Replace the category's page content; `null` clears it |
-| `PUT /api/v1/catalog/products/by-sku/:sku` | API key | Idempotent upsert (PIM sync) |
+| `GET /api/v1/admin/catalog/products/:id/content` | admin | The product's content attributes with a per-language summary ([Product content](./catalog/product-content.md)) |
+| `GET /api/v1/admin/catalog/products/:id/content/:attributeKey` | admin | One content attribute's envelope — one Page Builder document per language |
+| `PUT /api/v1/admin/catalog/products/:id/content/:attributeKey` | admin | Replace one content attribute's envelope; `null` clears it |
+| `PUT /api/v1/catalog/products/by-sku/:sku` | API key | Idempotent upsert (PIM sync); an update is audited as `product.update` naming the key (`apiKeyId`) and is never checked for completeness |
+
+## Product status and archiving
+
+A product's **status** is `active` or `inactive`, globally and as an override per
+Sales Channel and per channel × language. `inactive` at any scope is plain **off**
+there: the product is not listed, not searchable, not orderable and its page answers as
+a product that does not exist. Switching a product off never archives it. New and
+duplicated products start `inactive`. Any other status value is refused with
+`400 VALIDATION_FAILED` — on the admin API, the API-key upsert
+`PUT /api/v1/catalog/products/by-sku/:sku` and an import; archiving is not a status.
+
+**Archiving** is a separate, product-wide action, offered as **Archive** and
+**Restore** (`POST …/products/:id/archive`, `…/restore`) and gated by `catalog:write`.
+Archive sets the product's archived time and takes it out of every channel; Restore
+clears it. Neither changes the status at any scope, and each writes one audit entry
+with the archived time before and after. Archiving an archived product, or restoring
+one that is not archived, answers `200` and changes nothing — no audit entry, no event.
+
+- **Bulk.** `POST /api/v1/admin/catalog/products/bulk-update` with
+  `fields: { archived: true }` archives every selected product, `false` restores them,
+  each through the same action and audit entry. `archived` must be the only field of
+  its request. Large selections run as a background bulk operation, and the
+  operation's undo puts every product back as it was. A background operation audits
+  each product with the admin who requested it, as a direct one does. Archive and
+  Restore lock the product, so two concurrent Archives of one product archive it once.
+- **Setting `active` never restores.** An archived product stays archived whatever its
+  status; only Restore brings it back. Restoring an `inactive` product leaves it off.
+- **Products archived before this change.** Until this release a product was archived by
+  setting it `inactive`. Every product `inactive` at the upgrade therefore stays
+  archived (keeping its archived time, or its last-update time when it had none), and
+  **needs an explicit Restore** to come back — setting it `active` alone leaves it
+  archived.
+- **The product page.** An archived product's page answers `410 PRODUCT_ARCHIVED`
+  ("gone"), but only to a buyer who could otherwise see it there: the check takes the
+  archive away and reads the global status as `active`, while every channel and channel
+  × language status, the membership, the channel's languages, the publication window and
+  the audience still apply. Everywhere else, and for any product that is off without
+  being archived, the page answers `404` exactly as for a product that does not exist.
+- **The admin list.** Archived products are hidden by default, whatever their status;
+  `archived=only` lists them and `archived=include` lists them beside the rest. The
+  `inactive` count and filter cover products that are off but not archived.
+  On the product list the **Archived** tab has its own address,
+  `/catalog/products/archived`, so the browser's Back button and a reload return to it, and
+  the command palette (⌘K / CTRL+K) opens it as **Archived products** — search for
+  "archived" or "archiwum".
+  With a selection, its bar offers Restore, Bulk edit and Delete; on the other tabs it
+  offers Bulk edit and Delete. Prices are set in price books, not from the list.
+- **From the admin assistant.** The assistant's `catalog.archive_product` and
+  `catalog.restore_product` tools (`catalog:write`) archive and restore products after
+  you confirm the plan it shows, through the same action and audit entry, with you as
+  the actor; larger selections run as the bulk operation above. Its status tool,
+  `catalog.set_product_status`, only switches products on or off and never archives or
+  restores, and its product search lists archived products and says which they are.
+
+### Status per channel and language, in bulk
+
+`POST /api/v1/admin/catalog/products/bulk-update` with
+`fields: { scopedStatus: { channelId, languageCode, value } }` sets the status of every
+selected product at one scope — the Sales Channel (`languageCode: null`) or one
+channel × language — to `active` or `inactive`, or removes the override there with
+`inherit`. Only that scope changes on each product; every other scope and the global
+status stay as they were. A product that is not in the channel, or a language the
+channel does not offer, is skipped and reported as `scope_invalid` — the product is
+never added to the channel. `scopedStatus` cannot be combined with `status` in one
+request. Each product's change is one audit entry naming the scope; large selections
+run as a background bulk operation whose undo puts every scope back as it was and
+reports any product changed since.
+
+### Completeness check when switching a product on
+
+When an operator's **status change** switches a product on for a sales channel and
+language — the global status, a channel or channel × language status, single or in
+bulk — the product must have, at that channel and language: a non-empty effective
+**name** (Channel × language → Channel → Global; a deliberately empty override counts
+as missing), a **URL key** (the Global key counts) and an effective value for every
+**required** attribute of its attribute set. The setting **Completeness check when switching a
+product on** (`catalog.scope_completeness_gate`, one value for the whole platform)
+decides what happens when something is missing:
+
+- **`warn`** (the default) — the change is saved and the answer lists what is missing
+  per channel and language (`warnings`, kind `completeness`).
+- **`refuse`** — the change is not saved: `422 SCOPE_INCOMPLETE` names every channel and
+  language with what it lacks. A change that would switch the product on in several
+  places is refused as a whole if any of them fails. In a bulk edit the products that
+  pass are changed and the others are skipped as `completeness_gate`.
+
+Only a status change is checked. A product that goes live because it joins a channel,
+a channel gains a language, its publication window opens, its audience changes, or it
+is restored is not checked; the **scope map** of the product editor shows what is
+missing at every channel and language instead. Setting an archived product `active` is
+checked like any status change, although the product stays archived. Imports, PIM
+synchronisation and the API-key upsert are never checked.
+
+## Prices
+
+**A product carries no price of its own.** Every price is a row of a price book of the
+`price_lists` module: the product's base price per currency, its variants' prices, and any
+catalogue, buyer or sale price. Set a product's base price on the product editor's **Pricing** tab
+— the *Base prices* panel there, and the list of the price books that price the product, are
+contributed by `price_lists` — or in the base book's grid. Variant prices are set in the same
+places, never on the variant itself. The `price_lists` module's page explains how the price a
+buyer pays is chosen.
+
+- **Listing cards, the product page and related products** show the viewer's own price — their
+  organization's and customer group's prices on the request's sales channel and currency. A product
+  whose variants cost different amounts shows its lowest price as a *from* price
+  (`ProductSummary.price` carries `variesByVariant` and `maxAmount`); a charged sale carries the
+  buyer's regular price as the compare-at price; with `pricing.show_list_price` on, a lower buyer
+  price carries the catalogue price as `listPrice`. A product nothing prices has no price and
+  follows the quote-request path.
+- **Sorting and filtering by price** — `?sort=price`, `?sort=-price`, `minPrice`, `maxPrice` on
+  `GET /api/v1/catalog/products` — order and select by the same quantity-1 price the cards show to
+  that viewer, the *from* price for a variant product. Priced products always come before unpriced
+  ones. A price ordering is always answered from PostgreSQL, never from the search index. Paging
+  through a price ordering with the cursor meets every product once, provided its price does not
+  change meanwhile; a product repriced during the walk may be met twice or not at all, as with any
+  cursor over a live price. A page may be short, or even empty, and still have more after it
+  (`hasMore: true`) when most of the rows it read are hidden from the viewer; follow its cursor.
+  The cursor of a price ordering or a price range is sealed: it cannot be read or altered, because
+  the position it continues from can be a product the viewer may not see. A cursor that does not
+  open — altered, issued by a release before the seal, or before the instance's session key was
+  changed — starts the listing again at its first page.
+- **Paging and creation time** — the default ordering, and the order of the unpriced products that
+  follow a price ordering, is the product's creation time, newest first. It is stored to the
+  millisecond: a value written by SQL, such as an import's or a bulk insert's `now()`, is rounded
+  to the millisecond as it is stored. So a walk through the listing by its cursor meets every
+  product once, including products created within the same millisecond.
+- **Reading named products** — `?ids=<id>,<id>,…` on `GET /api/v1/catalog/products` restricts the
+  listing to those products: at most 24 distinct ids, each a uuid, or `400 VALIDATION_FAILED`. The
+  answer is the subset the viewer may see, priced exactly as any listing card for that viewer, in
+  the listing's own order — a caller that cares about its order re-orders by id. It combines with the
+  other filters and is always answered from PostgreSQL. A blog post's related products are read this
+  way.
+- **Where the viewer's price display mode is *None*** — for instance an anonymous visitor on a
+  channel that hides prices until sign-in — the listing and the product detail carry no amount, and
+  a price ordering or range is refused for that page with `400 PRICE_ORDERING_UNAVAILABLE`. Sales channels have no price-visibility flag
+  of their own any more: the display mode decides, for each viewer.
+- **Gross prices use each product's own VAT rate.** Every product on the listing and the product
+  detail carries `vatRate`, the VAT rate the viewer is charged for it, as a fraction (`0.08` = 8 %).
+  It is the rate the cart and the order apply: the product's tax class (its type) against the
+  viewer's organization — its VAT status and registered country. A VAT-exempt or reverse-charge
+  organization gets `0`; an anonymous visitor, or a buyer with no organization, is treated as a VAT
+  payer in Poland. The storefront derives every product's gross price — on the cards, the list rows
+  and the product page — from this rate. Where a reply carries no rate (`null` when the rate could
+  not be read, or no field from an older backend), the storefront shows the net price, labelled
+  net, and never a gross at an assumed rate.
+
+For developers: the listing paths price a whole page in one batched call —
+`resolveListingPrices`, or `resolveListingPriceDetails` where the page renders the split
+(`ProductSummary.resolvedPrice`: `basePrice`, `salePrice`, `listPrice`, `displayMode`) — through the
+`pricingService` port slices of `@endora-commerce/contracts`, passing the viewer's organization and
+customer account rather than a resolved group. A price ordering reads `ListingPriceOrderPort`
+(`orderByUnitPrice`, `pricedProductIds`) over `price_lists`' precomputed price surface and composes
+the unpriced tail itself (`catalog-query.service.ts`). The external catalogue API prices through
+`resolveLinePrices` and builds a bound organization's tier ladder from `listTierStarts`. Product,
+category and attribute writes publish the events `price_lists` subscribes to, which clear the
+pricing caches and mark on the price surface the products each event concerns, for the surface
+worker to refresh.
+
+`vatRate` is resolved per reply by `createProductTaxRateResolver` (`@endora-commerce/contracts`),
+the rule the cart uses too, over `organizations`' `organizationTaxProfilePort` and `taxes`'
+`taxService`. It depends on the viewer's organization and nothing else about the viewer, so it
+follows the same cache rule as the price: a reply for a viewer naming an organization is
+`Cache-Control: private, no-store`, and the shareable reply is the anonymous one, which carries the
+guest's rate. A failed resolution answers `vatRate: null` on every product rather than refusing the
+listing.
+
+### Removed price fields (migration note)
+
+The release that introduced price books removed the product's *Default unit price* (the
+`defaultPrice` and `price` keys of `attributeValues`, and the editor field) and the variant price
+override (`product_variants.price_override`, and the variant editor's price field), without
+converting either. Product and variant create and update, and the products import, refuse those
+fields with `400 PRICE_SET_IN_PRICE_BOOKS` (`PRICE_FIELDS_REFUSED_ON_PRODUCTS`,
+`PRICE_FIELDS_REFUSED_ON_VARIANTS` in `@endora-commerce/contracts`), saying that prices are set in
+price books. The catalogue's migration `20261022T111811_catalog_price_fields_removed.ts` dropped the
+column and stripped the keys.
+
+## Editing a category
+
+*Catalog → Categories* shows the category tree. Each row has three controls: the category's **name**, which opens
+its editor in a panel beside the tree; a **+** that opens the form for a new subcategory in the same panel; and an
+**actions menu** (⋮) holding **Edit**, **Content**, **Activate** / **Deactivate** and, last, **Delete**, which asks
+for confirmation. The row shows the category's main image as a small thumbnail.
+
+The editor holds the category's own fields — its names, slug, parent and custom fields — and, while the Price lists
+module is on, the category's **Price display mode**, contributed by that module and shown above the Save and Cancel
+buttons. The **Main image** sits below them and applies at once, outside Save. In the new-category form the slug is
+made from the name as you type it; type your own to stop that.
+
+The category has a **name for every language your active sales channels offer**, one field each, all shown at
+once. A name stored in a language no active channel offers any more stays in the editor, read-only and marked
+**Not in any channel**; saving keeps it unchanged. If the channels' languages cannot be read, the editor says so
+and offers the languages the category already has, plus your admin language.
+
+The editor has **one Save** for all of it. Changing the price display mode only stages it: it is no longer saved
+the moment you choose it. Save reads "Save" while there is nothing to save and "Save 2 changes" once there is,
+counting the category's own changes and the display mode together.
+
+- Save checks everything first; if anything is refused, nothing is written.
+- The category is written first, then the display mode. If the category is refused — a slug already in use, an
+  invalid custom field — the display mode is not written either.
+- If the category is saved and the display mode is not, the editor stays open and a summary says what was saved
+  and what was not. The next Save writes only the display mode.
+- **Cancel** discards every unsaved change without asking.
+- Opening another category, a new-category form or closing the panel with unsaved changes asks first: **Save and
+  continue**, **Discard changes** or **Stay here**. Following a link elsewhere in the admin, or closing or reloading the browser tab, asks too. The
+  open category is not part of the page address, so the browser's Back button leaves the page without asking.
 
 ## Entities
 
-`Product`, `ProductVariant`, `Category`, `ProductAttribute`,
-`SalesChannel`, plus the M:N bridges
+`Product`, `ProductVariant`, `Category`, `ProductAttribute` (the
+`SalesChannel` entity is the platform's), plus the M:N bridges
 `product_categories`, `sales_channel_products`, `product_assets`, and
 `ProductListSavedView` (`product_list_saved_views`, the product list's saved
 views).
+
+## Filtering the product list
+
+Beside the search box, the product list's toolbar has up to four filters:
+
+- **Type** — simple, configurable, grouped, bundle or virtual.
+- **Category** — the category you choose and every category below it.
+- **Sales channel** — the products assigned to that channel. Shown only when there is
+  more than one channel.
+- **Stock** — **Low stock** or **Out of stock**, with the same meaning as on the
+  Inventory list. *Out of stock* is a product whose stock is tracked and whose total
+  on-hand quantity across warehouses is 0. *Low stock* is a product whose stock is
+  tracked, which has a low-stock threshold, and whose total on-hand quantity is above 0
+  and at or below that threshold. A product with no stock record is neither. Shown only
+  while the Inventory module is on.
+
+The filters combine with each other, with the status tabs and with the search.
+**Clear filters** in an empty result resets all of them except the tab.
+
+**Select all matching uses the same filters.** When you select every product that
+matches (the banner above the table), Bulk edit and Delete act on exactly the products
+the filtered list shows, never on products outside the filter.
+
+For integrations, `GET /api/v1/admin/catalog/products` and
+`POST /api/v1/admin/catalog/products/resolve-ids` take the same three filters:
+`categoryId` (a category id), `salesChannelId` (a sales-channel id) and `stock`
+(`low` or `out`) — as query parameters on the list and as body fields on
+`resolve-ids`. A malformed value answers `400 VALIDATION_FAILED` naming the field. The
+list answers `stockFilterAvailable` beside its page: `false` while the Inventory module
+is off, and then a request that names `stock` answers `503 MODULE_DISABLED` instead of
+ignoring the filter. The shapes are `adminProductListFiltersSchema` and
+`resolveProductIdsRequestSchema` in `@endora-commerce/contracts`.
 
 ## Saved views
 
@@ -73,12 +322,11 @@ The product list's toolbar carries a **Saved views** selector, whose first
 entry is **— Select a view —**, and two buttons beside it: **Save view** and
 **Delete view**.
 
-- **What a view remembers.** The status, the type and the search text — and
-  nothing else. The **Stock**, **Category** and **Channel** chips are not saved.
-  Choosing a view sets status, type and search to the view's values (a value
-  the list no longer offers loads as *All*), resets the Stock chip to *All*,
-  discards anything you had changed and not saved, clears the row selection and
-  goes back to the first page.
+- **What a view remembers.** The status, the search text and every filter: type,
+  category, sales channel and stock. Choosing a view sets them all to the view's
+  values (a value the list no longer offers loads as *All*), discards anything you
+  had changed and not saved, clears the row selection and goes back to the first
+  page.
 - **Saving.** **Save view** opens one dialog with a **Name** field and a
   **Share with every admin who can open this list** checkbox. The checkbox
   starts unchecked, so a new view is private unless you tick it. The name is
@@ -129,7 +377,8 @@ entry is **— Select a view —**, and two buttons beside it: **Save view** and
   characters), `shared` (boolean) and `filters` (an object, at most 8192 bytes
   as UTF-8 JSON). The product list has no sort or column control, so a view
   stores no `sort` or `visibleColumns`; those keys are dropped. The Admin UI
-  writes `filters` as `{ status?, type?, q? }`, only the non-default ones.
+  writes `filters` as `{ status?, archived?, type?, q?, categoryId?, salesChannelId?, stock? }`,
+  only the non-default ones.
   Anything outside those bounds is `400 VALIDATION_FAILED`. The shapes are
   `createProductSavedViewRequestSchema` and
   `updateProductSavedViewRequestSchema` in `@endora-commerce/contracts`.
@@ -189,16 +438,19 @@ modules are present. The payload is sent whole; the strict schemas are
 | Event | Sent when | Payload, beside `eventId` and `occurredAt` |
 | --- | --- | --- |
 | `product.created.v1` | A product is created — in the Admin UI, through the API-key upsert, by an import or a PIM synchronisation, or by duplicating another product. | `productId` (UUID), `sku` — the SKU it was created with; it can change later, `productId` cannot. |
-| `product.updated.v1` | A product is written, or one of its variants is created, changed or deleted. | `productId`, `changedFields` — the names of the product fields the write addressed (`name`, `status`, `categoryIds`, …; `variants` for a variant write). Names only, an open list, and it may be empty. |
-| `product.archived.v1` | A product's status moves to `inactive` from another status. Once per transition: editing a product that is already inactive does not send it again. | `productId` |
+| `product.updated.v1` | A product is written, or one of its variants is created, changed or deleted. | `productId`, `changedFields` — the names of the product fields whose stored value the write changed (`name`, `status`, `categoryIds`, …; `variants` for a variant write). Names only, an open list, and it may be empty. A product update that changes nothing is not announced. |
+| `product.archived.v1` | A product is archived by the Archive action — for one product or in bulk. Once per transition: archiving an archived product sends nothing. A status change never sends it: `inactive` is plain off. | `productId` |
 
-- **Order.** The archiving write sends `product.updated.v1` (with `status` in
-  `changedFields`) and then `product.archived.v1`, on every path that can
-  archive a product: the Admin UI, the API-key upsert, a bulk edit, an import.
-- **Reactivation has no event of its own.** A product that leaves `inactive`
-  sends `product.updated.v1` with `status` in `changedFields` and nothing else —
-  the same signal as any other status change, a draft being published
-  included. To tell them apart, read the product: its `status` is the answer.
+- **Order.** Archive sends `product.updated.v1` (with `archivedAt` in
+  `changedFields`) and then `product.archived.v1`, for one product and for each
+  product of a bulk Archive.
+- **Restore has no event of its own.** Restore sends `product.updated.v1` with
+  `archivedAt` in `changedFields` and nothing else. Switching a product on or
+  off sends `product.updated.v1` with `status`. To tell them apart, read the
+  product: its `status` and `archivedAt` are the answer.
+- **Undo.** Undoing a bulk edit sends `product.updated.v1` for every product it
+  put back, naming the fields it restored, and `product.archived.v1` where it
+  archives a product again.
 - **Deletion is not delivered.** Deleting a product emits `product.deleted.v1`
   on the in-process event bus only; it is not offered to webhooks, and no
   `product.archived.v1` is sent for it. A receiver that mirrors the catalogue
@@ -219,12 +471,225 @@ modules are present. The payload is sent whole; the strict schemas are
 
 ## Extension points
 
-- **Per-Sales-Channel pricing** — query service receives a SalesChannel
-  context; new gating (e.g. customer-segment-specific catalogs) is added by
-  composing into `catalog-query.service.ts`.
+- **Per-Sales-Channel listing** — the query service receives a SalesChannel
+  context, and every price it renders is resolved for that channel; new gating
+  (e.g. customer-segment-specific catalogs) is added by composing into
+  `catalog-query.service.ts`.
+- **Product editor zones** — the editor mounts admin zones other modules contribute to;
+  `product.editor.seo.after`, at the end of the SEO tab (props: `productId`), is where the
+  SEO module puts its link to the meta-tag editor, so the catalog never names that module.
 - **Slug uniqueness** — the slug is unique across all Sales Channels by
   default; override the slugifier in `catalog-admin.service.ts` if locale
   collisions become a concern.
+- **Hookable status writes** — another module may take part, in the same transaction, in every
+  catalog write that can make a product active again, through a `beforeCommit` command hook on the
+  refs in `CATALOG_HOOKABLE_ACTIONS` (`@endora-commerce/contracts`), listing `catalog` in its
+  manifest `dependencies`: `product.update`, `product.restore`, `product.bulk_update.undo`,
+  `product.scopes.update`, `product.scoped_values.save` and `product.scoped_values.import` (the
+  connector and CSV path). A bulk edit runs one of these per product. The hook data
+  (`ProductStatusHookData`) holds, per addressed product, its global status, archive and deletion
+  flags before and after the write, and every channel-scoped status cell the write moved — the
+  channel row (`languageCode: null`) or one language — with `null` for a cell that inherits. It
+  carries ids, status codes and booleans only.
+
+## Server-side writes
+
+Another module, an overlay module or an integration worker (a PIM or ERP
+connector) writes a product through **`catalogProductCommandPort`**, the Product
+aggregate's write port, and attribute definitions through
+**`catalogAttributeCommandPort`** — declared as `CatalogProductCommandPort` and
+`CatalogAttributeCommandPort` in `@endora-commerce/contracts`. It never writes
+this module's tables itself. Resolve each per use with
+`lazyPort<CatalogProductCommandPort>(ctx, 'catalogProductCommandPort')`, with
+`catalog` in the calling module's manifest `dependencies`. Reads stay on
+`catalogProductReadPort` and `catalogAttributeReadPort`.
+
+| Method | Audit action | What the admin does the same way |
+| --- | --- | --- |
+| `create(req, options?)` | `product.create` | `POST /api/v1/admin/catalog/products` |
+| `update(id, req, options?)` | `product.update` | `PATCH /api/v1/admin/catalog/products/:id` |
+| `archive(id, options?)` / `restore(id, options?)` | `product.archive` / `product.restore` | `POST …/products/:id/archive`, `…/restore` |
+| `delete(id, options?)` | `product.delete` | `DELETE …/products/:id` |
+| `createVariant(productId, req, options?)` | `product_variant.create` | `POST …/products/:productId/variants` |
+| `updateVariant(productId, variantId, req, options?)` | `product_variant.update` | `PATCH …/variants/:variantId` |
+| `deleteVariant(productId, variantId, options?)` | `product_variant.delete` | `DELETE …/variants/:variantId` |
+| `setCustomFieldValues(id, merge, options?)` | `product.update` | `PATCH …/products/:id` with `attributeValues` |
+| `applyScopedValues(id, { cells }, options?)` | `product.scoped_values.import` | — (the products import writes the same way) |
+
+| `catalogAttributeCommandPort` method | Audit action | Admin endpoint |
+| --- | --- | --- |
+| `create(req, options?)` | `catalog.attribute.create` | `POST /api/v1/admin/catalog/attributes` |
+| `update(idOrKey, req, options?)` | `catalog.attribute.update` | `PATCH …/attributes/:idOrKey` |
+| `delete(idOrKey, options?)` | `catalog.attribute.delete` | `DELETE …/attributes/:idOrKey` |
+| `addOption(idOrKey, input, options?)` | `catalog.attribute_option.create` | `POST …/attributes/:idOrKey/options` |
+| `updateOption(optionId, input, options?)` | `catalog.attribute_option.update` | `PATCH …/options/:optionId` |
+| `deleteOption(optionId, options?)` | `catalog.attribute_option.delete` | `DELETE …/options/:optionId` |
+
+**One write path.** Each method calls the service method the admin endpoint
+calls, so the two cannot write differently: the same audit entry, the same
+`product.*` events after the commit — which keep the search index, the
+storefront pages and the outbound webhooks up to date — a new product bound to
+the default sales channel, the attribute definitions refreshed, and a full
+search reindex queued when `isSearchable` flips. Inputs are the endpoints'
+request bodies (`update` without `version`), and refusals are the endpoints'
+errors with their codes. The one difference: the **completeness check** does
+not run — a status change through `update` is never refused for missing
+content and returns no warnings, as for imports and connectors.
+
+**A product's custom fields are its attribute values.** `setCustomFieldValues`
+hands your `merge` the product's current `attributeValues` and stores what it
+returns, in one `product.update` entry; a key it leaves out is removed. Unlike
+the other entities, the catalog checks the result itself, with the rules of the
+admin edit: every changed key belongs to the product's attribute set
+(`400 VALIDATION_FAILED`), the set's required attributes keep a value, and
+neither a price (`400 PRICE_SET_IN_PRICE_BOOKS`) nor a Page Builder content
+attribute (`400 ATTRIBUTE_VALUE_REJECTED`) is accepted.
+
+**Scoped values.** `applyScopedValues` writes cells — a field at Global, a
+channel or a channel and language — exactly as the connector port always has:
+only the cells you name change, each refused cell is reported and the rest
+applied, URL keys are never taken over (see [URL keys and
+redirects](./catalog/url-keys-and-redirects.md)). One audit entry per call,
+the product's editor version moves, one `product.updated.v1`.
+
+**Who wrote it.** The actor is the ambient one, never a parameter: an
+administrator inside an admin request, or under `withSystemScopeActingFor`; the
+**system** actor under `withSystemScope` in a worker. The ports check no
+permission — the caller is the gate — so never resolve them for a
+customer-facing route.
+
+**Options** (the last parameter of every method):
+
+- `source` — a lower-case code naming the integration (`pim_akeneo`,
+  `erp.sync`, at most 64 characters), recorded as `source` in the audit entry
+  beside the actor. Any other value is refused with `422 VALIDATION_FAILED`
+  before anything is read or written.
+- `expectedVersion` — the product's editor version you read (the `version` of
+  `GET …/products/:id/scoped-values`); `update` and `setCustomFieldValues`
+  refuse a product that has moved on with `409 VERSION_CONFLICT`. Every other
+  method ignores it.
+- `extensions` — no catalog write is declared hookable yet, so any key is
+  refused with `422 COMMAND_EXTENSION_UNCLAIMED` before anything is written.
+
+**Not offered**: bundle slots, grouped items, links, the gallery, attachments,
+packaging units, URL keys and redirects (each has its own admin screen),
+duplicating a product, bulk edit and bulk import (`catalogBulkImportPort`), and
+the scoped editor's save of one scope. Categories are a separate aggregate.
+`catalog` cannot be switched off, so the ports are always available.
+
+**Deprecated since 0.113.0**, removed in a later release:
+`catalogProductWritePort` (each write moves to the method of the same operation
+above; `listAttributes` and `listAttributesByFlag` to `catalogAttributeReadPort`)
+and `catalogProductScopeWritePort.applyScopes` (to `applyScopedValues`, with the
+same cells and `source`). Both delegate to the new ports meanwhile, so their
+entries and refusals are unchanged.
+
+## Order rules: minimum order quantity and returnable
+
+Two rules on a product decide how it may be ordered and whether it may be sent
+back. Both are edited in the **Order rules** card on the product editor's
+**Inventory** tab.
+
+> **Upgrading: every existing product starts as not returnable.** A product on
+> which nobody has set **Returnable** reads as not returnable, and that includes
+> every product that existed before the setting was introduced. Lines of orders
+> placed after the upgrade are therefore not returnable until you mark their
+> products. To mark many at once, select them on the product list and use
+> **Bulk edit → Returnable → Yes — returnable**. Orders placed before the
+> upgrade are unaffected: their lines stay returnable under the usual rules.
+
+### Minimum order quantity
+
+- **Minimum order quantity (pcs)** — the fewest pieces of the product a buyer
+  may order in one order. Optional; a whole number from **1 to 1 000 000**, or
+  empty for no minimum. It applies to `simple` and `configurable` products
+  only: on a `grouped`, `bundle` or `virtual` product the card says so, and
+  the API refuses the field with `422 MIN_ORDER_QUANTITY_NOT_SUPPORTED_FOR_TYPE`
+  naming `minOrderQuantity` (`details.field`, `productType`), on create, on
+  update and per channel. A value outside the range is refused with
+  `400 VALIDATION_FAILED`.
+- **A minimum per packaging unit** — each packaging unit may carry its own
+  minimum number of units; see [Packaging Units](./catalog/packaging-units.md).
+
+The minimum is judged on the **product total**: every line of the product in
+the basket counts — single-piece and packaging-unit lines, every variant. A
+packaging-unit minimum counts the units of that unit ordered for the product,
+over every variant. The two checks are independent; a basket must satisfy
+every minimum that is set. Variants inherit the product's minimum.
+
+Every way into a basket, a quote request or an order applies it — the cart,
+checkout, quick order, one-click buy, shopping lists, quote requests, the
+admin's Create order screen and the external order API. Each of those modules'
+pages says what its path does with a line below the minimum. A refusal answers
+`422 PRODUCT_BELOW_MINIMUM_QUANTITY` (pieces) or
+`422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` (a packaging unit), with a message
+in the buyer's language naming the product and the minimum. Removing a line is
+always allowed.
+
+A product a buyer may not see, or that the request's sales channel does not
+publish, is reported as an unknown product on every path — its name and its
+minimum are never disclosed.
+
+The storefront product detail, the product list, search results and the
+comparison carry `minOrderQuantity` (`null` when there is none, or when the
+product's type takes no minimum); the product detail's `packagingUnits[]`
+carries each unit's `minOrderUnits`. The storefront starts the quantity at the
+minimum and does not offer less.
+
+### Returnable
+
+**Returnable** (yes / no, on every product type) says whether buyers may
+include the product in a **return**. It does not restrict **complaints**. The
+default is no.
+
+The value is **recorded on each order line when the order is placed**
+(`order_items.returnable_at_purchase`); changing the flag later changes no
+order already placed. A line whose product could not be read at placement is
+recorded as not returnable. What the Returns module does with the recorded
+value is on its own page.
+
+### Per sales channel
+
+Both rules can be overridden for one sales channel — **Order rules** per channel in the
+product's scopes — in the product editor at a channel, or through
+`PUT /api/v1/admin/catalog/products/:id/scoped-values` (`minOrderQuantity`, `returnable`) or
+`PATCH /api/v1/admin/catalog/products/:id/scopes` for API clients. `{ "inherit": true }` uses
+the Global value again; `null` on the minimum stores "no minimum" for that channel. The channel's value
+applies wherever a basket, an order or a quote request belongs to that channel: adding to
+the basket, the basket view, submitting for approval, the checkout preview, placement, the
+admin order preview, quote requests and the buyer's quick-order import. A channel minimum
+of 1 means no minimum in that channel, whatever the global value. Placement records the
+order channel's returnable flag on each line, so returns follow the channel the order was
+placed in. The storefront product detail and listing report the minimum of the request's
+channel.
+
+### Audit and copies
+
+Setting or clearing either rule is audited like any product edit, with the old
+and the new value. **Bulk edit → Returnable** writes one audit entry per
+product it changes, for up to 200 products in one synchronous request and
+through the queued bulk edit beyond. Changing a rule never alters an existing
+cart, order, quote request or return. **Duplicate** does not copy either rule:
+the copy starts with no minimum and as not returnable.
+
+### API
+
+| Field | Where | Values |
+| --- | --- | --- |
+| `minOrderQuantity` | `POST` / `PATCH /api/v1/admin/catalog/products[/:id]`, the admin product response | integer `1…1000000`, or `null` to clear |
+| `returnable` | the same, and `POST /api/v1/admin/catalog/products/bulk-update` | boolean |
+| `minOrderUnits` | `POST` / `PATCH …/packaging-units[/:unitId]`, the packaging-unit response | integer `1…1000000`, or `null` to clear |
+
+The catalogue read port (`CatalogProductReadPort`) reports `minOrderQuantity`
+and `returnable` on each product record and `minOrderUnits` on each packaging
+unit, and gains `listPackagingUnitsByProductIds` for batch reads. Like every
+method of the port it applies no visibility policy: a caller passes only
+product ids it has already vetted.
+
+Migration `20261016T082008_catalog_order_rules.ts` adds
+`products.min_order_quantity` (nullable, `CHECK` 1–1 000 000),
+`products.returnable` (not null, default `false`) and
+`product_packaging_units.min_order_units` (nullable, `CHECK` 1–1 000 000).
 
 ## Product structure and composition surfaces
 
@@ -242,10 +707,54 @@ The catalog grew several capability surfaces, each with its own page:
 - [Composite Products](./catalog/composite-products.md) — `grouped`
   (fixed children), `bundle` (configurable slots), `virtual` (digital
   delivery)
+- [Product content](./catalog/product-content.md) — Page Builder documents
+  kept per product in content attributes and shown in the product page's
+  description tab
 
 Five product types are now supported: `simple`, `configurable`,
 `grouped`, `bundle`, `virtual`. `simple` and `configurable` are the
 original pair; the other three were added later.
+
+## Page Builder blocks
+
+The catalog declares the Page Builder's product and category blocks. Their
+data is read on the server, so the products are in the page's HTML.
+
+**Product grid and product slider** (`catalog.ProductGrid`,
+`catalog.ProductSlider`) keep every option they had — the product source
+(picked products, a category, a search), the limit, columns, gap and view —
+and add:
+
+| Option | Meaning |
+| --- | --- |
+| Header | An optional heading, lead text and button (for example "See all") above the products. |
+| Card style | Default, compact, horizontal, or **showcase**: the product image on a neutral backdrop, its name, a short summary and a "more" link — no price or SKU. |
+| Text under the product name | The one line under each card's name: the card style's default (the SKU on the default, compact and horizontal cards, the short description on showcase), the **Short description** (the first words of the product's description, at most 160 characters), the SKU, or none. The page editor's preview shows the same line as the storefront. |
+| Card title weight | The weight of each card's product name: **Default** (the card style's own) or 300–800. |
+| Card image background | The colour of the box behind each card's image: a brand colour or a hex value. Empty keeps the card style's own light grey. |
+| Divider under each card | **None** (as before) or **Line**: a 1 px line under each card, in the **Divider color** you pick or the neutral border colour. A bordered card's bottom edge becomes the line; a showcase card gets it 16 px below its text. |
+| Card link label | The text of the showcase card's link; "More" when empty. |
+| Gap (grid) | A spacing step or **Custom gap (px)**, per breakpoint. A grid saved with a gap in pixels opens on Custom with that number and looks as before. The category grid's gap works the same way. |
+| Equal items height (grid) | Per breakpoint, next to the columns and the view, on the **Responsive** tab; a value saved before applies at every width. The category grid's works the same way. |
+| Button below the products | An optional button under the grid or slider. |
+
+The slider takes the Page Builder carousel's options: slides per view per
+breakpoint, gap, slide or fade effect, arrow and dot placement, bleed to the
+viewport edge and optional autoplay. A grid or slider saved before these
+options existed renders as it did. To give any of these blocks an anchor, a
+colour scheme, a background, spacing or a width, place it inside a **Section**
+block (`cms.Section`). The header texts, the card
+link label and the footer button label are translatable with the Page
+Builder's **Translate** action.
+
+**The product summary.** The storefront product list and product detail
+(`GET /api/v1/catalog/products`, `GET /api/v1/catalog/products/:idOrSlug`)
+return `summary`: the product description in the request language as plain
+text, cut at a word boundary to at most 160 characters with `…`, or `null`
+when the product has no description. It is derived from the description the
+read already loads, so it costs no extra query per product (the module's
+`src/backend/services/product-summary-text.ts`).
+The showcase card shows it.
 
 ## Attribute extensions on the Catalog read paths
 
@@ -292,8 +801,34 @@ compatibility at the API boundary.
 Product `sku` is mutable. The internal canonical reference for every
 cross-module link (assets, links, RFQ items, ...) is the `Product.id`
 UUID, which never changes. Updating the SKU writes an audit row and
-refuses with `409 sku_in_use` if the new value already belongs to
-another product.
+refuses with `409 SKU_ALREADY_EXISTS` if the new value already belongs to
+another product or a variant — the code create answers with. The refusal
+token says which (`held_by_product`, `held_by_variant`), and `details` carries
+`sku` and `conflictingProductId` or `conflictingVariantId`. Until issue #624
+it was `400 VALIDATION_FAILED` with the token `sku_in_use` in the message.
+
+### A deleted product frees its SKU
+
+Deleting a product (`DELETE /api/v1/admin/catalog/products/:id`) frees its
+SKU and the SKUs of its variants: a new product or variant can take them at
+once — in the Admin UI, through `PUT /api/v1/catalog/products/by-sku/:sku`
+(which then creates a new product rather than updating the deleted one), or
+from an import or a PIM synchronisation. Products and variants share one SKU
+namespace, so a deleted variant's SKU can be reused by a product and the
+other way round. This also applies to products deleted before the change.
+
+The deleted product keeps its real SKU, so the audit log and a reconciliation
+with an ERP or PIM still show it, and orders, invoices and quotes keep the SKU
+they recorded at the time. A deletion cannot be undone, and a deleted product
+cannot be restored.
+
+Every lookup by SKU addresses the live product. A product import and the CSV
+stock import write the live product; on the catalogue's read port
+(`catalogProductReadPort`), `findBySku`, `findBySkus` and `findVariantsBySkus`
+answer the live product or variant when there is one, and otherwise the most
+recently deleted one holding that SKU — at most one per SKU. Pass
+`{ liveOnly: true }` to `findBySku` and `findBySkus` to ignore deleted
+products altogether.
 
 ### Attribute Set swap
 
@@ -332,7 +867,7 @@ and ownership model is different:
   catalog behaviour flags (`isSearchable`, `isFilterable`,
   `isVariantAxis`, `displayAsSlider`, `isComparable`,
   `quickSearchable`, `isPromoRule`, `isPriceRule`, `filterPosition`,
-  `isVisibleOnProductPage`, `channelScoped`, `languageScoped`,
+  `isVisibleOnProductPage`, `scopable`,
   `massEditable`) plus two presentation refinements (`selectDisplay`,
   `numericKind`) that keep the legacy `enum`/`select` and
   `number`/`price` distinctions lossless. **Flags stay catalog-owned**
@@ -346,7 +881,7 @@ and ownership model is different:
   row), using the transactional apply seam exported by
   `custom_fields`. The generic Custom Fields admin surface lists
   product definitions read-only and refuses mutations with
-  `409 host_managed`.
+  `409 CUSTOM_FIELD_HOST_MANAGED`.
 - **Migration `20260723T230401_catalog_attributes_on_custom_fields.ts`** performed the
   one-time convergence in a single transaction: backfilled one
   definition per legacy attribute (key, labels, mapped value type,
@@ -382,4 +917,4 @@ The admin's global search (the command palette, ⌘K / Ctrl+K) finds products an
 | Category: Name | yes |
 | Category: URL key (slug) | yes |
 
-Names match in every language and are shown in the admin's language. Drafts and inactive products are found and show their status; deleted products and categories are not. A category result opens the category tree with that category highlighted. Both appear for a role holding `catalog:read`.
+Names match in every language and are shown in the admin's language. Inactive and archived products are found and show their status; deleted products and categories are not. A category result opens the category tree with that category highlighted. Both appear for a role holding `catalog:read`.

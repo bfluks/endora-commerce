@@ -43,6 +43,7 @@ describe('storefront megamenu /by-channel contract (T024)', () => {
         items: [
           {
             parentId: null,
+            presentation: 'mega',
             position: 0,
             kind: 'external-link',
             labels: { 'en-US': 'Phone', 'pl-PL': 'Telefon' },

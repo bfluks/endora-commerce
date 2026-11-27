@@ -3,32 +3,72 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import { HttpError } from '@endora-commerce/platform/http';
 import {
   ERROR_CODES,
+  compareDecimals,
+  lineAmountHalfUp,
+  moneyDifference,
+  roundHalfUp,
+  supportedLanguageOf,
   type InvoiceDetail,
   type InvoiceKind,
   type OrderReadPort,
-  type VatSummaryRow,
+  type OrderRefundedCharges,
+  type OrderReturnRefund,
+  type OrderReturnedQuantity,
+  type SupportedLanguage,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { Invoice } from '../entities/invoice.entity.js';
 import { InvoiceLine } from '../entities/invoice-line.entity.js';
-import { isOrgInScope } from '@endora-commerce/platform/tenancy';
+import { orgInScope } from '@endora-commerce/platform/tenancy';
 import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import { refuseDuplicateInvoiceNumber } from './duplicate-number-refusal.js';
 import type { InvoiceNumberGenerator } from './invoice-number-generator.js';
 import type { SellerSettingsResolver } from './seller-settings.js';
-import { buildInvoiceLines, type RawOrderLine } from './invoice-line-builder.js';
+import { buildInvoiceLines, readModelVatSummary, type RawOrderLine } from './invoice-line-builder.js';
+import { invoicePaidPosition } from './invoice-paid.js';
+import { keptDiscount, keptOrderLines, retainedOnReturnLines } from './kept-quantities.js';
+import type { OrderReturnsLock } from './order-returns-lock.js';
+import { invoicesProse, invoicesProseTable, type InvoicesTranslate } from '../invoices-prose.js';
+import { INVOICE_RENDER_LANGUAGE } from '../document/invoice-document-type.js';
 import {
   shouldHoldForVendorNumber,
   type LedgerNumberingLookup,
 } from './vendor-number-hold.js';
 
-function round2(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
+/** The greater of two decimals, as the first one's text when they are equal. */
+function maxDecimal(a: string, b: string): string {
+  return compareDecimals(a, b) >= 0 ? a : b;
 }
 
 export interface IssueInvoiceOptions {
   saleDate?: string;
   paymentDueDate?: string;
   issuedBy?: string;
+}
+
+/**
+ * What was captured for an order and what was refunded from it, each summed
+ * over the captured payment attempts as a two-place decimal — or `null` when no
+ * attempt was captured, or the `payments` module is absent and nothing can say
+ * (issue #417, review of PR #423).
+ */
+export interface CapturedPaymentsLookup {
+  capturedFor(orderId: string): Promise<{ captured: string; refunded: string } | null>;
+}
+
+/**
+ * What the order's settled return cases refunded (issue #428), and what of the
+ * order came back with them (issue #435) — empty lists when the `returns`
+ * module is absent and nothing can say.
+ */
+export interface ReturnRefundsLookup {
+  refundsFor(orderId: string): Promise<OrderReturnRefund[]>;
+  returnedQuantitiesFor(orderId: string): Promise<OrderReturnedQuantity[]>;
+  /**
+   * What those cases refunded of the order's delivery and surcharge (issue
+   * #876) — `0.00` each when `returns` is absent and nothing can say.
+   */
+  refundedChargesFor(orderId: string): Promise<OrderRefundedCharges>;
 }
 
 /** Minimal audit-log seam (FR-035). */
@@ -51,7 +91,15 @@ export interface InvoiceDomainEventEmitter {
   emit(eventName: string, payload: { eventId: string; occurredAt: string } & Record<string, unknown>): void;
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** The names of the lines an invoice itemises beside the products, in this module's bundle. */
+const INVOICE_LINE_NAME_KEYS = [
+  'lines.item',
+  'lines.unit.piece',
+  'lines.unit.service',
+  'lines.delivery',
+  'lines.paymentSurcharge',
+  'lines.discount',
+] as const;
 
 /**
  * Core invoice issuance + read service (feature 047, US1). Issues invoices /
@@ -79,6 +127,26 @@ export class InvoiceService {
     private readonly events?: InvoiceDomainEventEmitter,
     private readonly emailOnReady?: (invoiceId: string) => Promise<void>,
     private readonly ledgerRouting?: LedgerNumberingLookup,
+    private readonly capturedPayments?: CapturedPaymentsLookup,
+    private readonly returnRefunds?: ReturnRefundsLookup,
+    /**
+     * The language the lines an invoice itemises beside the products are named
+     * in, and this module's bundle to name them from (issue #95). The name is
+     * stored with the line — an issued invoice does not change — so it is
+     * written in the invoice's language, `INVOICE_RENDER_LANGUAGE` (owner answer
+     * N5), at issue. Without a translator, English.
+     */
+    private readonly lineProse: {
+      readonly translate?: InvoicesTranslate | undefined;
+      readonly language?: SupportedLanguage;
+    } = {},
+    /**
+     * The order's returns lock (review of PR #865, F3): issuing holds it, so an
+     * invoice never reads a case a settlement has moved money for but not yet
+     * recorded. The composition always supplies it; without it (a unit test's
+     * fake entity manager) issuance takes no lock.
+     */
+    private readonly returnsLock?: OrderReturnsLock,
   ) {}
 
   /** Issue an invoice/proforma for an order. Idempotent per (order, kind). */
@@ -87,10 +155,19 @@ export class InvoiceService {
     kind: Exclude<InvoiceKind, 'correction' | 'wz'>,
     opts: IssueInvoiceOptions = {},
   ): Promise<InvoiceDetail> {
+    if (this.returnsLock) return this.returnsLock.run(orderId, () => this.#issue(orderId, kind, opts));
+    return this.#issue(orderId, kind, opts);
+  }
+
+  async #issue(
+    orderId: string,
+    kind: Exclude<InvoiceKind, 'correction' | 'wz'>,
+    opts: IssueInvoiceOptions,
+  ): Promise<InvoiceDetail> {
     const em = this.emFactory();
     const order = await this.orders.findById(orderId);
     // Feature 050 — Invoice is transitively scoped through its Order's org.
-    if (!order || !isOrgInScope(order.organizationId ?? '')) {
+    if (!order || !(await orgInScope(order.organizationId ?? ''))) {
       throw new HttpError(404, ERROR_CODES.ORDER_NOT_FOUND, 'Order not found.');
     }
 
@@ -101,47 +178,156 @@ export class InvoiceService {
 
     const seller = await this.sellerSettings.resolve(order.salesChannelId);
     const items = await this.orders.listItems(orderId);
-    const raw: RawOrderLine[] = items.map((it) => {
-      const netValue = Number(it.lineTotal);
-      const qty = it.quantity;
-      return {
-        name: it.productSnapshot?.name ?? 'Pozycja',
-        unit: it.packagingUnitSnapshot?.name ?? 'szt.',
-        quantity: qty,
-        unitNetPrice: Number(it.unitPrice),
-        taxRate: Number(it.taxRate),
-        netValue,
-        orderItemId: it.id,
-      };
-    });
+    // A line's net is its unit price times its quantity, exactly (issue #417).
+    // It is **not** the order line's `lineTotal`: placement stores that gross
+    // (`unitPrice × quantity × (1 + taxRate)`), and reading it as the net taxed
+    // every VAT-payer line twice — the invoice's net was the order's gross.
+    const names = await invoicesProseTable(
+      this.lineProse.translate,
+      INVOICE_LINE_NAME_KEYS,
+      this.lineProse.language ?? supportedLanguageOf(INVOICE_RENDER_LANGUAGE),
+    );
+    // Only what the buyer kept (issue #435, product-owner ruling of
+    // 2026-11-07): a return settled with a refund or a credit before the
+    // invoice exists has no invoice to correct (#135), so the invoice lists
+    // each line at its ordered quantity less what came back, and a line
+    // returned in full drops out. The delivery and surcharge lines below are
+    // the order's, less what a consumer's withdrawal refunded of them (issue
+    // #876); the discount line carries only the kept goods' share (ruling Q3).
+    const returned = (await this.returnRefunds?.returnedQuantitiesFor(orderId)) ?? [];
+    const raw: RawOrderLine[] = keptOrderLines(items, returned).map(({ item: it, quantity }) => ({
+      name: it.productSnapshot?.name ?? names['lines.item'],
+      unit: it.packagingUnitSnapshot?.name ?? names['lines.unit.piece'],
+      quantity,
+      unitNetPrice: it.unitPrice,
+      taxRate: it.taxRate,
+      netValue: lineAmountHalfUp(it.unitPrice, quantity),
+      orderItemId: it.id,
+      lineKind: 'goods',
+    }));
+    // Issue #854 (owner ruling of 2026-11-07) — what a settled return withheld
+    // is part of the goods' price, at the VAT rate of the line it was withheld
+    // from: one line per such order line, its net from the rate row's target,
+    // so the invoice charges what the buyer kept paid for the returned goods.
+    // It names no order item: a correction never reads it as goods.
+    for (const retained of retainedOnReturnLines(items, returned)) {
+      const name = await invoicesProse(
+        this.lineProse.translate,
+        'lines.retainedOnReturn',
+        this.lineProse.language ?? supportedLanguageOf(INVOICE_RENDER_LANGUAGE),
+        { product: retained.item.productSnapshot?.name ?? names['lines.item'] },
+      );
+      raw.push({
+        name: name.slice(0, 512),
+        unit: names['lines.unit.service'],
+        quantity: 1,
+        unitNetPrice: retained.net,
+        taxRate: retained.item.taxRate,
+        netValue: retained.net,
+        lineKind: 'retained',
+      });
+    }
 
     // Itemize the order's non-product amounts so the invoice total reconciles
     // with the order total. The order model adds delivery + payment surcharge
     // and subtracts the discount on the gross without extra VAT, so each is a
     // 0%-VAT line (the discount is a negative line).
-    const deliveryTotal = Number(order.deliveryTotal ?? 0);
-    if (deliveryTotal > 0) {
-      raw.push({ name: 'Dostawa', unit: 'usł.', quantity: 1, unitNetPrice: deliveryTotal, taxRate: 0, netValue: deliveryTotal });
-    }
-    const surcharge = Number(order.paymentMethodSnapshot?.additionalPrice ?? 0);
-    if (surcharge > 0) {
+    // The amounts are read as the decimals they are stored as (issue #417).
+    // Issue #876 — less what a settled return refunded of each: a consumer's
+    // withdrawal from the whole sale refunds the delivery and the surcharge, so
+    // the invoice charges only what is left, and a line that reaches 0 drops
+    // out. What is left is a delivery the operator reduced to the standard
+    // price (art. 13(2)), or one a business customer's return kept.
+    const refundedCharges = (await this.returnRefunds?.refundedChargesFor(orderId)) ?? { delivery: '0', surcharge: '0' };
+    const deliveryTotal = maxDecimal(moneyDifference(roundHalfUp(order.deliveryTotal ?? 0), refundedCharges.delivery), '0.00');
+    if (Number(deliveryTotal) > 0) {
       raw.push({
-        name: 'Dopłata za metodę płatności',
-        unit: 'usł.',
+        name: names['lines.delivery'],
+        unit: names['lines.unit.service'],
+        quantity: 1,
+        unitNetPrice: deliveryTotal,
+        taxRate: 0,
+        netValue: deliveryTotal,
+        lineKind: 'delivery',
+      });
+    }
+    const surcharge = maxDecimal(
+      moneyDifference(roundHalfUp(order.paymentMethodSnapshot?.additionalPrice ?? 0), refundedCharges.surcharge),
+      '0.00',
+    );
+    if (Number(surcharge) > 0) {
+      raw.push({
+        name: names['lines.paymentSurcharge'],
+        unit: names['lines.unit.service'],
         quantity: 1,
         unitNetPrice: surcharge,
         taxRate: 0,
         netValue: surcharge,
+        lineKind: 'payment_surcharge',
       });
     }
-    const discountTotal = Number(order.discountTotal ?? 0);
-    if (discountTotal > 0) {
-      raw.push({ name: 'Rabat', unit: 'usł.', quantity: 1, unitNetPrice: -discountTotal, taxRate: 0, netValue: -discountTotal });
+    // Whether anything is left to sell: a kept product line, an amount
+    // withheld on a return (issue #854: part of the goods' price), the delivery
+    // or the payment surcharge. A discount line alone is not a sale (F4).
+    const keptSale = raw.length > 0;
+    // The discount the settled returns did not carry back (issue #435,
+    // product-owner ruling Q3 of 2026-11-07): their refunds already gave the
+    // buyer the rest, so the invoice of the kept goods, like what was paid,
+    // takes only this much off. Without a return it is the order's discount.
+    const discountTotal = keptDiscount(order.discountTotal ?? 0, returned);
+    if (Number(discountTotal) > 0) {
+      const negative = `-${discountTotal}`;
+      raw.push({
+        name: names['lines.discount'],
+        unit: names['lines.unit.service'],
+        quantity: 1,
+        unitNetPrice: negative,
+        taxRate: 0,
+        netValue: negative,
+        lineKind: 'discount',
+      });
     }
     const built = buildInvoiceLines(raw);
 
     const issuedAt = new Date();
-    const paidTotal = order.paymentStatus === 'paid' ? built.grossTotal : 0;
+    // What was actually paid for the order — never the invoice gross (issue
+    // #417, review of PR #423). An order placed before 0.108.0 charged its own
+    // total (40.80), and its invoice, issued now under the per-rate method, may
+    // be a cent more (40.81): the cent is shown as still due, not invented as
+    // paid. What was received — captured by `payments`, or the stored total of
+    // an order recorded as paid with nothing captured — less everything refunded,
+    // each refund once: what `payments` recorded and, since issue #428, what a
+    // settled return refunded outside it (a manual transfer, a credit-limit
+    // top-up). `invoicePaidPosition` states the rule.
+    const position = invoicePaidPosition({
+      orderTotal: order.total,
+      paymentStatus: order.paymentStatus,
+      paymentKind: order.paymentMethodSnapshot?.kind ?? null,
+      payments: (await this.capturedPayments?.capturedFor(orderId)) ?? null,
+      returnRefunds: (await this.returnRefunds?.refundsFor(orderId)) ?? [],
+    });
+    // An order whose payments were refunded in full before it was invoiced —
+    // nothing kept, and the refunds cover the whole order — has no sale left to
+    // document, so it is not invoiced (owner ruling of 2026-10-24). One refunded
+    // in part is invoiced, with what was kept as paid.
+    //
+    // An order returned in full before it was invoiced — every product line
+    // back, and no delivery or surcharge kept — has no sale left either,
+    // whether or not the refund has been paid out yet: one waiting for a
+    // person, or for the gateway's webhook, refuses it the same way
+    // (product-owner ruling on F4, review of PR #865). Both are answered
+    // before a number is drawn; a proforma is refused for neither.
+    if (kind === 'invoice' && (position.refundedInFull || !keptSale)) {
+      throw new HttpError(
+        422,
+        ERROR_CODES.INVOICE_ORDER_REFUNDED,
+        position.refundedInFull
+          ? 'The order was refunded in full before it was invoiced, so there is no sale left to invoice.'
+          : 'The order was returned in full before it was invoiced, so there is no sale left to invoice.',
+        { reason: position.refundedInFull ? 'refunded_in_full' : 'returned_in_full' },
+      );
+    }
+    const paidTotal = position.paid;
     const buyer = {
       name: order.billingAddress.companyName ?? order.billingAddress.recipientName,
       taxId: order.billingAddress.taxId ?? '',
@@ -173,16 +359,17 @@ export class InvoiceService {
         paymentDueDate: opts.paymentDueDate ?? null,
         paymentMethod: order.paymentMethodSnapshot?.name ?? null,
         currency: order.currency,
-        netTotal: built.netTotal.toFixed(2),
-        taxTotal: built.taxTotal.toFixed(2),
-        total: built.grossTotal.toFixed(2),
-        paidTotal: paidTotal.toFixed(2),
+        netTotal: built.netTotal,
+        taxTotal: built.taxTotal,
+        total: built.grossTotal,
+        paidTotal,
         sellerSnapshot: seller,
         buyerSnapshot: buyer,
+        vatSummary: built.storedVatSummary,
         issuedBy: opts.issuedBy ?? 'system',
         status: holdForVendor ? 'pending' : 'ready',
       });
-      await tx.persistAndFlush(inv);
+      await tx.persist(inv).flush();
       let ordinal = 0;
       for (const l of built.lines) {
         ordinal += 1;
@@ -192,11 +379,12 @@ export class InvoiceService {
           name: l.name,
           unit: l.unit,
           quantity: String(l.quantity),
-          unitNetPrice: l.unitNetPrice.toFixed(4),
-          taxRate: l.taxRate.toFixed(4),
-          netValue: l.netValue.toFixed(2),
-          grossValue: l.grossValue.toFixed(2),
+          unitNetPrice: l.stored.unitNetPrice,
+          taxRate: l.stored.taxRate,
+          netValue: l.stored.netValue,
+          grossValue: l.stored.grossValue,
           orderItemId: l.orderItemId ?? null,
+          lineKind: l.lineKind,
         });
       }
       await tx.flush();
@@ -207,7 +395,7 @@ export class InvoiceService {
     if (this.audit) {
       await this.audit
         .record({
-          actorAdminUserId: opts.issuedBy && UUID_RE.test(opts.issuedBy) ? opts.issuedBy : null,
+          actorAdminUserId: opts.issuedBy && isUuidShape(opts.issuedBy) ? opts.issuedBy : null,
           action: 'invoice.issued',
           objectType: 'invoice',
           objectId: invoice.id,
@@ -216,7 +404,8 @@ export class InvoiceService {
             kind: invoice.kind,
             orderId,
             salesChannelId: order.salesChannelId,
-            grossTotal: built.grossTotal,
+            // No amount (#470, D-288): the invoice is the Organization's, and the
+            // audit log is read without its reach. The total is on the invoice.
           },
         })
         .catch(() => undefined);
@@ -275,6 +464,7 @@ export class InvoiceService {
     assignment: { ksefReferenceNumber: string; ksefProcessedAt: Date },
   ): Promise<void> {
     const em = this.emFactory().fork();
+    if (!isUuidShape(invoiceId)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Invoice not found.');
     const inv = await em.findOne(Invoice, { id: invoiceId });
     if (!inv) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Invoice not found.');
     if (inv.ksefReferenceNumber) {
@@ -290,7 +480,7 @@ export class InvoiceService {
     // flow (`ksef.submission.accepted`); this is the sole-writer projection of it.
     inv.ksefReferenceNumber = assignment.ksefReferenceNumber;
     inv.ksefProcessedAt = assignment.ksefProcessedAt;
-    await em.persistAndFlush(inv);
+    await em.persist(inv).flush();
   }
 
   /**
@@ -299,6 +489,7 @@ export class InvoiceService {
    */
   async applyVendorAssignedNumber(invoiceId: string, number: string): Promise<void> {
     const em = this.emFactory().fork();
+    if (!isUuidShape(invoiceId)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Invoice not found.');
     const inv = await em.findOne(Invoice, { id: invoiceId });
     if (!inv) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Invoice not found.');
     if (inv.status === 'cancelled') {
@@ -324,7 +515,7 @@ export class InvoiceService {
     // the ledger webhook already claimed — same shape as `recordKsefAssignment`.
     inv.number = number;
     inv.status = 'ready';
-    await em.persistAndFlush(inv);
+    await em.persist(inv).flush();
     await this.emailOnReady?.(invoiceId);
   }
 
@@ -333,26 +524,28 @@ export class InvoiceService {
    */
   async recordPaidFromLedger(invoiceId: string): Promise<void> {
     const em = this.emFactory().fork();
+    if (!isUuidShape(invoiceId)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Invoice not found.');
     const inv = await em.findOne(Invoice, { id: invoiceId });
     if (!inv) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Invoice not found.');
-    if (Number(inv.paidTotal) >= Number(inv.total)) return;
+    if (compareDecimals(inv.paidTotal, inv.total) >= 0) return;
     // command-coverage-ignore: idempotent paidTotal projection of Infakt
     // `invoice_paid` — the webhook receipt is the claim; this is the sole-writer stamp.
     inv.paidTotal = inv.total;
-    await em.persistAndFlush(inv);
+    await em.persist(inv).flush();
   }
 
   /** Load an invoice as a render-ready detail (lines + derived VAT summary). */
   async buildDetail(invoiceId: string): Promise<InvoiceDetail> {
     const em = this.emFactory();
+    if (!isUuidShape(invoiceId)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Invoice not found.');
     const inv = await em.findOne(Invoice, { id: invoiceId });
     if (!inv) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Invoice not found.');
     const order = inv.orderId ? await this.orders.findById(inv.orderId) : null;
     if (inv.origin === 'erp_import') {
-      if (!isOrgInScope(inv.organizationId ?? '')) {
+      if (!(await orgInScope(inv.organizationId ?? ''))) {
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Invoice not found.');
       }
-    } else if (!order || !isOrgInScope(order.organizationId ?? '')) {
+    } else if (!order || !(await orgInScope(order.organizationId ?? ''))) {
       throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Invoice not found.');
     }
     const lineRows = await em.find(InvoiceLine, { invoiceId }, { orderBy: { ordinal: 'asc' } });
@@ -368,21 +561,9 @@ export class InvoiceService {
       grossValue: Number(l.grossValue),
     }));
 
-    const byRate = new Map<number, { net: number; gross: number }>();
-    for (const l of lines) {
-      const cur = byRate.get(l.taxRate) ?? { net: 0, gross: 0 };
-      cur.net += l.netValue;
-      cur.gross += l.grossValue;
-      byRate.set(l.taxRate, cur);
-    }
-    const vatSummary: VatSummaryRow[] = [...byRate.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([taxRate, v]) => ({
-        taxRate,
-        netTotal: round2(v.net),
-        vatAmount: round2(v.gross - v.net),
-        grossTotal: round2(v.gross),
-      }));
+    // The summary the document was issued with, or — issued before 0.108.0 —
+    // the one derived from its stored lines as it was then (review of PR #423).
+    const vatSummary = readModelVatSummary(lineRows, inv.vatSummary);
 
     const grossTotal = Number(inv.total);
     const paidTotal = Number(inv.paidTotal);
@@ -399,11 +580,14 @@ export class InvoiceService {
       saleDate: inv.saleDate ?? null,
       paymentDueDate: inv.paymentDueDate ?? null,
       paymentMethod: inv.paymentMethod ?? null,
-      netTotal: inv.netTotal != null ? Number(inv.netTotal) : round2(grossTotal - (inv.taxTotal != null ? Number(inv.taxTotal) : 0)),
+      netTotal: Number(inv.netTotal ?? moneyDifference(inv.total, inv.taxTotal ?? '0')),
       taxTotal: inv.taxTotal != null ? Number(inv.taxTotal) : 0,
       grossTotal,
       paidTotal,
-      amountDue: round2(grossTotal - paidTotal),
+      // Never negative (issue #428): what was paid above the gross is the
+      // overpayment, stated on its own, and nothing is then due.
+      amountDue: Number(maxDecimal(moneyDifference(inv.total, inv.paidTotal), '0.00')),
+      overpayment: Number(maxDecimal(moneyDifference(inv.paidTotal, inv.total), '0.00')),
       total: grossTotal,
       originalInvoiceId: inv.originalInvoiceId ?? null,
       templateId: inv.templateId ?? null,

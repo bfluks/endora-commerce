@@ -1,9 +1,9 @@
 ---
-title: search
+title: Wyszukiwanie w sklepie
 description: Indeksator Meilisearch i warstwa zapytań
 ---
 
-# `search`
+# Wyszukiwanie w sklepie (`search`)
 
 Wyszukiwanie w katalogu oparte na Meilisearch. Moduł odpowiada za indeksator, który odwzorowuje
 zdarzenia katalogu w osobnych indeksach dla każdego kanału sprzedaży, typowaną warstwę zapytań, dane
@@ -18,9 +18,10 @@ nie importując niczego z wnętrza tych modułów.
 
 | Metoda + ścieżka | Odbiorca | Cel |
 | --- | --- | --- |
-| `GET /api/v1/search/suggest?q=…&limit=N` | storefront (bez uwierzytelnienia) | Dane dla podpowiedzi w okienku wyszukiwania; zwraca do `limit` wierszy `ProductSummary` uporządkowanych według trafności w Meilisearch |
+| `GET /api/v1/search/suggest?q=…&limit=N` | storefront (bez uwierzytelnienia) | Dane dla podpowiedzi w okienku wyszukiwania; zwraca do `limit` wierszy `ProductSummary` uporządkowanych według trafności w Meilisearch, wyszukiwanych i nazwanych w języku żądania: tagi `Accept-Language` od największej wagi `q`, każdy dopasowany do języków kanału (dokładnie, a potem po języku podstawowym), w przeciwnym razie język domyślny kanału |
 | `POST /api/v1/search/record` | storefront (bez uwierzytelnienia) | Zapis na potrzeby analityki bez czekania na wynik; dla każdego zatwierdzonego wyszukiwania zapisuje w `search_phrase_records` jeden wiersz z frazą w dosłownym brzmieniu |
-| `POST /api/v1/admin/search/llm/toggle` | administrator (`search:write`) | Nakładka na `search.llm.enabled`, która waliduje powiązane ustawienia; odmawia włączenia, gdy którekolwiek pole embedder.* jest puste dla któregokolwiek z docelowych kanałów |
+| `POST /api/v1/admin/search/llm/toggle` | administrator (`search:write`) | Nakładka na `search.llm.enabled`, która waliduje powiązane ustawienia; odmawia włączenia z `400 LLM_CONFIG_INCOMPLETE`, gdy poświadczenie embeddera nie dostarcza adresu bazowego, klucza API i modelu dla każdego z docelowych kanałów |
+| `POST /api/v1/admin/search/reindex` | administrator (`search:write`) | Akcja **Reindeksuj produkty** w panelu: od razu przebudowuje indeks każdego kanału sprzedaży i zwraca podsumowanie przebiegu; `503 SEARCH_BACKEND_UNAVAILABLE`, gdy Meilisearch nie działa albo odrzuca wywołanie |
 
 Pełna strona wyników wyszukiwania korzysta z `GET /api/v1/catalog/products?q=…` — właścicielem tego
 kontraktu jest katalog, a trasa `/search` w storefroncie po prostu ponownie eksportuje
@@ -28,18 +29,19 @@ kontraktu jest katalog, a trasa `/search` w storefroncie po prostu ponownie eksp
 
 ## Ustawienia
 
-Sześć ustawień w grupie `search`, rejestrowanych przez `packages/modules/search/src/manifest.ts`:
+Siedem ustawień w grupie `search`, rejestrowanych przez `packages/modules/search/src/manifest.ts`:
 
 | Kod | Typ | Wartość domyślna | Cel |
 | --- | --- | --- | --- |
+| `search.enabled` | `boolean` | `true` | Włączanie i wyłączanie modułu przez operatora (dla całej platformy): wyłącza okienko podpowiedzi, wyniki, zapis analityki, ekrany LLM i reindeksacji w panelu oraz indeksowanie; nic nie jest usuwane |
 | `search.popup.suggestion_count` | `number` | `8` | Ile produktów pokazuje okienko podpowiedzi w storefroncie; `0` wyłącza okienko, ale zatwierdzone wyszukiwanie nadal przechodzi do wyników |
 | `search.popup.minimum_query_length` | `number` | `3` | Minimalna liczba znaków, zanim storefront wyśle zapytanie o podpowiedzi i zanim zostanie zapisany wiersz frazy |
 | `search.llm.enabled` | `boolean` | `false` | Włącza w tym kanale hybrydowe wyszukiwanie Meilisearch — leksykalne i semantyczne |
-| `search.llm.embedder_url` | `string` | `""` | Adres URL endpointu embeddera zgodnego z OpenAI (używanego przez Meilisearch) |
-| `search.llm.embedder_api_key` | `string` | `""` | Klucz API embeddera (panel administracyjny maskuje to pole) |
-| `search.llm.embedder_model` | `string` | `""` | Identyfikator modelu embeddera (np. `text-embedding-3-small`) |
+| `search.llm.embedder_credentials` | `credential_ref` (`llm`) | `""` | Wielokrotnego użytku konfiguracja poświadczeń LLM (ekran Credentials); jej adres bazowy, klucz API i model to endpoint embeddera zgodnego z OpenAI, jego klucz i model (np. `text-embedding-3-small`). Wymagane do włączenia wyszukiwania wspomaganego przez LLM |
+| `search.reindex_interval_minutes` | `number` | `10` | Jak często proces w tle przebudowuje indeks każdego kanału; `0` wyłącza okresowe przebudowywanie (ręczna reindeksacja pozostaje dostępna) |
+| `search.index_task_timeout_seconds` | `number` | `120` | Jak długo czekać na jedno zadanie indeksowania Meilisearch, zanim zostanie zgłoszone jako wciąż trwające; rezygnacja z czekania nie anuluje zadania |
 
-Wszystkie sześć ustawień można zawęzić do kanału sprzedaży w ramach istniejącego modelu ustawień.
+Ustawienia okienka podpowiedzi i LLM można zawęzić do kanału sprzedaży w ramach istniejącego modelu ustawień.
 Okienko podpowiedzi w storefroncie odczytuje liczbę wyników i próg przy każdym żądaniu przez ogólną
 metodę odczytu (`SettingsService.get`); przy jakimkolwiek błędzie odczytu (brak w pamięci podręcznej,
 `SettingNotRegistered`) usługa podpowiedzi wraca do wartości domyślnych z manifestu, żeby chwilowy
@@ -53,14 +55,15 @@ Embedder jest rejestrowany pod umowną nazwą `default` z `source: 'openAi'`; pa
 OpenAI w Ollamie…).
 
 Nakładka przełączająca (`POST /api/v1/admin/search/llm/toggle`) odmawia ustawienia `enabled=true`
-dla kanału, w którym trzy pola embedder.* nie są w pełni wypełnione. Tablica `details[]` w
-odpowiedzi z błędem wymienia każdą brakującą parę `(channelCode, settingCode)`, żeby panel
-administracyjny mógł wskazać braki.
+(`400 LLM_CONFIG_INCOMPLETE`) dla kanału, w którym odwołanie `search.llm.embedder_credentials` nie
+dostarcza wszystkich trzech: adresu bazowego, klucza API i modelu. Tablica `details[]` w odpowiedzi
+z błędem wymienia każdy brak jako `<channelCode>.search.llm.embedder_credentials` z brakującą
+częścią, żeby panel administracyjny mógł go wskazać.
 
 Reakcja na zmianę ustawienia (w `SearchEventSubscriber`) to dodatkowe zabezpieczenie: zaawansowany
 użytkownik, który ustawi `search.llm.enabled=true` bezpośrednio żądaniem PUT przez ogólną trasę
 ustawień w API administracyjnym (z pominięciem nakładki), **nie** zepsuje konfiguracji Meilisearch —
-gdy trójka pól embedder.* jest niekompletna, mechanizm zapisuje ostrzeżenie w logu i zostawia indeks
+gdy poświadczenie embeddera jest niekompletne, mechanizm zapisuje ostrzeżenie w logu i zostawia indeks
 bez zmian.
 
 Wyłączenie nigdy nie jest odrzucane; wywoływane jest `index.resetEmbedders()`, więc kanał wraca do
@@ -101,19 +104,42 @@ frazami.
 ## Indeksator i subskrybent zdarzeń
 
 `SearchIndexer` zapisuje jeden dokument na produkt w indeksie kanału o nazwie
-`products_<channel_code>`. Dokument odzwierciedla produkt z katalogu (id, sku, name, description,
-type, status, slug, primaryAssetUrl, categoryIds, categorySlugs, attributes, searchableOptions,
-createdAt, updatedAt). Indeksator ustawia też w Meilisearch `searchableAttributes` i
-`filterableAttributes` na podstawie bieżących flag `product_attributes.is_searchable` i
-`is_filterable`, a `sortableAttributes` — na podstawie `SORTABLE_ATTRIBUTES` (zobacz *Sortowanie*).
+`products_<channel_code>`. Dokument odzwierciedla produkt z katalogu (id, sku, type, status, slug,
+primaryAssetUrl, categoryIds, categorySlugs, attributes, createdAt, updatedAt) i dla każdego języka
+oferowanego przez kanał zawiera `texts.<język>`: obowiązujące w tym kanale i języku `name` i
+`description` produktu (`''` dla celowo pustego nadpisania), jego przeszukiwalne atrybuty tekstowe i
+etykiety jego przeszukiwalnych opcji wyboru w tym języku. `attributes` zawiera tylko wartości
+atrybutów innych niż tekstowe. Indeksator ustawia też w Meilisearch `searchableAttributes` (`sku`,
+`texts`, `attributes`) i `filterableAttributes` na podstawie bieżących flag
+`product_attributes.is_searchable` i `is_filterable`, a `sortableAttributes` — na podstawie
+`SORTABLE_ATTRIBUTES` (zobacz *Sortowanie*).
 
-**Dokument nie zawiera ceny.** Kiedyś zawierał — skopiowaną ze starego atrybutu katalogu
-`attributes.defaultPrice`, a nie z żadnego cennika — i nie była ona odczytywana w ścieżce zapytań,
-która przy uzupełnianiu wyników ustala cenę dla oglądającego na podstawie `price_lists`, więc indeks
-nie może decydować o tym, ile płaci kupujący. Ceny dla konkretnego kupującego i tak nie da się
-zindeksować: jeden indeks na kanał sprzedaży i jeden dokument na produkt oznaczają, że dodanie ceny
-do dokumentu pomnożyłoby indeks przez liczbę klientów. Stary atrybut jest nadal indeksowany pod
-`attributes.defaultPrice`, gdzie nazwa mówi, czym jest.
+**Wyszukiwanie tylko w języku kupującego.** Zapytanie przeszukuje wyłącznie język kupującego:
+`texts.<L>.name`, `texts.<L>.description`, `texts.<L>.attributes` i `texts.<L>.options` oraz `sku` i
+przeszukiwalne atrybuty inne niż tekstowe, gdzie `L` to język żądania dopasowany do języków kanału
+sprzedaży (sprawdzany względem nich, zanim zostanie użyty). Zapytanie polskiego kupującego nigdy nie
+trafia w tekst angielski. Produkt wyłączony w danym kanale i języku nie jest zwracany.
+
+**Dokument nie zawiera ceny.** Ceny należą do oglądającego: ścieżka zapytań ustala je z cenników
+(`price_lists`) przy uzupełnianiu wyników, więc indeks nigdy nie decyduje o tym, ile płaci
+kupujący. Ceny dla konkretnego kupującego i tak nie da się zindeksować: jeden indeks na kanał
+sprzedaży i jeden dokument na produkt oznaczają, że dodanie ceny do dokumentu pomnożyłoby indeks
+przez liczbę klientów.
+
+### Ceny w wynikach wyszukiwania
+
+- **Wyniki i podpowiedzi** są wyceniane dla oglądającego — jego organizacji, grupy klientów i kanału
+  sprzedaży — jednym zbiorczym wywołaniem `resolveListingPriceDetails` na stronę lub okno
+  podpowiedzi, tą samą wyceną co lista produktów w katalogu, więc wynik wyszukiwania, karta w
+  katalogu i koszyk pokazują tę samą cenę. Podpowiedzi są wyceniane w walucie żądania.
+- Produkt z wariantami pokazuje najniższą cenę wariantu jako cenę **„od”**, a naliczona cena
+  promocyjna niesie własną cenę kupującego jako cenę przekreśloną.
+- Przy włączonym ustawieniu cenników `pricing.show_list_price` wynik niesie `listPrice` obok niższej
+  ceny kupującego, tak samo jak karta w katalogu.
+- **Sortowania ani filtrowania według ceny** (`?sort=price`, `?sort=-price`, `minPrice`,
+  `maxPrice`) nigdy nie obsługuje Meilisearch: katalog kieruje taką listę do PostgreSQL, gdzie
+  wstępnie wyliczona powierzchnia cen modułu `price_lists` porządkuje ją według cen, które karty
+  pokazują temu oglądającemu.
 
 ### Sortowanie
 
@@ -132,8 +158,14 @@ Cztery sposoby sortowania z kontraktu listy produktów odpowiadają następując
 | `name` | `name:asc` |
 | `-name` | `name:desc` |
 
-Zindeksowane `name` jest ustalane w domyślnym języku kanału, czyli w języku, w którym wyświetla się
-lista produktów, więc kolejność widziana przez kupującego to ta, według której posortowano wyniki.
+Nazwa jest sortowana w języku kupującego: sortowanie działa na `texts.<L>.name`, oznaczonym jako
+sortowalne dla każdego języka oferowanego przez kanał, więc kolejność widziana przez kupującego to
+kolejność nazw, które czyta.
+
+Nazwa *wyświetlana* na karcie wyniku nie pochodzi z indeksu. Każde trafienie jest przed udzieleniem
+odpowiedzi ponownie odczytywane z Postgresa, a karta dostaje tę nazwę, którą dla kanału sprzedaży i
+języka z żądania pokazuje karta na liście produktów katalogu: nazwę obowiązującą w tym miejscu
+(kanał × język → kanał → globalna).
 
 **Aktualizacja indeksu zbudowanego przed wprowadzeniem ustawień sortowania** wymaga ponownego
 zindeksowania: ustawienia nigdy nie były stosowane (`sortableAttributes` było `[]` w każdym indeksie,
@@ -146,15 +178,25 @@ instancji. Odświeżenie po
 `attribute.updated.v1` ponownie stosuje ustawienia, ale nie zapisuje dokumentów, więc przywraca
 sortowanie `name`, ale nie `-createdAt`.
 
-### `searchableOptions` — wyszukiwanie po listach opcji
+### Wyszukiwanie po listach opcji
 
 Dla atrybutów z flagą `isSearchable` ORAZ typem wartości wyboru (`select`, `enum`, `multiselect`)
-indeksator ustala etykietę opcji w danym języku i dodaje ją do pola dokumentu
-`searchableOptions: string[]`. Ustawienia Meilisearch obejmują `searchableOptions` w
-`searchableAttributes`, więc klient, który wpisze widoczny dla siebie tekst (np. „Czerwony”), znajdzie
-produkty, których surową wartością jest klucz opcji (np. „red”). Wyłączenie `isSearchable` usuwa
-etykiety opcji z `searchableOptions` przy następnym odświeżeniu, w zwykłym rytmie wyznaczanym przez
-zdarzenia.
+indeksator ustala etykiety opcji w każdym języku kanału i zapisuje je w `texts.<język>.options`,
+więc klient, który wpisze widoczny dla siebie tekst (np. „Czerwony”), znajdzie produkty, których
+surową wartością jest klucz opcji (np. „red”). Etykiety są odczytywane raz na przebieg indeksowania.
+Wyłączenie `isSearchable` usuwa etykiety opcji przy następnym odświeżeniu, w zwykłym rytmie
+wyznaczanym przez zdarzenia.
+
+### Aktualizacja do dokumentu z tekstami w językach (funkcja 174)
+
+Pola dokumentu `name`, `description`, `localizedNames` i `searchableOptions` oraz wartości tekstowe w
+`attributes` zastępuje `texts`. **Po aktualizacji uruchom jedno pełne ponowne indeksowanie**:
+okresowy przebieg w roli worker robi to sam (`search.reindex_interval_minutes`); w przeciwnym razie
+użyj akcji **Reindex products** w panelu administracyjnym albo `pnpm run cli search reindex`. Dopóki
+indeks nie zostanie ponownie zindeksowany — jego przeszukiwalne atrybuty nie obejmują jeszcze
+`texts` — sprawdzenie przy starcie wtyczki indeksuje go ponownie, a do tego czasu zapytania są
+obsługiwane jak dotąd, bez ograniczenia do języka, a w dzienniku pojawia się ostrzeżenie. Rozmiar
+indeksu rośnie wraz z liczbą języków oferowanych przez kanał.
 
 `SearchEventSubscriber` utrzymuje indeksy w zgodności z katalogiem:
 
@@ -169,6 +211,17 @@ zdarzenia.
 Każda procedura obsługi przechwytuje własne błędy — chwilowa awaria Meilisearch nie psuje zapisu w
 katalogu. Zapasowa ścieżka odczytu (`catalog/routes.public.ts`) utrzymuje wyszukiwanie w storefroncie
 w działaniu przy nieaktualnym indeksie aż do następnego ręcznego `search:reindex`.
+
+### Dostępność w kanale i języku
+
+Od wprowadzenia zakresów danych produktu (`specs/163-product-data-scopes/`) produkt można włączyć lub wyłączyć w każdym kanale sprzedaży i w każdym języku kanału, nadać mu okno publikacji i odbiorców właściwych dla kanału. Indeksator pyta moduł `catalog` (`catalogProductAvailabilityPort.describeChannelAvailability`) zamiast czytać status produktu:
+
+- produkt należący do kanału trafia do indeksu, gdy jest włączony w **co najmniej jednym** języku kanału; produkt zarchiwizowany lub usunięty nie jest włączony w żadnym;
+- każdy dokument zawiera `liveLanguages` (języki kanału, w których produkt jest włączony), `publishFromMs` / `publishUntilMs` (obowiązujące okno w milisekundach od epoki; `0` i `Number.MAX_SAFE_INTEGER`, gdy okno jest otwarte) oraz obowiązujące w kanale `visibility` i `allowedOrganizationIds`. Wszystkie pięć to atrybuty filtrowalne;
+- zapytanie dodaje filtr dla języka żądania (tagi `Accept-Language` od największej wagi `q`, każdy dopasowany do języków kanału — dokładnie, a potem po języku podstawowym — pierwszy, który kanał oferuje, w przeciwnym razie język domyślny), okna w chwili zapytania i odbiorców wywołującego, więc strona jest wycinana wyłącznie z dostępnych trafień. Lista dozwolonych organizacji służy tylko do filtrowania i nigdy nie trafia do odpowiedzi;
+- przy uzupełnianiu wyników moduł `catalog` jest pytany ponownie (`filterAvailable`) o każde trafienie, więc nieaktualny dokument nie pokaże produktu, który nie jest już dostępny.
+
+Około minuty po pierwszym uruchomieniu po aktualizacji proces workera doprowadza ustawienia każdego istniejącego indeksu kanału do aktualnego stanu bez ponownego indeksowania: pięć pól dostępności staje się filtrowalnych, więc zapytania nadal obsługuje indeks, zamiast przechodzić na PostgreSQL. Raz na uruchomienie odczytuje ustawienia każdego indeksu i zmienia je tylko tam, gdzie czegoś brakuje. Dokument zaindeksowany przed tą zmianą nadal nie ma nowych pól i jest obsługiwany jak dotąd. **Po aktualizacji uruchom ponowne indeksowanie każdego kanału sprzedaży** (operacja zbiorcza `search_reindex` albo opisane niżej polecenie CLI), aby filtry okna i języka działały dokładnie.
 
 ### Gdy indeks nie odpowiada
 
@@ -242,8 +295,8 @@ Implementacja znajduje się w `packages/modules/search/src/backend/cli/reindex.t
 - `backend/test/integration/search/event-subscriber.test.ts` (istniejący) — indeksowanie wyzwalane zdarzeniami katalogu.
 - `backend/test/integration/search/catalog-via-meilisearch.test.ts` (istniejący) — ścieżka odczytu wybierana flagą środowiskową.
 - `backend/test/integration/search/sort-order.test.ts` (6 przypadków) — każdy z czterech sposobów sortowania obsłużony przez Meilisearch (kluczowa jest asercja na `x-search-backend`: Postgres obsługuje wszystkie cztery, więc sama kolejność nie odróżni strony z Meilisearch od zapasowej), zadeklarowane `sortableAttributes` i brak zindeksowanego pola `price`.
-- `backend/test/unit/search/search-sort-attributes.test.ts` (4 przypadki) — `buildSort` zwraca tylko pola zadeklarowane w `SORTABLE_ATTRIBUTES`.
-- `backend/test/unit/search/search-degrade-observability.test.ts` (3 przypadki) — odrzucone zapytanie podaje kod błędu silnika i jest zgłaszane raz; nieosiągalność nie jest zgłaszana podwójnie.
+- `src/backend/services/search-sort-attributes.test.ts` (4 przypadki, w pakiecie tego modułu) — `buildSort` zwraca tylko pola zadeklarowane w `SORTABLE_ATTRIBUTES`.
+- `src/backend/services/search-degrade-observability.test.ts` (3 przypadki, w pakiecie tego modułu) — odrzucone zapytanie podaje kod błędu silnika i jest zgłaszane raz; nieosiągalność nie jest zgłaszana podwójnie.
 
 Dwa ostatnie nie wymagają usług; pozostałe działają na prawdziwym Postgresie i prawdziwym
 Meilisearch.

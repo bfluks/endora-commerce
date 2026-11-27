@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { Download, History, Play } from 'lucide-react';
-import { Alert, AlertDescription, Button, Card, CardContent, PageHeader } from '@endora-commerce/admin-kit/ui';
+import { Alert, AlertDescription, Button, Card, CardContent, EmptyState, PageHeader, TabPanel, Tabs } from '@endora-commerce/admin-kit/ui';
 import { ResponsiveTable, type ResponsiveColumn } from '@endora-commerce/admin-kit/components';
 import { formatDateTime, useAuth } from '@endora-commerce/admin-kit/lib';
-import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import {
   productFeedsClient,
   type FeedRunDetail,
@@ -17,6 +17,8 @@ import { FeedSettingsForm } from '../components/FeedSettingsForm.js';
 import { FeedStatusBadge } from '../components/FeedStatusBadge.js';
 
 type Tab = 'overview' | 'runs' | 'delivery' | 'settings';
+
+const TABS: readonly Tab[] = ['overview', 'runs', 'delivery', 'settings'];
 
 const POLL_INTERVAL_MS = 5_000;
 
@@ -32,6 +34,7 @@ const POLL_INTERVAL_MS = 5_000;
  * only the token's sha256, so after a reload the card falls back to the prefix.
  */
 export function ProductFeedDetailPage(): ReactNode {
+  const { language } = useTranslationContext();
   const t = useTranslation('product_feeds');
   const { feedId } = useParams<{ feedId: string }>();
   const location = useLocation();
@@ -129,13 +132,13 @@ export function ProductFeedDetailPage(): ReactNode {
           )}
         </Link>
       ),
-      meta: (row) => formatDateTime(row.startedAt ?? row.createdAt),
+      meta: (row) => formatDateTime(row.startedAt ?? row.createdAt, language),
     },
     {
       id: 'startedAt',
       header: t('runs.table.startedAt'),
       hideOnMobile: true,
-      render: (row) => muted(row, formatDateTime(row.startedAt ?? row.createdAt)),
+      render: (row) => muted(row, formatDateTime(row.startedAt ?? row.createdAt, language)),
     },
     {
       id: 'trigger',
@@ -189,6 +192,7 @@ export function ProductFeedDetailPage(): ReactNode {
   ];
 
   const lastFailed = feed.lastRun?.status === 'failed';
+  const lastWithdrawn = feed.lastRun?.status === 'withdrawn';
 
   return (
     <div>
@@ -226,62 +230,70 @@ export function ProductFeedDetailPage(): ReactNode {
         </Alert>
       )}
 
-      <div className="b2b-tabs-scroll mb-4">
-        <div className="b2b-tabs" role="tablist">
-          {(['overview', 'runs', 'delivery', 'settings'] as const).map((id) => (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              aria-selected={tab === id}
-              className={`b2b-tab ${tab === id ? 'is-active' : ''}`}
-              onClick={() => setTab(id)}
-            >
-              {t(`feeds.tab.${id}`)}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {tab === 'overview' && (
-        <FeedLinkCard
-          feed={feed}
-          issuedToken={issuedToken}
-          onChanged={(issued) => {
-            setIssuedToken(issued);
-            void load();
-          }}
-        />
+      {(feed.pinnedPriceBookWarning || lastWithdrawn) && (
+        // Feature 160 (FR-029) — a feed pinned to a price book that does not
+        // apply now gets no prices from it; say so where the operator looks
+        // first, with the reason. Owner ruling 2026-10-23: a run that found it
+        // so withdrew the published file, and the link answers as if the feed
+        // had never been generated until a run publishes again.
+        <Alert variant="warning" className="mb-4" role="status">
+          <AlertDescription className="flex flex-col gap-1">
+            {feed.pinnedPriceBookWarning && <span>{t(`feeds.pinnedBook.${feed.pinnedPriceBookWarning}`)}</span>}
+            {lastWithdrawn && <span>{t('feeds.pinnedBook.withdrawn')}</span>}
+          </AlertDescription>
+        </Alert>
       )}
 
-      {tab === 'runs' && (
-        // Same card surface as every other admin list, and the same `.b2b-empty`
-        // block the feed list uses — the hand-rolled dashed box was a third
-        // empty-state design in one module.
-        <Card>
-          <CardContent className="pt-6">
-            <ResponsiveTable
-              columns={runColumns}
-              data={runs}
-              keyExtractor={(row) => row.id}
-              emptyState={
-                <div className="b2b-empty">
-                  <div className="b2b-empty__icon">
-                    <History size={20} aria-hidden="true" />
-                  </div>
-                  <div className="b2b-empty__title">{t('feeds.runs.empty.title')}</div>
-                  <div className="b2b-empty__sub">{t('feeds.runs.empty.subtitle')}</div>
-                </div>
-              }
-            />
-          </CardContent>
-        </Card>
-      )}
+      {/* The kit's strip (issue #1491): named, one tab stop, ←/→ and Home/End,
+          and the selected section in the one panel its tab labels. */}
+      <Tabs
+        items={TABS.map((id) => ({ value: id, label: t(`feeds.tab.${id}`) }))}
+        value={tab}
+        onValueChange={setTab}
+        idBase="product-feed"
+        aria-label={t('feeds.tabs.label')}
+        className="mb-4"
+      />
 
-      {/* Feature 070 — where this feed is pushed, and whether the partner got it. */}
-      {tab === 'delivery' && <FeedDeliveryPanel feedId={feed.id} />}
+      <TabPanel idBase="product-feed" value={tab}>
+        {tab === 'overview' && (
+          <FeedLinkCard
+            feed={feed}
+            issuedToken={issuedToken}
+            onChanged={(issued) => {
+              setIssuedToken(issued);
+              void load();
+            }}
+          />
+        )}
 
-      {tab === 'settings' && <FeedSettingsForm feed={feed} onSaved={setFeed} />}
+        {tab === 'runs' && (
+          // Same card surface as every other admin list, and the same kit
+          // `EmptyState` the feed list uses — the hand-rolled dashed box was a
+          // third empty-state design in one module.
+          <Card>
+            <CardContent>
+              <ResponsiveTable
+                columns={runColumns}
+                data={runs}
+                keyExtractor={(row) => row.id}
+                emptyState={
+                  <EmptyState
+                    icon={<History size={20} />}
+                    title={t('feeds.runs.empty.title')}
+                    description={t('feeds.runs.empty.subtitle')}
+                  />
+                }
+              />
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Feature 070 — where this feed is pushed, and whether the partner got it. */}
+        {tab === 'delivery' && <FeedDeliveryPanel feedId={feed.id} />}
+
+        {tab === 'settings' && <FeedSettingsForm feed={feed} onSaved={setFeed} />}
+      </TabPanel>
     </div>
   );
 }

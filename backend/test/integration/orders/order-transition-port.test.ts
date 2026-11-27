@@ -45,7 +45,7 @@ async function seedOrder(em: EntityManager): Promise<Order> {
     currency: 'PLN',
     placedAt: new Date(),
   });
-  await em.persistAndFlush(order);
+  await em.persist(order).flush();
   return order;
 }
 
@@ -89,7 +89,9 @@ describe('orderTransitionPort', () => {
     });
     expect(entries).toHaveLength(1);
     expect(entries[0]?.stateBefore).toEqual({ status: 'new' });
-    expect(entries[0]?.stateAfter).toEqual({ status: 'paid' });
+    // Since 0.113.0 the port delegates to `orderCommandPort` and the actor's
+    // `source` is recorded as the entry's (`specs/186-aggregate-ports/` R-18.2).
+    expect(entries[0]?.stateAfter).toEqual({ status: 'paid', source: 'payment' });
   });
 
   it('reports an order already at the target as already_there, recording nothing', async () => {

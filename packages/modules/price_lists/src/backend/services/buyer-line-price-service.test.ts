@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BuyerLinePriceQuery } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
+import { NoSystemDefaultChannel } from '@endora-commerce/platform/kernel';
 import {
   BUYER_LINE_PRICE_CHUNK_SIZE,
   BuyerLinePriceService,
@@ -26,6 +27,8 @@ interface Harness {
   service: BuyerLinePriceService;
   deps: BuyerLinePriceServiceDeps;
   calls: PricingResolutionInput[];
+  /** One entry per `resolveLinePrices` call: how many lines it carried. */
+  batches: number[];
   spies: {
     findByIds: ReturnType<typeof vi.fn>;
     findCustomer: ReturnType<typeof vi.fn>;
@@ -42,6 +45,7 @@ function harness(options: {
 } = {}): Harness {
   const known = new Set(options.knownProducts ?? [productId(1), productId(2), productId(3)]);
   const calls: PricingResolutionInput[] = [];
+  const batches: number[] = [];
   const findByIds = vi.fn(async (ids: readonly string[]) =>
     ids.filter((id) => known.has(id)).map((id) => ({ id, attributeValues: {} })),
   );
@@ -54,29 +58,42 @@ function harness(options: {
   const deps: BuyerLinePriceServiceDeps = {
     pricingService: {
       // A bracket table: 1–9 pieces at 100, 10+ at 90, priced on the channel's
-      // currency unless the caller names one.
-      resolveLinePrice: async (input) => {
-        calls.push(input);
-        const amount = input.context.quantity >= 10 ? '90.0000' : '100.0000';
-        return {
-          amount,
-          currency: input.context.currencyCode ?? input.context.salesChannel.defaultCurrency,
-          priceListId: `list-${input.context.salesChannel.id}`,
-          isSale: false,
-          bracketStartQuantity: input.context.quantity >= 10 ? 10 : 1,
-          displayMode: 'net',
-        };
+      // currency unless the caller names one. Batched (D-287 P0): each line is
+      // recorded as the single resolution it stands for.
+      resolveLinePrices: async (input) => {
+        batches.push(input.lines.length);
+        const out = new Map();
+        for (const line of input.lines) {
+          const single: PricingResolutionInput = {
+            product: line.product,
+            variantId: line.variantId ?? null,
+            context: { ...input.context, quantity: line.quantity },
+          };
+          calls.push(single);
+          out.set(line.key, {
+            amount: line.quantity >= 10 ? '90.0000' : '100.0000',
+            currency: input.context.currencyCode ?? input.context.salesChannel.defaultCurrency,
+            priceListId: `list-${input.context.salesChannel.id}`,
+            isSale: false,
+            bracketStartQuantity: line.quantity >= 10 ? 10 : 1,
+            displayMode: 'net_only' as const,
+          });
+        }
+        return out;
       },
     },
-    catalogProductRead: { findByIds },
-    customerAccountRead: { findById: findCustomer },
-    organizationDetails: { findById: findOrganization },
+    // Partial records: the service reads the ids, the attribute values, the
+    // organisation and the customer group off them, and nothing else.
+    catalogProductRead: { findByIds } as unknown as BuyerLinePriceServiceDeps['catalogProductRead'],
+    customerAccountRead: { findById: findCustomer } as unknown as BuyerLinePriceServiceDeps['customerAccountRead'],
+    organizationDetails: { findById: findOrganization } as unknown as BuyerLinePriceServiceDeps['organizationDetails'],
     salesChannels: { findById: findChannel, findSystemDefault: findDefaultChannel },
   };
   return {
     service: new BuyerLinePriceService(deps),
     deps,
     calls,
+    batches,
     spies: { findByIds, findCustomer, findOrganization, findChannel, findDefaultChannel },
   };
 }
@@ -178,6 +195,20 @@ describe('BuyerLinePriceService.resolveForBuyer (T019)', () => {
     expect((error as HttpError).statusCode).toBe(400);
     expect((error as HttpError).code).toBe('VALIDATION_FAILED');
     expect((error as HttpError).message).not.toContain(UNKNOWN_CHANNEL_ID);
+    expect(h.calls).toHaveLength(0);
+  });
+
+  it('answers no system-default channel as the platform invariant it is (500 INTERNAL), not a caller error', async () => {
+    // Issue #636 (#86): it was `400 VALIDATION_FAILED` "No default sales
+    // channel." No request causes it and no buyer can fix it — the boot
+    // reconciler guarantees a default — so it is the platform's one spelling
+    // of that state, `NoSystemDefaultChannel` (D-48).
+    const h = harness();
+    h.spies.findDefaultChannel.mockResolvedValueOnce(null);
+    const error = await h.service.resolveForBuyer(query({ salesChannelId: null })).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(NoSystemDefaultChannel);
+    expect((error as HttpError).statusCode).toBe(500);
+    expect((error as HttpError).code).toBe('INTERNAL');
     expect(h.calls).toHaveLength(0);
   });
 
@@ -283,5 +314,8 @@ describe('BuyerLinePriceService.resolveForBuyer (T019)', () => {
       expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
       expect(spy.mock.calls.length).toBeLessThanOrEqual(chunks);
     }
+    // D-287 P0 — one batched pricing call per chunk, not one per line.
+    expect(h.batches).toHaveLength(chunks);
+    expect(h.batches.reduce((a, b) => a + b, 0)).toBe(250);
   });
 });

@@ -1,25 +1,33 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type ReactNode,
+  type RefObject,
 } from 'react';
-import { ArrowDown, ArrowUp, Plus, Star, Trash2 } from 'lucide-react';
-import { PaginationFooter, TouchReorderButtons } from '@endora-commerce/admin-kit/components';
+import { Languages, Plus } from 'lucide-react';
+import { PaginationFooter, useConfirmDialog } from '@endora-commerce/admin-kit/components';
 import type {
   Country,
   CreateDictionaryLanguageRequest,
   DictionaryLanguage,
   UpdateDictionaryLanguageRequest,
 } from '@endora-commerce/contracts';
-import { ApiError, normalize, type PageSizeOption } from '@endora-commerce/admin-kit/lib';
-import { Alert, AlertDescription, Badge, Button, Card, CardContent, CardHeader, CardTitle, Checkbox, Input, Label, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
+import { normalize, type PageSizeOption } from '@endora-commerce/admin-kit/lib';
+import { Alert, AlertDescription, Badge, Button, Card, CardContent, CardHeader, CardTitle, Checkbox, EmptyState, FormField, InlineStatus, Input, Label, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, useInlineStatus } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { dictionaryClient } from '../api/client.js';
+import { DictionaryRowActions } from '../components/DictionaryRowActions.js';
 import { EntryStatusBadges } from '../components/EntryStatusBadges.js';
+import { RowReorder } from '../components/RowReorder.js';
 import { TranslationsDrawer } from '../components/TranslationsDrawer.js';
+import { useDictionaryTab, type DictionaryTabProps } from '../lib/dictionary-tab.js';
+import { formatDictionaryError } from '../lib/format-error.js';
+
 interface LanguageFormState {
   code: string;
   label: string;
@@ -52,8 +60,9 @@ const emptyLanguage: LanguageFormState = {
   sortOrder: 1000,
 };
 
-export function LanguagesTab(): ReactNode {
+export function LanguagesTab({ ref, onEmptyChange }: DictionaryTabProps = {}): ReactNode {
   const t = useTranslation('dictionaries');
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [rows, setRows] = useState<DictionaryLanguage[]>([]);
   const [countries, setCountries] = useState<Country[]>([]);
   const [translationCompleteness, setTranslationCompleteness] = useState<Record<string, boolean>>({});
@@ -64,12 +73,20 @@ export function LanguagesTab(): ReactNode {
   const [status, setStatus] = useState<StatusFilter>('all');
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<PageSizeOption>(DEFAULT_PAGE_SIZE);
-  const [draggingCode, setDraggingCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [assocSaving, setAssocSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
+  // An action's result is said beside the list's toolbar, in an always-mounted
+  // polite region, not as a success banner (issue #1499, DEC-12 a).
+  const actionStatus = useInlineStatus();
+  const searchId = useId();
+  // Where focus returns after the empty state's "Clear filters" (WCAG 2.2 SC 2.4.3).
+  const searchRef = useRef<HTMLInputElement>(null);
+  // Read through a ref so `load` keeps one identity while the bundle arrives.
+  const tRef = useRef(t);
+  tRef.current = t;
+  const formatError = (err: unknown, fallback: string): string => formatDictionaryError(err, fallback, tRef.current);
 
   const load = useCallback(async (): Promise<DictionaryLanguage[]> => {
     setLoading(true);
@@ -94,7 +111,7 @@ export function LanguagesTab(): ReactNode {
       );
       return languagePage.data;
     } catch (err) {
-      setError(formatError(err, 'Failed to load languages.'));
+      setError(formatDictionaryError(err, tRef.current('languages.error.load'), tRef.current));
       return [];
     } finally {
       setLoading(false);
@@ -149,10 +166,24 @@ export function LanguagesTab(): ReactNode {
   const lastCode = rows[rows.length - 1]?.code;
 
   const openCreate = (): void => {
+    actionStatus.clear();
     setCreating(true);
     setSelected(null);
     setForm({ ...emptyLanguage, sortOrder: nextSortOrder(rows) });
   };
+
+  const { firstFieldRef, create } = useDictionaryTab({
+    ref,
+    onEmptyChange,
+    empty: !loading && error === null && rows.length === 0,
+    openCreate,
+  });
+  const addButton = (
+    <Button type="button" onClick={create}>
+      <Plus aria-hidden="true" />
+      {t('languages.addLanguage')}
+    </Button>
+  );
 
   const openEdit = (row: DictionaryLanguage): void => {
     setCreating(false);
@@ -183,7 +214,7 @@ export function LanguagesTab(): ReactNode {
           ...(form.fallbackCode ? { fallbackCode: form.fallbackCode } : {}),
         };
         await dictionaryClient.createLanguage(input);
-        setInfo(`Language ${input.code} created.`);
+        actionStatus.show(t('language.created', { code: input.code }));
       } else if (selected) {
         const input: UpdateDictionaryLanguageRequest = {
           label: form.label.trim(),
@@ -194,7 +225,7 @@ export function LanguagesTab(): ReactNode {
           sortOrder: form.sortOrder,
         };
         await dictionaryClient.updateLanguage(selected.code, input);
-        setInfo(`Language ${selected.code} saved.`);
+        actionStatus.show(t('language.saved', { code: selected.code }));
       }
       const fresh = await load();
       const code = creating ? form.code.trim() : selected?.code;
@@ -203,7 +234,8 @@ export function LanguagesTab(): ReactNode {
       setSelected(nextSelected);
       if (nextSelected) openEdit(nextSelected);
     } catch (err) {
-      setError(formatError(err, 'Save failed.'));
+      actionStatus.clear();
+      setError(formatError(err, t('error.save')));
     } finally {
       setSaving(false);
     }
@@ -212,22 +244,29 @@ export function LanguagesTab(): ReactNode {
   const setDefault = async (code: string): Promise<void> => {
     try {
       await dictionaryClient.setDefaultLanguage(code);
-      setInfo(`Language ${code} is now default.`);
+      actionStatus.show(t('language.madeDefault', { code }));
       await load();
     } catch (err) {
-      setError(formatError(err, 'Failed to set default language.'));
+      actionStatus.clear();
+      setError(formatError(err, t('error.setDefault')));
     }
   };
 
   const remove = async (code: string): Promise<void> => {
-    if (!confirm(`Delete language ${code}?`)) return;
+    const ok = await confirm({
+      message: t('language.deleteConfirm', { code }),
+      confirmLabel: t('action.delete'),
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await dictionaryClient.deleteLanguage(code);
-      setInfo(`Language ${code} deleted.`);
+      actionStatus.show(t('language.deleted', { code }));
       const fresh = await load();
       setSelected(fresh.find((row) => row.code === selected?.code) ?? null);
     } catch (err) {
-      setError(formatError(err, 'Delete failed.'));
+      actionStatus.clear();
+      setError(formatError(err, t('error.delete')));
     }
   };
 
@@ -241,21 +280,8 @@ export function LanguagesTab(): ReactNode {
       await dictionaryClient.updateLanguage(other.code, { sortOrder: row.sortOrder });
       await load();
     } catch (err) {
-      setError(formatError(err, 'Reorder failed.'));
-    }
-  };
-
-  const dropOn = async (target: DictionaryLanguage): Promise<void> => {
-    if (!draggingCode || draggingCode === target.code) return;
-    const source = rows.find((row) => row.code === draggingCode);
-    setDraggingCode(null);
-    if (!source) return;
-    try {
-      await dictionaryClient.updateLanguage(source.code, { sortOrder: target.sortOrder });
-      await dictionaryClient.updateLanguage(target.code, { sortOrder: source.sortOrder });
-      await load();
-    } catch (err) {
-      setError(formatError(err, 'Reorder failed.'));
+      actionStatus.clear();
+      setError(formatError(err, t('error.reorder')));
     }
   };
 
@@ -277,7 +303,8 @@ export function LanguagesTab(): ReactNode {
       setSelected(nextSelected);
       if (nextSelected) openEdit(nextSelected);
     } catch (err) {
-      setError(formatError(err, 'Association update failed.'));
+      actionStatus.clear();
+      setError(formatError(err, t('error.association')));
     } finally {
       setAssocSaving(null);
     }
@@ -288,13 +315,14 @@ export function LanguagesTab(): ReactNode {
     setError(null);
     try {
       await dictionaryClient.upsertLanguageCountry(language.code, countryCode, { isPrimary: true });
-      setInfo(`${countryCode} is primary for ${language.code}.`);
+      actionStatus.show(t('language.primarySet', { country: countryCode, language: language.code }));
       const fresh = await load();
       const nextSelected = fresh.find((row) => row.code === language.code) ?? null;
       setSelected(nextSelected);
       if (nextSelected) openEdit(nextSelected);
     } catch (err) {
-      setError(formatError(err, 'Primary country update failed.'));
+      actionStatus.clear();
+      setError(formatError(err, t('error.primary')));
     } finally {
       setAssocSaving(null);
     }
@@ -303,10 +331,15 @@ export function LanguagesTab(): ReactNode {
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
       <Card>
-        <CardHeader className="gap-3 md:flex-row md:items-center md:justify-between md:space-y-0">
-          <CardTitle>{t('languages.title')}</CardTitle>
+        <CardHeader className="gap-3 md:flex-row md:items-center md:space-y-0">
           <div className="flex w-full flex-wrap gap-2 md:w-auto">
+            <Label htmlFor={searchId} className="sr-only">
+              {t('languages.searchLabel')}
+            </Label>
             <Input
+              ref={searchRef}
+              id={searchId}
+              type="search"
               className="min-w-56 md:w-72"
               placeholder={t('languages.searchPlaceholder')}
               value={search}
@@ -322,10 +355,7 @@ export function LanguagesTab(): ReactNode {
               <option value="active">{t('languages.filter.active')}</option>
               <option value="inactive">{t('languages.filter.inactive')}</option>
             </Select>
-            <Button type="button" onClick={openCreate}>
-              <Plus />
-              {t('languages.addLanguage')}
-            </Button>
+            <InlineStatus {...actionStatus.props} className="self-center" />
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -335,15 +365,33 @@ export function LanguagesTab(): ReactNode {
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           ) : null}
-          {info ? (
-            <Alert variant="success">
-              <AlertDescription>{info}</AlertDescription>
-            </Alert>
-          ) : null}
           {loading ? (
             <p className="text-sm text-muted-foreground">{t('languages.loading')}</p>
+          ) : filtered.length === 0 ? (
+            // "The dictionary holds none" and "the filters hide them all" are
+            // two situations with two next steps (#1448, DS-15). While the
+            // dictionary is empty its Add is here and not in the page header
+            // (#1562): one primary per view.
+            search.trim() !== '' || status !== 'all' ? (
+              <EmptyState
+                variant="no-results"
+                title={t('languages.empty')}
+                onClearFilters={() => {
+                  setSearch('');
+                  setStatus('all');
+                }}
+                focusAfterClear={searchRef}
+              />
+            ) : (
+              <EmptyState
+                icon={<Languages size={20} />}
+                title={t('languages.emptyState.title')}
+                description={t('languages.emptyState.body')}
+                action={addButton}
+              />
+            )
           ) : (
-            <Table>
+            <Table aria-label={t('languages.title')}>
               <TableHeader>
                 <TableRow>
                   <TableHead>{t('languages.column.code')}</TableHead>
@@ -358,22 +406,8 @@ export function LanguagesTab(): ReactNode {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {visible.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={7} className="text-sm text-muted-foreground">
-                      {t('languages.empty')}
-                    </TableCell>
-                  </TableRow>
-                ) : null}
                 {visible.map((row) => (
-                  <TableRow
-                    key={row.code}
-                    draggable
-                    onDragStart={() => setDraggingCode(row.code)}
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={() => void dropOn(row)}
-                    className={draggingCode === row.code ? 'opacity-50' : undefined}
-                  >
+                  <TableRow key={row.code}>
                     <TableCell className="font-mono text-xs">{row.code}</TableCell>
                     <TableCell>
                       <div>{row.label}</div>
@@ -394,57 +428,22 @@ export function LanguagesTab(): ReactNode {
                     <TableCell>{row.sortOrder}</TableCell>
                     <TableCell>
                       <div className="flex justify-end gap-1 items-center">
-                        <TouchReorderButtons
-                          onMoveUp={() => void move(row, -1)}
-                          onMoveDown={() => void move(row, 1)}
-                          disableUp={row.code === firstCode}
-                          disableDown={row.code === lastCode}
+                        <RowReorder
+                          onMove={(direction) => void move(row, direction)}
+                          first={row.code === firstCode}
+                          last={row.code === lastCode}
                         />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="b2b-reorder-desktop-only"
-                          disabled={row.code === firstCode}
-                          title={t('action.moveUp')}
-                          onClick={() => void move(row, -1)}
-                        >
-                          <ArrowUp />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="b2b-reorder-desktop-only"
-                          disabled={row.code === lastCode}
-                          title={t('action.moveDown')}
-                          onClick={() => void move(row, 1)}
-                        >
-                          <ArrowDown />
-                        </Button>
-                        <Button type="button" variant="outline" size="sm" onClick={() => openEdit(row)}>
-                          {t('action.edit')}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          title={t('action.setDefault')}
-                          disabled={row.isDefault || !row.isActive}
-                          onClick={() => void setDefault(row.code)}
-                        >
-                          <Star />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          size="icon"
-                          title={t('action.delete')}
-                          disabled={row.isDefault}
-                          onClick={() => void remove(row.code)}
-                        >
-                          <Trash2 />
-                        </Button>
+                        <DictionaryRowActions
+                          code={row.code}
+                          isDefault={row.isDefault}
+                          isActive={row.isActive}
+                          onEdit={() => {
+                            actionStatus.clear();
+                            openEdit(row);
+                          }}
+                          onSetDefault={() => void setDefault(row.code)}
+                          onDelete={() => void remove(row.code)}
+                        />
                       </div>
                     </TableCell>
                   </TableRow>
@@ -452,7 +451,7 @@ export function LanguagesTab(): ReactNode {
               </TableBody>
             </Table>
           )}
-          {loading ? null : (
+          {loading || filtered.length === 0 ? null : (
             <PaginationFooter
               page={currentPage}
               pageSize={pageSize}
@@ -472,6 +471,7 @@ export function LanguagesTab(): ReactNode {
         languages={rows}
         countries={countries}
         selected={selected}
+        firstFieldRef={firstFieldRef}
         lockedCode={!creating}
         disabled={!creating && !selected}
         saving={saving}
@@ -484,6 +484,7 @@ export function LanguagesTab(): ReactNode {
         onSetAssociation={setAssociation}
         onMakePrimary={makePrimary}
       />
+      {confirmDialog}
     </div>
   );
 }
@@ -495,6 +496,7 @@ function LanguageEditor({
   languages,
   countries,
   selected,
+  firstFieldRef,
   lockedCode,
   disabled,
   saving,
@@ -510,6 +512,8 @@ function LanguageEditor({
   languages: DictionaryLanguage[];
   countries: Country[];
   selected: DictionaryLanguage | null;
+  /** The code field — focused when the header's Add opens the editor (#1562). */
+  firstFieldRef: RefObject<HTMLInputElement | null>;
   lockedCode: boolean;
   disabled: boolean;
   saving: boolean;
@@ -539,36 +543,37 @@ function LanguageEditor({
           <p className="text-sm text-muted-foreground">{t('languages.editor.selectHint')}</p>
         ) : (
           <form className="space-y-4" onSubmit={submit}>
-            <Field label="Code">
+            <FormField label={t('field.code')}>
               <Input
+                ref={firstFieldRef}
                 value={form.code}
                 disabled={lockedCode}
                 placeholder="en-US"
                 onChange={(e) => setForm({ ...form, code: e.target.value })}
                 required
               />
-            </Field>
-            <Field label="Label">
+            </FormField>
+            <FormField label={t('field.label')}>
               <Input
                 value={form.label}
                 onChange={(e) => setForm({ ...form, label: e.target.value })}
                 required
               />
-            </Field>
-            <Field label="Native label">
+            </FormField>
+            <FormField label={t('field.nativeLabel')}>
               <Input
                 value={form.nativeLabel}
                 onChange={(e) => setForm({ ...form, nativeLabel: e.target.value })}
                 required
               />
-            </Field>
+            </FormField>
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Fallback">
+              <FormField label={t('field.fallback')}>
                 <Select
                   value={form.fallbackCode}
                   onChange={(e) => setForm({ ...form, fallbackCode: e.target.value })}
                 >
-                  <option value="">None</option>
+                  <option value="">{t('option.none')}</option>
                   {languages
                     .filter((language) => language.code !== form.code)
                     .map((language) => (
@@ -577,14 +582,14 @@ function LanguageEditor({
                       </option>
                     ))}
                 </Select>
-              </Field>
-              <Field label="Sort order">
+              </FormField>
+              <FormField label={t('field.sortOrder')}>
                 <Input
                   type="number"
                   value={form.sortOrder}
                   onChange={(e) => setForm({ ...form, sortOrder: Number(e.target.value) })}
                 />
-              </Field>
+              </FormField>
             </div>
             <div className="flex flex-wrap gap-4">
               <label className="flex items-center gap-2 text-sm">
@@ -592,22 +597,22 @@ function LanguageEditor({
                   checked={form.isRtl}
                   onChange={(e) => setForm({ ...form, isRtl: e.target.checked })}
                 />
-                RTL
+                {t('field.rtl')}
               </label>
               <label className="flex items-center gap-2 text-sm">
                 <Checkbox
                   checked={form.isActive}
                   onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
                 />
-                Active
+                {t('field.active')}
               </label>
             </div>
             <div className="flex justify-end gap-2 border-t pt-4">
               <Button type="button" variant="outline" onClick={onCancel}>
-                Cancel
+                {t('action.cancel')}
               </Button>
-              <Button type="submit" disabled={saving}>
-                Save
+              <Button type="submit" disabled={saving} aria-busy={saving}>
+                {t('action.save')}
               </Button>
             </div>
 
@@ -636,9 +641,10 @@ function LanguageEditor({
                           size="sm"
                           variant="ghost"
                           disabled={!checked || assocSaving === country.code}
+                          aria-label={t('action.makePrimaryNamed', { country: country.label })}
                           onClick={() => void onMakePrimary(selected, country.code)}
                         >
-                          Primary
+                          {t('action.makePrimary')}
                         </Button>
                       </div>
                     );
@@ -694,27 +700,8 @@ function CountryChips({
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }): ReactNode {
-  return (
-    <div className="space-y-1">
-      <Label>{label}</Label>
-      {children}
-    </div>
-  );
-}
-
 function nextSortOrder(rows: Array<{ sortOrder: number }>): number {
   return rows.reduce((max, row) => Math.max(max, row.sortOrder), 0) + 10;
-}
-
-function formatError(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    if (err.status === 409 && err.envelope.error.code === 'DICTIONARY_ENTRY_HAS_DEPENDENTS') {
-      return `${err.envelope.error.message} Disable the entry instead or remove dependent records first.`;
-    }
-    return err.envelope.error.message;
-  }
-  return fallback;
 }
 
 async function loadTranslationCompleteness(

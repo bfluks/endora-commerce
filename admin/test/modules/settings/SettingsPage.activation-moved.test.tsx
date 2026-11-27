@@ -36,6 +36,12 @@ const activationSetting: SettingDto = {
   activationControl: true,
 } as SettingDto;
 
+// The tab strip between the module's screens needs a router and a session this
+// file does not mount; it is covered by `settings-section-tabs.test.tsx` (#1550).
+vi.mock('../../../../packages/modules/settings/src/admin/components/SettingsSectionTabs', () => ({
+  SettingsSectionTabs: () => null,
+}));
+
 vi.mock('../../../../packages/modules/settings/src/admin/api/settings-client', () => ({
   settingsClient: {
     list: vi.fn(async () => ({
@@ -75,7 +81,6 @@ const { SettingsPage } = await import(
 
 const bundle = passthroughBundle('settings', [
   'page.title',
-  'page.description',
   'search.placeholder',
   'search.shortcut',
   'search.noResults',

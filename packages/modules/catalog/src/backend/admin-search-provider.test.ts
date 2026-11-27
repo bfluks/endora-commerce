@@ -89,21 +89,30 @@ describe('pickLocalizedName', () => {
 });
 
 describe('catalog admin search providers — mapping', () => {
-  it('maps a product to its screen, named in the admin language, with SKU, type and status', async () => {
+  it('maps a product to its screen, named by its Global name (174, FR-031), with SKU, type and status', async () => {
     const translate = vi.fn(async (key: string, language: string) => `${language}:${key}`);
     const search = vi.fn(async () => ({
-      rows: [{ id: 'p1', sku: 'CHAIR-RED', name: { 'en-US': 'Red chair', 'pl-PL': 'Czerwone krzesło' }, type: 'simple', status: 'draft' }],
+      rows: [{ id: 'p1', sku: 'CHAIR-RED', name: 'Czerwone krzesło', type: 'simple', status: 'inactive' }],
       hasMore: false,
     }));
     const provider = createProductAdminSearchProvider({ search, translate });
     const { hits } = await provider.search(query());
-    expect(search).toHaveBeenCalledWith({ text: 'chair', likeEscaped: 'chair', isUuid: false, fields: ['sku', 'name'], limit: 5 });
+    // Spec 193 (T040, FR-034) — the calling admin travels with the query, so the product search
+    // can narrow by that admin's visibility scope inside its statement.
+    expect(search).toHaveBeenCalledWith({
+      text: 'chair',
+      likeEscaped: 'chair',
+      isUuid: false,
+      fields: ['sku', 'name'],
+      limit: 5,
+      adminUserId: 'admin-1',
+    });
     expect(hits).toEqual([
       {
         id: 'p1',
         title: 'Czerwone krzesło',
         subtitle: 'CHAIR-RED · simple',
-        status: { code: 'draft', label: 'pl:adminSearch.product.status.draft' },
+        status: { code: 'inactive', label: 'pl:adminSearch.product.status.inactive' },
         targetRoute: '/catalog/products/p1',
       },
     ]);
@@ -135,5 +144,26 @@ describe('catalog admin search providers — mapping', () => {
         },
       ],
     });
+  });
+});
+
+/**
+ * Feature 172 (`specs/172-product-content-attributes/`, FR-045, research
+ * R-15) — the admin product search matches SKU, name, slug and quick-search
+ * attribute values, and never a product's Page Builder content: the content
+ * lives in its own table, which the search's query does not read, and a
+ * content attribute cannot be quick-searchable (research R-6).
+ */
+describe('admin product search — no Page Builder content (feature 172)', () => {
+  it('offers no content field, and its query reads no content table', () => {
+    const product = createProductAdminSearchProvider({
+      search: async () => ({ rows: [], hasMore: false }),
+      translate: async (key) => key,
+    });
+    expect(product.fields.map((f) => f.code)).not.toContain('content');
+    const source = readFileSync(new URL('./services/catalog-admin-search.service.ts', import.meta.url), 'utf8');
+    expect(source).not.toMatch(/product_content_values|ProductContentValue|page_builder/);
+    // Quick-search attributes are chosen by the flag a content attribute cannot carry.
+    expect(source).toMatch(/listByFlag\('quickSearchable'\)/);
   });
 });

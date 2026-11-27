@@ -3,15 +3,27 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   BULK_OPERATION_TYPES,
   type AdminUserReadPort,
+  type ProductScopeStatus,
   type BulkUpdateProductsRequest,
   type EmailMailerPort,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 
 import { effectiveState } from '@endora-commerce/platform/kernel';
 import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
+import type { AdminPermissionChecker } from '@endora-commerce/platform/kernel';
 import type { Command, CommandBus } from '@endora-commerce/platform/commands';
 import { applyUndo, type RevertRecord } from '@endora-commerce/platform/commands';
+import { withSystemScopeActingFor } from '@endora-commerce/platform/tenancy';
 import { Product } from '../entities/product.entity.js';
+import {
+  predicateClause,
+  requireVisibility,
+  SYSTEM_PRODUCT_SCOPE,
+  type AdminProductReadScope,
+  type CatalogAdminProductVisibility,
+} from './admin-product-visibility.js';
+import type { CatalogEventBus } from './catalog-admin.service.js';
 import {
   BulkOperation,
   type BulkOperationLogEntry,
@@ -23,6 +35,8 @@ import type {
   CatalogBulkUpdateService,
   BulkUpdateOutcome,
 } from './catalog-bulk-update.service.js';
+import { readScopedStatuses, restoreScopedStatus, type StatusScope } from './product-scopes.service.js';
+import { withProductStatusHookData } from '../commands/product-status-hook-data.js';
 
 /**
  * BulkOperationService — queued product bulk-edit.
@@ -42,6 +56,17 @@ import type {
  *     in-app bell notification and an email.
  *   - `list()` / `get()` back the "Bulk actions" admin page.
  */
+
+/**
+ * The requester a caller writes when it resolved no admin. Only a `search_reindex`
+ * operation may carry it (`plugin.ts`'s enqueuer); a product write is refused (S-L3).
+ */
+const NO_REQUESTER = '00000000-0000-0000-0000-000000000000';
+
+/** Whether `id` names an admin at all — neither empty nor {@link NO_REQUESTER} (S-L3). */
+function isKnownRequester(id: string | null | undefined): id is string {
+  return typeof id === 'string' && id.length > 0 && id !== NO_REQUESTER;
+}
 
 /** Per-product outcomes are capped on the row so a huge run can't bloat it. */
 const MAX_PERSISTED_RESULTS = 1000;
@@ -185,6 +210,27 @@ export class BulkOperationService {
        * message rather than silently no-op'ing.
        */
       reindexRunner?: SearchReindexRunner;
+      /**
+       * Feature 163 (FR-082, research R30.3) — where an undo announces what it
+       * reverted: `product.updated.v1` per product with the restored keys, and
+       * `product.archived.v1` where it re-archives. Without it an undo restores
+       * silently, as it did before.
+       */
+      events?: CatalogEventBus;
+      /**
+       * Feature 163, checkpoint F (S-3) — `admin_roles`' `permissionService`. A queued
+       * operation runs acting for its requester; at worker start the requester must
+       * still be an active administrator holding `catalog:write`, else it fails closed.
+       * Absent only in compositions that queue nothing for an admin (some tests).
+       */
+      permissionChecker?: AdminPermissionChecker;
+      /**
+       * Spec 193 (FR-033, TM-1, TM-3 (2)) — `product_visibility_rules`' admin scope, presence-decided
+       * by the wiring. A restricted caller sees, and may undo, only operations whose selection holds
+       * no product hidden from them; a queued run resolves its requester's scope at execution.
+       * Without it every scope is the system's.
+       */
+      visibility?: CatalogAdminProductVisibility;
     } = {},
     /**
      * Feature 054 — when injected, product bulk edits capture per-product revert
@@ -197,23 +243,32 @@ export class BulkOperationService {
   async create(input: CreateBulkOperationInput): Promise<SerializedBulkOperation> {
     // command-coverage-ignore: catalog_bulk_operations row bookkeeping (queue
     // status / progress counters); the actual product mutations are audited by
-    // updateProduct. The operation record itself is not a domain-audit target.
+    // the `product.update` Command, or by the Archive / Restore Commands for `fields.archived`.
+    // The operation record itself is not a domain-audit target.
+    const type = input.type ?? 'product_bulk_update';
+    // Final security review S-L3 — a product write runs acting for its requester
+    // (S-W2) and is re-checked against them at worker start (S-3); with no known
+    // requester neither can answer, and the run would execute as the system. So it
+    // is refused here, before a row exists. `search_reindex` is exempt by design: it
+    // writes no product (it rebuilds the search indexes from catalog's own rows), and
+    // it is enqueued by the attribute `searchable` flip, which may have no admin
+    // behind it (`plugin.ts`).
+    if (type !== BULK_OPERATION_TYPES.SEARCH_REINDEX && !isKnownRequester(input.requestedByAdminUserId)) {
+      throw new Error('A product bulk operation needs a known requester; none was resolved for this request.');
+    }
     const em = this.emFactory();
     const op = new BulkOperation();
-    op.type = input.type ?? 'product_bulk_update';
+    op.type = type;
     op.status = 'pending';
     op.requestedByAdminUserId = input.requestedByAdminUserId;
     op.total = input.payload.productIds.length;
     op.payload = input.payload;
     op.logs = [
-      logEntry(
-        'info',
-        op.type === BULK_OPERATION_TYPES.SEARCH_REINDEX
-          ? 'Operacja przeindeksowania wyszukiwarki utworzona i dodana do kolejki.'
-          : `Operacja utworzona i dodana do kolejki (${op.total} elementów).`,
-      ),
+      op.type === BULK_OPERATION_TYPES.SEARCH_REINDEX
+        ? logEntry('info', 'bulkOperations.log.reindexQueued')
+        : logEntry('info', 'bulkOperations.log.queued', { total: op.total }),
     ];
-    await em.persistAndFlush(op);
+    await em.persist(op).flush();
     // Producer side (Principle X): enqueue and return. Never block the HTTP
     // response on actual processing. Enqueue errors are non-fatal — the row
     // stays `pending` and the worker's boot reconciliation re-enqueues it.
@@ -235,7 +290,8 @@ export class BulkOperationService {
   async processById(operationId: string): Promise<void> {
     // command-coverage-ignore: catalog_bulk_operations row bookkeeping (queue
     // status / progress counters); the actual product mutations are audited by
-    // updateProduct. The operation record itself is not a domain-audit target.
+    // the `product.update` Command, or by the Archive / Restore Commands for `fields.archived`.
+    // The operation record itself is not a domain-audit target.
     const em = this.emFactory();
     const affected = await em.nativeUpdate(
       BulkOperation,
@@ -261,23 +317,75 @@ export class BulkOperationService {
     return rows.map((r) => r.id);
   }
 
-  async list(input: ListBulkOperationsInput = {}): Promise<ListBulkOperationsResult> {
+  async list(scope: AdminProductReadScope, input: ListBulkOperationsInput = {}): Promise<ListBulkOperationsResult> {
     const em = this.emFactory();
     const where = input.status && input.status.length > 0 ? { status: { $in: input.status } } : {};
     const limit = Math.min(Math.max(input.limit ?? 25, 1), 100);
     const offset = Math.max(input.offset ?? 0, 0);
+    const clean = this.#selectionWithoutHidden(scope, '"o"');
+    if (clean) {
+      // Spec 193 (TM-1) — filtered in the statement that pages, so `total` counts what is shown.
+      const statuses = input.status && input.status.length > 0 ? input.status : null;
+      const filter = `${clean.sql}${statuses ? ' and "o"."status" = any(?::text[])' : ''}`;
+      const params = [...clean.params, ...(statuses ? [`{${statuses.join(',')}}`] : [])];
+      const [counted] = await em.execute<Array<{ n: number }>>(
+        `select count(*)::int as "n" from "catalog_bulk_operations" "o" where ${filter}`,
+        params,
+      );
+      const ids = await em.execute<Array<{ id: string }>>(
+        `select "o"."id" from "catalog_bulk_operations" "o" where ${filter}
+          order by "o"."created_at" desc, "o"."id" desc limit ? offset ?`,
+        [...params, limit, offset],
+      );
+      const found = ids.length === 0 ? [] : await em.find(BulkOperation, { id: { $in: ids.map((r) => r.id) } });
+      const byId = new Map(found.map((op) => [op.id, op]));
+      const items = ids.map((r) => byId.get(r.id)).filter((op): op is BulkOperation => op !== undefined);
+      return { items: items.map(serialize), total: counted!.n };
+    }
     const [rows, total] = await em.findAndCount(BulkOperation, where, {
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: 'desc', id: 'desc' },
       limit,
       offset,
     });
     return { items: rows.map(serialize), total };
   }
 
-  async get(id: string): Promise<SerializedBulkOperation | null> {
+  async get(scope: AdminProductReadScope, id: string): Promise<SerializedBulkOperation | null> {
     const em = this.emFactory();
+    if (!isUuidShape(id)) return null;
     const op = await em.findOne(BulkOperation, { id });
-    return op ? serialize(op) : null;
+    if (!op || (await this.#touchesHidden(scope, id))) return null;
+    return serialize(op);
+  }
+
+  /**
+   * Spec 193 (TM-1) — a clause over the operation alias that holds when its selection names no
+   * product hidden from `scope`; `null` for a scope that narrows nothing. A missing id in the
+   * selection hides nothing; for a `deny` scope every existing product is hidden.
+   */
+  #selectionWithoutHidden(scope: AdminProductReadScope, alias: '"o"'): { sql: string; params: unknown[] } | null {
+    const visibility = requireVisibility(this.deps.visibility, scope);
+    if (!visibility) return null;
+    const clause = predicateClause(visibility.productPredicate(scope, { productId: '"p"."id"' }));
+    if (clause === null) return null;
+    return {
+      sql: `not exists (
+        select 1 from jsonb_array_elements_text(coalesce(${alias}."payload"->'productIds', '[]'::jsonb)) as "x"("pid")
+          join "products" "p" on "p"."id"::text = "x"."pid"
+         where "p"."deleted_at" is null${clause === false ? '' : ` and not ${clause.sql}`})`,
+      params: clause === false ? [] : clause.params,
+    };
+  }
+
+  /** Whether the operation's selection names a product hidden from `scope`. */
+  async #touchesHidden(scope: AdminProductReadScope, operationId: string): Promise<boolean> {
+    const clean = this.#selectionWithoutHidden(scope, '"o"');
+    if (!clean) return false;
+    const rows = await this.emFactory().execute<Array<{ id: string }>>(
+      `select "o"."id" from "catalog_bulk_operations" "o" where "o"."id" = ? and ${clean.sql}`,
+      [operationId, ...clean.params],
+    );
+    return rows.length === 0;
   }
 
   /**
@@ -309,7 +417,8 @@ export class BulkOperationService {
   private async claimNextPending(): Promise<string | null> {
     // command-coverage-ignore: catalog_bulk_operations row bookkeeping (queue
     // status / progress counters); the actual product mutations are audited by
-    // updateProduct. The operation record itself is not a domain-audit target.
+    // the `product.update` Command, or by the Archive / Restore Commands for `fields.archived`.
+    // The operation record itself is not a domain-audit target.
     const em = this.emFactory();
     const candidate = await em.findOne(
       BulkOperation,
@@ -332,13 +441,15 @@ export class BulkOperationService {
   private async processOne(id: string): Promise<void> {
     // command-coverage-ignore: catalog_bulk_operations row bookkeeping (queue
     // status / progress counters); the actual product mutations are audited by
-    // updateProduct. The operation record itself is not a domain-audit target.
+    // the `product.update` Command, or by the Archive / Restore Commands for `fields.archived`.
+    // The operation record itself is not a domain-audit target.
     const em = this.emFactory();
+    if (!isUuidShape(id)) return;
     const op = await em.findOne(BulkOperation, { id });
     if (!op) return;
 
     const logs: BulkOperationLogEntry[] = Array.isArray(op.logs) ? [...op.logs] : [];
-    logs.push(logEntry('info', `Rozpoczęto przetwarzanie operacji (${op.total} elementów).`));
+    logs.push(logEntry('info', 'bulkOperations.log.started', { total: op.total }));
 
     if (op.type === BULK_OPERATION_TYPES.SEARCH_REINDEX) {
       await this.processReindex(op, logs);
@@ -354,13 +465,24 @@ export class BulkOperationService {
     // when the edit touches revertible direct columns (never the category
     // bridge). Read BEFORE the mutation so the snapshot is the true pre-state.
     const revertKeys = this.commandBus ? revertibleFieldKeys(op.payload.fields) : null;
+    const statusScope = statusScopeOf(op.payload);
     const beforeByProduct =
       revertKeys && revertKeys.length > 0
-        ? await this.#snapshotProductFields(em, op.payload.productIds, revertKeys)
+        ? await this.#snapshotProductFields(em, op.payload.productIds, revertKeys, statusScope)
         : null;
 
     try {
-      const result = await this.bulkUpdateService.bulkUpdate(
+      // Feature 163 (S-W2) — every per-product Command (Archive / Restore, a scope
+      // write) runs acting for the admin who queued the operation, so its audit row
+      // names them as the inline path's does; the id is the one the route recorded
+      // server-side at `create()`. A run with no known requester never gets here: the
+      // re-check below fails it (S-L3).
+      await this.#assertRequesterMayWrite(op.requestedByAdminUserId);
+      // Spec 193 (TM-3 (2)) — the requester's scope as of now, never the one they had when queuing;
+      // the bulk update re-checks each product against it at its write.
+      const scope = this.deps.visibility ? await this.deps.visibility.scopeFor(op.requestedByAdminUserId) : SYSTEM_PRODUCT_SCOPE;
+      const result = await withSystemScopeActingFor(op.requestedByAdminUserId, `catalog bulk operation ${id} for its requester`, () => this.bulkUpdateService.bulkUpdate(
+        scope,
         req,
         { actorAdminUserId: op.requestedByAdminUserId },
         {
@@ -378,20 +500,19 @@ export class BulkOperationService {
             );
           },
         },
-      );
+      ));
 
       logs.push(
-        logEntry(
-          'info',
-          `Zakończono: ${result.summary.succeeded} z powodzeniem, ${result.summary.skipped} pominięto, ${result.summary.failed} z błędem (łącznie ${result.summary.total}).`,
-        ),
+        logEntry('info', 'bulkOperations.log.finished', {
+          succeeded: result.summary.succeeded,
+          skipped: result.summary.skipped,
+          failed: result.summary.failed,
+          total: result.summary.total,
+        }),
       );
       if (result.summary.failed > 0) {
         logs.push(
-          logEntry(
-            'warn',
-            `${result.summary.failed} elementów zakończyło się błędem — szczegóły w statusie pojedynczych elementów.`,
-          ),
+          logEntry('warn', 'bulkOperations.log.itemsFailed', { failed: result.summary.failed }),
         );
       }
       // Build revert state from the products that actually succeeded, reading
@@ -402,7 +523,7 @@ export class BulkOperationService {
           .filter((r) => r.status === 'succeeded')
           .map((r) => r.productId)
           .filter((pid) => beforeByProduct.has(pid));
-        const afterByProduct = await this.#snapshotProductFields(em, succeededIds, revertKeys);
+        const afterByProduct = await this.#snapshotProductFields(em, succeededIds, revertKeys, statusScope);
         revertState = succeededIds.map((pid) => ({
           recordId: pid,
           before: beforeByProduct.get(pid)!,
@@ -430,7 +551,7 @@ export class BulkOperationService {
       await this.notify(op, 'completed', result.summary);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      logs.push(logEntry('error', `Operacja nie powiodła się: ${message}`));
+      logs.push(logEntry('error', 'bulkOperations.log.failed', { message }));
       await em.nativeUpdate(
         BulkOperation,
         { id },
@@ -451,11 +572,12 @@ export class BulkOperationService {
   ): Promise<void> {
     // command-coverage-ignore: catalog_bulk_operations row bookkeeping (queue
     // status / progress counters); the actual product mutations are audited by
-    // updateProduct. The operation record itself is not a domain-audit target.
+    // the `product.update` Command, or by the Archive / Restore Commands for `fields.archived`.
+    // The operation record itself is not a domain-audit target.
     const em = this.emFactory();
     if (!this.deps.reindexRunner) {
       const message = 'Search reindex handler is not configured.';
-      logs.push(logEntry('error', `Operacja nie powiodła się: ${message}`));
+      logs.push(logEntry('error', 'bulkOperations.log.failed', { message }));
       await em.nativeUpdate(
         BulkOperation,
         { id: op.id },
@@ -467,7 +589,7 @@ export class BulkOperationService {
     try {
       const { documentCount } = await this.deps.reindexRunner();
       logs.push(
-        logEntry('info', `Przeindeksowano ${documentCount} dokumentów we wszystkich indeksach.`),
+        logEntry('info', 'bulkOperations.log.reindexed', { documentCount }),
       );
       await em.nativeUpdate(
         BulkOperation,
@@ -491,13 +613,41 @@ export class BulkOperationService {
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      logs.push(logEntry('error', `Operacja nie powiodła się: ${message}`));
+      logs.push(logEntry('error', 'bulkOperations.log.failed', { message }));
       await em.nativeUpdate(
         BulkOperation,
         { id: op.id },
         { status: 'failed', error: message, logs, finishedAt: new Date() },
       );
       await this.notify(op, 'failed', null, message);
+    }
+  }
+
+  /**
+   * Checkpoint F (S-3) — the requester recorded at `create()` may have been
+   * deactivated or lost `catalog:write` while the operation waited in the queue.
+   * Throws (the caller marks the operation failed) unless they are still allowed; a
+   * permission check that cannot answer throws too.
+   *
+   * Final security review S-L3 — a run nobody is recorded as requesting (an empty id
+   * or the all-zero sentinel, which `create()` now refuses but a row queued before
+   * that may still carry) fails here too, with or without a checker: it used to run
+   * as the system. A composition with no checker wired (some tests) skips only the
+   * permission half; production composes `admin_roles`' `permissionService`.
+   */
+  async #assertRequesterMayWrite(requesterId: string | null): Promise<void> {
+    if (!isKnownRequester(requesterId)) {
+      throw new Error('This operation records no known requester, so it cannot run on anybody’s authority.');
+    }
+    const checker = this.deps.permissionChecker;
+    if (!checker) return;
+    const allowed =
+      (await checker.isActiveAdministrator(requesterId)) &&
+      (await checker.hasPermission(requesterId, 'catalog:write'));
+    if (!allowed) {
+      throw new Error(
+        'The administrator who queued this operation is no longer active or no longer holds catalog:write.',
+      );
     }
   }
 
@@ -586,10 +736,17 @@ export class BulkOperationService {
    * never clobber) any product changed since. Runs as an audited `bulk.undo`
    * Command and is idempotent-safe on re-invocation (FR-006/FR-007/FR-014).
    */
-  async undo(operationId: string): Promise<UndoOutcome> {
+  async undo(scope: AdminProductReadScope, operationId: string): Promise<UndoOutcome> {
     const em = this.emFactory();
+    if (!isUuidShape(operationId)) return { ok: false, code: 'NOT_FOUND' };
     const op = await em.findOne(BulkOperation, { id: operationId });
     if (!op) return { ok: false, code: 'NOT_FOUND' };
+    // Spec 193 (FR-033, TM-1) — an operation that affected a product hidden from the caller is,
+    // to them, an operation that does not exist.
+    if (await this.#touchesHidden(scope, operationId)) return { ok: false, code: 'NOT_FOUND' };
+    // Issue #501 — an operation still in flight is its own refusal, not "cannot be undone":
+    // the admin hides Undo until completion, and the API says why when it is reached anyway.
+    if (op.status === 'pending' || op.status === 'running') return { ok: false, code: 'RUNNING' };
     if (op.status !== 'completed' || !op.reversible || !op.revertState || op.revertState.length === 0) {
       return { ok: false, code: 'NOT_REVERSIBLE' };
     }
@@ -600,10 +757,49 @@ export class BulkOperationService {
       before: r.before,
       after: r.after,
     }));
-    return this.commandBus.run(this.#undoCommand(operationId, records));
+    const restored: RestoredProduct[] = [];
+    const outcome = await this.commandBus.run(
+      // Spec 193 T049 — hookable (`CATALOG_HOOKABLE_ACTIONS.productBulkUpdateUndo`).
+      withProductStatusHookData(
+        this.#undoCommand(operationId, records, restored, statusScopeOf(op.payload)),
+        records.map((r) => r.recordId),
+      ),
+    );
+    // After commit only: `commandBus.run` has resolved, so the restores are saved.
+    // The undo emits for every reverted field — a status or visibility undo used to
+    // leave search, feeds and webhooks stale until the next write — and in one
+    // event scope, dispatched in order and waited for (R30.3).
+    const events = this.deps.events;
+    if (events && restored.length > 0) {
+      await events.run(async () => {
+        for (const product of restored) {
+          events.emit('product.updated.v1', {
+            eventId: randomUUID(),
+            occurredAt: new Date().toISOString(),
+            productId: product.productId,
+            changedFields: product.changedFields,
+          });
+          if (product.rearchived) {
+            events.emit('product.archived.v1', {
+              eventId: randomUUID(),
+              occurredAt: new Date().toISOString(),
+              productId: product.productId,
+            });
+          }
+        }
+      });
+    }
+    return outcome;
   }
 
-  #undoCommand(operationId: string, records: readonly RevertRecord[]): Command<UndoOutcome> {
+  #undoCommand(
+    operationId: string,
+    records: readonly RevertRecord[],
+    /** Written by `restore`: every product the undo wrote, for the after-commit announcements. */
+    restored: RestoredProduct[],
+    /** Feature 163 (FR-052) — the scope a bulk scoped-status edit wrote, when it was one. */
+    statusScope: StatusScope | null,
+  ): Command<UndoOutcome> {
     return {
       action: 'product.bulk_update.undo',
       objectType: 'bulk_operation',
@@ -619,13 +815,40 @@ export class BulkOperationService {
         const res = await applyUndo(em, records, {
           readCurrent: async (tem, rec) => {
             const p = await tem.findOne(Product, { id: rec.recordId });
-            return p ? pickProductFields(p, Object.keys(rec.after)) : null;
+            if (!p) return null;
+            const keys = Object.keys(rec.after);
+            const current = pickProductFields(p, keys.filter((k) => k !== SCOPED_STATUS_KEY));
+            if (keys.includes(SCOPED_STATUS_KEY) && statusScope) {
+              const statuses = await readScopedStatuses(tem, [p.id], statusScope);
+              current[SCOPED_STATUS_KEY] = statuses.get(p.id) ?? null;
+            }
+            return current;
           },
           restore: async (tem, rec) => {
             const p = await tem.findOne(Product, { id: rec.recordId });
             if (!p) return;
-            tem.assign(p, rec.before);
-            tem.persist(p);
+            const wasArchived = (p.archivedAt ?? null) !== null;
+            // Feature 163 (FR-052) — a scope's status is a scope row, not a product
+            // column: put the row back, then the product columns.
+            const { [SCOPED_STATUS_KEY]: scopedStatus, ...columns } = rec.before;
+            if (SCOPED_STATUS_KEY in rec.before && statusScope) {
+              await restoreScopedStatus(tem, p.id, statusScope, (scopedStatus ?? null) as ProductScopeStatus | null);
+            }
+            // The revert record is JSON: a captured `archivedAt` is an ISO string,
+            // which the column takes back as the instant it names.
+            const before =
+              typeof columns['archivedAt'] === 'string'
+                ? { ...columns, archivedAt: new Date(columns['archivedAt']) }
+                : columns;
+            if (Object.keys(before).length > 0) {
+              tem.assign(p, before);
+              tem.persist(p);
+            }
+            restored.push({
+              productId: p.id,
+              changedFields: Object.keys(rec.before),
+              rearchived: 'archivedAt' in rec.before && !wasArchived && rec.before['archivedAt'] != null,
+            });
           },
         });
         op.undoStatus = res.undoStatus === 'reverted' ? 'reverted' : 'partially_reverted';
@@ -640,41 +863,77 @@ export class BulkOperationService {
     };
   }
 
-  /** Read `productIds` and pick each product's values for `keys`. */
+  /**
+   * Read `productIds` and pick each product's values for `keys`; `scopedStatus` is the
+   * stored status at the edit's scope (`null` = inherit), read from the scope rows.
+   */
   async #snapshotProductFields(
     em: EntityManager,
     productIds: readonly string[],
-    keys: readonly string[],
+    allKeys: readonly string[],
+    statusScope: StatusScope | null,
   ): Promise<Map<string, Record<string, unknown>>> {
     const out = new Map<string, Record<string, unknown>>();
     if (productIds.length === 0) return out;
-    const products = await em.find(Product, { id: { $in: [...productIds] } });
+    const keys = allKeys.filter((k) => k !== SCOPED_STATUS_KEY);
+    const statuses =
+      allKeys.includes(SCOPED_STATUS_KEY) && statusScope
+        ? await readScopedStatuses(em, productIds, statusScope)
+        : null;
+    // `refresh`: the after-state is read on the em that already holds the
+    // before-state, and MikroORM's merge never lets a fresh `null` replace a loaded
+    // non-null value — a bulk Restore's after-state read back the stale
+    // `archivedAt`, so its undo saw every product as changed since (ci-pg, 163 Q).
+    const products = await em.find(Product, { id: { $in: [...productIds] } }, { refresh: true });
     for (const p of products) {
-      out.set(p.id, pickProductFields(p, keys));
+      const picked = pickProductFields(p, keys);
+      if (statuses) picked[SCOPED_STATUS_KEY] = statuses.get(p.id) ?? null;
+      out.set(p.id, picked);
     }
     return out;
   }
 }
 
+/** A product an undo restored: what it announces once the undo has committed. */
+interface RestoredProduct {
+  productId: string;
+  changedFields: string[];
+  /** Whether the undo moved `archivedAt` from null to set (it re-archived the product). */
+  rearchived: boolean;
+}
+
 /** Undo result surfaced to the route (mapped to 200/404/409). */
 export type UndoOutcome =
   | { ok: true; reverted: string[]; conflicts: { recordId: string; reason: string }[]; undoStatus: 'reverted' | 'partially_reverted' | 'none' }
-  | { ok: false; code: 'NOT_FOUND' | 'NOT_REVERSIBLE' | 'ALREADY_REVERTED' };
+  | { ok: false; code: 'NOT_FOUND' | 'RUNNING' | 'NOT_REVERSIBLE' | 'ALREADY_REVERTED' };
 
 /**
  * Field keys of a bulk edit that can be undone by restoring direct product
  * columns. Returns `[]` (⇒ not reversible) when the edit is empty or touches a
  * non-revertible field (the category bridge) — all-or-nothing, never partial.
+ *
+ * Feature 163 (R30.3) — `archived` (bulk Archive / Restore) is the `archivedAt`
+ * column; a `status` edit is the status alone, since a status write no longer
+ * touches `archivedAt` (FR-010).
  */
 const NON_REVERTIBLE_BULK_FIELDS = new Set(['categoryIds']);
+const BULK_FIELD_COLUMN: Readonly<Record<string, string>> = { archived: 'archivedAt' };
 function revertibleFieldKeys(fields: Record<string, unknown>): string[] {
   const keys = Object.keys(fields);
   if (keys.length === 0) return [];
   if (keys.some((k) => NON_REVERTIBLE_BULK_FIELDS.has(k))) return [];
-  const set = new Set(keys);
-  // `status` changes also flip `archivedAt` in updateProduct — restore both.
-  if (set.has('status')) set.add('archivedAt');
-  return [...set];
+  return [...new Set(keys.map((k) => BULK_FIELD_COLUMN[k] ?? k))];
+}
+
+/** The revert-record key of a bulk scoped-status edit (FR-052): the status at its one scope. */
+const SCOPED_STATUS_KEY = 'scopedStatus';
+
+/** The scope a bulk scoped-status edit wrote, or `null` for any other edit. */
+function statusScopeOf(payload: BulkOperationPayload): StatusScope | null {
+  const field = (payload.fields as Record<string, unknown> | undefined)?.[SCOPED_STATUS_KEY] as
+    | { channelId: string; languageCode: string | null }
+    | undefined;
+  return field ? { channelId: field.channelId, languageCode: field.languageCode } : null;
 }
 
 /** Pick a plain, JSON-cloned snapshot of a product's `keys` for revert state. */
@@ -688,8 +947,42 @@ function pickProductFields(product: Product, keys: readonly string[]): Record<st
   return out;
 }
 
-function logEntry(level: BulkOperationLogEntry['level'], message: string): BulkOperationLogEntry {
-  return { ts: new Date().toISOString(), level, message };
+/**
+ * The trail is stored and read later by administrators in languages of their
+ * own, so the backend cannot write it in its reader's language
+ * (`specs/conventions/module-i18n.md`): an entry stores the key its reader
+ * translates, its params, and the English sentence for a reader that cannot
+ * resolve the key (issue #95). The English is `i18n/en.json`'s, held equal to
+ * it by `bulk-operation-log.test.ts`.
+ */
+const LOG_ENGLISH = {
+  'bulkOperations.log.queued': 'Operation created and queued ({total} items).',
+  'bulkOperations.log.reindexQueued': 'Search reindex operation created and queued.',
+  'bulkOperations.log.started': 'Started processing the operation ({total} items).',
+  'bulkOperations.log.finished':
+    'Finished: {succeeded} succeeded, {skipped} skipped, {failed} failed ({total} in total).',
+  'bulkOperations.log.itemsFailed': '{failed} items failed — see the status of each item for details.',
+  'bulkOperations.log.failed': 'The operation failed: {message}',
+  'bulkOperations.log.reindexed': 'Reindexed {documentCount} documents across all indexes.',
+} as const;
+
+export type BulkOperationLogKey = keyof typeof LOG_ENGLISH;
+export const BULK_OPERATION_LOG_ENGLISH: Readonly<Record<BulkOperationLogKey, string>> = LOG_ENGLISH;
+
+function logEntry(
+  level: BulkOperationLogEntry['level'],
+  key: BulkOperationLogKey,
+  params?: Record<string, string | number>,
+): BulkOperationLogEntry {
+  const message = LOG_ENGLISH[key].replace(/\{(\w+)\}/g, (match, name: string) =>
+    params?.[name] != null ? String(params[name]) : match,
+  );
+  return {
+    ts: new Date().toISOString(),
+    level,
+    message,
+    messageKey: params ? { key, params } : { key },
+  };
 }
 
 function touchedFieldsOf(payload: BulkOperationPayload): string[] {

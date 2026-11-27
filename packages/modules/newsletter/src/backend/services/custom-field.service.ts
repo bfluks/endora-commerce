@@ -4,6 +4,7 @@ import {
   type CreateNewsletterCustomFieldRequest,
   type NewsletterCustomField as NewsletterCustomFieldDto,
   type UpdateNewsletterCustomFieldRequest,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { NewsletterCustomField } from '../entities/newsletter-custom-field.entity.js';
@@ -38,7 +39,11 @@ export class NewsletterCustomFieldService {
   async create(input: CreateNewsletterCustomFieldRequest): Promise<NewsletterCustomFieldDto> {
     const em = this.emFactory();
     const existing = await em.findOne(NewsletterCustomField, { key: input.key });
-    if (existing) throw new HttpError(409, ERROR_CODES.VALIDATION_FAILED, 'Field key already exists.');
+    if (existing) {
+      throw new HttpError(409, ERROR_CODES.NEWSLETTER_CUSTOM_FIELD_KEY_TAKEN, 'Field key already exists.', {
+        key: input.key,
+      });
+    }
     const field = em.create(NewsletterCustomField, {
       key: input.key,
       label: input.label,
@@ -52,20 +57,22 @@ export class NewsletterCustomFieldService {
 
   async update(id: string, input: UpdateNewsletterCustomFieldRequest): Promise<NewsletterCustomFieldDto> {
     const em = this.emFactory();
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Field not found.');
     const field = await em.findOne(NewsletterCustomField, { id });
     if (!field) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Field not found.');
     if (input.label !== undefined) field.label = input.label;
     this.#audit(em, 'newsletter_custom_field.update', field.id, { label: field.label });
-    await em.persistAndFlush(field);
+    await em.persist(field).flush();
     return this.toDto(field);
   }
 
   async remove(id: string): Promise<void> {
     const em = this.emFactory();
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Field not found.');
     const field = await em.findOne(NewsletterCustomField, { id });
     if (!field) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Field not found.');
     this.#audit(em, 'newsletter_custom_field.delete', field.id, null);
-    await em.removeAndFlush(field);
+    await em.remove(field).flush();
   }
 
   private toDto(f: NewsletterCustomField): NewsletterCustomFieldDto {

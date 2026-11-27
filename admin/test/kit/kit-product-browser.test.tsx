@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AdminMe } from '@endora-commerce/admin-kit/lib';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { StrictMode, useState, type ReactElement, type ReactNode } from 'react';
-import { ADMIN_PRODUCT_SELECTION_MAX } from '@endora-commerce/contracts';
-import { TranslationProvider } from '../../../packages/admin-shell/src/i18n/TranslationProvider';
-import type { Bundle } from '../../../packages/admin-shell/src/i18n/types';
+import { ADMIN_PREFERENCES_DEFAULTS, ADMIN_PRODUCT_SELECTION_MAX } from '@endora-commerce/contracts';
+import { TranslationProvider } from '@endora-commerce/admin-kit/i18n';
+import type { Bundle } from '@endora-commerce/admin-kit/i18n';
 import { adminSession } from '../helpers/render-with-session';
 
 /**
@@ -70,14 +71,22 @@ interface Row extends Item {
   updatedAt: string;
 }
 
-function product(id: string, en: string, status: Item['status'], type: Item['type'], pl?: string): Row {
+function product(
+  id: string,
+  en: string,
+  status: Item['status'],
+  type: Item['type'],
+  archivedAt: string | null = null,
+): Row {
   return {
     id,
     sku: `SKU-${id.toUpperCase()}`,
     slug: id,
-    name: pl ? { 'en-US': en, 'pl-PL': pl } : { 'en-US': en },
+    // Feature 174 (FR-031): the admin list answers the Global name as one string.
+    name: en,
     status,
     type,
+    archivedAt,
     updatedAt: '2026-10-01T00:00:00.000Z',
   };
 }
@@ -86,16 +95,21 @@ function pad(n: number): string {
   return String(n).padStart(2, '0');
 }
 
-/** g1 (active, grouped), d1, i1, then a01…a24 — 27 rows, 25 of them active. */
+/**
+ * g1 (active, grouped), p1 and i1 (inactive), then a01…a24 — 27 rows that are not
+ * archived, 25 of them active — and x1, an **active** product that is archived
+ * (feature 163: archived is its own axis, independent of status).
+ */
 const CATALOG: Row[] = [
   product('g1', 'Grouped set', 'active', 'grouped'),
-  product('d1', 'Draft widget', 'draft', 'simple'),
+  product('p1', 'Paused widget', 'inactive', 'simple'),
   product('i1', 'Old widget', 'inactive', 'simple'),
   ...Array.from({ length: 24 }, (_, i) =>
     i === 0
-      ? product('a01', 'Widget 01', 'active', 'simple', 'Widżet 01')
+      ? product('a01', 'Widget 01', 'active', 'simple')
       : product(`a${pad(i + 1)}`, `Widget ${pad(i + 1)}`, 'active', 'simple'),
   ),
+  product('x1', 'Retired widget', 'active', 'simple', '2026-10-20T00:00:00.000Z'),
 ];
 
 const PATH = '/api/v1/admin/catalog/products';
@@ -104,28 +118,35 @@ function serve(catalog: readonly Row[], url: string): unknown {
   const [path, query = ''] = url.split('?');
   expect(path).toBe(PATH);
   const params = new URLSearchParams(query);
+  // Feature 163 (R30.4) — the list's own rules: archived products are excluded by
+  // default, `archived=only` asks for them alone, and the legacy flag is not sent.
+  expect(params.has('includeArchived')).toBe(false);
+  const archivedMode = params.get('archived') ?? 'exclude';
   const status = params.get('status');
   const type = params.get('type');
   const q = (params.get('q') ?? '').toLowerCase();
   const page = Number(params.get('page'));
   const pageSize = Number(params.get('pageSize'));
-  const base = catalog.filter(
+  const matches = catalog.filter(
     (p) =>
       (type === null || p.type === type) &&
       (q === '' ||
         p.sku.toLowerCase().includes(q) ||
         p.slug.includes(q) ||
-        Object.values(p.name).some((n) => n.toLowerCase().includes(q))),
+        p.name.toLowerCase().includes(q)),
   );
+  const live = matches.filter((p) => p.archivedAt == null);
+  const archived = matches.filter((p) => p.archivedAt != null);
+  const base = archivedMode === 'only' ? archived : live;
   const filtered = base.filter((p) => status === null || p.status === status);
   return {
     data: filtered.slice(page * pageSize, (page + 1) * pageSize),
     pagination: { page, pageSize, total: filtered.length },
     counts: {
-      all: base.length,
-      active: base.filter((p) => p.status === 'active').length,
-      draft: base.filter((p) => p.status === 'draft').length,
-      inactive: base.filter((p) => p.status === 'inactive').length,
+      all: live.length,
+      active: live.filter((p) => p.status === 'active').length,
+      inactive: live.filter((p) => p.status === 'inactive').length,
+      archived: archived.length,
     },
   };
 }
@@ -143,12 +164,27 @@ function requestedUrls(): string[] {
 const ORDER_RULES: Rules = {
   initialStatus: 'active',
   blockedTypes: ['grouped', 'bundle'],
-  blockedStatuses: ['draft', 'inactive'],
+  blockedStatuses: ['inactive'],
+  blockArchived: true,
 };
 const PRICE_LIST_RULES: Rules = { initialStatus: 'all' };
 
 const SESSION = adminSession({ permissions: ['catalog:read'] });
-const PAGE_SIZE_KEY = `b2b-admin.page-size.catalog-products.${SESSION.adminUser.id}`;
+/**
+ * The page size the Product list and this picker share (`catalog-products`),
+ * seeded on the session as the server would send it (feature 164 moved it off
+ * `localStorage`).
+ */
+let catalogPageSize = 10;
+const sessionWithPageSize = (): AdminMe => ({
+  ...SESSION,
+  preferences: { ...ADMIN_PREFERENCES_DEFAULTS, listPageSizes: { 'catalog-products': catalogPageSize } },
+});
+/** The kit's own client, which the preferences store writes through. */
+const kitClient = (
+  await vi.importActual<typeof import('@endora-commerce/admin-kit/lib')>('@endora-commerce/admin-kit/lib')
+).apiClient;
+let preferencesPatch: ReturnType<typeof vi.spyOn>;
 
 interface HarnessProps {
   rules?: Rules;
@@ -198,7 +234,7 @@ function renderHarness(
   options: { language?: 'en' | 'pl'; permissions?: readonly string[]; strict?: boolean } = {},
 ): ReturnType<typeof render> {
   const language = options.language ?? 'en';
-  const session = options.permissions ? adminSession({ permissions: options.permissions }) : SESSION;
+  const session = options.permissions ? adminSession({ permissions: options.permissions }) : sessionWithPageSize();
   const wrapper = ({ children }: { children: ReactNode }): ReactElement => {
     const tree = (
       <TranslationProvider language={language} initialBundle={BUNDLES[language]}>
@@ -228,8 +264,8 @@ function rowCheckbox(name: string): HTMLInputElement {
 
 beforeEach(() => {
   getSpy.mockReset();
-  window.localStorage.clear();
-  window.localStorage.setItem(PAGE_SIZE_KEY, '10');
+  catalogPageSize = 10;
+  preferencesPatch = vi.spyOn(kitClient, 'patch').mockResolvedValue({ data: ADMIN_PREFERENCES_DEFAULTS });
 });
 
 afterEach(() => {
@@ -239,20 +275,24 @@ afterEach(() => {
 // ---------------------------------------------------------------- B1, B2, B4
 
 describe('requests and filters (B1, B2)', () => {
-  it('opens on rules.initialStatus, asking includeArchived=1 with the preference page size', async () => {
+  it('opens on rules.initialStatus, leaving archived products out, with the preference page size', async () => {
     useCatalog();
     const user = userEvent.setup();
     renderHarness(<Harness />);
     await openPicker(user);
 
-    expect(requestedUrls()[0]).toBe(`${PATH}?includeArchived=1&page=0&pageSize=10&status=active`);
+    expect(requestedUrls()[0]).toBe(`${PATH}?page=0&pageSize=10&status=active`);
     const active = screen.getByRole('tab', { name: /^Active/ });
     expect(active.getAttribute('aria-selected')).toBe('true');
     // Counts come from the response's `counts`.
     expect(within(active).getByText('25')).toBeTruthy();
     expect(within(screen.getByRole('tab', { name: /^All/ })).getByText('27')).toBeTruthy();
-    expect(within(screen.getByRole('tab', { name: /^Draft/ })).getByText('1')).toBeTruthy();
-    expect(within(screen.getByRole('tab', { name: /^Inactive/ })).getByText('1')).toBeTruthy();
+    expect(within(screen.getByRole('tab', { name: /^Inactive/ })).getByText('2')).toBeTruthy();
+    // Feature 163 — no Draft tab anywhere; a host that refuses archived products
+    // (the order) is not offered a tab of rows it could not tick.
+    expect(screen.queryByRole('tab', { name: /^Draft/ })).toBeNull();
+    expect(screen.queryByRole('tab', { name: /^Archived/ })).toBeNull();
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['All 27', 'Active 25', 'Inactive 2']);
     expect(screen.getByRole('searchbox').getAttribute('placeholder')).toBe('Search SKU, slug, name…');
   });
 
@@ -261,11 +301,30 @@ describe('requests and filters (B1, B2)', () => {
     const user = userEvent.setup();
     renderHarness(<Harness rules={PRICE_LIST_RULES} />);
     await openPicker(user);
-    expect(requestedUrls()[0]).toBe(`${PATH}?includeArchived=1&page=0&pageSize=10`);
+    expect(requestedUrls()[0]).toBe(`${PATH}?page=0&pageSize=10`);
 
-    await user.click(screen.getByRole('tab', { name: /^Draft/ }));
-    await waitFor(() => expect(screen.getByText('Draft widget')).toBeTruthy());
-    expect(requestedUrls().at(-1)).toBe(`${PATH}?includeArchived=1&page=0&pageSize=10&status=draft`);
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'All 27',
+      'Active 25',
+      'Inactive 2',
+      'Archived 1',
+    ]);
+    expect(screen.queryByText('Retired widget')).toBeNull();
+
+    await user.click(screen.getByRole('tab', { name: /^Inactive/ }));
+    await waitFor(() => expect(screen.getByText('Paused widget')).toBeTruthy());
+    expect(requestedUrls().at(-1)).toBe(`${PATH}?page=0&pageSize=10&status=inactive`);
+
+    // Archived is its own axis: `archived=only`, never a status value.
+    await user.click(screen.getByRole('tab', { name: /^Archived/ }));
+    await waitFor(() => expect(screen.getByText('Retired widget')).toBeTruthy());
+    expect(requestedUrls().at(-1)).toBe(`${PATH}?archived=only&page=0&pageSize=10`);
+    const row = screen.getByText('Retired widget').closest('tr')!;
+    expect(within(row).getByText('Active')).toBeTruthy();
+    // One Archived look across the browser, the list and the editor.
+    expect(within(row).getByText('Archived')).toHaveClass('b2b-badge', 'b2b-badge--warn');
+    // Not blocked by this host, so it can be ticked.
+    expect(rowCheckbox('Retired widget').disabled).toBe(false);
   });
 
   it('cycles the type filter through every type and back to all', async () => {
@@ -276,7 +335,7 @@ describe('requests and filters (B1, B2)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Type' }));
     await waitFor(() =>
-      expect(requestedUrls().at(-1)).toBe(`${PATH}?includeArchived=1&page=0&pageSize=10&type=simple`),
+      expect(requestedUrls().at(-1)).toBe(`${PATH}?page=0&pageSize=10&type=simple`),
     );
     expect(screen.getByRole('button', { name: 'Type: Simple' })).toBeTruthy();
     for (const label of ['Configurable', 'Grouped', 'Bundle', 'Virtual']) {
@@ -287,7 +346,7 @@ describe('requests and filters (B1, B2)', () => {
     // Unset, the chip reads as the Products list's does.
     expect(screen.getByRole('button', { name: 'Type' })).toBeTruthy();
     await waitFor(() =>
-      expect(requestedUrls().at(-1)).toBe(`${PATH}?includeArchived=1&page=0&pageSize=10`),
+      expect(requestedUrls().at(-1)).toBe(`${PATH}?page=0&pageSize=10`),
     );
   });
 
@@ -304,7 +363,7 @@ describe('requests and filters (B1, B2)', () => {
 
     await waitFor(() =>
       expect(requestedUrls().at(-1)).toBe(
-        `${PATH}?includeArchived=1&page=0&pageSize=10&status=active&q=widget+0`,
+        `${PATH}?page=0&pageSize=10&status=active&q=widget+0`,
       ),
     );
     const withQuery = requestedUrls().filter((u) => u.includes('q='));
@@ -325,22 +384,22 @@ describe('requests and filters (B1, B2)', () => {
     await screen.findByRole('dialog');
     await waitFor(() => expect(pending).toHaveLength(1));
 
-    await user.click(screen.getByRole('tab', { name: /^Draft/ }));
+    await user.click(screen.getByRole('tab', { name: /^Archived/ }));
     await waitFor(() => expect(pending).toHaveLength(2));
 
-    pending[1]!.resolve(); // the newer (draft) answer first
-    await waitFor(() => expect(screen.getByText('Draft widget')).toBeTruthy());
+    pending[1]!.resolve(); // the newer (archived) answer first
+    await waitFor(() => expect(screen.getByText('Retired widget')).toBeTruthy());
     pending[0]!.resolve(); // the stale "all" answer last
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryByText('Grouped set')).toBeNull();
-    expect(screen.getByText('Draft widget')).toBeTruthy();
+    expect(screen.getByText('Retired widget')).toBeTruthy();
   });
 });
 
 // ---------------------------------------------------------------- B3, B14
 
 describe('columns (B3, B14)', () => {
-  it('shows product with the pl second line, SKU, translated status and type, in a scroll container', async () => {
+  it("shows the product's one Global name, SKU, translated status and type, in a scroll container", async () => {
     useCatalog();
     const user = userEvent.setup();
     const { container } = renderHarness(<Harness />);
@@ -350,13 +409,11 @@ describe('columns (B3, B14)', () => {
       expect(within(dialog).getByRole('columnheader', { name: header })).toBeTruthy();
     }
     const row = screen.getByText('Widget 01').closest('tr')!;
-    expect(within(row).getByText('Widżet 01')).toBeTruthy();
     expect(within(row).getByText('SKU-A01')).toBeTruthy();
     expect(within(row).getByText('Active')).toBeTruthy();
     expect(within(row).getByText('Simple')).toBeTruthy();
-    // A product with no different Polish name has no second line.
-    const plain = screen.getByText('Widget 02').closest('tr')!;
-    expect(within(plain).getAllByText(/Widget 02|Widżet 02/)).toHaveLength(1);
+    // Feature 174 (FR-031): one name, no per-language second line.
+    expect(within(row).getAllByText(/Widget 01/)).toHaveLength(1);
     expect(dialog.querySelector('.b2b-table-scroll table')).not.toBeNull();
     expectNoRawKeys(container);
   });
@@ -389,13 +446,13 @@ describe('pagination and selection (B4, B5)', () => {
 
     await user.click(screen.getByRole('button', { name: /Next/ }));
     await waitFor(() =>
-      expect(requestedUrls().at(-1)).toBe(`${PATH}?includeArchived=1&page=1&pageSize=10&status=active`),
+      expect(requestedUrls().at(-1)).toBe(`${PATH}?page=1&pageSize=10&status=active`),
     );
     await user.selectOptions(within(dialog).getByRole('combobox'), '20');
     await waitFor(() =>
-      expect(requestedUrls().at(-1)).toBe(`${PATH}?includeArchived=1&page=0&pageSize=20&status=active`),
+      expect(requestedUrls().at(-1)).toBe(`${PATH}?page=0&pageSize=20&status=active`),
     );
-    expect(window.localStorage.getItem(PAGE_SIZE_KEY)).toBe('10');
+    expect(preferencesPatch).not.toHaveBeenCalled();
   });
 
   it('keeps the selection across page, page-size and filter changes', async () => {
@@ -427,11 +484,11 @@ describe('pagination and selection (B4, B5)', () => {
     renderHarness(<Harness rules={{ ...ORDER_RULES, initialStatus: 'all' }} />);
     await openPicker(user);
 
-    // Page 0 of "All": g1 (grouped), d1 (draft), i1 (inactive), a01…a07.
+    // Page 0 of "All": g1 (grouped), p1 and i1 (inactive), a01…a07.
     await user.click(screen.getByRole('checkbox', { name: 'Select all selectable products on this page' }));
     expect(screen.getByText('7 selected')).toBeTruthy();
     expect(rowCheckbox('Grouped set').checked).toBe(false);
-    expect(rowCheckbox('Draft widget').checked).toBe(false);
+    expect(rowCheckbox('Paused widget').checked).toBe(false);
 
     await user.click(screen.getByRole('button', { name: /Next/ }));
     await waitFor(() => expect(screen.getByText('Widget 08')).toBeTruthy());
@@ -487,7 +544,7 @@ describe('footer, cap and reasons (B6, B7, B8)', () => {
       product(`b${String(i).padStart(3, '0')}`, `Bulk ${String(i).padStart(3, '0')}`, 'active', 'simple'),
     );
     useCatalog(big);
-    window.localStorage.setItem(PAGE_SIZE_KEY, '500');
+    catalogPageSize = 500;
     const user = userEvent.setup();
     renderHarness(<Harness rules={PRICE_LIST_RULES} />);
     await openPicker(user);
@@ -519,7 +576,7 @@ describe('footer, cap and reasons (B6, B7, B8)', () => {
 
     const cases: Array<[string, string]> = [
       ['Grouped set', 'Product group — pick its individual products'],
-      ['Draft widget', 'Not active — cannot be added'],
+      ['Paused widget', 'Not active — cannot be added'],
       ['Old widget', 'Not active — cannot be added'],
       ['Widget 02', 'Already added'],
     ];
@@ -620,9 +677,10 @@ describe('confirm (B6, B10)', () => {
       id: 'a01',
       sku: 'SKU-A01',
       slug: 'a01',
-      name: { 'en-US': 'Widget 01', 'pl-PL': 'Widżet 01' },
+      name: 'Widget 01',
       status: 'active',
       type: 'simple',
+      archivedAt: null,
     });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
@@ -793,5 +851,118 @@ describe('under <StrictMode>, as the admin renders it', () => {
 
     attempts[1]!(true);
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+});
+
+// ---------------------------------------------------------------- issue #1445, #1448
+
+describe('the status strip is the kit Tabs (issue #1445, DS-12)', () => {
+  it('names the strip, keeps one tab stop and links every tab to the list panel', async () => {
+    useCatalog();
+    const user = userEvent.setup();
+    renderHarness(<Harness rules={PRICE_LIST_RULES} />);
+    const dialog = await openPicker(user);
+
+    const strip = within(dialog).getByRole('tablist', { name: 'Product status' });
+    const tabs = within(strip).getAllByRole('tab');
+    // Roving tabindex: the selected tab is the strip's one stop.
+    expect(tabs.map((tab) => tab.tabIndex)).toEqual([0, -1, -1, -1]);
+    const panel = within(dialog).getByRole('tabpanel');
+    for (const tab of tabs) expect(tab.getAttribute('aria-controls')).toBe(panel.id);
+    expect(panel.getAttribute('aria-labelledby')).toBe(tabs[0]!.id);
+    // The count is part of the tab's accessible name, not a bare number.
+    expect(tabs[1]!.getAttribute('aria-label')).toBe('Active, items: 25');
+    expect(within(panel).getByText('Grouped set')).toBeTruthy();
+  });
+
+  it('moves and selects with the arrow keys, Home and End', async () => {
+    useCatalog();
+    const user = userEvent.setup();
+    renderHarness(<Harness rules={PRICE_LIST_RULES} />);
+    await openPicker(user);
+
+    screen.getByRole('tab', { name: /^All/ }).focus();
+    await user.keyboard('{ArrowRight}');
+    await waitFor(() => expect(requestedUrls().at(-1)).toBe(`${PATH}?page=0&pageSize=10&status=active`));
+    expect(document.activeElement).toBe(screen.getByRole('tab', { name: /^Active/ }));
+    expect(screen.getByRole('tab', { name: /^Active/ }).getAttribute('aria-selected')).toBe('true');
+
+    await user.keyboard('{End}');
+    await waitFor(() => expect(requestedUrls().at(-1)).toBe(`${PATH}?archived=only&page=0&pageSize=10`));
+    await user.keyboard('{Home}');
+    await waitFor(() => expect(requestedUrls().at(-1)).toBe(`${PATH}?page=0&pageSize=10`));
+  });
+
+  it('reviewing the selection leaves the strip without a selected tab, and Show all returns to it', async () => {
+    useCatalog();
+    const user = userEvent.setup();
+    renderHarness(<Harness />);
+    const dialog = await openPicker(user);
+    await user.click(rowCheckbox('Widget 01'));
+
+    await user.click(screen.getByRole('button', { name: 'Show selected only' }));
+    // The review is not one status: no tab claims it, and the list is not its panel.
+    const tabs = within(dialog).getAllByRole('tab');
+    for (const tab of tabs) {
+      expect(tab.getAttribute('aria-selected')).toBe('false');
+      expect((tab as HTMLButtonElement).disabled).toBe(true);
+    }
+    expect(within(dialog).queryByRole('tabpanel')).toBeNull();
+    expect(screen.getByText('Widget 01')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Show all products' }));
+    await waitFor(() => expect(screen.getByText('Widget 02')).toBeTruthy());
+    expect(screen.getByRole('tab', { name: /^Active/ }).getAttribute('aria-selected')).toBe('true');
+    expect(within(dialog).getByRole('tabpanel')).toBeTruthy();
+  });
+});
+
+describe('empty states (issue #1448, DS-15)', () => {
+  it('a search or type that matches nothing shows no-results, whose Clear filters resets both and keeps the tab', async () => {
+    useCatalog();
+    const user = userEvent.setup();
+    renderHarness(<Harness rules={PRICE_LIST_RULES} />);
+    const dialog = await openPicker(user);
+    await user.click(screen.getByRole('tab', { name: /^Inactive/ }));
+    await waitFor(() => expect(screen.getByText('Paused widget')).toBeTruthy());
+    await user.click(rowCheckbox('Paused widget'));
+
+    await user.click(screen.getByRole('button', { name: 'Type' }));
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'nothing-matches' } });
+    await screen.findByText('No products match these filters.');
+    const empty = dialog.querySelector('[data-empty-state="no-results"]') as HTMLElement;
+    expect(empty).not.toBeNull();
+
+    await user.click(within(empty).getByRole('button', { name: 'Clear filters' }));
+    await waitFor(() => expect(screen.getByText('Old widget')).toBeTruthy());
+    expect(requestedUrls().at(-1)).toBe(`${PATH}?page=0&pageSize=10&status=inactive`);
+    expect((screen.getByRole('searchbox') as HTMLInputElement).value).toBe('');
+    expect(screen.getByRole('button', { name: 'Type' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /^Inactive/ }).getAttribute('aria-selected')).toBe('true');
+    // The selection is not a filter.
+    expect(screen.getByText('1 selected')).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('searchbox')));
+  });
+
+  it('a tab with nothing in it, unfiltered, says so without offering to clear anything', async () => {
+    useCatalog(CATALOG.filter((p) => p.archivedAt == null));
+    const user = userEvent.setup();
+    renderHarness(<Harness rules={PRICE_LIST_RULES} />);
+    const dialog = await openPicker(user);
+
+    await user.click(screen.getByRole('tab', { name: /^Archived/ }));
+    expect(await screen.findByText('No archived products')).toBeTruthy();
+    const empty = dialog.querySelector('[data-empty-state="no-data"]') as HTMLElement;
+    expect(empty).not.toBeNull();
+    expect(within(empty).queryByRole('button')).toBeNull();
+  });
+
+  it('an empty catalogue says so, in Polish too', async () => {
+    useCatalog([]);
+    const user = userEvent.setup();
+    const { container } = renderHarness(<Harness rules={PRICE_LIST_RULES} />, { language: 'pl' });
+    await openPicker(user, 'Przeglądaj produkty');
+    expect(screen.getByText('Katalog nie ma jeszcze produktów')).toBeTruthy();
+    expectNoRawKeys(container);
   });
 });

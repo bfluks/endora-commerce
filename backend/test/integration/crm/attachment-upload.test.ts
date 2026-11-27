@@ -21,6 +21,7 @@ import {
   seedCrmAsset,
   seedCrmOrganization,
   seedCrmSalesRep,
+  crmValueChangeOf,
 } from '../../helpers/seed-crm.js';
 import {
   TINY_PNG,
@@ -116,8 +117,13 @@ describe('crm attachment upload', () => {
     const downloaded = await h.app.inject({ method: 'GET', url: `${link.pathname}${link.search}` });
     expect(downloaded.statusCode, downloaded.body).toBe(200);
     expect(downloaded.rawPayload.equals(bytes)).toBe(true);
+    // Without the signature the private file answers exactly like an id that
+    // names nothing — 404 ASSET_NOT_FOUND, not 403 — so holding the id does not
+    // confirm the file exists (issue #542; specs/156-asset-stable-url/contracts/
+    // file-serving.md, rule 2, amended 2026-11-09).
     const unsigned = await h.app.inject({ method: 'GET', url: link.pathname });
-    expect(unsigned.statusCode, 'a private file is not served without its signature').toBe(403);
+    expect(unsigned.statusCode, 'a private file is not served without its signature').toBe(404);
+    expect(unsigned.json().error.code).toBe(ERROR_CODES.ASSET_NOT_FOUND);
 
     const removed = await h.app.inject({
       method: 'DELETE',
@@ -131,8 +137,10 @@ describe('crm attachment upload', () => {
     expect(added).toHaveLength(1);
     expect(added[0]).toMatchObject({
       objectType: 'crm_opportunity',
-      stateAfter: { attachmentId: attached.id, assetId: attached.assetId, fileName: 'scope.txt' },
+      stateAfter: { attachmentId: attached.id, assetId: attached.assetId, changedFields: ['fileName'] },
     });
+    // The file name is the Opportunity's to keep, not the global audit log's (#470).
+    expect(await crmValueChangeOf(h, added[0]!)).toMatchObject({ after: { fileName: 'scope.txt' } });
     // The library's half of the write is the library's entry.
     const stored = await h.auditLogService.query({ action: 'asset.upload', objectId: attached.assetId });
     expect(stored).toHaveLength(1);

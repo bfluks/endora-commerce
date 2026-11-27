@@ -7,7 +7,9 @@ import {
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { HttpError } from '@endora-commerce/platform/http';
 import { getTenantContext } from '@endora-commerce/platform/tenancy';
-import { Organization } from './entities/organization.entity.js';
+import type { CommandBus } from '@endora-commerce/platform/commands';
+import { makeAssignSalesRepCommand, makeUnassignSalesRepCommand } from './commands/sales-rep-assignment.commands.js';
+import { organizationInReach } from './organization-reach.js';
 import type { SalesRepAssignmentPort } from './services/sales-rep-assignment-service.js';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 
@@ -50,6 +52,11 @@ export interface SalesRepRoutesDeps {
   requireAdmin: RequireAdminFactory;
   salesRepAssignment: SalesRepAssignmentPort;
   adminUsers: AdminUserReadPort;
+  /**
+   * Runs `organization.sales_rep_assign` / `_unassign` (`specs/186-aggregate-ports/`
+   * R-16.7) — the factories `organizationCommandPort` runs too.
+   */
+  commandBus: Pick<CommandBus, 'run'>;
 }
 
 /**
@@ -92,18 +99,31 @@ export async function registerOrganizationsSalesRepRoutes(
   app: FastifyInstance,
   deps: SalesRepRoutesDeps,
 ): Promise<void> {
-  const { emFactory, requireAdmin, salesRepAssignment, adminUsers } = deps;
+  const { emFactory, requireAdmin, salesRepAssignment, adminUsers, commandBus } = deps;
   const guard = requireAdmin('organizations:assign-sales-rep');
+  /**
+   * Issue #856 — the reach every `/admin/organizations/:id` route answers by
+   * since #698: a sales representative reads the assignments of an
+   * Organization they may see, and an Organization assigned to another
+   * representative answers the same `404 NOT_FOUND` as an unknown one. The
+   * rule is `salesRepAssignment` itself — this module's one
+   * `organizationSalesRepScopePort`, built with the roll-up deps (#108).
+   */
+  const inReach = organizationInReach({
+    emFactory,
+    salesRepScope: salesRepAssignment,
+    param: 'organizationId',
+  });
 
   // GET /api/v1/admin/organizations/:organizationId/sales-reps
   app.get<{ Params: { organizationId: string } }>(
     '/api/v1/admin/organizations/:organizationId/sales-reps',
-    { preHandler: guard },
+    { preHandler: [guard, inReach] },
     async (request) => {
-      const em = emFactory();
-      const org = await em.findOne(Organization, { id: request.params.organizationId });
-      if (!org) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
-      const assignments = await salesRepAssignment.listForOrganization(org.id);
+      // The preHandler has answered 404 for a malformed, unknown, deleted or
+      // out-of-reach id.
+      const organizationId = request.params.organizationId;
+      const assignments = await salesRepAssignment.listForOrganization(organizationId);
       const adminIds = assignments.map((a) => a.adminUserId);
       const admins = adminIds.length > 0 ? await adminUsers.findByIds(adminIds) : [];
       const adminById = new Map(admins.map((a) => [a.id, a]));
@@ -131,25 +151,19 @@ export async function registerOrganizationsSalesRepRoutes(
     async (request, reply) => {
       requireUnscopedActor(); // D-260 — the graph is the boundary.
       const body = assignSalesRepRequestSchema.parse(request.body);
-      const em = emFactory();
-      const org = await em.findOne(Organization, { id: request.params.organizationId });
-      if (!org) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
-      const adminUser = await adminUsers.findById(body.adminUserId);
+      // The Command refuses an unknown Organization or administrator (404) and
+      // a personal Organization (422), and stamps the acting administrator as
+      // the assigner; an existing assignment is answered as it is.
+      const { assignment: created } = await commandBus.run(
+        makeAssignSalesRepCommand(
+          { adminUsers },
+          { organizationId: request.params.organizationId, adminUserId: body.adminUserId },
+        ),
+      );
+      const adminUser = await adminUsers.findById(created.adminUserId);
       if (!adminUser) {
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Admin user not found.');
       }
-      const actor = (request as { actor?: { kind?: string; adminUserId?: string }; testActor?: { kind?: string; adminUserId?: string } });
-      const assignedBy =
-        actor.actor?.kind === 'admin'
-          ? actor.actor.adminUserId ?? null
-          : actor.testActor?.kind === 'admin'
-            ? actor.testActor.adminUserId ?? null
-            : null;
-      const created = await salesRepAssignment.assign({
-        organizationId: org.id,
-        adminUserId: adminUser.id,
-        assignedByAdminUserId: assignedBy,
-      });
       reply.code(201);
       return {
         data: {
@@ -171,10 +185,12 @@ export async function registerOrganizationsSalesRepRoutes(
     { preHandler: guard },
     async (request, reply) => {
       requireUnscopedActor(); // D-260 — the graph is the boundary.
-      const removed = await salesRepAssignment.unassign({
-        organizationId: request.params.organizationId,
-        adminUserId: request.params.adminUserId,
-      });
+      const removed = await commandBus.run(
+        makeUnassignSalesRepCommand({
+          organizationId: request.params.organizationId,
+          adminUserId: request.params.adminUserId,
+        }),
+      );
       if (!removed) {
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Assignment not found.');
       }

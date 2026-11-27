@@ -59,9 +59,70 @@ export function isColumnContentZone(zone: string, data: Data): boolean {
   return (parent === 'cms.Column' || parent === 'transactional_emails.EmailColumn') && zoneSlotName(zone) === 'content';
 }
 
+/**
+ * What a Carousel's (`cms.ContentSlider`'s) `slides` slot holds: free-content
+ * slides and the four item blocks of `specs/163-page-builder-marketing-pages/`
+ * (research R-12). A `cms.Row` dropped there is wrapped into a `cms.Slide` by
+ * the page builder's `onAction` handler.
+ */
+export const CAROUSEL_SLIDE_TYPES: readonly string[] = [
+  'cms.Slide',
+  'cms.CarouselImage',
+  'cms.CarouselSplit',
+  'cms.LinkTile',
+  'cms.DownloadTile',
+];
+
+function isCarouselSlideType(type: string | null | undefined): boolean {
+  return typeof type === 'string' && CAROUSEL_SLIDE_TYPES.includes(type);
+}
+
 /** True when the zone is a Content slider's `slides` slot. */
 export function isContentSliderSlidesZone(zone: string, data: Data): boolean {
   return getZoneParentComponentType(zone, data) === 'cms.ContentSlider' && zoneSlotName(zone) === 'slides';
+}
+
+/**
+ * Blocks that stand only at the top level of a page: `cms.Section`, the one
+ * block carrying section settings (`specs/163-page-builder-marketing-pages/`
+ * FR-000, plan § *Owner ruling 2026-10-23*), and `cms.SectionGroup`, the
+ * container of Sections (T158, plan § *Owner ruling 2026-10-26*). Every slot
+ * refuses them too; this guard catches a drop the slot's own
+ * `allow`/`disallow` would not. The one exception is a Section in a group's
+ * slot ({@link SECTION_GROUP_TYPE}).
+ */
+export const ROOT_ONLY_TYPES: readonly string[] = ['cms.Section', 'cms.SectionGroup'];
+
+/** The container of Sections (T158): its `content` slot holds {@link SECTION_GROUP_CHILD_TYPES} and nothing else. */
+export const SECTION_GROUP_TYPE = 'cms.SectionGroup';
+
+/** What a Section group's slot holds: Sections only. */
+export const SECTION_GROUP_CHILD_TYPES: readonly string[] = ['cms.Section'];
+
+function isRootOnlyType(type: string | null | undefined): boolean {
+  return typeof type === 'string' && ROOT_ONLY_TYPES.includes(type);
+}
+
+/** True when the zone is the page's own content list (`root:default-zone`, or a legacy root zone). */
+export function isRootZone(zone: string): boolean {
+  return zoneParentId(zone) === 'root';
+}
+
+/** True when the zone is a Section group's `content` slot. */
+export function isSectionGroupContentZone(zone: string, data: Data): boolean {
+  return getZoneParentComponentType(zone, data) === SECTION_GROUP_TYPE && zoneSlotName(zone) === 'content';
+}
+
+/**
+ * Whether a block of `type` may not stand in `zone` because of where it
+ * belongs: a root-only block outside the root (a Section inside a group's
+ * slot excepted), or anything but a Section in a group's slot.
+ */
+function isMisplacedSectionLevel(type: string | null | undefined, zone: string, data: Data): boolean {
+  if (isSectionGroupContentZone(zone, data)) {
+    return !(typeof type === 'string' && SECTION_GROUP_CHILD_TYPES.includes(type));
+  }
+  return isRootOnlyType(type) && !isRootZone(zone);
 }
 
 export type PuckItemSelector = { zone?: string; index: number };
@@ -162,12 +223,19 @@ export function readPuckZoneIndexes(
 
 function getItemTypeAtZoneIndex(data: Data, zone: string, index: number): string | null {
   const items = getZoneItems(data, zone);
-  return items[index]?.type ?? null;
+  if (items.length > 0) return items[index]?.type ?? null;
+  // A slot zone (`{parentId}:{slotName}`) lives in its parent's props, not in `data.zones` (T158).
+  if (isRootZone(zone)) return null;
+  const parent = findItemById(data, zoneParentId(zone));
+  return toPuckItemArray(parent?.props[zoneSlotName(zone)])[index]?.type ?? null;
 }
 
 /**
  * Returns true when a Puck action should be reverted — Column may only live in a
- * Row `content` slot.
+ * Row `content` slot, a Carousel's slides are its item blocks, a root-only
+ * block (`cms.Section`, `cms.SectionGroup`) may only be inserted or moved into
+ * the page's own list — a Section into a group's slot too — and a group's slot
+ * holds Sections only (T158).
  */
 export function shouldRevertPuckAction(
   action: PuckAction,
@@ -177,6 +245,9 @@ export function shouldRevertPuckAction(
   const sourceData = prevData ?? data;
 
   if (action.type === 'insert') {
+    if (isMisplacedSectionLevel(action.componentType, action.destinationZone, data)) {
+      return true;
+    }
     if (
       (action.componentType === 'cms.Column' || action.componentType === 'transactional_emails.EmailColumn') &&
       !isRowContentZone(action.destinationZone, data)
@@ -185,7 +256,7 @@ export function shouldRevertPuckAction(
     }
     if (
       isContentSliderSlidesZone(action.destinationZone, data) &&
-      action.componentType !== 'cms.Slide' &&
+      !isCarouselSlideType(action.componentType) &&
       // Row is wrapped into a Slide in the page-builder onAction handler.
       action.componentType !== 'cms.Row'
     ) {
@@ -196,6 +267,9 @@ export function shouldRevertPuckAction(
 
   if (action.type === 'move') {
     const type = getItemTypeAtZoneIndex(sourceData, action.sourceZone, action.sourceIndex);
+    if (isMisplacedSectionLevel(type, action.destinationZone, data)) {
+      return true;
+    }
     if (
       (type === 'cms.Column' || type === 'transactional_emails.EmailColumn') &&
       !isRowContentZone(action.destinationZone, data)
@@ -204,7 +278,7 @@ export function shouldRevertPuckAction(
     }
     if (
       isContentSliderSlidesZone(action.destinationZone, data) &&
-      type !== 'cms.Slide'
+      !isCarouselSlideType(type)
     ) {
       return true;
     }
@@ -221,7 +295,7 @@ export function shouldRevertPuckAction(
     }
     if (
       isContentSliderSlidesZone(action.destinationZone, data) &&
-      type !== 'cms.Slide'
+      !isCarouselSlideType(type)
     ) {
       return true;
     }

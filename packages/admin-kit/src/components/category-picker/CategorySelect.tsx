@@ -1,15 +1,20 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ApiError, apiClient } from '../../lib/api-client.js';
+import { ApiError, apiClient } from '../../lib/index.js';
 import { useAppLanguage } from '../../i18n/app-language-context.js';
+import { useTranslation } from '../../i18n/useTranslation.js';
 import { Combobox, type ComboboxOption } from '../../ui/combobox.js';
+import {
+  adminLanguageToLocale,
+  pickCategoryDisplayName,
+} from '../category-tree-picker/category-tree-utils.js';
 
 /**
  * Single-select catalog-category picker.
  *
  * `GET /api/v1/admin/catalog/categories` returns the full tree flat (no
  * pagination), so the list is fetched once on mount and the <Combobox>
- * filters client-side. Labels are locale-aware (admin UI language, then
- * `en-US`, then any value, then slug). The committed value is the
+ * filters client-side. Labels are locale-aware (the admin UI language's
+ * locale, then `en-US`, then any value, then slug). The committed value is the
  * category UUID.
  *
  * For multi-select category audiences use <CategoryTreePicker>; this is
@@ -39,7 +44,10 @@ export function CategorySelect(props: CategorySelectProps): ReactNode {
   const { language } = useAppLanguage();
   const [categories, setCategories] = useState<AdminCategory[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // The server's sentence when it sent one, `null` for a failure it did not
+  // explain — translated at render, so the load effect does not depend on `t`.
+  const [error, setError] = useState<{ message: string | null } | null>(null);
+  const t = useTranslation('core');
 
   useEffect(() => {
     let alive = true;
@@ -52,9 +60,7 @@ export function CategorySelect(props: CategorySelectProps): ReactNode {
       })
       .catch((err: unknown) => {
         if (!alive) return;
-        setError(
-          err instanceof ApiError ? err.envelope.error.message : 'Failed to load categories.',
-        );
+        setError({ message: err instanceof ApiError ? err.envelope.error.message : null });
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -65,12 +71,18 @@ export function CategorySelect(props: CategorySelectProps): ReactNode {
   }, []);
 
   const options = useMemo<ComboboxOption<string>[]>(() => {
-    const labelFor = (c: AdminCategory): string =>
-      c.name[language] ?? c.name['en-US'] ?? Object.values(c.name)[0] ?? c.slug;
-    return categories.map((c) => ({ value: c.id, label: labelFor(c), description: c.slug }));
+    // Names are keyed by locale (`pl-PL`), the admin language by its short
+    // code (`pl`): map one to the other rather than index by the wrong key.
+    const locale = adminLanguageToLocale(language);
+    return categories.map((c) => ({
+      value: c.id,
+      label: pickCategoryDisplayName(c.name, c.slug, locale),
+      description: c.slug,
+    }));
   }, [categories, language]);
 
-  const emptyMessage = props.emptyMessage ?? error ?? 'No categories.';
+  const errorMessage = error === null ? null : (error.message ?? t('categorySelect.loadError'));
+  const emptyMessage = errorMessage ?? props.emptyMessage ?? t('categorySelect.empty');
 
   return (
     <Combobox<string>
@@ -80,9 +92,9 @@ export function CategorySelect(props: CategorySelectProps): ReactNode {
       loading={loading}
       clearable={props.clearable ?? true}
       disabled={props.disabled ?? false}
-      placeholder={props.placeholder ?? 'Select a category…'}
+      placeholder={props.placeholder ?? t('categorySelect.placeholder')}
       emptyMessage={emptyMessage}
-      ariaLabel={props.ariaLabel ?? 'Select category'}
+      ariaLabel={props.ariaLabel ?? t('categorySelect.ariaLabel')}
       id={props.id ?? ''}
       className={props.className ?? ''}
     />

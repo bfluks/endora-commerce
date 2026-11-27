@@ -1,5 +1,6 @@
 import { Cart, CartItem } from '../../helpers/package-entities.js';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { CUSTOMER_KNOWN_DEVICE_COOKIE_NAME } from '@endora-commerce/contracts';
 
 import {
   setupBackendServer,
@@ -16,6 +17,7 @@ import {
 import { SEED_PRODUCT_101_ID, SEED_PRODUCT_102_ID } from '../../helpers/seed-catalog.js';
 
 import { STUB_CUSTOMER_PASSWORD } from '../../helpers/seed-organizations.js';
+import { systemDefaultSalesChannelId } from '../../helpers/sales-channel-fixtures.js';
 
 
 /**
@@ -99,6 +101,64 @@ describe('POST /api/v1/auth/customer/login — cart-merge response field', () =>
     expect(hasAnonClearCookie(setCookies)).toBe(true);
   });
 
+  // Issue #358 — the storefront signs in from a server action and builds the
+  // Cookie header itself: the known-device cookie (URI-encoded, as the browser
+  // jar holds it decoded) and `b2b_cart_anon`, joined by `; `, nothing else.
+  // Sent as that raw header rather than through `inject({ cookies })`, so the
+  // shape the storefront actually sends is the one parsed here.
+  it('merges from the exact Cookie header the storefront forwards (known device + b2b_cart_anon)', async () => {
+    const em = h.em();
+    const priors = await em.find(Cart, {
+      customerAccountId: TEST_CUSTOMER_EMPTY_ID,
+      status: 'active',
+    });
+    for (const c of priors) await em.nativeDelete(CartItem, { cartId: c.id });
+    await em.nativeDelete(Cart, {
+      customerAccountId: TEST_CUSTOMER_EMPTY_ID,
+      status: 'active',
+    });
+
+    // A completed sign-in hands back the known-device cookie the storefront stores.
+    const first = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/customer/login',
+      payload: { email: 'stub-customer-empty@example.com', password: STUB_CUSTOMER_PASSWORD },
+    });
+    expect(first.statusCode).toBe(200);
+    const devicePair = collectSetCookie(first.headers['set-cookie'])
+      .map((header) => header.split(';')[0]!.trim())
+      .find((pair) => pair.startsWith(`${CUSTOMER_KNOWN_DEVICE_COOKIE_NAME}=`));
+    expect(devicePair).toBeDefined();
+    const deviceValue = decodeURIComponent(devicePair!.slice(CUSTOMER_KNOWN_DEVICE_COOKIE_NAME.length + 1));
+
+    const anonToken = `anon-login-storefront-${Date.now()}`;
+    const add = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/cart/items',
+      payload: { productId: SEED_PRODUCT_101_ID, quantity: 1 },
+      cookies: { b2b_cart_anon: anonToken },
+    });
+    expect(add.statusCode).toBe(200);
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/customer/login',
+      payload: { email: 'stub-customer-empty@example.com', password: STUB_CUSTOMER_PASSWORD },
+      headers: {
+        cookie: `${CUSTOMER_KNOWN_DEVICE_COOKIE_NAME}=${encodeURIComponent(deviceValue)}; b2b_cart_anon=${encodeURIComponent(anonToken)}`,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as LoginResponseBody;
+    expect(body.data.cartMerge?.outcome).toBe('adopted');
+    expect(hasAnonClearCookie(collectSetCookie(res.headers['set-cookie']))).toBe(true);
+
+    const adopted = await em.fork().findOneOrFail(Cart, { id: body.data.cartMerge!.destinationCartId });
+    expect(adopted.customerAccountId).toBe(TEST_CUSTOMER_EMPTY_ID);
+    const lines = await em.fork().find(CartItem, { cartId: adopted.id });
+    expect(lines.map((line) => line.productId)).toEqual([SEED_PRODUCT_101_ID]);
+  });
+
   it('cartMerge.outcome = "merged" when the customer already had an active cart', async () => {
     const em = h.em();
     // Wipe and reseed an existing cart for the RFQ actor (customer_accounts.id
@@ -117,8 +177,11 @@ describe('POST /api/v1/auth/customer/login — cart-merge response field', () =>
       customerAccountId: TEST_CUSTOMER_RFQ_ID,
       organizationId: TEST_ORGANIZATION_ID,
       status: 'active',
+      // The sign-in request names no channel, so the basket merged into is the
+      // system default's (`specs/154-sales-channel-access/`).
+      salesChannelId: await systemDefaultSalesChannelId(em),
     });
-    await em.persistAndFlush(custCart);
+    await em.persist(custCart).flush();
     em.persist(
       em.create(CartItem, {
         cartId: custCart.id,
@@ -166,8 +229,9 @@ describe('POST /api/v1/auth/customer/login — cart-merge response field', () =>
     const anon = em.create(Cart, {
       anonymousCartToken: anonToken,
       status: 'active',
+      salesChannelId: await systemDefaultSalesChannelId(em),
     });
-    await em.persistAndFlush(anon);
+    await em.persist(anon).flush();
 
     const res = await h.app.inject({
       method: 'POST',

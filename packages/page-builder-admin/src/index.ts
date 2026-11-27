@@ -36,7 +36,7 @@
  * React context and `action-bar-target` is a module-scoped store, and two copies
  * of either are a `null` context and an action bar that never updates.
  */
-export { emptyPageBuilderData, isEmptyPageBuilderData } from './chrome/page-builder-data.js';
+export { emptyPageBuilderData, hasUnsavedCanvas, isEmptyPageBuilderData } from './chrome/page-builder-data.js';
 export {
   getActionBarTarget,
   getHoverActionBarTarget,
@@ -48,19 +48,18 @@ export {
 export type { ActionBarTarget } from './chrome/action-bar-target.js';
 export { QuickTooltip, wrapQuickTooltip } from './chrome/QuickTooltip.js';
 export { PageBuilderOverlayBridge } from './chrome/PageBuilderOverlayBridge.js';
+export { PageBuilderHeaderActions } from './chrome/PageBuilderHeaderActions.js';
+export type { ApplyTemplateOption, PageBuilderHeaderActionsProps } from './chrome/PageBuilderHeaderActions.js';
 export {
-  PageBuilderHeaderActions,
-  PageBuilderHeaderShell,
-  PageBuilderTemplateActions,
-} from './chrome/PageBuilderHeaderActions.js';
-export type { ApplyTemplateOption } from './chrome/PageBuilderHeaderActions.js';
-export {
+  createFileAssetField,
   createImageAssetField,
   createImageSourceField,
   createImageUrlField,
   createSlideImageField,
   createVideoAssetField,
+  AdminImagePicker,
   inputClassName,
+  pickedImageFromAsset,
   pickerButtonClass,
 } from './chrome/AssetPickers.js';
 export type { SlideImageValue } from './chrome/AssetPickers.js';
@@ -71,6 +70,7 @@ export {
   createProductSlugsField,
 } from './chrome/CatalogPickers.js';
 export { PageBuilderColorPaletteProvider } from './chrome/ColorPaletteProvider.js';
+export { PageBuilderFieldText, pageBuilderFieldTextBundleKey } from './chrome/FieldTextProvider.js';
 export { ColorPaletteModal } from './chrome/ColorPaletteModal.js';
 export {
   getPageBuilderColorPalette,
@@ -87,3 +87,38 @@ export type {
   PageBuilderEditorLayoutProps,
   PageBuilderEditorSettingsPanel,
 } from './chrome/PageBuilderEditorLayout.js';
+// Issue #1540 — a builder's first load: the three-pane skeleton, not a grey sentence.
+export { PageBuilderLoadingSkeleton } from './chrome/PageBuilderLoadingSkeleton.js';
+export type { PageBuilderLoadingSkeletonProps } from './chrome/PageBuilderLoadingSkeleton.js';
+// Feature 163 — the shared fields of the reshaped blocks (research R-9, R-11):
+// one `LinkValue` field, the `ButtonSpec[]` list and the `ResponsiveImage`
+// field. `createButtonLinkSlugField` is `cms`' old slug-only link target, moved
+// here from `cms`' admin components (feature 163, T016) and kept until `cms.Button` and
+// `cms.Hero` are reshaped onto `createLinkField`.
+export {
+  LINK_KINDS,
+  LinkFieldControl,
+  createButtonLinkSlugField,
+  createLinkField,
+  // Feature 169: the in-page anchor picker as a field of its own (`cms.PageNavigation`).
+  createAnchorField,
+} from './chrome/LinkField.js';
+export type { LinkFieldControlProps, LinkFieldOptions } from './chrome/LinkField.js';
+export { DEFAULT_BUTTON_SPEC, createButtonListField, createButtonSpecField } from './chrome/ButtonListField.js';
+export type { ButtonListFieldOptions, ButtonSpecFieldOptions } from './chrome/ButtonListField.js';
+export { ResponsiveImageControl, ResponsiveRatioControl, createResponsiveImageField } from './chrome/ResponsiveImageField.js';
+export type { ResponsiveImageControlProps, ResponsiveRatioControlProps } from './chrome/ResponsiveImageField.js';
+export { listPageBuilderLinkPages } from './chrome/cms-page-builder-api.js';
+// Feature 163, R17 (T220): a post listing's blog category, picked from the blog's categories.
+export { BlogCategoryFieldControl, createBlogCategorySlugField, flattenBlogCategories } from './chrome/BlogCategoryPicker.js';
+// Feature 169 (US7): `newsletter.Signup`'s topic tag and subscriber attribute, picked from the newsletter's lists.
+export {
+  NewsletterCustomFieldControl,
+  NewsletterTagCodeControl,
+  createNewsletterCustomFieldField,
+  createNewsletterTagCodeField,
+  withNewsletterAttributePick,
+} from './chrome/NewsletterPickers.js';
+export type { NewsletterAttributePick } from './chrome/NewsletterPickers.js';
+// Feature 170 (FR-004): the form of a `forms.Form` block, picked from the forms the editor may see.
+export { FormPickerControl, createFormPickerField } from './chrome/FormPickers.js';

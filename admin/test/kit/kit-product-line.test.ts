@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { LINE_QUANTITY_MAX } from '@endora-commerce/contracts';
 import { parsePositiveInt, productDisplayName } from '@endora-commerce/admin-kit/components';
 
 /**
@@ -8,18 +9,20 @@ import { parsePositiveInt, productDisplayName } from '@endora-commerce/admin-kit
  */
 
 describe('productDisplayName', () => {
-  it('prefers en-US over any other locale', () => {
-    expect(productDisplayName({ name: { 'pl-PL': 'Widżet', 'en-US': 'Widget' }, slug: 'w' })).toBe('Widget');
+  // Feature 174 (FR-031, `contracts/readers.md` §1): the admin list answers the
+  // product's Global name as one string; a host shows it as it is.
+  it('shows the Global name string as it is', () => {
+    expect(productDisplayName({ name: 'Drill X', slug: 'w' })).toBe('Drill X');
   });
 
-  it('falls back to the first locale present when there is no en-US', () => {
-    expect(productDisplayName({ name: { 'de-DE': 'Ding', 'pl-PL': 'Rzecz' }, slug: 'w' })).toBe('Ding');
+  it('never splits a string name into characters', () => {
+    expect(productDisplayName({ name: 'Wiertarka X', slug: 'w', sku: 'S' })).not.toBe('W');
   });
 
   it('falls back to the slug, then the SKU, then an empty string', () => {
-    expect(productDisplayName({ name: {}, slug: 'the-slug', sku: 'SKU-1' })).toBe('the-slug');
-    expect(productDisplayName({ name: {}, sku: 'SKU-1' })).toBe('SKU-1');
-    expect(productDisplayName({ name: {} })).toBe('');
+    expect(productDisplayName({ name: '', slug: 'the-slug', sku: 'SKU-1' })).toBe('the-slug');
+    expect(productDisplayName({ name: '', sku: 'SKU-1' })).toBe('SKU-1');
+    expect(productDisplayName({ name: '' })).toBe('');
   });
 });
 
@@ -31,5 +34,13 @@ describe('parsePositiveInt', () => {
 
   it.each(['', '0', '-1', '1.5', '1e3', 'abc', '9007199254740993'])('refuses %j', (input) => {
     expect(parsePositiveInt(input)).toBeNull();
+  });
+
+  // Issue #351 — the API refuses a line quantity past `LINE_QUANTITY_MAX`, so the
+  // line is invalid on the form before it is sent, not after.
+  it('accepts LINE_QUANTITY_MAX and refuses one more', () => {
+    expect(parsePositiveInt(String(LINE_QUANTITY_MAX))).toBe(LINE_QUANTITY_MAX);
+    expect(parsePositiveInt(String(LINE_QUANTITY_MAX + 1))).toBeNull();
+    expect(parsePositiveInt('2147483648')).toBeNull();
   });
 });

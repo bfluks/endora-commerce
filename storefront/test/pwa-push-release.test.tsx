@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import {
   PUSH_DISMISS_KEY,
@@ -48,7 +48,7 @@ function fakeSubscription(): FakeSubscription {
 function stubBrowser(options: {
   registration?: { pushManager: { getSubscription: () => Promise<FakeSubscription | null> } } | undefined;
   fetchImpl?: (...args: unknown[]) => Promise<Response>;
-}): { fetchSpy: ReturnType<typeof vi.fn>; storage: Map<string, string> } {
+}): { fetchSpy: Mock<(...args: unknown[]) => Promise<Response>>; storage: Map<string, string> } {
   const storage = new Map<string, string>();
   vi.stubGlobal('window', {
     PushManager: function PushManager() {},
@@ -179,10 +179,19 @@ describe('signing out', () => {
 
   it('renders the same Sign out button the account sidebar always had', async () => {
     const { SignOutButton } = await import('../components/account/SignOutButton');
-    const html = renderToString(<SignOutButton signOut={async () => {}} />);
+    const html = renderToString(<SignOutButton signOut={async () => {}} locale="en-US" />);
 
     expect(html).toContain('b2b-account__logout');
     expect(html).toContain('Sign out');
+  });
+
+  it('captions the button in the page language it is given (issue #85)', async () => {
+    const { SignOutButton } = await import('../components/account/SignOutButton');
+    expect(renderToString(<SignOutButton signOut={async () => {}} locale="en-US" />)).toContain('Sign out');
+    expect(renderToString(<SignOutButton signOut={async () => {}} locale="pl-PL" />)).toContain('Wyloguj się');
+    expect(
+      renderToString(<SignOutButton signOut={async () => {}} locale="pl-PL" label="Log out" />),
+    ).toContain('Log out');
   });
 });
 

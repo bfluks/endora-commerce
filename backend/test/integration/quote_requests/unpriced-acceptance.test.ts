@@ -211,7 +211,7 @@ describe('Quote Requests — a request is accepted, approved and ordered only on
     const converted = await convert(rfq.id);
     expect(converted.statusCode).toBe(200);
     const { cartId } = (converted.json() as { data: { cartId: string } }).data;
-    expect(await basketLines(cartId)).toEqual([{ quantity: 8, unitPrice: '6.40' }]);
+    expect(await basketLines(cartId)).toEqual([{ quantity: 8, unitPrice: '6.4000' }]);
   });
 
   // -------------------------------------------------------------------------
@@ -251,7 +251,7 @@ describe('Quote Requests — a request is accepted, approved and ordered only on
     const converted = await convert(rfq.id);
     expect(converted.statusCode).toBe(200);
     const { cartId } = (converted.json() as { data: { cartId: string } }).data;
-    expect(await basketLines(cartId)).toEqual([{ quantity: 9, unitPrice: '11.25' }]);
+    expect(await basketLines(cartId)).toEqual([{ quantity: 9, unitPrice: '11.2500' }]);
 
     const placed = await h.app.inject({
       method: 'POST',
@@ -269,7 +269,7 @@ describe('Quote Requests — a request is accepted, approved and ordered only on
     const em = h.em();
     em.clear();
     const lines = await em.find(OrderItem, { orderId }, { filters: false });
-    expect(lines.map((line) => String(line.unitPrice))).toEqual(['11.25']);
+    expect(lines.map((line) => String(line.unitPrice))).toEqual(['11.2500']);
   });
 
   it('operator creates on behalf with prices → buyer accepts', async () => {
@@ -301,13 +301,13 @@ describe('Quote Requests — a request is accepted, approved and ordered only on
     const em = h.em();
     em.clear();
     const stored = await em.find(QuoteRequestItem, { quoteRequestId: rfq.id }, { filters: false });
-    expect(stored.map((line) => line.agreedUnitPrice)).toEqual(['0.00']);
+    expect(stored.map((line) => line.agreedUnitPrice)).toEqual(['0.0000']);
 
     expect((await accept(rfq.id, revised.currentRevisionNumber)).statusCode).toBe(200);
 
     const converted = await convert(rfq.id);
     expect(converted.statusCode).toBe(200);
     const { cartId } = (converted.json() as { data: { cartId: string } }).data;
-    expect(await basketLines(cartId)).toEqual([{ quantity: 1, unitPrice: '0.00' }]);
+    expect(await basketLines(cartId)).toEqual([{ quantity: 1, unitPrice: '0.0000' }]);
   });
 });

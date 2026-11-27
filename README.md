@@ -7,6 +7,8 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <a href="https://www.npmjs.com/package/@endora-commerce/cli"><img src="https://img.shields.io/npm/v/@endora-commerce/cli?label=npm&amp;logo=npm" alt="npm version of @endora-commerce/cli"></a>
+  <a href="https://www.npmjs.com/package/@endora-commerce/cli"><img src="https://img.shields.io/npm/dm/@endora-commerce/cli?label=downloads&amp;logo=npm" alt="Monthly npm downloads of @endora-commerce/cli"></a>
+  <a href="https://github.com/endora-commerce/endora-commerce/graphs/commit-activity"><img src="https://img.shields.io/github/commit-activity/m/endora-commerce/endora-commerce?label=commits&amp;logo=github" alt="Commits per month"></a>
   <a href="https://docs.commerce.endora.software"><img src="https://img.shields.io/badge/docs-docs.commerce.endora.software-6322C8" alt="Documentation"></a>
   <a href="https://discord.gg/GJ2Yk9CvY"><img src="https://img.shields.io/badge/Discord-join%20us-5865F2?logo=discord&amp;logoColor=white" alt="Join us on Discord"></a>
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs welcome"></a>
@@ -155,7 +157,9 @@ Everything past the first run is on the documentation site,
   [kernel](docs/docs/architecture/kernel.md), the
   [customisation ladder](docs/docs/architecture/customisation-ladder.md) and
   [per-deployment overlay modules](docs/docs/architecture/overlay-pattern.md).
-- **The API** — a running backend serves its OpenAPI document at `GET /api/v1/_openapi.json`.
+- **The API** — a running backend serves its OpenAPI document at `GET /api/v1/_openapi.json` to
+  administrators holding `platform.api_description.read` and to API keys with that scope; in the
+  admin it is **System → API description**.
 
 ## 💻 Hardware & system requirements
 
@@ -184,23 +188,29 @@ catalogue), Mailpit ~20 MB, and ~500–800 MB for each of the three Node.js proc
 Target workload: a single supplier with a catalogue of hundreds of thousands of products, and
 hundreds of quote requests and hundreds of orders per month.
 
-| Resource | Minimum | Recommended |
-| --- | --- | --- |
-| CPU | 4 vCPU | 8 vCPU |
-| RAM | 8 GB | 16 GB |
-| Disk | 40 GB SSD | 100 GB NVMe SSD (with daily database backups) |
-| OS | Linux LTS (Ubuntu 22.04+ / Debian 12+) | — |
-| Network | Static public IPv4, HTTPS terminator (nginx / Caddy / Cloudflare) | — |
-| PostgreSQL | 16.x | — |
-| Redis | 7.x | — |
-| Meilisearch | 1.11.x | — |
-| Node.js | 22.x LTS (minimum 22.18) | — |
+| Resource | Minimum | Recommended | Large catalogue |
+| --- | --- | --- | --- |
+| Fits | up to tens of thousands of products | the target workload above | above 300k SKUs, or sustained traffic above one order per minute |
+| CPU | 2 vCPU | 4 vCPU | 8 vCPU |
+| RAM | 4 GB | 8 GB | 16 GB, or Meilisearch on its own node |
+| Disk | 40 GB SSD | 100 GB NVMe SSD (with daily database backups) | 100 GB+ NVMe SSD (with daily database backups) |
+| OS | Linux LTS (Ubuntu 22.04+ / Debian 12+) | — | — |
+| Network | Static public IPv4, HTTPS terminator (nginx / Caddy / Cloudflare) | — | — |
+| PostgreSQL | 16.x | — | — |
+| Redis | 7.x | — | — |
+| Meilisearch | 1.11.x | — | — |
+| Node.js | 22.x LTS (minimum 22.18) | — | — |
+
+The images are built in CI, so these figures cover the running stack only; building on the VPS
+itself needs more memory. Measured on 2026-11-09 with the production backend build and all modules
+installed on an empty catalogue: the backend settles at about 520 MB resident (about 600 MB at
+start-up), PostgreSQL about 200 MB, Meilisearch about 140 MB and Redis under 20 MB. The backend
+does not start with a V8 heap below about 384 MB (`--max-old-space-size`). Memory then grows with
+the catalogue, mostly in Meilisearch and PostgreSQL rather than in the Node.js processes.
 
 Container orchestration (Kubernetes, Docker Swarm, Nomad) is an operational choice, not a
 requirement; running each service directly on the VPS under systemd, with PostgreSQL, Redis and
-Meilisearch from distribution packages, is an equally valid target. Catalogues above 300k SKUs or
-sustained traffic above one order per minute should use the Recommended tier or move Meilisearch
-to its own node. Queues run on Redis (BullMQ).
+Meilisearch from distribution packages, is an equally valid target. Queues run on Redis (BullMQ).
 
 ## 🔧 Developing Endora Commerce
 

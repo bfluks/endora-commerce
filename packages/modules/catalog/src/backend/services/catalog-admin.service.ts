@@ -1,18 +1,30 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { randomUUID } from 'crypto';
-import { UniqueConstraintViolationException } from '@mikro-orm/core';
+import { LockMode, UniqueConstraintViolationException } from '@mikro-orm/core';
 import {
   ERROR_CODES,
+  isOrderMinimumEligibleType,
+  isValidOrderMinimum,
+  PRICE_FIELDS_REFUSED_ON_PRODUCTS,
   // Aliased: the private method below keeps the name, so the shared function
   // needs one the class body cannot shadow.
   slugify as slugifyText,
+  type AdminAttributeUsage,
   type CatalogAdminAuditContext,
   type CreateAttributeRequest,
   type CreateProductRequest,
   type CreateVariantRequest,
+  type CustomFieldMerge,
   type UpdateAttributeRequest,
   type UpdateProductRequest,
+  type ProductArchivedMode,
+  type ProductStatus,
+  type ProductStockFilter,
+  type ScopeCompletenessGateMode,
+  type ScopeWarning,
   type UpdateVariantRequest,
+  uuidSchema,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import type { EventBase, EventBus } from '@endora-commerce/platform/events';
 
@@ -20,15 +32,39 @@ export interface CatalogEvents extends Record<string, EventBase> {
   'product.created.v1': EventBase & { productId: string; sku: string };
   'product.updated.v1': EventBase & { productId: string; changedFields: string[] };
   'product.archived.v1': EventBase & { productId: string };
-  'product.deleted.v1': EventBase & { productId: string };
+  /**
+   * `formerUrlKeys` (feature 163, T155 CACHE-1) — the redirect keys the deletion
+   * removed, so a subscriber dropping the product's cached pages can still name them.
+   */
+  'product.deleted.v1': EventBase & { productId: string; formerUrlKeys?: string[] };
   'attribute.updated.v1': EventBase & {
     attributeKey: string;
     isSearchable: boolean;
     isFilterable: boolean;
   };
+  /**
+   * Feature 172 (research R-9) — one product × content attribute value was
+   * saved, and nothing else of the product changed. A separate event rather
+   * than a cause of `product.updated.v1`, because that one is what `search`,
+   * `seo` and `price_lists` react to, and a content document is on none of
+   * their projections: saving a paragraph drops the product's storefront page
+   * cache and re-indexes nothing (FR-035).
+   */
+  'product.content.updated.v1': EventBase & { productId: string; attributeKey: string };
 }
 
 export type CatalogEventBus = EventBus<CatalogEvents>;
+
+/** Feature 163 (R30.4) — the admin product list's tab badges. */
+export interface ProductListCounts {
+  all: number;
+  active: number;
+  inactive: number;
+  archived: number;
+}
+
+/** Spec 193 — the badges of a scope that sees no product (`deny`, FR-023). */
+const NO_PRODUCTS: Readonly<ProductListCounts> = Object.freeze({ all: 0, active: 0, inactive: 0, archived: 0 });
 
 /**
  * How a duplicate inherits the source's per-warehouse low-stock thresholds
@@ -51,10 +87,93 @@ export type CatalogWarehouseThresholdCopy = (input: {
   sourceProductId: string;
   targetProductId: string;
 }) => Promise<{ copied: number } | 'not-present'>;
+
+/**
+ * The admin products list's filters (feature 163, issue #1624), as
+ * {@link CatalogAdminService.listProducts} and
+ * {@link CatalogAdminService.resolveProductIds} take them.
+ */
+export interface AdminProductListQuery {
+  /**
+   * Feature 163 (FR-113, R30.4) — which archived products are listed, on
+   * `archived_at` and independently of the status. Default `exclude`.
+   */
+  archived?: ProductArchivedMode;
+  status?: ProductStatus;
+  type?: 'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual';
+  q?: string;
+  /** Legacy: restrict to products in this category (by slug) or any descendant. */
+  categorySlug?: string;
+  /** Issue #1624 — restrict to products in this category or any descendant. */
+  categoryId?: string;
+  /** Issue #1624 — restrict to products bound to this sales channel. */
+  salesChannelId?: string;
+  /** Issue #1624 — the Inventory list's *Low stock* / *Out of stock*. */
+  stock?: ProductStockFilter;
+}
+
+/**
+ * A PostgreSQL array literal of uuids, bound as **one** parameter
+ * (`= any(?::uuid[])`), so a large id set never meets the driver's limit on
+ * bound parameters. Every element is a uuid read from the database.
+ */
+function uuidArrayLiteral(ids: Iterable<string>): string {
+  return `{${[...ids].join(',')}}`;
+}
+
+/**
+ * Issue #1624 — what the admin products list's stock filter asks of `inventory`.
+ *
+ * `available()` is the presence probe the list answers as `stockFilterAvailable`,
+ * so the admin offers the filter only while it can be applied. `predicate()` is
+ * the gated port call and is **not** probed: with `inventory` off it throws
+ * `ModuleDisabledError` (503), because a stock filter that is silently ignored
+ * would hand "select all matching" the whole catalogue (`refuses-without`). The
+ * predicate is SQL placed inside this module's statement — the Inventory list's
+ * definitions, owned by `inventory`, over this module's own columns — so the
+ * database filters and pages; this module never names `inventory`'s tables.
+ */
+export interface CatalogStockFilterSource {
+  available(): boolean;
+  predicate(
+    state: ProductStockFilter,
+    columns: { productId: string; manageStock: string; lowStockThreshold: string },
+  ): { sql: string; params: string[] };
+}
+
+/**
+ * Feature 174 (FR-119, T151) — `seo`'s product metadata copied at every scope a duplicate's
+ * source holds, through `seo`'s write port **on the duplicate Command's em** (no audit of its
+ * own: the duplicate's entry covers it). Presence is decided by the wiring in front of the port;
+ * with `seo` off the copy is skipped and the answer is `'not-present'` — a duplicate nobody asked
+ * SEO of is not refused for it (Principle XVII).
+ */
+export type CatalogSeoProductMetaCopy = (
+  em: EntityManager,
+  input: { sourceProductId: string; targetProductId: string },
+) => Promise<{ copied: number } | 'not-present'>;
 import { HttpError } from '@endora-commerce/platform/http';
 import { Category } from '../entities/category.entity.js';
 import { Product } from '../entities/product.entity.js';
+import { ProductUrlRedirect } from '../entities/product-url-redirect.entity.js';
+import { allocateFreeSlug } from './url-key.service.js';
+import { bumpScopeVersion } from './scoped-values-state.js';
 import { ProductVariant } from '../entities/product-variant.entity.js';
+import { ProductChannelScope } from '../entities/product-channel-scope.entity.js';
+import { ProductChannelLanguageScope } from '../entities/product-channel-language-scope.entity.js';
+import { globalScopeFields } from './product-availability.service.js';
+import { toChannelRecord, toLanguageRecord } from './product-scopes.service.js';
+import type { ScopeCompletenessGate } from './scope-completeness.js';
+import {
+  hiddenProductIds,
+  isProductHidden,
+  predicateClause,
+  requireVisibility,
+  type AdminProductReadScope,
+  type CatalogAdminProductVisibility,
+  type ProductVisibilityClause,
+} from './admin-product-visibility.js';
+import type { SqlFragment } from '@endora-commerce/contracts';
 import {
   assertVirtualDownloadFields,
   ProductTypeValidationError,
@@ -62,6 +181,7 @@ import {
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import type { Command, CommandBus } from '@endora-commerce/platform/commands';
+import { withCallerOptions, type CallerOptions } from '../commands/caller-options.js';
 // D-77 — the apply seam is named once in this module, by `attribute-commands.ts`
 // (see the re-export there for why it is a re-export and not a local
 // declaration). This file takes it as it is: since T053(b) the write path
@@ -83,10 +203,29 @@ import {
   type AttributeOptionCommandTarget,
   type AttributeOptionResult,
 } from '../commands/attribute-commands.js';
+import { requireLinkableAsset, type LinkableAssetReader } from './linkable-asset.js';
+import {
+  attributeSetExists,
+  findSkuHolder,
+  missingCategoryIds,
+  missingRequiredAttributeKeys,
+  PRODUCT_SKU_MAX,
+  reconcileProductCategories,
+} from './product-global-field-rules.js';
+import { assertNoContentAttributeValues } from './content-attribute-rules.js';
+import { readAttributeUsage } from './attribute-usage.js';
+import { withProductStatusHookData } from '../commands/product-status-hook-data.js';
 
 // Feature 061 — the API-form mapping helpers moved next to the R7 map; the
 // re-exports keep the long-standing import site (routes, tests) stable.
 export { dbToApiAttributeType, resolveAttributeApiType } from './attribute-type-mapping.js';
+
+
+/**
+ * How many free-looking slug candidates `allocateUniqueSlug` locks at once (Phase 16
+ * review): enough that a concurrent writer winning one does not fail the allocation.
+ */
+const SLUG_CANDIDATE_LOCKS = 3;
 
 /*
  * `CatalogCustomFieldsPort` used to stand here — this module's own widening of
@@ -110,17 +249,23 @@ export { dbToApiAttributeType, resolveAttributeApiType } from './attribute-type-
 export type AdminAuditContext = CatalogAdminAuditContext;
 
 /**
- * Virtual attribute-value keys that are NOT bound to any AttributeSet but are
- * legitimately stored under `product.attributeValues`. `defaultPrice` / `price`
- * are the per-product base price the Details tab edits and the PriceList engine
- * reads (see `default-price-list-migration.ts`). They must never be rejected by
- * `assertAttributeValueKeysAllowed`, otherwise every save that carries a price
- * (i.e. nearly all of them) fails with ATTRIBUTE_VALUE_REJECTED.
+ * Feature 160 (FR-043) — a product has no price of its own: a price is a row of
+ * a price book (D-287 §5.8). The old *default price* keys of `attributeValues`
+ * are refused on every write rather than stored where nothing reads them, with
+ * a code that says where prices are set. Exported for the routes, which refuse
+ * the same names at the top level of an old client's body.
  */
-const VIRTUAL_ATTRIBUTE_VALUE_KEYS: ReadonlySet<string> = new Set([
-  'defaultPrice',
-  'price',
-]);
+export function refusePriceFields(fields: Readonly<Record<string, unknown>> | undefined, pathPrefix = ''): void {
+  if (!fields) return;
+  const named = PRICE_FIELDS_REFUSED_ON_PRODUCTS.filter((key) => Object.prototype.hasOwnProperty.call(fields, key));
+  if (named.length === 0) return;
+  throw new HttpError(
+    400,
+    ERROR_CODES.PRICE_SET_IN_PRICE_BOOKS,
+    'Prices are set in price books, not on the product.',
+    named.map((key) => ({ path: `${pathPrefix}${key}`, issue: 'prices are set in price books' })),
+  );
+}
 
 /**
  * Feature 068 — the width of `products.sku` / `product_variants.sku` and the
@@ -135,11 +280,38 @@ const SKU_MAX_LENGTH = 255;
  * (T067) and webhook bridge (Phase 2 T037) can react.
  */
 
+/**
+ * Feature 163 (FR-060) — an operator's write asking for the completeness gate: the
+ * mode read once for the request, and where to put the warnings of `warn`. Absent, the
+ * write is not gated (imports, connectors, the API-key upsert — A-6).
+ */
+export interface ProductUpdateGate {
+  completeness?: ScopeCompletenessGateMode | undefined;
+  /** Receives the `completeness` warnings in `warn` mode. */
+  warnings?: ScopeWarning[];
+  /**
+   * Feature 163 (S-W3) — the API key an integration wrote through, recorded in the
+   * audit entry's after-state (the entry has no API-key column; the Command derives
+   * its actor from the ambient context, whose admin id is `null` for a key).
+   */
+  apiKeyId?: string | null | undefined;
+}
+
+/** Issue #241 — value equality for a product field the update compares before it writes. */
+function sameValue(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 export class CatalogAdminService {
   constructor(
     private readonly emFactory: () => EntityManager,
     private readonly events: CatalogEventBus,
-    private readonly auditLog?: AuditPort,
+    /**
+     * Unread since issue #241: the last write it recorded by hand, the bulk edit's
+     * `product.update`, now runs the Command. Kept so the positional signature the
+     * composition and the fixtures construct this service with does not move.
+     */
+    _auditLog?: AuditPort,
     /**
      * Feature 005 / T027 — when injected, every newly-created Product
      * that does not declare explicit channel membership lands in the
@@ -173,7 +345,62 @@ export class CatalogAdminService {
      * is the module's declared degrade rather than a failure.
      */
     private readonly copyWarehouseThresholds?: CatalogWarehouseThresholdCopy,
+    /**
+     * Feature 163 (FR-060, FR-061) — the completeness gate for an operator's change of
+     * the global status. Composed into the admin routes' instance only; it runs only
+     * when a call passes a mode ({@link ProductUpdateGate}), so the integration ports
+     * and the API-key upsert, which never do, are never gated (A-6).
+     */
+    private readonly completenessGate?: ScopeCompletenessGate,
+    /**
+     * Feature 166 (FR-006) — `assets_library`'s read port, asked before a
+     * download file is linked. Optional so fixtures without the library keep
+     * constructing the service; a create that names a file without it fails
+     * closed ({@link CatalogAdminService.#requireAssets}).
+     */
+    private readonly assets?: LinkableAssetReader,
+    /** Feature 174 (FR-119) — `seo`'s metadata copy for a duplicate, presence-decided by the wiring. */
+    private readonly copySeoProductMeta?: CatalogSeoProductMetaCopy,
+    /**
+     * Issue #1624 — the admin list's stock filter. Optional so fixtures keep
+     * constructing the service; a stock filter without it fails loudly rather
+     * than being ignored.
+     */
+    private readonly stockFilter?: CatalogStockFilterSource,
+    /**
+     * Spec 193 (R-7, TM-3) — `product_visibility_rules`' predicates for a narrowed admin scope.
+     * Optional so fixtures keep constructing the service; a narrowed scope reaching an instance
+     * built without it refuses ({@link requireVisibility}), never widens.
+     */
+    private readonly visibility?: CatalogAdminProductVisibility,
   ) {}
+
+  /** Issue #1624 — whether the admin list can apply a stock filter right now. */
+  stockFilterAvailable(): boolean {
+    return this.stockFilter?.available() ?? false;
+  }
+
+  #requireAssets(): LinkableAssetReader {
+    if (!this.assets) {
+      throw new Error('CatalogAdminService: the asset read port is not wired — a download file cannot be linked.');
+    }
+    return this.assets;
+  }
+
+  /** The gate's mode for an operator's write, read once per request; `undefined` where no gate is composed. */
+  async completenessMode(): Promise<ScopeCompletenessGateMode | undefined> {
+    return this.completenessGate?.mode();
+  }
+
+  /**
+   * Feature 172 (FR-014) — the early refusal of a content attribute's key on a
+   * product write, before any row is read or a transaction opened. Reads the
+   * attribute model only when the write carries attribute values at all.
+   */
+  async #refuseContentAttributeValues(attributeValues: Record<string, unknown> | undefined): Promise<void> {
+    if (!attributeValues || Object.keys(attributeValues).length === 0) return;
+    assertNoContentAttributeValues(attributeValues, await this.#requireAttributeRead().listAll());
+  }
 
   #requireAttributeRead(): CatalogAttributeReadService {
     if (!this.attributeRead) {
@@ -211,9 +438,10 @@ export class CatalogAdminService {
    * fallback contract as {@link #auditedWrite}). The domain event declared on
    * the command is emitted either way (on commit only).
    */
-  async #runCommand<T>(command: Command<T>): Promise<T> {
+  async #runCommand<T>(command: Command<T>, caller?: CallerOptions): Promise<T> {
     if (this.commandBus) {
-      return this.commandBus.run(command);
+      // `specs/186-aggregate-ports/` (#1825) — an aggregate port's `source` and `extensions`.
+      return this.commandBus.run(caller ? withCallerOptions(command, caller) : command);
     }
     const em = this.emFactory();
     const result = await em.transactional(async (tem) => {
@@ -264,7 +492,12 @@ export class CatalogAdminService {
   async createProduct(
     req: CreateProductRequest,
     _auditCtx?: AdminAuditContext,
+    caller?: CallerOptions,
   ): Promise<Product> {
+    refusePriceFields(req.attributeValues as Record<string, unknown> | undefined, 'attributeValues.');
+    // Feature 172 (FR-014) — refused before the Command opens a transaction;
+    // the set guard inside it refuses the same keys again for every other path.
+    await this.#refuseContentAttributeValues(req.attributeValues as Record<string, unknown> | undefined);
     // Feature 002 (T047): cross-field validation for virtual download
     // fields. Zod's .refine() catches most cases at the boundary; the
     // service-level guard is the belt-and-braces backstop for any
@@ -281,13 +514,19 @@ export class CatalogAdminService {
       }
       throw err;
     }
+    // Feature 155 (FR-001, D5) — the range and the type rule hold for every
+    // caller, not only for the ones a route schema stands in front of.
+    assertOrderMinimumAllowed(req.type, req.minOrderQuantity);
+    // Feature 166 (FR-006) — a download file the caller may not see answers
+    // as a missing one, and is never linked.
+    if (req.downloadAssetId) await requireLinkableAsset(this.#requireAssets(), req.downloadAssetId);
 
     // The id is allocated up front so the Command can name its audit target
     // before the row exists (same shape as `duplicateProduct`).
     const productId = randomUUID();
     let product: Product;
     try {
-      product = await this.#runCommand(this.#createProductCommand(productId, req));
+      product = await this.#runCommand(this.#createProductCommand(productId, req), caller);
     } catch (err) {
       if (err instanceof UniqueConstraintViolationException) {
         throw new HttpError(409, ERROR_CODES.SKU_ALREADY_EXISTS, `SKU "${req.sku}" already exists.`);
@@ -316,13 +555,14 @@ export class CatalogAdminService {
         // to be allocated against the live table. Without this, two products
         // sharing a name collided on the slug index and the catch above
         // mislabelled the failure `SKU_ALREADY_EXISTS`.
-        const slug = await this.allocateUniqueSlug(em, this.anyValue(req.name) || req.sku);
+        const slug = await this.allocateUniqueSlug(em, req.name || req.sku);
         const product = em.create(Product, {
           id: productId,
           sku: req.sku,
           slug,
           type: req.type,
-          status: req.status ?? 'draft',
+          // Feature 163 (Q1-d) — a product starts switched off.
+          status: req.status ?? 'inactive',
           name: req.name,
           description: req.description,
           stockMode: req.stockMode ?? null,
@@ -337,6 +577,9 @@ export class CatalogAdminService {
             ? { downloadAssetId: req.downloadAssetId }
             : {}),
           ...(req.downloadUrl !== undefined ? { downloadUrl: req.downloadUrl } : {}),
+          // Feature 155 (FR-001, FR-003) — the order rules, when the request names them.
+          ...(req.minOrderQuantity !== undefined ? { minOrderQuantity: req.minOrderQuantity } : {}),
+          ...(req.returnable !== undefined ? { returnable: req.returnable } : {}),
         });
         // Feature 002 (T023): the keys in `attributeValues` MUST belong to
         // the Product's AttributeSet. The entity defaults `attributeSetId`
@@ -364,11 +607,13 @@ export class CatalogAdminService {
           result: product,
           after: {
             sku: product.sku,
-            name: { ...product.name },
+            name: product.name,
             status: product.status,
             visibility: product.visibility,
             stockMode: product.stockMode,
             categoryIds,
+            minOrderQuantity: product.minOrderQuantity ?? null,
+            returnable: product.returnable,
           },
         };
       },
@@ -384,69 +629,57 @@ export class CatalogAdminService {
     };
   }
 
-  async updateProduct(
-    id: string,
-    req: UpdateProductRequest,
-    auditCtx?: AdminAuditContext,
-  ): Promise<Product> {
+  /**
+   * The unaudited product update: the write, its flush and `product.updated.v1`,
+   * with no Command and no audit entry. Only the bus-less fallback of
+   * {@link updateProductAudited} and fixtures reach it; every operator, API-key and
+   * bulk write runs the `product.update` Command (issue #241, Principle XIII).
+   */
+  async updateProduct(id: string, req: UpdateProductRequest, gate?: ProductUpdateGate): Promise<Product> {
     const em = this.emFactory();
-    const r = await this.#applyProductUpdate(em, id, req);
+    const r = await this.#applyProductUpdate(em, id, req, gate);
     await em.flush();
-    if (this.auditLog && auditCtx) {
-      await this.auditLog.record({
-        actorAdminUserId: auditCtx.actorAdminUserId,
-        ...(auditCtx.impersonatedCustomerAccountId !== undefined
-          ? { impersonatedCustomerAccountId: auditCtx.impersonatedCustomerAccountId }
-          : {}),
-        action: 'product.update',
-        objectType: 'product',
-        objectId: r.product.id,
-        stateBefore: r.stateBefore,
-        stateAfter: { ...r.stateAfter, changedFields: r.changedFields },
-        ...(auditCtx.ipAddress !== undefined ? { ipAddress: auditCtx.ipAddress } : {}),
-        ...(auditCtx.userAgent !== undefined ? { userAgent: auditCtx.userAgent } : {}),
-        ...(auditCtx.requestId !== undefined ? { requestId: auditCtx.requestId } : {}),
-      });
-    }
-    const announceUpdated = (): void =>
-      this.events.emit('product.updated.v1', {
-        eventId: randomUUID(),
-        occurredAt: new Date().toISOString(),
-        productId: r.product.id,
-        changedFields: r.changedFields,
-      });
-    if (r.archived) {
-      // Two announcements of one write, in one event scope: outside a scope the
-      // bus starts each emit's subscribers at once and waits for none, so the
-      // two ran side by side and a subscriber could be handed
-      // `product.archived.v1` first. A scope dispatches in order and waits, so
-      // every subscriber sees "updated, then archived" — the order the audited
-      // path already had — and the search indexer's removal has finished
-      // before this returns, which is what keeps a reactivation that follows
-      // from being undone by a removal still on its way.
-      await this.events.run(async () => {
-        announceUpdated();
-        this.#emitArchived(r.product.id);
-      });
-    } else {
-      announceUpdated();
-    }
+    // Issue #241 — a write that changed nothing announces nothing.
+    if (r.changedFields.length === 0) return r.product;
+    // Feature 163 (FR-010) — a status write never archives, so this write has
+    // one announcement; `product.archived.v1` belongs to the Archive action.
+    this.events.emit('product.updated.v1', {
+      eventId: randomUUID(),
+      occurredAt: new Date().toISOString(),
+      productId: r.product.id,
+      changedFields: r.changedFields,
+    });
     return r.product;
   }
 
+  /** The completeness gate for `product`'s global status going to `status` (FR-060). */
+  async #gateGlobalStatus(
+    em: EntityManager,
+    product: Product,
+    status: ProductStatus,
+    mode: ScopeCompletenessGateMode,
+  ): Promise<ScopeWarning[]> {
+    const gate = this.completenessGate!;
+    const [channelRows, languageRows, channels] = await Promise.all([
+      em.find(ProductChannelScope, { productId: product.id }),
+      em.find(ProductChannelLanguageScope, { productId: product.id }),
+      gate.memberChannels(product.id),
+    ]);
+    const before = {
+      global: globalScopeFields(product),
+      channelRows: channelRows.map(toChannelRecord),
+      languageRows: languageRows.map(toLanguageRecord),
+    };
+    const after = { ...before, global: { ...before.global, status } };
+    return gate.enforce(em, product, before, after, channels, mode);
+  }
+
   /**
-   * `product.archived.v1` — the product's status moved to `inactive`.
-   *
-   * Emitted by the update paths themselves, after the write has committed and
-   * after the `product.updated.v1` of the same write, inside an event scope
-   * the path opens — see the two call sites for why. It used to be emitted
-   * only by `archiveProduct`, which nothing calls: archiving has been "update
-   * with `status: 'inactive'`" since feature 022, so the event the search
-   * indexer subscribes to and outbound webhooks are offered was announced by
-   * no path an operator, an importer or a PIM sync can take.
-   *
-   * Once per transition: a product that is already inactive is not archived
-   * again by a further edit, nor by a write naming the same status.
+   * `product.archived.v1` — the product was archived by the Archive action
+   * (feature 163, FR-019). Emitted by {@link archiveProduct} alone, after the
+   * write has committed and after its `product.updated.v1` `['archivedAt']`,
+   * inside the event scope that method opens. Once per transition: archiving an
+   * archived product announces nothing.
    */
   #emitArchived(productId: string): void {
     this.events.emit('product.archived.v1', {
@@ -458,33 +691,63 @@ export class CatalogAdminService {
 
   /**
    * Feature 054 — admin single-update path, audited co-transactionally via the
-   * Command Bus (one audit row + the event on commit, none on rollback). Falls
-   * back to the legacy `updateProduct` when no bus is injected (bus-less tests).
+   * Command Bus (one audit row + the event on commit, none on rollback; none either
+   * when nothing changed, issue #241). Falls back to the unaudited `updateProduct`
+   * when no bus is injected (bus-less tests).
    */
-  async updateProductAudited(id: string, req: UpdateProductRequest): Promise<Product> {
-    if (!this.commandBus) return this.updateProduct(id, req);
-    const commandBus = this.commandBus;
-    const outcome = { archived: false };
-    // A Command declares one event, and archiving is a second announcement of
-    // the same write. The Command Bus opens its own event scope, which ends —
-    // dispatching `product.updated.v1` and waiting for its subscribers — once
-    // the write has committed; `product.archived.v1` is emitted after that,
-    // into the scope opened here, so it is dispatched second and waited for as
-    // well. Emitted outside any scope it was started and not waited for: this
-    // method returned while the search indexer's removal was still on its way,
-    // and a reactivation that followed could be undone by it.
-    return this.events.run(async () => {
-      const product = await commandBus.run(this.#updateProductCommand(id, req, outcome));
-      if (outcome.archived) this.#emitArchived(product.id);
-      return product;
-    });
+  /**
+   * Whether product writes run through the Command Bus, and so are audited. A bulk
+   * edit refuses to run when they do not (issue #241): its per-product writes would
+   * fall back to the unaudited `updateProduct`.
+   */
+  hasCommandBus(): boolean {
+    return this.commandBus !== undefined;
+  }
+
+  async updateProductAudited(
+    id: string,
+    req: UpdateProductRequest,
+    gate?: ProductUpdateGate,
+    caller?: CallerOptions,
+  ): Promise<Product> {
+    // Feature 172 (FR-014) — before the transaction, as on create.
+    await this.#refuseContentAttributeValues(req.attributeValues as Record<string, unknown> | undefined);
+    if (!this.commandBus) return this.updateProduct(id, req, gate);
+    // Spec 193 T049 — hookable (`CATALOG_HOOKABLE_ACTIONS.productUpdate`).
+    const command = withProductStatusHookData(this.#updateProductCommand(id, req, gate), [id]);
+    return this.commandBus.run(caller ? withCallerOptions(command, caller) : command);
+  }
+
+  /**
+   * `specs/186-aggregate-ports/` (#1825, research R-19.2) — the product's custom-field values
+   * are its attribute values: `catalogProductCommandPort.setCustomFieldValues` runs the admin
+   * `PATCH`'s own Command, `product.update`, with the bag `merge` answers for the stored one.
+   * Keys `merge` drops are removed (the `PATCH` can only add or change keys); everything a
+   * changed key meets is the `PATCH`'s `attributeValues` rule — the attribute set, the set's
+   * required attributes, no price key, no content attribute — and `version` its editor version.
+   */
+  async setAttributeValues(
+    id: string,
+    merge: CustomFieldMerge,
+    version?: string,
+    caller?: CallerOptions,
+  ): Promise<Product> {
+    if (!this.commandBus) {
+      throw new Error('CatalogAdminService: setAttributeValues needs the Command Bus.');
+    }
+    // Spec 193 T049 — the same hookable `product.update` as the `PATCH`, so it carries the same data.
+    const command = withProductStatusHookData(
+      this.#updateProductCommand(id, version === undefined ? {} : { version }, undefined, merge),
+      [id],
+    );
+    return this.commandBus.run(caller ? withCallerOptions(command, caller) : command);
   }
 
   #updateProductCommand(
     id: string,
     req: UpdateProductRequest,
-    /** Written by `run`: whether this write moved the product to `inactive`. */
-    outcome: { archived: boolean },
+    gate?: ProductUpdateGate,
+    merge?: CustomFieldMerge,
   ): Command<Product> {
     let changedFields: string[] = [];
     return {
@@ -492,24 +755,29 @@ export class CatalogAdminService {
       objectType: 'product',
       objectId: id,
       run: async ({ em }) => {
-        const r = await this.#applyProductUpdate(em, id, req);
+        const r = await this.#applyProductUpdate(em, id, req, gate, merge);
         changedFields = r.changedFields;
-        outcome.archived = r.archived;
+        // Issue #241 — a write that changed nothing records no entry and announces
+        // nothing. The editor's version bump still commits, as on a no-op scope write.
+        if (changedFields.length === 0) return { result: r.product, skipAudit: true };
         return {
           result: r.product,
           before: r.stateBefore,
-          after: { ...r.stateAfter, changedFields },
+          after: { ...r.stateAfter, changedFields, ...(gate?.apiKeyId ? { apiKeyId: gate.apiKeyId } : {}) },
         };
       },
-      event: (product) => ({
-        eventName: 'product.updated.v1',
-        payload: {
-          eventId: randomUUID(),
-          occurredAt: new Date().toISOString(),
-          productId: product.id,
-          changedFields,
-        },
-      }),
+      event: (product) =>
+        changedFields.length === 0
+          ? undefined
+          : {
+              eventName: 'product.updated.v1',
+              payload: {
+                eventId: randomUUID(),
+                occurredAt: new Date().toISOString(),
+                productId: product.id,
+                changedFields,
+              },
+            },
     };
   }
 
@@ -521,31 +789,63 @@ export class CatalogAdminService {
     em: EntityManager,
     id: string,
     req: UpdateProductRequest,
+    gate?: ProductUpdateGate,
+    merge?: CustomFieldMerge,
   ): Promise<{
     product: Product;
     stateBefore: Record<string, unknown>;
     stateAfter: Record<string, unknown>;
     changedFields: string[];
-    /** Whether this write moved the status to `inactive` from another one. */
-    archived: boolean;
   }> {
+    refusePriceFields(req.attributeValues as Record<string, unknown> | undefined, 'attributeValues.');
+    if (!isUuidShape(id)) {
+      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+    }
     const product = await em.findOne(Product, { id });
     if (!product) {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
     }
+    // Feature 155 (FR-001, D5) — refused before anything on the row changes.
+    assertOrderMinimumAllowed(product.type, req.minOrderQuantity);
+    // Feature 174 (C2/C3 code review 1) — the existence rules the scoped save holds for the same
+    // Global-only fields (`product-global-field-rules.ts`), checked before anything is written:
+    // an unknown attribute set or an unknown or deleted category used to reach the foreign key
+    // (a 500), and a deleted category was linked silently.
+    if (
+      req.attributeSetId !== undefined &&
+      req.attributeSetId !== product.attributeSetId &&
+      !(await attributeSetExists(em, req.attributeSetId))
+    ) {
+      throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, 'unknown_attribute_set');
+    }
+    if (req.categoryIds !== undefined) {
+      const missing = await missingCategoryIds(em, req.categoryIds);
+      if (missing.length > 0) {
+        throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, `unknown_category_ids: ${missing.join(', ')}`);
+      }
+    }
+    // Feature 174 (R7, contract §6) — a product-row write is Save-overwritable: it moves the
+    // editor's version, and a `version` the caller sends is compared first (stale → 409).
+    await bumpScopeVersion(em, id, req.version);
     const stateBefore: Record<string, unknown> = {
       sku: product.sku,
-      name: { ...product.name },
-      description: { ...product.description },
+      name: product.name,
+      description: product.description,
       stockMode: product.stockMode,
       visibility: product.visibility,
       status: product.status,
       archivedAt: product.archivedAt ?? null,
       attributeValues: { ...product.attributeValues },
       allowedOrganizationIds: [...product.allowedOrganizationIds],
+      // Feature 155 (FR-005) — always present, so a row records the value
+      // whether or not this write touched it.
+      minOrderQuantity: product.minOrderQuantity ?? null,
+      returnable: product.returnable,
+      // Feature 163 (FR-023) — the global publication window.
+      publishFrom: product.publishFrom?.toISOString() ?? null,
+      publishUntil: product.publishUntil?.toISOString() ?? null,
     };
     const changedFields: string[] = [];
-    let archived = false;
     // Feature 012 / FR-016 — SKU is mutable. Refused with 400 sku_in_use
     // when the new SKU collides with another product. The internal UUID
     // (product.id) is the canonical reference; snapshot tables keep the
@@ -557,47 +857,59 @@ export class CatalogAdminService {
       // create contract enforces. This guard used to read 160 while the
       // column held 64, so a 100-character rename passed validation and then
       // failed at the database; all three now agree.
-      if (trimmed.length === 0 || trimmed.length > 255) {
+      if (trimmed.length === 0 || trimmed.length > PRODUCT_SKU_MAX) {
         throw new HttpError(
           400,
           ERROR_CODES.VALIDATION_FAILED,
           'invalid_sku',
         );
       }
-      const conflict = await em.findOne(Product, { sku: trimmed });
-      if (conflict && conflict.id !== product.id) {
-        throw new HttpError(
-          400,
-          ERROR_CODES.VALIDATION_FAILED,
-          `sku_in_use { conflictingProductId: ${conflict.id}, conflictingSku: ${trimmed} }`,
-        );
-      }
       // Feature 025 — SKUs share a global namespace with variants (see createVariant).
-      const variantConflict = await em.findOne(ProductVariant, { sku: trimmed });
-      if (variantConflict) {
+      const holder = await findSkuHolder(em, product.id, trimmed);
+      if (holder) {
+        // Issue #624 (#86) — create's code and status for the same refusal;
+        // the token says which kind of row holds the SKU. The SKU travels as
+        // `sku`: `details.code` is the envelope's token slot.
         throw new HttpError(
-          400,
-          ERROR_CODES.VALIDATION_FAILED,
-          `sku_in_use { conflictingVariantId: ${variantConflict.id}, conflictingSku: ${trimmed} }`,
+          409,
+          ERROR_CODES.SKU_ALREADY_EXISTS,
+          `SKU "${trimmed}" is already used by another ${'productId' in holder ? 'product' : 'variant'}.`,
+          'productId' in holder
+            ? { code: 'held_by_product', sku: trimmed, conflictingProductId: holder.productId }
+            : { code: 'held_by_variant', sku: trimmed, conflictingVariantId: holder.variantId },
         );
       }
       product.sku = trimmed;
       changedFields.push('sku');
     }
-    if (req.name) { product.name = req.name; changedFields.push('name'); }
-    if (req.description) { product.description = req.description; changedFields.push('description'); }
-    if (req.stockMode !== undefined) { product.stockMode = req.stockMode; changedFields.push('stockMode'); }
-    if (req.visibility) { product.visibility = req.visibility; changedFields.push('visibility'); }
-    // Feature 022 / 032 — status field. Cross-field rule: transitioning to
-    // `inactive` sets archivedAt; transitioning away clears it.
+    // Issue #241 — a field is changed only when its value moves: a write that
+    // restates what is stored records no audit entry and announces nothing.
+    if (req.name && req.name !== product.name) { product.name = req.name; changedFields.push('name'); }
+    if (req.description && req.description !== product.description) {
+      product.description = req.description;
+      changedFields.push('description');
+    }
+    if (req.stockMode !== undefined && req.stockMode !== (product.stockMode ?? null)) {
+      product.stockMode = req.stockMode;
+      changedFields.push('stockMode');
+    }
+    if (req.visibility && req.visibility !== product.visibility) {
+      product.visibility = req.visibility;
+      changedFields.push('visibility');
+    }
+    // Feature 022 — status field. Feature 163 (FR-010, FR-019, O-5): a status
+    // write never sets or clears `archivedAt` — `inactive` is plain off and
+    // `active` does not restore. Archiving is the Archive / Restore action.
     if (req.status !== undefined && req.status !== product.status) {
-      product.status = req.status;
-      if (req.status === 'inactive') {
-        product.archivedAt = new Date();
-        archived = true;
-      } else {
-        product.archivedAt = null;
+      // Feature 163 (FR-060, US6 #3) — a change of the global switch runs the
+      // completeness gate over every pair it turns on, before the row changes: in
+      // `refuse` one failing pair refuses the whole write (N3). It reads status
+      // only, so an archived product set `active` is gated too.
+      if (gate?.completeness && this.completenessGate) {
+        const warnings = await this.#gateGlobalStatus(em, product, req.status, gate.completeness);
+        gate.warnings?.push(...warnings);
       }
+      product.status = req.status;
       changedFields.push('status');
     }
     // Feature 002 (T034) — attribute_set_id swap. Persist BEFORE
@@ -605,6 +917,31 @@ export class CatalogAdminService {
     if (req.attributeSetId !== undefined && req.attributeSetId !== product.attributeSetId) {
       product.attributeSetId = req.attributeSetId;
       changedFields.push('attributeSetId');
+    }
+    if (merge) {
+      // `specs/186-aggregate-ports/` (R-19.2) — the caller's read-modify-write over the bag, on
+      // this transaction's row. The changed keys meet the PATCH's rules below; a refusal `merge`
+      // throws propagates and writes nothing.
+      const current = product.attributeValues ?? {};
+      const next = await merge({ ...current });
+      const changed = Object.fromEntries(
+        Object.entries(next).filter(([key, value]) => !sameValue(current[key], value)),
+      );
+      const removed = Object.keys(current).filter((key) => !Object.prototype.hasOwnProperty.call(next, key));
+      refusePriceFields(changed, 'attributeValues.');
+      if (Object.keys(changed).length > 0) {
+        assertNoContentAttributeValues(changed, await this.#requireAttributeRead().listAll());
+      }
+      await this.assertAttributeValueKeysAllowed(
+        em,
+        product.attributeSetId,
+        changed,
+        new Set(Object.keys(current)),
+      );
+      if (Object.keys(changed).length > 0 || removed.length > 0) {
+        product.attributeValues = { ...next };
+        changedFields.push('attributeValues');
+      }
     }
     if (req.attributeValues) {
       // Feature 002 (T023) — validate the patched keys against the
@@ -618,8 +955,12 @@ export class CatalogAdminService {
         req.attributeValues as Record<string, unknown>,
         new Set(Object.keys(product.attributeValues ?? {})),
       );
-      product.attributeValues = { ...product.attributeValues, ...req.attributeValues };
-      changedFields.push('attributeValues');
+      const current = product.attributeValues ?? {};
+      const patch = req.attributeValues as Record<string, unknown>;
+      if (Object.keys(patch).some((key) => !sameValue(current[key], patch[key]))) {
+        product.attributeValues = { ...current, ...patch };
+        changedFields.push('attributeValues');
+      }
     }
     // Feature 012 / FR-013 — refuse the save if any required attribute
     // in the assigned set is left without a value. The merged map is
@@ -628,7 +969,8 @@ export class CatalogAdminService {
     if (
       product.attributeSetId &&
       (req.attributeValues !== undefined ||
-        req.attributeSetId !== undefined)
+        req.attributeSetId !== undefined ||
+        merge !== undefined)
     ) {
       await this.assertRequiredAttributesPresent(
         em,
@@ -636,7 +978,7 @@ export class CatalogAdminService {
         product.attributeValues ?? {},
       );
     }
-    if (req.allowedOrganizationIds) {
+    if (req.allowedOrganizationIds && !sameValue(req.allowedOrganizationIds, product.allowedOrganizationIds)) {
       product.allowedOrganizationIds = req.allowedOrganizationIds;
       changedFields.push('allowedOrganizationIds');
     }
@@ -652,41 +994,90 @@ export class CatalogAdminService {
       }
     }
     // Feature 010 — per-product stock-management flags.
-    if (req.manageStock !== undefined) {
+    if (req.manageStock !== undefined && req.manageStock !== product.manageStock) {
       product.manageStock = req.manageStock;
       changedFields.push('manageStock');
     }
-    if (req.backorderEnabled !== undefined) {
+    if (req.backorderEnabled !== undefined && req.backorderEnabled !== product.backorderEnabled) {
       product.backorderEnabled = req.backorderEnabled;
       changedFields.push('backorderEnabled');
     }
-    if (req.lowStockThreshold !== undefined) {
+    if (req.lowStockThreshold !== undefined && req.lowStockThreshold !== (product.lowStockThreshold ?? null)) {
       product.lowStockThreshold = req.lowStockThreshold;
       changedFields.push('lowStockThreshold');
     }
-    if (req.lowStockThresholdMode !== undefined) {
+    if (req.lowStockThresholdMode !== undefined && req.lowStockThresholdMode !== product.lowStockThresholdMode) {
       product.lowStockThresholdMode = req.lowStockThresholdMode;
       changedFields.push('lowStockThresholdMode');
     }
-    if (req.fulfilmentStrategy !== undefined) {
+    if (req.fulfilmentStrategy !== undefined && req.fulfilmentStrategy !== (product.fulfilmentStrategy ?? null)) {
       product.fulfilmentStrategy = req.fulfilmentStrategy;
       changedFields.push('fulfilmentStrategy');
     }
-    if (req.fulfilmentStrategyWarehouseOrder !== undefined) {
+    if (
+      req.fulfilmentStrategyWarehouseOrder !== undefined &&
+      !sameValue(req.fulfilmentStrategyWarehouseOrder, product.fulfilmentStrategyWarehouseOrder ?? null)
+    ) {
       product.fulfilmentStrategyWarehouseOrder = req.fulfilmentStrategyWarehouseOrder;
       changedFields.push('fulfilmentStrategyWarehouseOrder');
     }
+    // Feature 155 (FR-001, FR-003, D5) — the pieces minimum and the returnable flag.
+    if (req.minOrderQuantity !== undefined && req.minOrderQuantity !== (product.minOrderQuantity ?? null)) {
+      product.minOrderQuantity = req.minOrderQuantity;
+      changedFields.push('minOrderQuantity');
+    }
+    if (req.returnable !== undefined && req.returnable !== product.returnable) {
+      product.returnable = req.returnable;
+      changedFields.push('returnable');
+    }
+    // Feature 163 (FR-023) — the global publication window, written as a pair:
+    // an omitted bound keeps its stored value, and the pair that results must
+    // start before it ends. It never touches a channel's window (FR-013).
+    if (req.publishFrom !== undefined || req.publishUntil !== undefined) {
+      const from =
+        req.publishFrom === undefined
+          ? (product.publishFrom ?? null)
+          : req.publishFrom === null
+            ? null
+            : new Date(req.publishFrom);
+      const until =
+        req.publishUntil === undefined
+          ? (product.publishUntil ?? null)
+          : req.publishUntil === null
+            ? null
+            : new Date(req.publishUntil);
+      if (from !== null && until !== null && from.getTime() >= until.getTime()) {
+        throw new HttpError(
+          422,
+          ERROR_CODES.VALIDATION_FAILED,
+          'The publication window must start before it ends.',
+          { field: 'window' },
+        );
+      }
+      if (
+        (from?.getTime() ?? null) !== (product.publishFrom?.getTime() ?? null) ||
+        (until?.getTime() ?? null) !== (product.publishUntil?.getTime() ?? null)
+      ) {
+        product.publishFrom = from;
+        product.publishUntil = until;
+        changedFields.push('publicationWindow');
+      }
+    }
     const stateAfter: Record<string, unknown> = {
-      name: { ...product.name },
-      description: { ...product.description },
+      name: product.name,
+      description: product.description,
       stockMode: product.stockMode,
       visibility: product.visibility,
       status: product.status,
       archivedAt: product.archivedAt ?? null,
       attributeValues: { ...product.attributeValues },
       allowedOrganizationIds: [...product.allowedOrganizationIds],
+      minOrderQuantity: product.minOrderQuantity ?? null,
+      returnable: product.returnable,
+      publishFrom: product.publishFrom?.toISOString() ?? null,
+      publishUntil: product.publishUntil?.toISOString() ?? null,
     };
-    return { product, stateBefore, stateAfter, changedFields, archived };
+    return { product, stateBefore, stateAfter, changedFields };
   }
 
   /**
@@ -706,53 +1097,21 @@ export class CatalogAdminService {
     productId: string,
     categoryIds: readonly string[],
   ): Promise<boolean> {
-    const conn = em.getConnection();
-    const txCtx = em.getTransactionContext();
-    const currentRows = (await conn.execute<Array<{ category_id: string }>>(
-      `select category_id from product_categories where product_id = ?`,
-      [productId],
-      'all',
-      txCtx,
-    )) as Array<{ category_id: string }>;
-    const current = new Set(currentRows.map((r) => r.category_id));
-    const target = new Set(categoryIds);
-    const toAdd = [...target].filter((id) => !current.has(id));
-    const toRemove = [...current].filter((id) => !target.has(id));
-    if (toRemove.length > 0) {
-      const placeholders = toRemove.map(() => '?').join(',');
-      await conn.execute(
-        `delete from product_categories where product_id = ? and category_id in (${placeholders})`,
-        [productId, ...toRemove],
-        'run',
-        txCtx,
-      );
-    }
-    if (toAdd.length > 0) {
-      const placeholders = toAdd.map(() => '(?,?)').join(',');
-      const params: unknown[] = [];
-      for (const cid of toAdd) {
-        params.push(productId, cid);
-      }
-      await conn.execute(
-        `insert into product_categories (product_id, category_id) values ${placeholders}`,
-        params,
-        'run',
-        txCtx,
-      );
-    }
-    return toAdd.length > 0 || toRemove.length > 0;
+    return reconcileProductCategories(em, productId, categoryIds);
   }
 
   /**
    * Duplicate an existing Product: copies the core row plus bridge tables
    * (categories, sales-channel memberships, gallery items + labels,
-   * attachments, related/up-sell/cross-sell links, grouped children,
-   * bundle slots + options, variants).
+   * attachments, packaging units, related/up-sell/cross-sell links, grouped
+   * children, bundle slots + options, variants) and, since feature 174
+   * (FR-119), every scoped value at Global, Channel and Channel × language.
    *
    * The duplicated row gets a fresh UUID; the SKU is derived from the
    * source by appending `-copy`, then `-copy-2`, `-copy-3`, … until a
-   * free slot is found. Status is reset to `'draft'` and `archivedAt`
-   * is cleared so the operator can review before publishing.
+   * free slot is found. Status is reset to `'inactive'` and `archivedAt`
+   * is cleared (feature 163, Q1-d) so the operator can review before
+   * switching it on — also when the source is archived and `active`.
    *
    * Variants have their own globally-unique SKUs; each is suffixed in
    * the same way against the variant SKU space.
@@ -771,83 +1130,114 @@ export class CatalogAdminService {
       before: Record<string, unknown> | null;
       after: Record<string, unknown> | null;
     }>,
+    caller?: CallerOptions,
   ): Promise<T> {
     if (this.commandBus) {
-      return this.commandBus.run({ action, objectType, objectId, run: ({ em }) => write(em) });
+      const command: Command<T> = { action, objectType, objectId, run: ({ em }) => write(em) };
+      return this.commandBus.run(caller ? withCallerOptions(command, caller) : command);
     }
-    const em = this.emFactory();
-    const w = await write(em);
-    await em.flush();
-    return w.result;
+    // Unaudited without a Command Bus, but still one transaction: the URL-key
+    // advisory locks a write takes (`allocateUniqueSlug`) hold only inside one.
+    return this.emFactory().transactional(async (em) => {
+      const w = await write(em);
+      await em.flush();
+      return w.result;
+    });
   }
 
   async duplicateProduct(id: string): Promise<Product> {
     const em = this.emFactory();
+    if (!isUuidShape(id)) {
+      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+    }
     const source = await em.findOne(Product, { id });
     if (!source) {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
     }
 
-    const newSku = await this.allocateCopySku(em, source.sku);
-    const newSlug = await this.allocateCopySlug(em, source.slug);
-
-    // The dup product row + its audit are co-transactional; the bridge copies
-    // run AFTER on this em (matches the pre-054 two-step) — the dup FK target
-    // exists once committed, and a partially-copied dup is no worse than today.
+    // Feature 174 (FR-119, T151) — the copy is ONE Command: the product row, every catalog-owned
+    // bridge and every scoped value at Global, Channel and Channel × language, empty overrides and
+    // inherit states included, commit or roll back together with the one audit entry. What other
+    // modules own runs through their own audited Commands after it (the channel memberships, the
+    // warehouse thresholds): a Command cannot nest inside another's transaction. URL keys are never
+    // copied beyond the fresh Global key, and status is reset at every scope (163 Q1-d).
     const dupId = randomUUID();
     const dup = await this.#auditedWrite('product.duplicate', 'product', dupId, async (cem) => {
+      // Inside the Command's transaction (Phase 16 review): the slug's URL-key lock is
+      // a transaction lock, so on a bare em it was released before the insert.
+      const newSku = await this.allocateCopySku(cem, source.sku);
+      const newSlug = await this.allocateCopySlug(cem, source.slug);
       const created = cem.create(Product, {
         id: dupId,
         sku: newSku,
         slug: newSlug,
-      type: source.type,
-      status: 'draft',
-      name: this.suffixCopyNames(source.name),
-      description: { ...source.description },
-      stockMode: source.stockMode ?? null,
-      visibility: source.visibility,
-      attributeValues: { ...source.attributeValues },
-      allowedOrganizationIds: [...source.allowedOrganizationIds],
-      attributeSetId: source.attributeSetId,
-      ...(source.downloadAssetId !== undefined && source.downloadAssetId !== null
-        ? { downloadAssetId: source.downloadAssetId }
-        : {}),
-      ...(source.downloadUrl !== undefined && source.downloadUrl !== null
-        ? { downloadUrl: source.downloadUrl }
-        : {}),
-      manageStock: source.manageStock,
-      backorderEnabled: source.backorderEnabled,
-      ...(source.lowStockThreshold !== undefined && source.lowStockThreshold !== null
-        ? { lowStockThreshold: source.lowStockThreshold }
-        : {}),
-      lowStockThresholdMode: source.lowStockThresholdMode,
-      ...(source.fulfilmentStrategy !== undefined && source.fulfilmentStrategy !== null
-        ? { fulfilmentStrategy: source.fulfilmentStrategy }
-        : {}),
-      ...(source.fulfilmentStrategyWarehouseOrder !== undefined &&
-      source.fulfilmentStrategyWarehouseOrder !== null
-        ? {
-            fulfilmentStrategyWarehouseOrder: [
-              ...source.fulfilmentStrategyWarehouseOrder,
-            ],
-          }
-        : {}),
+        type: source.type,
+        status: 'inactive',
+        archivedAt: null,
+        name: this.suffixCopyName(source.name),
+        description: source.description,
+        stockMode: source.stockMode ?? null,
+        visibility: source.visibility,
+        attributeValues: { ...source.attributeValues },
+        allowedOrganizationIds: [...source.allowedOrganizationIds],
+        attributeSetId: source.attributeSetId,
+        ...(source.downloadAssetId !== undefined && source.downloadAssetId !== null
+          ? { downloadAssetId: source.downloadAssetId }
+          : {}),
+        ...(source.downloadUrl !== undefined && source.downloadUrl !== null
+          ? { downloadUrl: source.downloadUrl }
+          : {}),
+        manageStock: source.manageStock,
+        backorderEnabled: source.backorderEnabled,
+        ...(source.lowStockThreshold !== undefined && source.lowStockThreshold !== null
+          ? { lowStockThreshold: source.lowStockThreshold }
+          : {}),
+        lowStockThresholdMode: source.lowStockThresholdMode,
+        ...(source.fulfilmentStrategy !== undefined && source.fulfilmentStrategy !== null
+          ? { fulfilmentStrategy: source.fulfilmentStrategy }
+          : {}),
+        ...(source.fulfilmentStrategyWarehouseOrder !== undefined &&
+        source.fulfilmentStrategyWarehouseOrder !== null
+          ? {
+              fulfilmentStrategyWarehouseOrder: [
+                ...source.fulfilmentStrategyWarehouseOrder,
+              ],
+            }
+          : {}),
+        // Feature 174 (FR-119) — the Global order rules and publication window.
+        minOrderQuantity: source.minOrderQuantity ?? null,
+        returnable: source.returnable,
+        publishFrom: source.publishFrom ?? null,
+        publishUntil: source.publishUntil ?? null,
       });
       await cem.flush();
+      const copied = await this.#copyCatalogRows(cem, source, dupId);
+      const seo = this.copySeoProductMeta
+        ? await this.copySeoProductMeta(cem, { sourceProductId: source.id, targetProductId: dupId })
+        : 'not-present';
+      // Feature 172 (FR-060, research R-16) — the product's Page Builder content
+      // is copied in this transaction, atomic with the row it belongs to. The
+      // audit row counts the attributes, never the documents.
+      const copiedContent = (await cem.execute(
+        `insert into product_content_values
+           (id, product_id, product_attribute_id, content, summary, created_at, updated_at)
+         select gen_random_uuid(), ?, product_attribute_id, content, summary, now(), now()
+           from product_content_values where product_id = ?
+         returning id`,
+        [dupId, source.id],
+      )) as Array<{ id: string }>;
       return {
         result: created,
         before: null,
-        after: { sku: newSku, slug: newSlug, sourceProductId: id },
+        after: {
+          sku: newSku,
+          slug: newSlug,
+          sourceProductId: id,
+          copied: { ...copied, seoScopes: seo === 'not-present' ? null : seo.copied },
+          contentAttributeCount: copiedContent.length,
+        },
       };
     });
-
-
-    // product_categories (bridge)
-    await em.execute(
-      `insert into "product_categories" ("product_id", "category_id")
-         select ?, "category_id" from "product_categories" where "product_id" = ?`,
-      [dup.id, source.id],
-    );
 
     // The channel assortment, through the kernel's membership service (issue
     // #185). This was an `insert … select` against the bridge table, which is
@@ -859,48 +1249,156 @@ export class CatalogAdminService {
       await this.salesChannelMembership.copyMemberships('product', source.id, dup.id);
     }
 
-    // gallery_items + gallery_item_labels — we need a fresh UUID per item
-    // and to rewrite the bridge rows to the new ids.
-    const galleryRows = (await em.execute(
-      `select "id", "asset_id", "position" from "gallery_items"
-         where "product_id" = ? order by "position" asc`,
-      [source.id],
-    )) as Array<{ id: string; asset_id: string; position: number }>;
-    if (galleryRows.length > 0) {
-      const idMap = new Map<string, string>();
-      for (const row of galleryRows) {
-        const newId = randomUUID();
-        idMap.set(row.id, newId);
-        await em.execute(
-          `insert into "gallery_items"
-             ("id", "product_id", "asset_id", "position", "created_at", "updated_at")
-             values (?, ?, ?, ?, now(), now())`,
-          [newId, dup.id, row.asset_id, row.position],
-        );
-      }
-      const labelRows = (await em.execute(
-        `select "gallery_item_id", "label" from "gallery_item_labels"
-           where "product_id" = ?`,
-        [source.id],
-      )) as Array<{ gallery_item_id: string; label: string }>;
-      for (const lbl of labelRows) {
-        const mapped = idMap.get(lbl.gallery_item_id);
-        if (!mapped) continue;
-        await em.execute(
-          `insert into "gallery_item_labels"
-             ("gallery_item_id", "product_id", "label") values (?, ?, ?)`,
-          [mapped, dup.id, lbl.label],
-        );
-      }
+    // Per-(product, warehouse) low-stock thresholds, so the duplicate inherits
+    // the source's alerting profile. `inventory`'s rows and `inventory`'s
+    // Command since issue #185 — this used to be an `insert … select` into that
+    // module's table from here, which kept writing while an operator had the
+    // module switched off. No `catch` around it: the wiring decides presence in
+    // front of the gate and the degrade arrives as `'not-present'`.
+    if (this.copyWarehouseThresholds) {
+      await this.copyWarehouseThresholds({
+        sourceProductId: source.id,
+        targetProductId: dup.id,
+      });
     }
 
-    // product_attachments
+    this.events.emit('product.created.v1', {
+      eventId: randomUUID(),
+      occurredAt: new Date().toISOString(),
+      productId: dup.id,
+      sku: dup.sku,
+    });
+
+    return dup;
+  }
+
+  /**
+   * Feature 174 (FR-119, T151) — every catalog-owned row of `source` copied onto `targetId`, on the
+   * Command's em: the bridges (categories, gallery with its Global roles, attachments, packaging
+   * units, links, grouped children, bundle slots, variants) and every scoped value at Channel and
+   * Channel × language — value overrides (texts and attributes), channel scope rows, gallery item,
+   * gallery role, attachment and packaging-unit overrides — verbatim, so a deliberately empty
+   * override stays empty and a scope holding nothing still inherits. Child-row overrides are
+   * re-pointed through an old → new id map passed as one JSON parameter.
+   *
+   * Not copied: URL keys and redirects (unique per channel; the copy has its fresh Global key),
+   * status at Channel and Channel × language (the copy starts `inactive` everywhere, 163 Q1-d).
+   * Orphaned rows (a scope the source no longer sells on) are copied like the rest: they keep
+   * what the source keeps, and come back to life in the same way when the scope does.
+   */
+  async #copyCatalogRows(em: EntityManager, source: Product, targetId: string): Promise<Record<string, number>> {
+    const count = async (sql: string, params: unknown[]): Promise<number> =>
+      ((await em.execute(sql, params)) as unknown[]).length;
+    const idMap = async (table: string): Promise<Record<string, string>> => {
+      const rows = (await em.execute(`select "id" from "${table}" where "product_id" = ?`, [source.id])) as Array<{
+        id: string;
+      }>;
+      return Object.fromEntries(rows.map((row) => [row.id, randomUUID()]));
+    };
+    const remap = (column: string) => `(?::jsonb ->> o."${column}"::text)::uuid`;
+
+    // product_categories (bridge)
     await em.execute(
+      `insert into "product_categories" ("product_id", "category_id")
+         select ?, "category_id" from "product_categories" where "product_id" = ?`,
+      [targetId, source.id],
+    );
+
+    // Texts and attributes at C and C×L.
+    const valueOverrides = await count(
+      `insert into "product_value_overrides"
+         ("id", "product_id", "attribute_key", "channel_id", "language_code", "value", "created_at", "updated_at")
+         select gen_random_uuid(), ?, o."attribute_key", o."channel_id", o."language_code", o."value", now(), now()
+           from "product_value_overrides" o where o."product_id" = ?
+         returning "id"`,
+      [targetId, source.id],
+    );
+
+    // Window, audience, MOQ and returnable at C; status inherits (the copy is reviewed first).
+    const channelScopes = await count(
+      `insert into "product_channel_scopes"
+         ("product_id", "sales_channel_id", "status", "window_overridden", "publish_from", "publish_until",
+          "visibility", "allowed_organization_ids", "min_order_quantity_overridden", "min_order_quantity",
+          "returnable", "created_at", "updated_at")
+         select ?, o."sales_channel_id", null, o."window_overridden", o."publish_from", o."publish_until",
+                o."visibility", o."allowed_organization_ids", o."min_order_quantity_overridden",
+                o."min_order_quantity", o."returnable", now(), now()
+           from "product_channel_scopes" o where o."product_id" = ?
+         returning "product_id"`,
+      [targetId, source.id],
+    );
+
+    // Gallery: the items with their Global alt text and hidden flag, the Global roles, the overrides.
+    const items = await idMap('gallery_items');
+    const itemsJson = JSON.stringify(items);
+    const galleryItems = await count(
+      `insert into "gallery_items" ("id", "product_id", "asset_id", "position", "alt_text", "hidden", "created_at", "updated_at")
+         select ${remap('id')}, ?, o."asset_id", o."position", o."alt_text", o."hidden", now(), now()
+           from "gallery_items" o where o."product_id" = ?
+         returning "id"`,
+      [itemsJson, targetId, source.id],
+    );
+    const galleryRoles = await count(
+      `insert into "gallery_item_labels" ("gallery_item_id", "product_id", "label")
+         select ${remap('gallery_item_id')}, ?, o."label"
+           from "gallery_item_labels" o where o."product_id" = ?
+         returning "label"`,
+      [itemsJson, targetId, source.id],
+    );
+    const galleryItemOverrides = await count(
+      `insert into "gallery_item_scope_overrides"
+         ("id", "gallery_item_id", "product_id", "sales_channel_id", "language_code", "field", "value", "created_at", "updated_at")
+         select gen_random_uuid(), ${remap('gallery_item_id')}, ?, o."sales_channel_id", o."language_code", o."field", o."value", now(), now()
+           from "gallery_item_scope_overrides" o where o."product_id" = ?
+         returning "id"`,
+      [itemsJson, targetId, source.id],
+    );
+    // An empty role (no holder) keeps its `null`: `->>` of a null key is null.
+    const galleryRoleOverrides = await count(
+      `insert into "gallery_role_scope_overrides"
+         ("id", "product_id", "sales_channel_id", "language_code", "label", "gallery_item_id", "created_at", "updated_at")
+         select gen_random_uuid(), ?, o."sales_channel_id", o."language_code", o."label", ${remap('gallery_item_id')}, now(), now()
+           from "gallery_role_scope_overrides" o where o."product_id" = ?
+         returning "id"`,
+      [targetId, itemsJson, source.id],
+    );
+
+    // Attachments with their Global hidden flag, then their overrides.
+    const attachmentIds = JSON.stringify(await idMap('product_attachments'));
+    const attachments = await count(
       `insert into "product_attachments"
-         ("id", "product_id", "asset_id", "attachment_type_id", "name", "description", "position", "created_at", "updated_at")
-         select gen_random_uuid(), ?, "asset_id", "attachment_type_id", "name", "description", "position", now(), now()
-           from "product_attachments" where "product_id" = ?`,
-      [dup.id, source.id],
+         ("id", "product_id", "asset_id", "attachment_type_id", "name", "description", "position", "hidden", "created_at", "updated_at")
+         select ${remap('id')}, ?, o."asset_id", o."attachment_type_id", o."name", o."description", o."position", o."hidden", now(), now()
+           from "product_attachments" o where o."product_id" = ?
+         returning "id"`,
+      [attachmentIds, targetId, source.id],
+    );
+    const attachmentOverrides = await count(
+      `insert into "product_attachment_scope_overrides"
+         ("id", "attachment_id", "product_id", "sales_channel_id", "language_code", "field", "value", "created_at", "updated_at")
+         select gen_random_uuid(), ${remap('attachment_id')}, ?, o."sales_channel_id", o."language_code", o."field", o."value", now(), now()
+           from "product_attachment_scope_overrides" o where o."product_id" = ?
+         returning "id"`,
+      [attachmentIds, targetId, source.id],
+    );
+
+    // Packaging units, then their name overrides.
+    const unitIds = JSON.stringify(await idMap('product_packaging_units'));
+    const packagingUnits = await count(
+      `insert into "product_packaging_units"
+         ("id", "product_id", "name", "base_quantity", "position", "is_default", "min_order_units", "created_at", "updated_at")
+         select ${remap('id')}, ?, o."name", o."base_quantity", o."position", o."is_default", o."min_order_units", now(), now()
+           from "product_packaging_units" o where o."product_id" = ?
+         returning "id"`,
+      [unitIds, targetId, source.id],
+    );
+    const packagingUnitOverrides = await count(
+      `insert into "product_packaging_unit_scope_overrides"
+         ("id", "packaging_unit_id", "product_id", "sales_channel_id", "language_code", "field", "value", "created_at", "updated_at")
+         select gen_random_uuid(), ${remap('packaging_unit_id')}, ?, o."sales_channel_id", o."language_code", o."field", o."value", now(), now()
+           from "product_packaging_unit_scope_overrides" o where o."product_id" = ?
+         returning "id"`,
+      [unitIds, targetId, source.id],
     );
 
     // product_links (only outgoing links are copied — incoming links from
@@ -910,7 +1408,7 @@ export class CatalogAdminService {
          ("id", "source_product_id", "target_product_id", "kind", "position", "created_at", "updated_at")
          select gen_random_uuid(), ?, "target_product_id", "kind", "position", now(), now()
            from "product_links" where "source_product_id" = ?`,
-      [dup.id, source.id],
+      [targetId, source.id],
     );
 
     // grouped_items (children of a grouped product)
@@ -920,7 +1418,7 @@ export class CatalogAdminService {
            ("id", "parent_product_id", "child_product_id", "quantity", "position", "created_at", "updated_at")
            select gen_random_uuid(), ?, "child_product_id", "quantity", "position", now(), now()
              from "grouped_items" where "parent_product_id" = ?`,
-        [dup.id, source.id],
+        [targetId, source.id],
       );
     }
 
@@ -945,7 +1443,7 @@ export class CatalogAdminService {
              values (?, ?, ?::jsonb, ?, ?, ?, now(), now())`,
           [
             newSlotId,
-            dup.id,
+            targetId,
             JSON.stringify(slot.name),
             slot.min_quantity,
             slot.max_quantity,
@@ -962,19 +1460,6 @@ export class CatalogAdminService {
       }
     }
 
-    // Per-(product, warehouse) low-stock thresholds, so the duplicate inherits
-    // the source's alerting profile. `inventory`'s rows and `inventory`'s
-    // Command since issue #185 — this used to be an `insert … select` into that
-    // module's table from here, which kept writing while an operator had the
-    // module switched off. No `catch` around it: the wiring decides presence in
-    // front of the gate and the degrade arrives as `'not-present'`.
-    if (this.copyWarehouseThresholds) {
-      await this.copyWarehouseThresholds({
-        sourceProductId: source.id,
-        targetProductId: dup.id,
-      });
-    }
-
     // product_variants (configurable products) — each variant has its own
     // unique SKU; we allocate copies the same way as the parent SKU.
     if (source.type === 'configurable') {
@@ -982,10 +1467,9 @@ export class CatalogAdminService {
       for (const v of variants) {
         const variantSku = await this.allocateCopySku(em, v.sku);
         const newVariant = em.create(ProductVariant, {
-          parentProductId: dup.id,
+          parentProductId: targetId,
           sku: variantSku,
           variantAttributeValues: { ...v.variantAttributeValues },
-          ...(v.priceOverride != null ? { priceOverride: v.priceOverride } : {}),
           ...(v.stockLevel != null ? { stockLevel: v.stockLevel } : {}),
         });
         em.persist(newVariant);
@@ -993,14 +1477,18 @@ export class CatalogAdminService {
       await em.flush();
     }
 
-    this.events.emit('product.created.v1', {
-      eventId: randomUUID(),
-      occurredAt: new Date().toISOString(),
-      productId: dup.id,
-      sku: dup.sku,
-    });
-
-    return dup;
+    return {
+      valueOverrides,
+      channelScopes,
+      galleryItems,
+      galleryItemOverrides,
+      galleryRoles,
+      galleryRoleOverrides,
+      attachments,
+      attachmentOverrides,
+      packagingUnits,
+      packagingUnitOverrides,
+    };
   }
 
   /**
@@ -1019,9 +1507,10 @@ export class CatalogAdminService {
       const suffix = i === 0 ? '-copy' : `-copy-${i + 1}`;
       const base = baseSku.slice(0, SKU_MAX_LENGTH - suffix.length);
       const candidate = `${base}${suffix}`;
-      const productHit = await em.findOne(Product, { sku: candidate });
+      // Issue #693 — a deleted product or variant does not hold its SKU.
+      const productHit = await em.findOne(Product, { sku: candidate, deletedAt: null });
       if (productHit) continue;
-      const variantHit = await em.findOne(ProductVariant, { sku: candidate });
+      const variantHit = await em.findOne(ProductVariant, { sku: candidate, deletedAt: null });
       if (variantHit) continue;
       return candidate;
     }
@@ -1044,14 +1533,27 @@ export class CatalogAdminService {
    * Feature 068 — used by the create path as well as the duplication path; a
    * name collision on create used to reach the database and be reported as a
    * SKU conflict.
+   *
+   * Feature 163 (A-11) — a new product's slug is its key in every language, so
+   * "free" means free as a URL key: no product's global key, and no live
+   * product's current or redirecting key in any language.
+   *
+   * Must run inside the caller's transaction (the Command's): the decisive check is
+   * made under the candidates' URL-key locks, which are transaction locks. The first
+   * {@link SLUG_CANDIDATE_LOCKS} candidates that look free without a lock are locked
+   * together, **once and in sorted order** — the order every key writer locks in, so
+   * the two cannot deadlock — and re-checked under the locks in index order; the first
+   * still free wins. A held lock is never released before the transaction ends, so
+   * locking candidates one at a time after a lost race would acquire them out of
+   * sorted order (`root-10` sorts before `root-9`). Losing every candidate of the set
+   * to concurrent writers is refused like an exhausted search.
    */
   private async allocateUniqueSlug(em: EntityManager, source: string): Promise<string> {
     const root = this.slugify(source);
-    for (let i = 0; i < 1000; i += 1) {
-      const candidate = i === 0 ? root : this.slugify(`${root}-${i + 1}`);
-      const hit = await em.findOne(Product, { slug: candidate });
-      if (!hit) return candidate;
-    }
+    const candidates = Array.from({ length: 1000 }, (_, i) => (i === 0 ? root : this.slugify(`${root}-${i + 1}`)));
+    // Feature 174 (T039) — the URL-key service's allocation: probe, lock in sorted order, re-check.
+    const slug = await allocateFreeSlug(em, candidates, SLUG_CANDIDATE_LOCKS);
+    if (slug !== null) return slug;
     throw new HttpError(
       409,
       ERROR_CODES.VALIDATION_FAILED,
@@ -1060,29 +1562,106 @@ export class CatalogAdminService {
   }
 
   /**
-   * Multilingual `name`: tag every locale with a "(copy)" suffix so the
-   * duplicated product is obviously a clone in lists. Empty locales are
-   * left untouched.
+   * Feature 174 — the copy's Global name with a "(copy)" suffix, so the duplicate is obviously a
+   * clone in lists. Its Channel and Channel × language names are copied verbatim (FR-119).
    */
-  private suffixCopyNames(name: Record<string, string>): Record<string, string> {
-    const out: Record<string, string> = {};
-    for (const [locale, value] of Object.entries(name)) {
-      if (!value || value.trim() === '') {
-        out[locale] = value;
-      } else {
-        out[locale] = `${value} (copy)`.slice(0, 255);
-      }
-    }
-    return out;
+  private suffixCopyName(name: string): string {
+    return name.trim() === '' ? name : `${name} (copy)`.slice(0, 255);
   }
 
   /**
-   * @deprecated Use `updateProduct` with `status: 'inactive'` instead — it is
-   * what this method does, and it is the update that emits
-   * `product.archived.v1` when the status actually moves.
+   * Feature 163 (FR-019, research R30.3) — Archive one product: the `product.archive`
+   * Command sets `archivedAt` and touches no status at any scope, and no
+   * completeness gate runs. Announces `product.updated.v1` `['archivedAt']`, then
+   * `product.archived.v1`, both after commit and in that order (one event scope,
+   * dispatched in order and waited for — the search indexer's removal has finished
+   * before this returns). Archiving an archived product is a no-op: no audit row,
+   * no event, `changed: false`.
+   *
+   * 404 `PRODUCT_NOT_FOUND` for an unknown, soft-deleted or non-UUID id.
    */
-  async archiveProduct(id: string, auditCtx?: AdminAuditContext): Promise<void> {
-    await this.updateProduct(id, { status: 'inactive' }, auditCtx);
+  async archiveProduct(id: string, caller?: CallerOptions): Promise<{ product: Product; changed: boolean }> {
+    return this.#setArchived(id, true, caller);
+  }
+
+  /**
+   * Feature 163 (FR-019) — Restore one product: the `product.restore` Command clears
+   * `archivedAt`, announces `product.updated.v1` `['archivedAt']`, and leaves the
+   * status where it is (an `inactive` product stays off). No-op on a product that is
+   * not archived.
+   */
+  async restoreProduct(id: string, caller?: CallerOptions): Promise<{ product: Product; changed: boolean }> {
+    return this.#setArchived(id, false, caller);
+  }
+
+  async #setArchived(
+    id: string,
+    archive: boolean,
+    caller?: CallerOptions,
+  ): Promise<{ product: Product; changed: boolean }> {
+    // A non-UUID id would reach PostgreSQL as an invalid `uuid` literal.
+    if (!uuidSchema.safeParse(id).success) {
+      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+    }
+    const outcome = { changed: false };
+    // The Command declares `product.updated.v1`; the Command Bus dispatches it
+    // when its own scope ends, after commit. `product.archived.v1` is emitted
+    // after that, into the scope opened here, so it is dispatched second.
+    return this.events.run(async () => {
+      // Spec 193 T049 — `product.restore` is hookable; an archive carries the same data.
+      const product = await this.#runCommand(
+        withProductStatusHookData(this.#archiveCommand(id, archive, outcome), [id]),
+        caller,
+      );
+      if (outcome.changed && archive) this.#emitArchived(product.id);
+      return { product, changed: outcome.changed };
+    });
+  }
+
+  #archiveCommand(id: string, archive: boolean, outcome: { changed: boolean }): Command<Product> {
+    return {
+      action: archive ? 'product.archive' : 'product.restore',
+      objectType: 'product',
+      objectId: id,
+      run: async ({ em }) => {
+        // Checkpoint C code review (C-W1) — the row lock serialises a single and a bulk
+        // Archive of one product: the second reads the first's `archivedAt` and is the
+        // no-op, so the transition is audited and announced once.
+        if (!isUuidShape(id)) {
+          throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+        }
+        const product = await em.findOne(Product, { id, deletedAt: null }, { lockMode: LockMode.PESSIMISTIC_WRITE });
+        if (!product) {
+          throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+        }
+        const before = product.archivedAt ?? null;
+        if ((before !== null) === archive) {
+          outcome.changed = false;
+          return { result: product, skipAudit: true };
+        }
+        product.archivedAt = archive ? new Date() : null;
+        em.persist(product);
+        await em.flush();
+        outcome.changed = true;
+        return {
+          result: product,
+          before: { archivedAt: before?.toISOString() ?? null },
+          after: { archivedAt: product.archivedAt?.toISOString() ?? null },
+        };
+      },
+      event: (product) =>
+        outcome.changed
+          ? {
+              eventName: 'product.updated.v1',
+              payload: {
+                eventId: randomUUID(),
+                occurredAt: new Date().toISOString(),
+                productId: product.id,
+                changedFields: ['archivedAt'],
+              },
+            }
+          : undefined,
+    };
   }
 
   async assertProductDeletable(em: EntityManager, productId: string): Promise<void> {
@@ -1121,16 +1700,19 @@ export class CatalogAdminService {
    * the audit entry and `product.deleted.v1` share one transaction. `_auditCtx`
    * is retained for the existing admin call site; the actor is server-derived.
    */
-  async deleteProduct(id: string, _auditCtx?: AdminAuditContext): Promise<void> {
-    await this.#runCommand(this.#deleteProductCommand(id));
+  async deleteProduct(id: string, _auditCtx?: AdminAuditContext, caller?: CallerOptions): Promise<void> {
+    await this.#runCommand(this.#deleteProductCommand(id), caller);
   }
 
-  #deleteProductCommand(id: string): Command<{ id: string }> {
+  #deleteProductCommand(id: string): Command<{ id: string; formerUrlKeys: string[] }> {
     return {
       action: 'product.delete',
       objectType: 'product',
       objectId: id,
       run: async ({ em }) => {
+        if (!isUuidShape(id)) {
+          throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+        }
         const product = await em.findOne(Product, { id, deletedAt: null });
         if (!product) {
           throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
@@ -1139,14 +1721,24 @@ export class CatalogAdminService {
         const stateBefore = {
           status: product.status,
           sku: product.sku,
-          name: { ...product.name },
+          name: product.name,
           deletedAt: product.deletedAt ?? null,
         };
+        // Feature 163 (FR-072) — a deleted product's old URL keys stop redirecting.
+        const urlRedirects = (await em.find(ProductUrlRedirect, { productId: id })).map((row) => ({
+          id: row.id,
+          languageCode: row.languageCode ?? null,
+          key: row.key,
+        }));
+        if (urlRedirects.length > 0) await em.nativeDelete(ProductUrlRedirect, { productId: id });
         product.deletedAt = new Date();
+        // Issue #693 — the variants are deleted with their product, at the same instant, so
+        // their SKUs are freed with the product's: uniqueness holds among live rows only.
+        await em.nativeUpdate(ProductVariant, { parentProductId: id, deletedAt: null }, { deletedAt: product.deletedAt });
         await em.flush();
         return {
-          result: { id: product.id },
-          before: stateBefore,
+          result: { id: product.id, formerUrlKeys: urlRedirects.map((row) => row.key) },
+          before: { ...stateBefore, urlRedirects },
           after: {
             ...stateBefore,
             deletedAt: product.deletedAt?.toISOString() ?? null,
@@ -1159,6 +1751,7 @@ export class CatalogAdminService {
           eventId: randomUUID(),
           occurredAt: new Date().toISOString(),
           productId: result.id,
+          formerUrlKeys: result.formerUrlKeys,
         },
       }),
     };
@@ -1168,7 +1761,7 @@ export class CatalogAdminService {
   // Attributes
   // ------------------------------------------------------------------
 
-  async createAttribute(req: CreateAttributeRequest): Promise<CatalogAttributeView> {
+  async createAttribute(req: CreateAttributeRequest, caller?: CallerOptions): Promise<CatalogAttributeView> {
     const read = this.#requireAttributeRead();
     // Definition sort order: append after the current tail (matches the CF
     // admin surface's manual ordering semantics).
@@ -1180,6 +1773,7 @@ export class CatalogAdminService {
         extensionId,
         sortOrder: nextSortOrder,
       }),
+      caller,
     );
     await this.#requireCustomFields().publishInvalidate('product');
     const view = await read.getByIdOrKey(extensionId);
@@ -1192,10 +1786,11 @@ export class CatalogAdminService {
   async updateAttributeByIdOrKey(
     idOrKey: string,
     req: UpdateAttributeRequest,
-    auditCtx?: AdminAuditContext,
+    auditCtx?: Pick<AdminAuditContext, 'actorAdminUserId'>,
+    caller?: CallerOptions,
   ): Promise<CatalogAttributeView> {
     const attr = await this.getAttributeByIdOrKey(idOrKey);
-    return this.applyAttributeUpdate(attr, req, auditCtx);
+    return this.applyAttributeUpdate(attr, req, auditCtx, caller);
   }
 
   async updateAttribute(
@@ -1210,7 +1805,8 @@ export class CatalogAdminService {
   private async applyAttributeUpdate(
     attr: CatalogAttributeView,
     req: UpdateAttributeRequest,
-    auditCtx?: AdminAuditContext,
+    auditCtx?: Pick<AdminAuditContext, 'actorAdminUserId'>,
+    caller?: CallerOptions,
   ): Promise<CatalogAttributeView> {
     // Capture the searchable flag before applying so we can tell a real
     // flip apart from a save that left it untouched (only a real change
@@ -1218,6 +1814,7 @@ export class CatalogAdminService {
     const previousIsSearchable = attr.isSearchable;
     await this.#runCommand(
       updateAttributeCommand(this.#attributeCommandDeps(), attr.id, req),
+      caller,
     );
     await this.#requireCustomFields().publishInvalidate('product');
     const updated = await this.#requireAttributeRead().getByIdOrKey(attr.id);
@@ -1250,103 +1847,56 @@ export class CatalogAdminService {
 
   // --- Read methods (admin lists / detail) --------------------------------
 
+  /**
+   * Spec 193 (FR-030, FR-031, R-7) — a narrowed `scope` puts `product_visibility_rules`'
+   * predicate inside both statements (the page and its `total`) and the tab badges, so paging
+   * and counts see visible rows only; `system` and `unrestricted` take the unchanged path.
+   */
   async listProducts(
-    options: {
-      includeArchived?: boolean;
-      status?: 'active' | 'draft' | 'inactive';
-      type?: 'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual';
-      q?: string;
-      /** When set, restrict to products in this category or any descendant. */
-      categorySlug?: string;
-      page?: number;
-      pageSize?: number;
-    } = {},
+    scope: AdminProductReadScope,
+    options: AdminProductListQuery & { page?: number; pageSize?: number } = {},
   ): Promise<{
     items: Product[];
     page: number;
     pageSize: number;
     total: number;
-    counts: { all: number; active: number; draft: number; inactive: number };
+    counts: ProductListCounts;
   }> {
     const em = this.emFactory();
     const page = Math.max(0, options.page ?? 0);
     const pageSize = Math.min(Math.max(1, options.pageSize ?? 20), 500);
-
-    // `status` overrides `includeArchived` — if the caller explicitly asks for
-    // a specific status (including `inactive`), we honour it; otherwise the
-    // legacy `includeArchived` flag controls whether inactive rows appear.
-    const where: Record<string, unknown> = { deletedAt: null };
-    if (options.status) {
-      where['status'] = options.status;
-    } else if (!options.includeArchived) {
-      where['status'] = { $ne: 'inactive' };
-    }
-    if (options.type) {
-      where['type'] = options.type;
-    }
-
-    const categoryProductIds = options.categorySlug?.trim()
-      ? await this.productIdsInCategoryTree(em, options.categorySlug.trim())
-      : null;
-    if (categoryProductIds && categoryProductIds.size === 0) {
-      // `em.execute`, not `em.getKnex()`: a knex handle takes its own pooled
-      // connection, so the status badges would be counted from outside a
-      // transaction the caller holds open while `em.find` above answers from
-      // inside it — one screen, two views of `products` (issue #207).
-      const countRowsEmpty = (await em.execute(
-        `select status, count(*) as count from products where deleted_at is null group by status`,
-      )) as Array<{ status: string; count: string | number }>;
-      const countsEmpty = { all: 0, active: 0, draft: 0, inactive: 0 };
-      for (const row of countRowsEmpty) {
-        const n = Number(row.count) || 0;
-        countsEmpty.all += n;
-        if (row.status === 'active') countsEmpty.active = n;
-        else if (row.status === 'draft') countsEmpty.draft = n;
-        else if (row.status === 'inactive') countsEmpty.inactive = n;
-      }
-      return { items: [], page, pageSize, total: 0, counts: countsEmpty };
-    }
-    if (categoryProductIds) {
-      where['id'] = { $in: [...categoryProductIds] };
-    }
+    const archivedMode = options.archived ?? 'exclude';
+    const trimmedQ = options.q?.trim();
+    const visible = this.#visibleProductsClause(scope, '"products"."id"');
+    if (visible === false) return { items: [], page, pageSize, total: 0, counts: { ...NO_PRODUCTS } };
+    const narrowed =
+      Boolean(trimmedQ) ||
+      Boolean(options.categorySlug?.trim()) ||
+      options.categoryId !== undefined ||
+      options.salesChannelId !== undefined ||
+      options.stock !== undefined ||
+      visible !== null;
 
     let items: Product[];
     let total: number;
-    const trimmedQ = options.q?.trim();
-    if (trimmedQ || categoryProductIds) {
-      // Text search and/or category filter: page via knex, then re-hydrate.
-      const knex = em.getKnex();
-      const baseQuery = knex('products').where((qb) => {
-        qb.whereNull('deleted_at');
-        if (options.status) qb.where('status', options.status);
-        else if (!options.includeArchived) qb.whereNot('status', 'inactive');
-        if (options.type) qb.where('type', options.type);
-        if (categoryProductIds) qb.whereIn('id', [...categoryProductIds]);
-        if (trimmedQ) {
-          const needle = `%${trimmedQ.toLowerCase()}%`;
-          qb.andWhere((inner) => {
-            inner
-              .whereRaw('LOWER("sku") LIKE ?', [needle])
-              .orWhereRaw('LOWER("slug") LIKE ?', [needle])
-              .orWhereRaw('LOWER("name"::text) LIKE ?', [needle]);
-          });
-        }
-      });
-      // Both pages run through `em.execute(builder)` rather than by awaiting
-      // the builder: a knex handle carries no transaction context, so the page
-      // a caller inside a transaction is shown would be computed from rows that
-      // transaction has not written yet (issue #207). The builder is kept
-      // rather than rewritten as a statement because the filters above are
-      // assembled at runtime; `execute` compiles it and runs it with the
-      // EntityManager's transaction context, so the SQL is byte-for-byte the
-      // one this method already sent.
-      const totalRows = (await em.execute(
-        baseQuery.clone().count('* as count'),
-      )) as Array<{ count: string | number }>;
+    if (narrowed) {
+      // Text search and/or a narrowing filter: page by statement, then re-hydrate.
+      const filters = await this.#adminListFilters(em, options, visible);
+      if (!filters) {
+        return { items: [], page, pageSize, total: 0, counts: await this.#productListCounts(em, visible) };
+      }
+      // Both pages run through `em.execute`, so a caller inside a transaction
+      // is shown the rows that transaction has written (issue #207).
+      const totalRows = await em.execute<Array<{ count: string | number }>>(
+        `select count(*) as "count" from "products" where ${filters.sql}`,
+        [...filters.params],
+      );
       total = Number(totalRows[0]?.count ?? 0);
-      const idRows = (await em.execute(
-        baseQuery.clone().orderBy('created_at', 'desc').offset(page * pageSize).limit(pageSize).select('id'),
-      )) as Array<{ id: string }>;
+      const idRows = await em.execute<Array<{ id: string }>>(
+        `select "id" from "products" where ${filters.sql}
+          order by "created_at" desc, "id" desc limit ? offset ?`,
+        [...filters.params, pageSize, page * pageSize],
+      );
       const ids = idRows.map((r) => r.id);
       if (ids.length === 0) {
         items = [];
@@ -1358,80 +1908,222 @@ export class CatalogAdminService {
         items = ids.map((id) => byId.get(id)).filter((p): p is Product => Boolean(p));
       }
     } else {
+      // Feature 163 (R30.4) — the status and the archived mode are two independent
+      // filters: `status` reads the status column, `archived` reads `archived_at`.
+      const where: Record<string, unknown> = { deletedAt: null };
+      if (options.status) where['status'] = options.status;
+      if (archivedMode === 'exclude') where['archivedAt'] = null;
+      else if (archivedMode === 'only') where['archivedAt'] = { $ne: null };
+      if (options.type) where['type'] = options.type;
       [items, total] = await em.findAndCount(Product, where, {
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: 'desc', id: 'desc' },
         offset: page * pageSize,
         limit: pageSize,
       });
     }
 
-    // Counts are computed across the *full* product set (including archived)
-    // so the admin's status tabs always have honest badges, regardless of
-    // which tab is currently active.
-    // `em.execute`, not `em.getKnex()` — same reason as the empty-category
-    // branch above.
-    const countRows = (await em.execute(
-      `select status, count(*) as count from products where deleted_at is null group by status`,
-    )) as Array<{ status: string; count: string | number }>;
-    const counts = { all: 0, active: 0, draft: 0, inactive: 0 };
-    for (const row of countRows) {
-      const n = Number(row.count) || 0;
-      counts.all += n;
-      if (row.status === 'active') counts.active = n;
-      else if (row.status === 'draft') counts.draft = n;
-      else if (row.status === 'inactive') counts.inactive = n;
+    return { items, page, pageSize, total, counts: await this.#productListCounts(em, visible) };
+  }
+
+  /**
+   * Spec 193 (FR-033, TM-1) — a selection as a narrowed caller may name it: the ids that exist and
+   * are visible, in their order. A hidden id goes the way a missing one does. Unchanged for a scope
+   * that narrows nothing (SC-003).
+   */
+  async narrowProductIds(scope: AdminProductReadScope, productIds: readonly string[]): Promise<string[]> {
+    const visible = this.#visibleProductsClause(scope, '"products"."id"');
+    if (visible === null) return [...productIds];
+    if (visible === false || productIds.length === 0) return [];
+    const rows = await this.emFactory().execute<Array<{ id: string }>>(
+      `select "id" from "products" where "id" = any(?::uuid[]) and "deleted_at" is null and ${visible.sql}`,
+      [uuidArrayLiteral(productIds.filter(isUuidShape)), ...visible.params],
+    );
+    const kept = new Set(rows.map((r) => r.id));
+    return productIds.filter((id) => kept.has(id));
+  }
+
+  /** Spec 193 (FR-080) — which of `productIds` exist and are hidden from `scope`. */
+  async hiddenProductIds(scope: AdminProductReadScope, productIds: readonly string[]): Promise<ReadonlySet<string>> {
+    return hiddenProductIds(this.emFactory(), this.visibility, scope, productIds);
+  }
+
+  /** Spec 193 — the product exists and `scope` does not let it through (a write's per-product re-check). */
+  async isProductHidden(scope: AdminProductReadScope, productId: string): Promise<boolean> {
+    return isProductHidden(this.emFactory(), this.visibility, scope, productId);
+  }
+
+  /**
+   * Spec 193 (FR-031) — the visibility clause over `column` (`"alias"."column"`) for a scope, for a
+   * statement of another service of this module that counts products.
+   */
+  productClause(scope: AdminProductReadScope, column: string): ProductVisibilityClause {
+    return this.#visibleProductsClause(scope, column);
+  }
+
+  /**
+   * Spec 193 — the visibility clause over `column` for a scope: `null` adds nothing (system,
+   * unrestricted), `false` matches nothing (`deny`), otherwise a parenthesised fragment.
+   */
+  #visibleProductsClause(scope: AdminProductReadScope, column: string): SqlFragment | null | false {
+    const visibility = requireVisibility(this.visibility, scope);
+    return visibility ? predicateClause(visibility.productPredicate(scope, { productId: column })) : null;
+  }
+
+  /**
+   * The admin list's filters as one clause, shared by {@link listProducts} and
+   * {@link resolveProductIds} so "select all matching" resolves exactly the rows
+   * the list shows (issue #1624 — the selection once ignored the category).
+   *
+   * Answers `null` when a filter is known to match nothing (an unknown or empty
+   * category), so the caller can skip the query.
+   *
+   * - **Category** — the category and its descendants, by id or by the legacy
+   *   slug; both given means both apply.
+   * - **Sales channel** — the kernel's membership subquery (Principle XII), placed
+   *   inside the statement so the page is cut after the channel narrows it.
+   * - **Stock** — `inventory`'s predicate for the Inventory list's *Low stock* /
+   *   *Out of stock*, correlated on this module's `products` columns and placed
+   *   in the statement like the channel subquery. With `inventory` off the
+   *   port's gate throws and the request answers 503: never ignored.
+   */
+  async #adminListFilters(
+    em: EntityManager,
+    options: AdminProductListQuery,
+    visible: SqlFragment | null,
+  ): Promise<{ readonly sql: string; readonly params: readonly unknown[] } | null> {
+    const archivedMode = options.archived ?? 'exclude';
+    const trimmedQ = options.q?.trim();
+
+    let categoryProductIds: Set<string> | null = null;
+    const categorySlug = options.categorySlug?.trim();
+    if (categorySlug) {
+      categoryProductIds = await this.productIdsInCategoryTree(em, categorySlug);
+    }
+    if (options.categoryId !== undefined) {
+      const byId = await this.#productIdsInCategoryTreeOf(
+        em,
+        await em.findOne(Category, { id: options.categoryId, deletedAt: null }),
+      );
+      categoryProductIds = categoryProductIds
+        ? new Set([...categoryProductIds].filter((id) => byId.has(id)))
+        : byId;
+    }
+    if (categoryProductIds && categoryProductIds.size === 0) return null;
+
+    let channelSubquery: { sql: string; params: string[] } | null = null;
+    if (options.salesChannelId !== undefined) {
+      if (!this.salesChannelMembership) {
+        throw new Error('CatalogAdminService: the channel membership accessor is not wired — a channel filter cannot be applied.');
+      }
+      channelSubquery = this.salesChannelMembership.entityIdsInChannelSubquery(options.salesChannelId, 'product');
     }
 
-    return { items, page, pageSize, total, counts };
+    let stockClause: { sql: string; params: string[] } | null = null;
+    if (options.stock !== undefined) {
+      if (!this.stockFilter) {
+        throw new Error('CatalogAdminService: the stock filter is not wired — a stock filter cannot be applied.');
+      }
+      stockClause = this.stockFilter.predicate(options.stock, {
+        productId: '"products"."id"',
+        manageStock: '"products"."manage_stock"',
+        lowStockThreshold: '"products"."low_stock_threshold"',
+      });
+    }
+
+    // Mirror the list's base rules: soft-deleted rows are never listed or
+    // selectable; the status and the archived mode are independent filters
+    // (feature 163, R30.4). Every value is a `?` placeholder; the id set goes
+    // in as one array literal (`any(?::uuid[])`), never a JS array.
+    const where: string[] = ['"deleted_at" is null'];
+    const params: unknown[] = [];
+    if (options.status) {
+      where.push('"status" = ?');
+      params.push(options.status);
+    }
+    if (archivedMode === 'exclude') where.push('"archived_at" is null');
+    else if (archivedMode === 'only') where.push('"archived_at" is not null');
+    if (options.type) {
+      where.push('"type" = ?');
+      params.push(options.type);
+    }
+    if (categoryProductIds) {
+      where.push('"products"."id" = any(?::uuid[])');
+      params.push(uuidArrayLiteral(categoryProductIds));
+    }
+    if (channelSubquery) {
+      where.push(`"products"."id" in (${channelSubquery.sql})`);
+      params.push(...channelSubquery.params);
+    }
+    if (stockClause) {
+      where.push(`(${stockClause.sql})`);
+      params.push(...stockClause.params);
+    }
+    if (trimmedQ) {
+      const needle = `%${trimmedQ.toLowerCase()}%`;
+      where.push('(LOWER("sku") LIKE ? or LOWER("slug") LIKE ? or LOWER("name"::text) LIKE ?)');
+      params.push(needle, needle, needle);
+    }
+    // Spec 193 — inside the statement, so the page is cut after visibility narrows it (FR-031).
+    if (visible) {
+      where.push(visible.sql);
+      params.push(...visible.params);
+    }
+    return { sql: where.join(' and '), params };
+  }
+
+  /**
+   * The admin list's tab badges, across the *full* product set whatever tab is
+   * active, so they stay honest (feature 163, R30.4): `all`, `active` and
+   * `inactive` over non-archived, non-deleted rows; `archived` over archived,
+   * non-deleted rows of either status.
+   *
+   * `em.execute`, not a statement on a connection of its own: there the badges
+   * would be counted from outside a transaction the caller holds open while the
+   * page above answers from inside it — one screen, two views of `products`
+   * (issue #207).
+   */
+  async #productListCounts(em: EntityManager, visible: SqlFragment | null): Promise<ProductListCounts> {
+    // Spec 193 (FR-031) — a narrowed scope's badges count visible products only.
+    const rows = (await em.execute(
+      `select status, (archived_at is not null) as archived, count(*) as count
+         from products where deleted_at is null${visible ? ` and ${visible.sql}` : ''}
+        group by status, (archived_at is not null)`,
+      visible ? [...visible.params] : [],
+    )) as Array<{ status: string; archived: boolean; count: string | number }>;
+    const counts: ProductListCounts = { all: 0, active: 0, inactive: 0, archived: 0 };
+    for (const row of rows) {
+      const n = Number(row.count) || 0;
+      if (row.archived) {
+        counts.archived += n;
+        continue;
+      }
+      counts.all += n;
+      if (row.status === 'active') counts.active += n;
+      else if (row.status === 'inactive') counts.inactive += n;
+    }
+    return counts;
   }
 
   /**
    * Feature 033 — return all product ids matching list filters (no pagination).
-   * Reuses the same filter semantics as {@link listProducts}.
+   * The filters are {@link listProducts}' own clause ({@link #adminListFilters}).
    */
   async resolveProductIds(
-    options: {
-      includeArchived?: boolean;
-      status?: 'active' | 'draft' | 'inactive';
-      type?: 'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual';
-      q?: string;
-    } = {},
+    scope: AdminProductReadScope,
+    options: AdminProductListQuery = {},
   ): Promise<{ productIds: string[]; total: number }> {
     const maxSelectionSize = Number(process.env['CATALOG_MAX_RESOLVE_IDS'] ?? 10_000);
     const em = this.emFactory();
-    const trimmedQ = options.q?.trim();
-    const knex = em.getKnex();
+    const visible = this.#visibleProductsClause(scope, '"products"."id"');
+    if (visible === false) return { productIds: [], total: 0 };
+    const filters = await this.#adminListFilters(em, options, visible);
+    if (!filters) return { productIds: [], total: 0 };
 
-    const applyListFilters = (qb: ReturnType<typeof knex>): ReturnType<typeof knex> => {
-      // Mirror listProducts: soft-deleted rows are never selectable, and the
-      // withdrawn status is `inactive` (feature 032 renamed `archived`).
-      qb.whereNull('deleted_at');
-      if (options.status) {
-        qb.where('status', options.status);
-      } else if (!options.includeArchived) {
-        qb.whereNot('status', 'inactive');
-      }
-      if (options.type) {
-        qb.where('type', options.type);
-      }
-      if (trimmedQ) {
-        const needle = `%${trimmedQ.toLowerCase()}%`;
-        qb.andWhere((inner) => {
-          inner
-            .whereRaw('LOWER("sku") LIKE ?', [needle])
-            .orWhereRaw('LOWER("slug") LIKE ?', [needle])
-            .orWhereRaw('LOWER("name"::text) LIKE ?', [needle]);
-        });
-      }
-      return qb;
-    };
-
-    // `em.execute(builder)`, not an awaited builder — see `listProducts`
-    // (issue #207); the filters are assembled at runtime, so the builder stays
-    // and `execute` supplies the EntityManager's transaction context.
-    const countRows = (await em.execute(
-      applyListFilters(knex('products')).clone().count('* as count'),
-    )) as Array<{ count: string | number }>;
+    // `em.execute` — see `listProducts` (issue #207).
+    const countRows = await em.execute<Array<{ count: string | number }>>(
+      `select count(*) as "count" from "products" where ${filters.sql}`,
+      [...filters.params],
+    );
     const total = Number(countRows[0]?.count ?? 0);
 
     if (total > maxSelectionSize) {
@@ -1443,9 +2135,10 @@ export class CatalogAdminService {
       );
     }
 
-    const idRows = (await em.execute(
-      applyListFilters(knex('products')).clone().orderBy('created_at', 'desc').select('id'),
-    )) as Array<{ id: string }>;
+    const idRows = await em.execute<Array<{ id: string }>>(
+      `select "id" from "products" where ${filters.sql} order by "created_at" desc`,
+      [...filters.params],
+    );
 
     const productIds = idRows.map((r) => r.id);
     return { productIds, total: productIds.length };
@@ -1453,6 +2146,9 @@ export class CatalogAdminService {
 
   async getProductById(id: string): Promise<Product> {
     const em = this.emFactory();
+    if (!isUuidShape(id)) {
+      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+    }
     const product = await em.findOne(Product, { id, deletedAt: null });
     if (!product) {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
@@ -1475,7 +2171,10 @@ export class CatalogAdminService {
     em: EntityManager,
     categorySlug: string,
   ): Promise<Set<string>> {
-    const root = await em.findOne(Category, { slug: categorySlug, deletedAt: null });
+    return this.#productIdsInCategoryTreeOf(em, await em.findOne(Category, { slug: categorySlug, deletedAt: null }));
+  }
+
+  async #productIdsInCategoryTreeOf(em: EntityManager, root: Category | null): Promise<Set<string>> {
     if (!root) return new Set();
 
     const all: string[] = [root.id];
@@ -1491,8 +2190,8 @@ export class CatalogAdminService {
     }
 
     const rows = await em.execute<{ product_id: string }[]>(
-      `select product_id from product_categories where category_id in (${all.map(() => '?').join(',')})`,
-      all,
+      `select product_id from product_categories where category_id = any(?::uuid[])`,
+      [uuidArrayLiteral(all)],
     );
     return new Set(rows.map((r) => r.product_id));
   }
@@ -1504,15 +2203,29 @@ export class CatalogAdminService {
    * tables) regardless of current status. Paginated for callers that
    * stream large id sets across multiple requests.
    */
-  async listProductsByIds(input: {
-    ids: string[];
-    page?: number;
-    pageSize?: number;
-  }): Promise<{ items: Product[]; page: number; pageSize: number; total: number }> {
+  async listProductsByIds(
+    scope: AdminProductReadScope,
+    input: {
+      ids: string[];
+      page?: number;
+      pageSize?: number;
+    },
+  ): Promise<{ items: Product[]; page: number; pageSize: number; total: number }> {
     const em = this.emFactory();
     const page = Math.max(0, input.page ?? 0);
     const pageSize = Math.min(Math.max(1, input.pageSize ?? 50), 500);
-    const uniqueIds = Array.from(new Set(input.ids));
+    let uniqueIds = Array.from(new Set(input.ids));
+    // Spec 193 (FR-030) — a hidden id is dropped before paging, as an unknown id is.
+    const visible = this.#visibleProductsClause(scope, '"products"."id"');
+    if (visible === false) uniqueIds = [];
+    else if (visible && uniqueIds.length > 0) {
+      const rows = await em.execute<Array<{ id: string }>>(
+        `select "id" from "products" where "id" = any(?::uuid[]) and ${visible.sql}`,
+        [uuidArrayLiteral(uniqueIds), ...visible.params],
+      );
+      const kept = new Set(rows.map((r) => r.id));
+      uniqueIds = uniqueIds.filter((id) => kept.has(id));
+    }
     if (uniqueIds.length === 0) {
       return { items: [], page, pageSize, total: 0 };
     }
@@ -1520,7 +2233,7 @@ export class CatalogAdminService {
       Product,
       { id: { $in: uniqueIds } },
       {
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: 'desc', id: 'desc' },
         offset: page * pageSize,
         limit: pageSize,
       },
@@ -1620,6 +2333,7 @@ export class CatalogAdminService {
       isDefault?: boolean;
       sortOrder?: number;
     },
+    caller?: CallerOptions,
   ): Promise<AttributeOptionResult> {
     const attr = await this.getAttributeByIdOrKey(attributeIdOrKey);
     const result = await this.#runCommand(
@@ -1628,6 +2342,7 @@ export class CatalogAdminService {
         this.#optionCommandTarget(attr),
         input,
       ),
+      caller,
     );
     await this.#requireCustomFields().publishInvalidate('product');
     return result;
@@ -1642,6 +2357,7 @@ export class CatalogAdminService {
       isDefault?: boolean;
       sortOrder?: number;
     },
+    caller?: CallerOptions,
   ): Promise<AttributeOptionResult> {
     const attr = await this.#attributeByOptionId(optionId);
     const result = await this.#runCommand(
@@ -1651,13 +2367,14 @@ export class CatalogAdminService {
         optionId,
         input,
       ),
+      caller,
     );
     await this.#requireCustomFields().publishInvalidate('product');
     return result;
   }
 
   /** Feature 012 / US4 — remove one option. Refused while products carry it (FR-025). */
-  async removeAttributeOption(optionId: string): Promise<void> {
+  async removeAttributeOption(optionId: string, caller?: CallerOptions): Promise<void> {
     const attr = await this.#attributeByOptionId(optionId);
     await this.#runCommand(
       deleteAttributeOptionCommand(
@@ -1665,6 +2382,7 @@ export class CatalogAdminService {
         this.#optionCommandTarget(attr),
         optionId,
       ),
+      caller,
     );
     await this.#requireCustomFields().publishInvalidate('product');
   }
@@ -1712,13 +2430,29 @@ export class CatalogAdminService {
   }
 
   /**
+   * Feature 172 (FR-007 – FR-009, research R-21) — what deleting the attribute
+   * would meet, for the attributes screen's confirmation dialog. The same query
+   * the delete Command's guard runs, so the dialog and the refusal agree.
+   */
+  async getAttributeUsage(scope: AdminProductReadScope, idOrKey: string): Promise<AdminAttributeUsage> {
+    const attr = await this.getAttributeByIdOrKey(idOrKey);
+    // Spec 193 (FR-031) — the dialog's counts are the caller's visible products; the delete
+    // Command's guard still counts every product, so a delete stays refused while any uses it.
+    return readAttributeUsage(
+      this.emFactory(),
+      { definitionId: attr.customFieldDefinitionId, extensionId: attr.id, key: attr.key },
+      this.#visibleProductsClause(scope, '"p"."id"'),
+    );
+  }
+
+  /**
    * Feature 012 — delete an attribute. Refused while any Attribute Set or
    * product still references it (FR-006). The structured error names the
    * dependent rows so the admin UI can guide the operator. Deletes the
    * extension AND the backing definition (+ options cascade) in one
    * transaction (feature 061).
    */
-  async deleteAttribute(idOrKey: string): Promise<void> {
+  async deleteAttribute(idOrKey: string, caller?: CallerOptions): Promise<void> {
     const attr = await this.getAttributeByIdOrKey(idOrKey);
     await this.#runCommand(
       deleteAttributeCommand(this.#attributeCommandDeps(), {
@@ -1728,6 +2462,7 @@ export class CatalogAdminService {
         key: attr.key,
         legacyValueType: attr.valueType,
       }),
+      caller,
     );
     await this.#requireCustomFields().publishInvalidate('product');
   }
@@ -1736,12 +2471,44 @@ export class CatalogAdminService {
 
   // ===== Feature 002 (T054 backend prereq) — Variants CRUD =================
 
+  /**
+   * Every variant of a product, by SKU — the admin's view (feature 161): no
+   * channel, status or audience filter, unlike the storefront's product read.
+   * A deleted or unknown product is `404`.
+   */
+  async listVariants(scope: AdminProductReadScope, parentProductId: string): Promise<ProductVariant[]> {
+    const product = await this.getProductById(parentProductId);
+    const em = this.emFactory();
+    const variants = await em.find(ProductVariant, { parentProductId: product.id }, { orderBy: { sku: 'asc' } });
+    // Spec 193 (RQ-3 A, TM-6) — a restricted caller sees the qualifying variants only.
+    const visibility = requireVisibility(this.visibility, scope);
+    if (!visibility || variants.length === 0) return variants;
+    const clause = predicateClause(visibility.variantPredicate(scope, { variantId: '"product_variants"."id"' }));
+    if (clause === false) return [];
+    if (clause === null) return variants;
+    const rows = await em.execute<Array<{ id: string }>>(
+      `select "id" from "product_variants" where "id" = any(?::uuid[]) and ${clause.sql}`,
+      [uuidArrayLiteral(variants.map((v) => v.id)), ...clause.params],
+    );
+    const kept = new Set(rows.map((r) => r.id));
+    return variants.filter((v) => kept.has(v.id));
+  }
+
   async createVariant(
     parentProductId: string,
     req: CreateVariantRequest,
+    caller?: CallerOptions,
   ): Promise<ProductVariant> {
     const em = this.emFactory();
-    const parent = await em.findOne(Product, { id: parentProductId });
+    if (!isUuidShape(parentProductId)) {
+      throw new HttpError(
+        404,
+        ERROR_CODES.PRODUCT_NOT_FOUND,
+        `Product ${parentProductId} not found.`,
+      );
+    }
+    // A deleted parent answers as an unknown one (#869).
+    const parent = await em.findOne(Product, { id: parentProductId, deletedAt: null });
     if (!parent) {
       throw new HttpError(
         404,
@@ -1750,14 +2517,18 @@ export class CatalogAdminService {
       );
     }
     if (parent.type !== 'configurable') {
+      // Issue #624 (#86) — the stored product type refuses it: the module's
+      // type-mismatch code, the token naming the rule.
       throw new HttpError(
         400,
-        ERROR_CODES.VALIDATION_FAILED,
+        ERROR_CODES.PRODUCT_TYPE_MISMATCH,
         `Variants can only be added to configurable Products; this Product is ${parent.type}.`,
+        { code: 'variants_need_configurable', productId: parentProductId, productType: parent.type },
       );
     }
-    // SKU uniqueness MUST hold across both products and variants.
-    const existingProduct = await em.findOne(Product, { sku: req.sku });
+    // SKU uniqueness MUST hold across both products and variants — among live
+    // rows: a deleted product does not hold its SKU (issue #693).
+    const existingProduct = await em.findOne(Product, { sku: req.sku, deletedAt: null });
     if (existingProduct) {
       throw new HttpError(
         409,
@@ -1772,9 +2543,6 @@ export class CatalogAdminService {
         parentProductId,
         sku: req.sku,
         variantAttributeValues: req.variantAttributeValues,
-        ...(req.priceOverride !== undefined
-          ? { priceOverride: String(req.priceOverride) }
-          : {}),
         ...(req.stockLevel !== undefined ? { stockLevel: req.stockLevel } : {}),
       });
       try {
@@ -1790,7 +2558,7 @@ export class CatalogAdminService {
         throw err;
       }
       return { result: v, before: null, after: { parentProductId, sku: req.sku } };
-    });
+    }, caller);
     this.events.emit('product.updated.v1', {
       eventId: randomUUID(),
       occurredAt: new Date().toISOString(),
@@ -1804,8 +2572,16 @@ export class CatalogAdminService {
     parentProductId: string,
     variantId: string,
     req: UpdateVariantRequest,
+    caller?: CallerOptions,
   ): Promise<ProductVariant> {
     const variant = await this.#auditedWrite('product_variant.update', 'product_variant', variantId, async (em) => {
+      if (!isUuidShape(variantId) || !isUuidShape(parentProductId)) {
+        throw new HttpError(
+          404,
+          ERROR_CODES.NOT_FOUND,
+          `Variant ${variantId} not found under Product ${parentProductId}.`,
+        );
+      }
       const v = await em.findOne(ProductVariant, { id: variantId, parentProductId });
       if (!v) {
         throw new HttpError(
@@ -1817,14 +2593,10 @@ export class CatalogAdminService {
       const before = {
         sku: v.sku,
         variantAttributeValues: { ...v.variantAttributeValues },
-        priceOverride: v.priceOverride,
         stockLevel: v.stockLevel,
       };
       if (req.variantAttributeValues !== undefined) {
         v.variantAttributeValues = req.variantAttributeValues;
-      }
-      if (req.priceOverride !== undefined) {
-        v.priceOverride = String(req.priceOverride);
       }
       if (req.stockLevel !== undefined) {
         v.stockLevel = req.stockLevel;
@@ -1832,9 +2604,9 @@ export class CatalogAdminService {
       return {
         result: v,
         before,
-        after: { sku: v.sku, priceOverride: v.priceOverride, stockLevel: v.stockLevel },
+        after: { sku: v.sku, stockLevel: v.stockLevel },
       };
-    });
+    }, caller);
     this.events.emit('product.updated.v1', {
       eventId: randomUUID(),
       occurredAt: new Date().toISOString(),
@@ -1844,8 +2616,15 @@ export class CatalogAdminService {
     return variant;
   }
 
-  async deleteVariant(parentProductId: string, variantId: string): Promise<void> {
+  async deleteVariant(parentProductId: string, variantId: string, caller?: CallerOptions): Promise<void> {
     await this.#auditedWrite('product_variant.delete', 'product_variant', variantId, async (em) => {
+      if (!isUuidShape(variantId) || !isUuidShape(parentProductId)) {
+        throw new HttpError(
+          404,
+          ERROR_CODES.NOT_FOUND,
+          `Variant ${variantId} not found under Product ${parentProductId}.`,
+        );
+      }
       const variant = await em.findOne(ProductVariant, { id: variantId, parentProductId });
       if (!variant) {
         // DELETE is idempotent — but we still 404 here so admins notice
@@ -1860,7 +2639,7 @@ export class CatalogAdminService {
       const before = { parentProductId, sku: variant.sku };
       em.remove(variant);
       return { result: undefined, before, after: null };
-    });
+    }, caller);
     this.events.emit('product.updated.v1', {
       eventId: randomUUID(),
       occurredAt: new Date().toISOString(),
@@ -1891,6 +2670,13 @@ export class CatalogAdminService {
     if (!attributeValues) return;
     const keys = Object.keys(attributeValues);
     if (keys.length === 0) return;
+    const views = await this.#requireAttributeRead().listAll();
+    // Feature 172 (FR-014, research R-7) — a Page Builder content attribute's
+    // key is refused **before** the `existingKeys` exemption below: whether it
+    // is new to this save or resent as "already stored", its value is a
+    // document authored on the product content screen, never an attribute
+    // value. This is the one guard every product write crosses.
+    assertNoContentAttributeValues(attributeValues, views);
 
     // Feature 061 — set membership is keyed by definition id; the key lives on
     // the definition, resolved through the composed view (Principle I).
@@ -1905,7 +2691,6 @@ export class CatalogAdminService {
        where attribute_set_id = ?`,
       [attributeSetId],
     )) as Array<{ custom_field_definition_id: string }>;
-    const views = await this.#requireAttributeRead().listAll();
     const keyByDefinitionId = new Map(views.map((v) => [v.customFieldDefinitionId, v.key]));
     const allowed = new Set(
       rows
@@ -1916,8 +2701,7 @@ export class CatalogAdminService {
     const rejected = keys.filter(
       (k) =>
         !allowed.has(k) &&
-        !existingKeys.has(k) &&
-        !VIRTUAL_ATTRIBUTE_VALUE_KEYS.has(k),
+        !existingKeys.has(k),
     );
     if (rejected.length > 0) {
       throw new HttpError(
@@ -1953,19 +2737,21 @@ export class CatalogAdminService {
     )) as Array<{ custom_field_definition_id: string }>;
     const views = await this.#requireAttributeRead().listAll();
     const viewByDefinitionId = new Map(views.map((v) => [v.customFieldDefinitionId, v]));
-    const missing = rows
-      .map((r) => viewByDefinitionId.get(r.custom_field_definition_id))
-      .filter((v): v is CatalogAttributeView => v !== undefined && v.isRequired)
-      .map((v) => v.key)
-      .filter((k) => {
-        const v = mergedAttributeValues[k];
-        return v === undefined || v === null || v === '';
-      });
+    const missing = missingRequiredAttributeKeys(
+      rows
+        .map((r) => viewByDefinitionId.get(r.custom_field_definition_id))
+        .filter((v): v is CatalogAttributeView => v !== undefined),
+      mergedAttributeValues,
+    );
     if (missing.length > 0) {
+      // Issue #624 (#86) — "required" is the attribute's configuration, and the
+      // values are the stored ones merged with the patch: a refusal of its own.
+      // The keys travel joined, because only a scalar fills a placeholder.
       throw new HttpError(
         400,
-        ERROR_CODES.VALIDATION_FAILED,
-        `missing_required_attribute_values: ${missing.join(', ')}`,
+        ERROR_CODES.ATTRIBUTE_VALUES_REQUIRED,
+        `Required attributes have no value: ${missing.join(', ')}.`,
+        { attributeKeys: missing.join(', ') },
       );
     }
   }
@@ -1986,6 +2772,9 @@ export class CatalogAdminService {
     requiredButMissing: Array<{ key: string; labelDefault: string }>;
   }> {
     const em = this.emFactory();
+    if (!isUuidShape(productId)) {
+      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
+    }
     const product = await em.findOne(Product, { id: productId });
     if (!product) {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
@@ -2070,8 +2859,33 @@ export class CatalogAdminService {
     return slugifyText(value, { maxLength: 160 });
   }
 
-  private anyValue(blob: Record<string, string>): string {
-    const key = Object.keys(blob)[0];
-    return key ? (blob[key] ?? '') : '';
+}
+
+/**
+ * Feature 155 (FR-001, threat F5, D5) — a pieces minimum is an integer in
+ * 1…1 000 000 and only a `simple` or `configurable` product may carry one;
+ * `null` (clear) and an absent key are always allowed. Refused with
+ * `details.field`, the answer an in-process caller gets where no route schema
+ * stood in front of it: a value out of range is `422 VALIDATION_FAILED`, a type
+ * that takes no minimum `422 MIN_ORDER_QUANTITY_NOT_SUPPORTED_FOR_TYPE` (issue
+ * #624, #86 — the product's type refuses it, not the value).
+ */
+function assertOrderMinimumAllowed(type: string, value: number | null | undefined): void {
+  if (value === undefined || value === null) return;
+  if (!isValidOrderMinimum(value)) {
+    throw new HttpError(
+      422,
+      ERROR_CODES.VALIDATION_FAILED,
+      'The minimum order quantity must be a whole number from 1 to 1000000.',
+      { field: 'minOrderQuantity' },
+    );
+  }
+  if (!isOrderMinimumEligibleType(type)) {
+    throw new HttpError(
+      422,
+      ERROR_CODES.MIN_ORDER_QUANTITY_NOT_SUPPORTED_FOR_TYPE,
+      `A minimum order quantity applies to simple or configurable products only; got "${type}".`,
+      { field: 'minOrderQuantity', productType: type },
+    );
   }
 }

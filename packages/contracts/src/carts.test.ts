@@ -1,0 +1,317 @@
+import { describe, expect, it } from 'vitest';
+import {
+  cartBuyingForResetReasonSchema,
+  cartFullPayloadSchema,
+  cartMiniPayloadSchema,
+  cartRepricingSummarySchema,
+  cartViewLineSchema,
+  orgCartDetailViewSchema,
+  setCartBuyingForRequestSchema,
+  setCartBuyingForResponseSchema,
+} from './carts.js';
+
+/**
+ * Issue #128 — the cart-view schemas describe what the cart routes answer.
+ *
+ * Each value below is a reply the routes have been sending, copied from the
+ * serialisers in `packages/modules/carts/src/backend/routes.ts`; before the
+ * issue none of them parsed. The contract test
+ * `backend/test/contract/carts/cart-response-schema.contract.test.ts` parses
+ * the real replies; this file keeps the shape honest where the contract tree
+ * does not run, before a merge.
+ */
+
+const LINE = {
+  id: '00000000-0000-4000-8000-000000000011',
+  productId: '00000000-0000-4000-8000-000000000101',
+  variantId: null,
+  quantity: 2,
+  unitPrice: { amount: 10, currency: 'PLN' },
+  lineTotal: { amount: 20, currency: 'PLN' },
+  unavailable: false,
+  unavailableReason: null,
+  productSlug: null,
+  productSku: null,
+  packagingUnitName: null,
+  packagingUnitBaseQuantity: null,
+  displayName: null,
+};
+
+describe('cartViewLineSchema', () => {
+  it('accepts a mutation-reply line: no product name resolved, no thumbnail key', () => {
+    expect(cartViewLineSchema.safeParse({ ...LINE, productName: null }).success).toBe(true);
+  });
+
+  it('still requires the productName key', () => {
+    expect(cartViewLineSchema.safeParse(LINE).success).toBe(false);
+  });
+});
+
+/** The reply for a caller with no basket yet — `emptyCart()` in the carts routes. */
+const EMPTY_BASKET = {
+  id: null,
+  customerAccountId: null,
+  organizationId: null,
+  salesChannelId: null,
+  anonymousCartToken: null,
+  status: 'active',
+  approvalStatus: 'not_required',
+  items: [],
+  itemCount: 0,
+  subtotal: { amount: 0, currency: 'PLN' },
+  discount: null,
+  appliedPromotions: [],
+  grandTotal: { amount: 0, currency: 'PLN' },
+  primaryCta: 'checkout',
+  droppedLines: [],
+  couponDroppedThisRead: null,
+  createdAt: null,
+  updatedAt: null,
+  lastActivityAt: null,
+};
+
+describe('cartFullPayloadSchema', () => {
+  it('accepts the empty basket, whose timestamps are null', () => {
+    expect(cartFullPayloadSchema.safeParse(EMPTY_BASKET).success).toBe(true);
+  });
+
+  // Issue #650 — additive: a reply from before the field parses, as `null`.
+  it('reads a reply without previousRejection as null', () => {
+    const parsed = cartFullPayloadSchema.parse(EMPTY_BASKET);
+    expect(parsed.previousRejection).toBeNull();
+  });
+
+  it('accepts the rejection of the previous basket and refuses a malformed one', () => {
+    const previousRejection = {
+      cartId: '00000000-0000-4000-8000-000000000020',
+      rejectedAt: '2026-11-03T09:00:00.000Z',
+      reason: 'Over the quarterly budget',
+    };
+    expect(cartFullPayloadSchema.parse({ ...EMPTY_BASKET, previousRejection }).previousRejection).toEqual({
+      ...previousRejection,
+      restoredLineCount: 0,
+      skippedLines: [],
+    });
+    expect(
+      cartFullPayloadSchema.safeParse({ ...EMPTY_BASKET, previousRejection: { ...previousRejection, cartId: 'x' } })
+        .success,
+    ).toBe(false);
+  });
+
+  // Issue #755 — the rejected basket's lines restored into this one, and the
+  // ones that could not be. Additive: a reply without them reads nothing restored.
+  it('carries what was restored from the rejected basket and what was skipped', () => {
+    const previousRejection = {
+      cartId: '00000000-0000-4000-8000-000000000020',
+      rejectedAt: '2026-11-03T09:00:00.000Z',
+      reason: null,
+      restoredLineCount: 2,
+      skippedLines: [
+        { productId: '00000000-0000-4000-8000-000000000021', productName: 'Bolt', reason: 'not_purchasable' },
+      ],
+    };
+    expect(cartFullPayloadSchema.parse({ ...EMPTY_BASKET, previousRejection }).previousRejection).toEqual(
+      previousRejection,
+    );
+    expect(
+      cartFullPayloadSchema.safeParse({ ...EMPTY_BASKET, previousRejection: { ...previousRejection, restoredLineCount: -1 } })
+        .success,
+    ).toBe(false);
+  });
+});
+
+// Issue #436 — the cart's VAT, per rate, computed by the backend the way the
+// order computes it. Additive: a reply without it reads `null`, and a line
+// without a rate reads as absent.
+describe('cartFullPayloadSchema — VAT per rate (issue #436)', () => {
+  const VAT = {
+    currency: 'PLN',
+    rows: [
+      { taxRate: 0.05, net: 10, vat: 0.5, gross: 10.5 },
+      { taxRate: 0.08, net: 16.5, vat: 1.32, gross: 17.82 },
+      { taxRate: 0.23, net: 46, vat: 10.58, gross: 56.58 },
+    ],
+    vatTotal: 12.4,
+    subtotalGross: 84.9,
+    grandTotalGross: 84.9,
+  };
+
+  it('reads a reply without the breakdown as null', () => {
+    expect(cartFullPayloadSchema.parse(EMPTY_BASKET).vat).toBeNull();
+  });
+
+  it('carries one row per rate and the gross totals', () => {
+    expect(cartFullPayloadSchema.parse({ ...EMPTY_BASKET, vat: VAT }).vat).toEqual(VAT);
+  });
+
+  it('refuses a negative rate', () => {
+    const rows = [{ ...VAT.rows[0]!, taxRate: -0.05 }];
+    expect(cartFullPayloadSchema.safeParse({ ...EMPTY_BASKET, vat: { ...VAT, rows } }).success).toBe(false);
+  });
+
+  it("carries a line's rate and its own gross, and reads a line without them as absent", () => {
+    const line = { ...LINE, productName: null, taxRate: 0.23, lineGross: { amount: 24.6, currency: 'PLN' } };
+    const parsed = cartViewLineSchema.parse(line);
+    expect(parsed.taxRate).toBe(0.23);
+    expect(parsed.lineGross).toEqual({ amount: 24.6, currency: 'PLN' });
+    const bare = cartViewLineSchema.parse({ ...LINE, productName: null });
+    expect(bare.taxRate).toBeUndefined();
+    expect(bare.lineGross).toBeUndefined();
+  });
+});
+
+describe('orgCartDetailViewSchema (issue #650)', () => {
+  const DETAIL = {
+    id: '00000000-0000-4000-8000-000000000030',
+    ownerCustomerAccountId: '00000000-0000-4000-8000-000000000031',
+    ownerDisplayName: 'Jan Kowalski',
+    ownerEmail: 'buyer@example.com',
+    orderId: null,
+    status: 'active',
+    approvalStatus: 'pending',
+    itemCount: 1,
+    total: { amount: 30, currency: 'PLN' },
+    lastActivityAt: '2026-11-03T09:00:00.000Z',
+    submittedForApprovalAt: '2026-11-03T09:00:00.000Z',
+    approvedAt: null,
+    rejectedAt: null,
+    rejectedReason: null,
+    items: [
+      {
+        id: LINE.id,
+        productId: LINE.productId,
+        variantId: null,
+        displayName: 'Bolt M8',
+        productSku: 'BOLT-M8',
+        quantity: 3,
+        unitPrice: { amount: 10, currency: 'PLN' },
+        lineTotal: { amount: 30, currency: 'PLN' },
+      },
+    ],
+  };
+
+  it('accepts the detail with its lines', () => {
+    expect(orgCartDetailViewSchema.safeParse(DETAIL).success).toBe(true);
+  });
+
+  // Issue #751 — the owner is named, the e-mail travelling beside the name.
+  it("carries the owner's e-mail beside the name, null for an account that is gone", () => {
+    expect(orgCartDetailViewSchema.parse(DETAIL).ownerEmail).toBe('buyer@example.com');
+    expect(orgCartDetailViewSchema.safeParse({ ...DETAIL, ownerEmail: null }).success).toBe(true);
+    const { ownerEmail: _ownerEmail, ...withoutEmail } = DETAIL;
+    expect(orgCartDetailViewSchema.safeParse(withoutEmail).success).toBe(false);
+  });
+
+  // Issue #751 (owner ruling on PR #760) — a completed cart names the order it produced.
+  it('carries the order a completed cart produced, null for any other', () => {
+    const orderId = '00000000-0000-4000-8000-000000000751';
+    expect(orgCartDetailViewSchema.parse({ ...DETAIL, status: 'completed', orderId }).orderId).toBe(orderId);
+    expect(orgCartDetailViewSchema.parse(DETAIL).orderId).toBeNull();
+    const { orderId: _orderId, ...withoutOrder } = DETAIL;
+    expect(orgCartDetailViewSchema.safeParse(withoutOrder).success).toBe(false);
+  });
+
+  it('requires the lines', () => {
+    const { items: _items, ...withoutLines } = DETAIL;
+    expect(orgCartDetailViewSchema.safeParse(withoutLines).success).toBe(false);
+  });
+});
+
+describe('cartMiniPayloadSchema', () => {
+  it('accepts the mini view as answered and keeps its subtotal and line variantId', () => {
+    const parsed = cartMiniPayloadSchema.parse({
+      id: '00000000-0000-4000-8000-000000000010',
+      itemCount: 1,
+      items: [
+        {
+          id: LINE.id,
+          productId: LINE.productId,
+          variantId: null,
+          quantity: 2,
+          unitPrice: LINE.unitPrice,
+          lineTotal: LINE.lineTotal,
+        },
+      ],
+      subtotal: { amount: 20, currency: 'PLN' },
+    });
+    expect(parsed.subtotal).toEqual({ amount: 20, currency: 'PLN' });
+    expect(parsed.items[0]?.variantId).toBeNull();
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+//  `specs/182-related-payers/` — the cart's *Buying for* context (FR-110 – FR-116)
+// ──────────────────────────────────────────────────────────────────────────
+
+const PAYER_ORG = '00000000-0000-4000-8000-0000000000b2';
+const BUYING_FOR = { organizationId: PAYER_ORG, name: 'Payer SA', terms: 'payer' };
+
+describe('cartFullPayloadSchema — buyingFor (FR-110)', () => {
+  it('reads a reply without the key as no context, and no reset', () => {
+    const parsed = cartFullPayloadSchema.parse(EMPTY_BASKET);
+    expect(parsed.buyingFor).toBeNull();
+    expect(parsed.buyingForReset).toBeNull();
+  });
+
+  it('carries the payer, its name and the terms the link had', () => {
+    expect(cartFullPayloadSchema.parse({ ...EMPTY_BASKET, buyingFor: BUYING_FOR }).buyingFor).toEqual(BUYING_FOR);
+    expect(
+      cartFullPayloadSchema.safeParse({ ...EMPTY_BASKET, buyingFor: { ...BUYING_FOR, terms: 'other' } }).success,
+    ).toBe(false);
+  });
+
+  it('says why a context was dropped on this read (FR-116)', () => {
+    expect(cartBuyingForResetReasonSchema.options).toEqual(['link_not_usable', 'terms_changed', 'capability_unavailable']);
+    const parsed = cartFullPayloadSchema.parse({ ...EMPTY_BASKET, buyingForReset: { reason: 'terms_changed' } });
+    expect(parsed.buyingForReset).toEqual({ reason: 'terms_changed' });
+  });
+});
+
+describe('setCartBuyingForRequestSchema (FR-110)', () => {
+  it('names a payer or returns to the buyer itself', () => {
+    expect(setCartBuyingForRequestSchema.parse({ payerOrganizationId: PAYER_ORG }).payerOrganizationId).toBe(PAYER_ORG);
+    expect(setCartBuyingForRequestSchema.parse({ payerOrganizationId: null }).payerOrganizationId).toBeNull();
+  });
+
+  it('requires the key, a uuid, and nothing the client could steer pricing with', () => {
+    expect(setCartBuyingForRequestSchema.safeParse({}).success).toBe(false);
+    expect(setCartBuyingForRequestSchema.safeParse({ payerOrganizationId: 'x' }).success).toBe(false);
+    expect(setCartBuyingForRequestSchema.safeParse({ payerOrganizationId: PAYER_ORG, terms: 'payer' }).success).toBe(
+      false,
+    );
+    expect(
+      setCartBuyingForRequestSchema.safeParse({ payerOrganizationId: PAYER_ORG, priceListId: PAYER_ORG }).success,
+    ).toBe(false);
+  });
+});
+
+describe('cartRepricingSummarySchema — what the switch changed (FR-113, FR-114)', () => {
+  const summary = {
+    lines: [
+      { lineId: LINE.id, before: { amount: 10, currency: 'PLN' }, after: { amount: 9, currency: 'PLN' }, unpriced: false },
+      { lineId: '00000000-0000-4000-8000-000000000012', before: { amount: 5, currency: 'PLN' }, after: null, unpriced: true },
+    ],
+    promotionsAdded: [{ promotionId: '00000000-0000-4000-8000-0000000000d1', name: 'Payer -5%' }],
+    promotionsRemoved: [{ promotionId: '00000000-0000-4000-8000-0000000000d2', name: null }],
+  };
+
+  it('per line the unit price before and after, and the lines left unpriced', () => {
+    expect(cartRepricingSummarySchema.parse(summary)).toEqual(summary);
+  });
+
+  it('an unpriced line has no price after', () => {
+    expect(
+      cartRepricingSummarySchema.safeParse({
+        ...summary,
+        lines: [{ lineId: LINE.id, before: null, after: { amount: 1, currency: 'PLN' }, unpriced: true }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('the switch answers the cart and the summary', () => {
+    const reply = { data: { ...EMPTY_BASKET, buyingFor: BUYING_FOR, repricing: summary } };
+    const parsed = setCartBuyingForResponseSchema.parse(reply);
+    expect(parsed.data.repricing).toEqual(summary);
+    expect(parsed.data.buyingFor).toEqual(BUYING_FOR);
+  });
+});

@@ -191,6 +191,11 @@ export const KnownIconNameSchema = z.enum([
   // nearest were `ClipboardList` and `ListChecks` — so the name joins it here
   // instead of the entry borrowing one that happens to be on it already.
   'CalendarDays',
+  // `specs/180-off-platform-complaints/` (US7) — `returns`' *Return and complaint
+  // terms* palette action (contracts/settings-emails-events.md §8). The list held
+  // no glyph for terms one accepts — `ClipboardCheck` is `orders`' — so the name
+  // joins it here instead of the action borrowing another module's glyph.
+  'FileCheck',
 ]);
 export type KnownIconName = z.infer<typeof KnownIconNameSchema>;
 
@@ -201,6 +206,8 @@ export type KnownIconName = z.infer<typeof KnownIconNameSchema>;
 const actionIdRe = /^[a-z][a-z0-9-]*$/;
 const translationKeyRe = /^[a-z][a-zA-Z0-9_]*(\.[a-z][a-zA-Z0-9_]*)*$/;
 const adminRouteRe = /^\/[A-Za-z0-9/_-]*$/;
+/** A registered admin API path, `:param` segments included — never the bare prefix. */
+const entryApiRouteRe = /^\/api\/v1\/admin(\/[A-Za-z0-9_:.-]+)+$/;
 
 // ---------------------------------------------------------------------------
 // Manifest-side action declaration
@@ -230,10 +237,57 @@ export const ModuleActionSchema = z.object({
    * codebase mixes colon and dot notation; both are accepted by design.
    */
   requiredPermission: z.string().min(1).max(64).optional(),
+  /**
+   * Issue #1088 — the admin API route the target screen **opens on**, the
+   * request whose gate decides whether the screen renders at all. Declared only
+   * where the SPA placement does not name it: the outbox is a tab of
+   * `/platform/command-hooks`, and its entry request is
+   * `GET /api/v1/admin/command-outbox`. Nothing reads it at runtime —
+   * `check:action-route-permissions` compares `requiredPermission` against this
+   * route instead of reconstructing one from `targetRoute`, and reports a
+   * declaration no registration answers. The method follows the target: GET,
+   * or the write verbs for a `/new` create form.
+   */
+  entryApiRoute: z
+    .string()
+    .max(255)
+    .regex(entryApiRouteRe, 'Entry API route must be a path under /api/v1/admin/')
+    .optional(),
+  /**
+   * Search words matched in **every** admin language. English, like every
+   * other default a manifest carries; a word an operator types in their own
+   * language belongs under {@link keywordsKey}, not here.
+   */
   keywords: z.array(z.string().trim().min(1).max(64)).max(10).default([]),
+  /**
+   * Issue #560 — a bundle key, relative to the module's namespace exactly as
+   * `labelKey` is, whose value is a comma-separated list of the search words
+   * an operator types **in that language** (`parseBundleKeywords`). The server
+   * resolves it in the requested language and serves it alongside `keywords`,
+   * so the palette finds `nowe poświadczenie` for a Polish admin without a
+   * Polish word standing in the manifest.
+   */
+  keywordsKey: z
+    .string()
+    .min(1)
+    .max(255)
+    .regex(translationKeyRe, 'Translation key must be dot-separated camelCase namespaces')
+    .optional(),
   weight: z.number().int().min(0).max(9999).default(100),
 });
 export type ModuleAction = z.infer<typeof ModuleActionSchema>;
+
+/**
+ * Read the value of an action's `keywordsKey` bundle entry: a comma-separated
+ * list, each word trimmed, empty entries dropped. One reader, shared by the
+ * server that serves the words and the test that holds every bundle to it.
+ */
+export function parseBundleKeywords(value: string): string[] {
+  return value
+    .split(',')
+    .map((word) => word.trim())
+    .filter((word) => word.length > 0);
+}
 
 /**
  * Top-level `actions` array on a module's manifest. Enforces
@@ -281,9 +335,10 @@ export type GetAdminActionsQuery = z.infer<typeof GetAdminActionsQuerySchema>;
 /**
  * Per-row view returned by the endpoint. Labels and descriptions are
  * already resolved into the requested language by the server; the
- * admin renders them verbatim. `keywords` is the raw list as declared
- * in the manifest — the admin applies its own diacritic-insensitive
- * normalize at filter time.
+ * admin renders them verbatim. `keywords` is the manifest's list followed
+ * by the words its `keywordsKey` resolves to in the requested language
+ * (issue #560), de-duplicated — the admin applies its own
+ * diacritic-insensitive normalize at filter time.
  */
 export const AdminActionViewSchema = z.object({
   moduleId: z.string(),

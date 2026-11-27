@@ -1,27 +1,38 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useFocusTrap } from './hooks/useFocusTrap.js';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useFocusTrap, useViewportTier } from '@endora-commerce/admin-kit/components';
 import { BrandLogo } from './BrandLogo.js';
 import { VersionBadge } from './VersionBadge.js';
+import { AdminFeedback } from './AdminFeedback.js';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
+  BookOpen,
   Boxes,
   ChevronDown,
   ChevronRight,
-  HelpCircle,
   Home as HomeIcon,
   Menu,
   LayoutDashboard,
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
+  Pin,
+  PinOff,
   Search,
   Sparkles,
+  Webhook,
   type LucideIcon,
 } from 'lucide-react';
-import { useAuth } from '../lib/auth.js';
-import { cn } from '../lib/utils.js';
-import { useTranslation } from '../i18n/useTranslation.js';
-import { useTranslationContext } from '../i18n/TranslationProvider.js';
+import {
+  useAuth,
+  cn,
+  useModulePresence,
+  useSurfaceVisibility,
+  type GatedSurface,
+  type PermissionRequirement,
+  resolveIcon,
+  useAdminPreference,
+} from '@endora-commerce/admin-kit/lib';
+import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import {
   registryNavFor,
   useAdminRegistry,
@@ -29,78 +40,38 @@ import {
 } from '../lib/module-registry/index.js';
 import { LanguagePicker } from './LanguagePicker.js';
 import { RoleRequiredNotice } from './RoleRequiredNotice.js';
-import { useViewportTier } from './hooks/useViewportTier.js';
 import { NotificationBell } from './notifications/index.js';
 import { useAdminActions } from '../lib/admin-actions/useAdminActions.js';
-import { normalize } from '../lib/text-normalization.js';
-import { useModulePresence } from '../lib/module-presence/index.js';
+import { matchesSearchTerms, searchTerms } from '../lib/palette-match.js';
 import { usePlatformVersion } from '../lib/platform-info/usePlatformVersion.js';
-import {
-  useSurfaceVisibility,
-  type GatedSurface,
-  type PermissionRequirement,
-} from '../lib/surface-visibility.js';
-import { resolveIcon } from '../lib/admin-actions/icon-map.js';
 import { getPromptCapability, listUnseenPromptRequests } from '../lib/prompt-actions/api.js';
 import { PromptModePanel } from './prompt-actions/PromptModePanel.js';
 import { useGlobalSearch } from '../lib/global-search/useGlobalSearch.js';
-import { Badge } from './ui/badge.js';
+import { Badge, Separator } from '@endora-commerce/admin-kit/ui';
 import { SpeechToTextButton } from './SpeechToTextButton.js';
 import type { PromptActionRequestDto } from '@endora-commerce/contracts';
 
-interface NavItem extends GatedSurface {
-  to: string;
-  /**
-   * Translation key under the `core` scope. Resolved at render time so
-   * the label flips when the admin changes preferred language.
-   */
-  labelKey: string;
-  /**
-   * The i18n scope `labelKey` resolves in. Absent means `'core'`, the shared
-   * bundle every host entry's key lives in.
-   *
-   * A module-contributed entry (feature 091) carries its own module id here:
-   * its `labelKey` is module-relative (`nav.importExport.label`) and its
-   * translations ship in the module's own `i18n/` directory, which is what
-   * takes a new module's sidebar label out of the shared `_i18n` bundle — one
-   * of the four shared files 11 of the last 12 module additions had to edit.
-   */
-  labelScope?: string;
-  icon: LucideIcon;
-  /**
-   * The permission code (or any-of set) that gates the entry's visibility, read
-   * from the **route that gates the destination** rather than copied from the
-   * entry above it. When unset, the entry renders for every authenticated admin
-   * because the destination genuinely has no gate. When set, the entry is hidden
-   * unless `useAuth().hasPermission(code)` returns true (the wildcard `*`
-   * permission held by `platform_admin` satisfies every code).
-   *
-   * Issue #230 filled the gaps this comment used to record as an open count:
-   * `/orders` (`orders:read`) and `/quote-requests` (`rfqs:handle`) were both
-   * advertised to roles that would collect a 403 on arrival.
-   */
-  requiredPermission?: PermissionRequirement;
-  /**
-   * The module that owns this destination, or `null` for a surface the admin
-   * shell owns itself (the dashboard). Feature 073 / FR-031: the sidebar is
-   * resolved from the server's effective enabled-set, and permission is not a
-   * proxy for module ownership — the two axes are filtered separately by
-   * `isSurfaceVisible`. Explicit attribution is what keeps a new entry from
-   * being silently unfiltered.
-   */
-  module: string | null;
-}
-
-interface NavSection {
-  /** Stable key — used as the localStorage slot for collapse state. */
-  key: string;
-  /**
-   * Translation key under the `core` scope for the section heading.
-   * Empty string = no group label (rendered flat).
-   */
-  labelKey: string;
-  items: NavItem[];
-}
+import type { NavItem, NavSection } from './sidebar/nav-types.js';
+import { sidebarGroupItemsId } from './sidebar/group-ids.js';
+import { navItemMatchesExactly } from './sidebar/nav-match.js';
+import {
+  SECTION_ALIASES,
+  migrateCollapsedGroups,
+  orderSectionItems,
+  resolveSectionKey,
+  toggleCollapsedGroup,
+} from './sidebar/nav-sections.js';
+import { PinnedSection } from './sidebar/PinnedSection.js';
+import { PinToggleButton } from './sidebar/PinToggleButton.js';
+import { PreferencesSaveNotice } from './sidebar/PreferencesSaveNotice.js';
+import { usePinActions, type PinOutcome } from './sidebar/use-pin-actions.js';
+import {
+  pinMatchesExactly,
+  reorderVisiblePins,
+  resolvePinsFrom,
+  visibleDestinations,
+  type VisibleDestination,
+} from '../lib/pinned-entries.js';
 
 /* Design-aligned navigation. The "Home" + "Orders" cluster sits above
  * the first labelled group exactly as the prototype shows. */
@@ -148,6 +119,16 @@ const NAV: NavSection[] = [
     // and the operator may see one of its entries.
     key: 'crm',
     labelKey: 'appShell.section.crm',
+    items: [],
+  },
+  {
+    // The "Projects & tasks" group (`specs/163-projects-and-tasks/` research
+    // R-16). It holds no host-declared row: every entry is the `projects` or
+    // the `tasks` module's contribution, each gated by its own module's
+    // permission, so the heading shows only Tasks entries while `projects` is
+    // off and disappears when both modules are.
+    key: 'work',
+    labelKey: 'appShell.section.work',
     items: [],
   },
   {
@@ -331,9 +312,38 @@ const NAV: NavSection[] = [
     // operator-visible regression; this is where it is repaired.
     items: [],
   },
+  // Issue #1519 (UX audit SHELL-11, owner decision DEC-02): the *System*
+  // section held eighteen rows — personal security, access control,
+  // integrations and data tools in one list, more than twice what a group can
+  // hold before it stops reading as one (Miller). It is two sections now, each
+  // about one thing, and the admin's own two-step verification left the
+  // sidebar for the Profile's *Security* tab (`profile.security` zone), since
+  // it is about the signed-in account and not about the platform.
   {
-    key: 'system',
-    labelKey: 'appShell.section.system',
+    // Who may sign in and what they may do. Every row is a contribution —
+    // `admin_users`, `admin_roles`, `api_keys`, `credentials`, `audit_logs` —
+    // at weights 100 to 500, in that order: identities first, then what grants
+    // their rights, then the secrets machines use, then the record of what
+    // all of them did.
+    key: 'access',
+    labelKey: 'appShell.section.access',
+    items: [],
+  },
+  {
+    // How the instance is configured and extended. Three rows are the host's
+    // and the rest are contributions; **every row carries a weight**, the
+    // host's included, so the section is one order rather than *host rows
+    // first, then contributions* — which kept the developer-facing API
+    // description above Settings whatever any module declared. Frequent
+    // configuration opens the list and the developer tools close it (Serial
+    // Position): Modules 100, Settings 200, Custom fields 300, Import/export
+    // 400, Bulk operations 500, Webhooks 600, Global search 700, PWA 800,
+    // Command hooks 900, API description 1000.
+    //
+    // A contribution still naming the deprecated `'system'` section is filed
+    // here (`SECTION_ALIASES`).
+    key: 'platform',
+    labelKey: 'appShell.section.platform',
     items: [
       // `module: null`, deliberately (D-36). This is the screen that switches
       // modules on and off; attributing it to a module would mean the surface
@@ -345,97 +355,52 @@ const NAV: NavSection[] = [
         icon: Boxes,
         requiredPermission: 'platform.modules.read',
         module: null,
+        weight: 100,
       },
-      // `/admin-users`, `/admin-roles` and `/audit-log` are declared by the
-      // modules that own them since feature 091's Phase 4 batch four, and
-      // arrive through `composeNav` from `modules.generated.ts` — including the
-      // split this file used to carry a comment about: the roles row is
-      // `admin_roles`' while the screen it points at is `admin_users`'. Their
-      // declarations, and that comment's reasoning, are in
-      // `packages/modules/{admin_users,admin_roles,audit_logs}/src/admin/index.ts`.
-      //
-      // Unlike *Analytics & Ads*, this section still holds host entries, so a
-      // registry entry appends after every one of them whatever its weight says
-      // — the operator-visible consequence the batch records.
-      // `/catalog/bulk-operations` stood here until feature 091's Phase 4 batch
-      // 15; `catalog` declares it now, at weight 400 — its position in this
-      // table's original thirteen rows, which is behind `/admin-roles`' 300 and
-      // ahead of `/custom-fields`' 500. One operator-visible change follows and
-      // is recorded rather than glossed: the row rendered *second* while it was
-      // the host's, `composeNav` putting every host row above every contributed
-      // one, and it renders fourth now — back where the table that wrote it put
-      // it. That *bulk operations may span many domains, so the entry lives
-      // under System while the URL stays `/catalog/bulk-operations` to keep
-      // existing deep links valid* is recorded where the route is.
-      // `/api-keys` and `/webhooks` are declared by the modules that own them
-      // since feature 091's Phase 4 (the plan's batch 6), and arrive through
-      // `composeNav` from `modules.generated.ts`. Their declarations are in
-      // `packages/modules/{api_keys,webhooks}/src/admin/index.ts`.
-      // `/credentials`, `/settings`, `/settings/groups` and `/settings/cache`
-      // are declared by the modules that own them since feature 091's Phase 4
-      // batch 10, and arrive through `composeNav` from `modules.generated.ts`.
-      // Their declarations are in
-      // `packages/modules/{credentials,settings}/src/admin/index.ts`.
-      //
-      // `/settings/pwa` is `pwa`'s and has been since batch six, when only the
-      // advertisement moved because the screen lived under
-      // `modules/settings/pages/`. Batch 10 moved that directory, so the screen
-      // went with it and the route is `pwa`'s too — the split closes rather
-      // than standing.
+      // `module: null` for the same reason (`specs/176-command-hooks-outbox/`
+      // FR-041): a command hook spans the module that declares an action and
+      // every module that hooks it. Either tab's code opens it (architect
+      // ruling 2 on #1080); an outbox-only operator lands on the outbox tab.
+      {
+        to: '/platform/command-hooks',
+        labelKey: 'appShell.nav.platformCommandHooks',
+        icon: Webhook,
+        requiredPermission: ['platform.modules.read', 'platform.command_outbox.read'],
+        module: null,
+        weight: 900,
+      },
+      // `module: null` for the same reason: the API description covers every
+      // module's routes, so no module's presence decides whether it is there.
+      // Gated on the code its backing route enforces.
+      {
+        to: '/api-description',
+        labelKey: 'appShell.nav.platformApiDescription',
+        icon: BookOpen,
+        requiredPermission: 'platform.api_description.read',
+        module: null,
+        weight: 1000,
+      },
+      // `/settings` (one row since issue #1550, with its groups and cache as
+      // tabs), `/custom-fields`, `/import-export`, `/catalog/bulk-operations`,
+      // `/webhooks`, `/global-search/configuration` and `/settings/pwa` are
+      // declared by the modules that own them, in
+      // `packages/modules/<id>/src/admin/index.ts`, and arrive through
+      // `composeNav` from `modules.generated.ts`. *Bulk operations may span
+      // many domains, so the entry lives here while the URL stays
+      // `/catalog/bulk-operations` to keep existing deep links valid* is
+      // recorded where the route is.
     ],
   },
 ];
 
-const STORAGE_KEY = 'b2b-admin.nav.collapsed-groups';
-const RAIL_STORAGE_KEY = 'b2b-admin.nav.rail-mode';
-
 /**
- * Rail (icon-only) mode persistence. The whole sidebar shrinks to a
- * 64px-wide column showing just icons; section labels disappear and
- * each section becomes a single icon (the first item's icon). Hovering
- * or clicking the icon reveals a popover with the section's items.
+ * The sidebar's sections in its own order, with their heading keys — what the
+ * Modules screen groups its rows by (issue #1520, UX audit SHELL-12), so a
+ * module is listed under the heading an operator already finds it under in the
+ * menu. Derived from `NAV`, never written out a second time.
  */
-function loadRailMode(): boolean {
-  if (typeof window === 'undefined') return false;
-  try {
-    return window.localStorage.getItem(RAIL_STORAGE_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-
-function persistRailMode(value: boolean): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(RAIL_STORAGE_KEY, value ? '1' : '0');
-  } catch {
-    /* ignore */
-  }
-}
-
-function loadCollapsed(): Set<string> {
-  if (typeof window === 'undefined') return new Set();
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return new Set();
-    const parsed = JSON.parse(raw) as unknown;
-    if (Array.isArray(parsed)) {
-      return new Set(parsed.filter((v): v is string => typeof v === 'string'));
-    }
-  } catch {
-    /* ignore */
-  }
-  return new Set();
-}
-
-function persistCollapsed(value: Set<string>): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(value)));
-  } catch {
-    /* ignore */
-  }
-}
+export const NAV_SECTION_HEADINGS: readonly { readonly key: string; readonly labelKey: string }[] =
+  NAV.map(({ key, labelKey }) => ({ key, labelKey }));
 
 /**
  * Map URL pathname → breadcrumb trail. Each crumb carries a label and
@@ -639,8 +604,11 @@ const CRUMB_DICT: Array<{ test: RegExp; build: (m: RegExpMatchArray) => Crumb[] 
   // *System*'s first host entry, `/platform/modules`, where these three trails
   // named `/admin-users` by hand; and the leaf label resolves in the owning
   // module's namespace rather than in `core`.
+  // Issue #1519 — the section crumb names *Platform*, the section the row
+  // renders in, and links nowhere: the screen is that section's first row, so
+  // a link would point at the page the operator is on.
   { test: /^\/platform\/modules\/?$/, build: () => [
-    { labelKey: 'appShell.section.system', href: '/admin-users' },
+    { labelKey: 'appShell.section.platform', href: null },
     { labelKey: 'appShell.nav.platformModules', href: null },
   ] },
   // `/settings` and `/settings/groups` had a hand-written trail here until
@@ -653,6 +621,13 @@ const CRUMB_DICT: Array<{ test: RegExp; build: (m: RegExpMatchArray) => Crumb[] 
   // label their sidebar row already carries.
   { test: /^\/profile\/?$/, build: () => [
     { labelKey: 'appShell.crumb.myProfile', href: null },
+  ] },
+  // Issue #1519 — the Profile's *Security* tab, the admin's own two-step
+  // verification. Both crumbs are the host's: the tab and its label are, and
+  // only the tab's body is a contribution (`profile.security`).
+  { test: /^\/profile\/security\/?$/, build: () => [
+    { labelKey: 'appShell.crumb.myProfile', href: '/profile' },
+    { labelKey: 'profile.tabs.security', href: null },
   ] },
   // The six `/transactional-emails*` trails stood here until feature 091's
   // Phase 4 batch 11. `registryCrumbs` derives all six now, out of the sidebar
@@ -824,13 +799,19 @@ interface PaletteItem extends GatedSurface {
  * does type `zamówienia`; folding only the query breaks the one who does not.
  * (Postel's Law — accept what was typed and normalise it.)
  *
- * `needle` must already be normalised; the caller folds the query once per
- * keystroke rather than once per row. `normalize` trims, so a query with a
+ * **Per word, across the row** — every word of the query must occur in some
+ * field, not the whole query in one. The rule itself is `lib/palette-match.ts`,
+ * shared with the Actions group for the same reason as the fold: a multi-word
+ * query such as `kanał sprzedaży` used to need one field carrying those words
+ * contiguously, so it missed `Kanały sprzedaży`.
+ *
+ * `terms` must already be folded by `searchTerms`; the caller does that once
+ * per keystroke rather than once per row. `normalize` trims, so a query with a
  * leading space matches what the operator meant rather than nothing at all
  * (issue #236).
  */
-function matchesQuery(needle: string, ...haystacks: string[]): boolean {
-  return haystacks.some((haystack) => normalize(haystack).includes(needle));
+function matchesQuery(terms: readonly string[], ...haystacks: string[]): boolean {
+  return matchesSearchTerms(terms, haystacks);
 }
 
 /**
@@ -964,7 +945,9 @@ const PALETTE_ITEMS: PaletteItem[] = [
  * render would allocate a new array on every keystroke in the palette input.
  *
  * **A module's entries append to their section**, ordered among themselves by
- * `weight` then module id. R11 describes the end state — the whole section
+ * `weight` then module id — unless the section's host rows carry a `weight` of
+ * their own, as *Platform*'s do since issue #1519, in which case host rows and
+ * contributions are one order (`orderSectionItems`). R11 describes the end state — the whole section
  * weight-ordered — which needs a weight on all 97 host entries and is Story 3's
  * to deliver as it drains them; inventing one per host entry now would be a
  * hundred numbers nothing derives. The consequence is visible and worth
@@ -983,7 +966,7 @@ function composeNav(
   const declared = new Set(sections.map((section) => section.key));
   for (const entry of entries) {
     for (const item of entry.contributions.nav ?? []) {
-      if (declared.has(item.section)) continue;
+      if (declared.has(resolveSectionKey(item.section))) continue;
       throw new Error(
         `Module '${entry.moduleId}' contributes a sidebar entry in section '${item.section}', ` +
           `which this shell does not declare. An entry in a section nobody renders is a ` +
@@ -991,26 +974,32 @@ function composeNav(
       );
     }
   }
-  return sections.map((section) => ({
-    ...section,
-    items: [
-      ...section.items,
-      ...registryNavFor(section.key, entries).map(
-        (item): NavItem => ({
-          to: item.to,
-          labelKey: item.labelKey,
-          labelScope: item.module,
-          icon: resolveIcon(item.icon),
-          // `exactOptionalPropertyTypes` — an ungated entry has no property,
-          // not a property holding `undefined`.
-          ...(item.requiredPermission === undefined
-            ? {}
-            : { requiredPermission: item.requiredPermission }),
-          module: item.module,
-        }),
-      ),
-    ],
-  }));
+  return sections.map((section) => {
+    // The section's own key, plus every retired key filed under it
+    // (`SECTION_ALIASES`, issue #1519).
+    const keys = [
+      section.key,
+      ...Object.keys(SECTION_ALIASES).filter((alias) => resolveSectionKey(alias) === section.key),
+    ];
+    const contributed = keys.flatMap((key) => registryNavFor(key, entries)).map(
+      (item): NavItem & { weight: number } => ({
+        to: item.to,
+        labelKey: item.labelKey,
+        labelScope: item.module,
+        icon: resolveIcon(item.icon),
+        // `exactOptionalPropertyTypes` — an ungated entry has no property,
+        // not a property holding `undefined`.
+        ...(item.requiredPermission === undefined
+          ? {}
+          : { requiredPermission: item.requiredPermission }),
+        module: item.module,
+        weight: item.weight,
+      }),
+    );
+    // A host row with a `weight` takes its place among the contributions
+    // (issue #1519); one without keeps rendering first.
+    return { ...section, items: orderSectionItems(section.items, contributed) };
+  });
 }
 
 /**
@@ -1045,8 +1034,20 @@ function useNavLabel(): (item: NavItem) => string {
   );
 }
 
+/** The sentence the pin and unpin live regions say, in the admin's language (FR-005). */
+function pinAnnouncementText(
+  t: (key: string, params?: Record<string, string | number>) => string,
+  outcome: PinOutcome,
+  label: string,
+): string {
+  return t(
+    outcome === 'pinned' ? 'appShell.pinned.announce.pinned' : 'appShell.pinned.announce.unpinned',
+    { label },
+  );
+}
+
 export function AppShell(): ReactNode {
-  const { me, logout, hasPermission } = useAuth();
+  const { me, logout } = useAuth();
   // The host's nav with every installed module's contributed entry folded in.
   const composedNav = useComposedNav();
   // Feature 073 — the effective enabled-set. A module that is off contributes
@@ -1056,23 +1057,28 @@ export function AppShell(): ReactNode {
   const isVisible = useSurfaceVisibility();
   const navigate = useNavigate();
   const location = useLocation();
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => loadCollapsed());
-  const [railMode, setRailMode] = useState<boolean>(() => loadRailMode());
+  // Feature 164 — folded groups and rail mode are the admin's, kept on the
+  // server and present in the first render (FR-013, FR-016). A stored group key
+  // this release does not render folds nothing and is kept in the next write
+  // (FR-015).
+  const [collapsedGroups, setCollapsedGroups] = useAdminPreference('sidebarCollapsedGroups');
+  // Issue #1519 — a folded *System* reads as both of its successors folded.
+  const collapsed = useMemo(() => new Set(migrateCollapsedGroups(collapsedGroups)), [collapsedGroups]);
+  const [storedRailMode, setStoredRailMode] = useAdminPreference('sidebarRailMode');
   const platformVersion = usePlatformVersion();
+  const feedbackOffered = isModulePresent('admin_feedback');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   const sidebarRef = useRef<HTMLElement | null>(null);
   const viewportTier = useViewportTier();
   const isMobile = viewportTier === 'mobile';
   useFocusTrap(sidebarRef, isMobile && navDrawerOpen);
+  // Rail mode has no effect on the mobile tier, whatever is stored (FR-013).
+  const railMode = storedRailMode && !isMobile;
 
   const toggleRailMode = useCallback((): void => {
-    setRailMode((prev) => {
-      const next = !prev;
-      persistRailMode(next);
-      return next;
-    });
-  }, []);
+    setStoredRailMode(!storedRailMode);
+  }, [storedRailMode, setStoredRailMode]);
   const t = useTranslation('core');
   // The brand link's tooltip. With a release known it is the full sentence in
   // either mode: collapsed, the badge has no room and this is the only place
@@ -1091,18 +1097,39 @@ export function AppShell(): ReactNode {
   // contributed resolves its label in that module's own namespace.
   const { t: tScoped } = useTranslationContext();
 
+  // Feature 164 — the sidebar's visible destinations, built once with the same
+  // predicate the sections render with and read by both the Pinned section and
+  // the palette's pin control (research R-7, R-15): a pin is the original
+  // entry's own object, so it cannot show a surface its original would not.
+  const pinTargets = useMemo(
+    () => visibleDestinations(composedNav, isVisible),
+    [composedNav, isVisible],
+  );
+  const { pins, isPinned, toggle: togglePin, setPins } = usePinActions();
+  const resolvedPins = useMemo(() => resolvePinsFrom(pins, pinTargets), [pins, pinTargets]);
+  // One polite region for every pin and unpin in the sidebar (FR-005), mounted
+  // empty and outside the sidebar, which the closed drawer hides from AT.
+  const [pinAnnouncement, setPinAnnouncement] = useState('');
+  const togglePinOf = useCallback(
+    (item: NavItem): void => {
+      const outcome = togglePin(item.to);
+      setPinAnnouncement(pinAnnouncementText(t, outcome, navLabel(item)));
+    },
+    [togglePin, t, navLabel],
+  );
+
   const fullName = me ? `${me.adminUser.firstName} ${me.adminUser.lastName}`.trim() : '';
   const role = me?.role?.name ?? 'Admin';
 
-  const toggleSection = useCallback((key: string): void => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      persistCollapsed(next);
-      return next;
-    });
-  }, []);
+  const toggleSection = useCallback(
+    (key: string): void => {
+      // Through the migration (issue #1519): a retired key is written back as
+      // its successors, so it cannot fold them again after they are opened.
+      // Every other key this release does not render is kept (FR-015).
+      setCollapsedGroups(toggleCollapsedGroup(collapsedGroups, key));
+    },
+    [collapsedGroups, setCollapsedGroups],
+  );
 
   // ⌘K opens the palette anywhere in the admin; ⌘B toggles the
   // sidebar rail (matches the shadcn / VS Code shortcut convention).
@@ -1158,7 +1185,7 @@ export function AppShell(): ReactNode {
         ref={sidebarRef}
         className={cn(
           'b2b-sidebar',
-          railMode && !isMobile && 'b2b-sidebar--rail',
+          railMode && 'b2b-sidebar--rail',
           isMobile && navDrawerOpen && 'b2b-sidebar--drawer-open',
         )}
         aria-hidden={isMobile && !navDrawerOpen ? true : undefined}
@@ -1169,7 +1196,6 @@ export function AppShell(): ReactNode {
           to="/"
           end
           className="b2b-sidebar__brand"
-          style={{ textDecoration: 'none', color: 'inherit', cursor: 'pointer' }}
           aria-label={t('appShell.brand.dashboardLink')}
           title={brandTooltip}
         >
@@ -1187,9 +1213,18 @@ export function AppShell(): ReactNode {
             search, divided from both. It is the link's sibling, not its child:
             the link's `aria-label` replaces its content as the accessible
             name, so a version inside it would be announced by nothing. */}
-        {platformVersion !== null ? (
+        {/* *Send feedback* (#379) sits beside the release, and is there while
+            the module that owns its endpoint is. Collapsed, the release is
+            hidden and the link is an icon of its own. */}
+        {platformVersion !== null || feedbackOffered ? (
           <div className="b2b-sidebar__version">
-            <VersionBadge version={platformVersion} />
+            {platformVersion !== null ? <VersionBadge version={platformVersion} /> : null}
+            {feedbackOffered && !railMode ? <AdminFeedback rail={false} /> : null}
+          </div>
+        ) : null}
+        {feedbackOffered && railMode ? (
+          <div className="b2b-sidebar__feedback-rail-row">
+            <AdminFeedback rail />
           </div>
         ) : null}
 
@@ -1205,21 +1240,61 @@ export function AppShell(): ReactNode {
               <Search size={16} />
             </button>
           ) : (
-            <>
-              <Search size={14} className="b2b-sidebar__search-icon" />
-              <input
-                className="b2b-sidebar__search-input"
-                placeholder={t('appShell.search.placeholder')}
-                readOnly
-                onClick={(): void => setPaletteOpen(true)}
-                onFocus={(): void => setPaletteOpen(true)}
-              />
-              <span className="b2b-sidebar__search-kbd">{t('appShell.search.shortcutSymbol')}</span>
-            </>
+            // Issue #1480 — a button styled as a search field, not a read-only
+            // input that opened the palette on focus: tabbing through the
+            // sidebar must never launch a dialog (WCAG 3.2.1 On Focus). Only an
+            // explicit activation (click, Enter, Space) or the shortcut opens it.
+            <button
+              type="button"
+              className="b2b-sidebar__search-input"
+              onClick={(): void => setPaletteOpen(true)}
+              aria-label={t('appShell.search.openPalette')}
+              aria-haspopup="dialog"
+              aria-keyshortcuts="Meta+K Control+K"
+            >
+              <Search size={14} className="b2b-sidebar__search-icon" aria-hidden="true" />
+              <span className="b2b-sidebar__search-placeholder">{t('appShell.search.placeholder')}</span>
+              <span className="b2b-sidebar__search-kbd" aria-hidden="true">
+                {t('appShell.search.shortcutSymbol')}
+              </span>
+            </button>
           )}
         </div>
 
         <nav className="b2b-sidebar__nav">
+          {railMode ? (
+            resolvedPins.length > 0 ? (
+              <RailSection
+                key="pinned"
+                section={{
+                  key: 'pinned',
+                  labelKey: 'appShell.pinned.heading',
+                  items: resolvedPins.map((pin) => pin.item),
+                }}
+                visibleItems={resolvedPins.map((pin) => pin.item)}
+                translatedLabel={t('appShell.pinned.heading')}
+                pinned={{
+                  icon: Pin,
+                  endOf: (item): boolean => {
+                    const pin = resolvedPins.find((candidate) => candidate.item === item);
+                    return pin ? pinMatchesExactly(pin, location.pathname) : false;
+                  },
+                  onUnpin: togglePinOf,
+                }}
+              />
+            ) : null
+          ) : (
+            <PinnedSection
+              pins={resolvedPins}
+              sections={composedNav}
+              collapsed={collapsed.has('pinned')}
+              onToggleCollapsed={toggleSection}
+              onUnpin={(pin): void => togglePinOf(pin.item)}
+              onReorder={(visibleOrder): void => setPins(reorderVisiblePins(pins, visibleOrder))}
+              navLabel={navLabel}
+              touch={isMobile}
+            />
+          )}
           {composedNav.map((section) => {
             const isOpen = !collapsed.has(section.key);
             // Permission-gate every entry, then presence-gate it (feature 073 /
@@ -1261,43 +1336,55 @@ export function AppShell(): ReactNode {
                 )}
               >
                 {section.labelKey ? (
+                  // Issue #1480 — the header is a disclosure: it says whether
+                  // its group is open and which region it folds (WCAG 4.1.2).
                   <button
                     type="button"
                     className="b2b-sidebar__group-label"
+                    aria-expanded={isOpen}
+                    aria-controls={sidebarGroupItemsId(section.key)}
                     onClick={(): void => toggleSection(section.key)}
                   >
-                    <ChevronDown size={11} />
+                    <ChevronDown size={11} aria-hidden="true" />
                     <span>{translatedLabel}</span>
                   </button>
                 ) : null}
-                <div className="b2b-sidebar__items">
+                <div className="b2b-sidebar__items" id={sidebarGroupItemsId(section.key)}>
                   {visibleItems.map((item) => {
                     const Icon = item.icon;
-                    // Force exact-match (`end`) when another item in the same
-                    // section nests under this item's path. Without this, a
-                    // parent route like `/inventory` lights up alongside its
-                    // children (`/inventory/low-stock`, `/inventory/import`,
-                    // …) because NavLink's default match is prefix-based.
-                    // The home link (`/`) is the canonical example and is
-                    // covered by the same rule (every other item starts with
-                    // `/`).
-                    const hasNestedSibling = section.items.some(
-                      (other) =>
-                        other !== item &&
-                        other.to.startsWith(item.to === '/' ? '/' : `${item.to}/`),
+                    // Force exact-match (`end`) only while a more specific
+                    // row of the same section is the one the operator is on
+                    // (issue #1550): `/inventory` stays dark on
+                    // `/inventory/low-stock`, and `/settings` lights up on
+                    // `/settings/groups`, which has no row of its own. The
+                    // home link (`/`) always matches exactly.
+                    const exact = navItemMatchesExactly(
+                      item.to,
+                      section.items.map((other) => other.to),
+                      location.pathname,
                     );
+                    const label = navLabel(item);
+                    // Feature 164 — the pin control is the row's second Tab
+                    // stop, after the link and never inside it (FR-004).
                     return (
-                      <NavLink
-                        key={item.to}
-                        to={item.to}
-                        end={item.to === '/' || hasNestedSibling}
-                        className={({ isActive }): string =>
-                          cn('b2b-nav-item', isActive && 'is-active')
-                        }
-                      >
-                        <Icon size={16} />
-                        <span style={{ flex: 1 }}>{navLabel(item)}</span>
-                      </NavLink>
+                      <div key={item.to} className="b2b-nav-row">
+                        <NavLink
+                          to={item.to}
+                          end={exact}
+                          className={({ isActive }): string =>
+                            cn('b2b-nav-item', isActive && 'is-active')
+                          }
+                        >
+                          <Icon size={16} />
+                          <span className="flex-1">{label}</span>
+                        </NavLink>
+                        <PinToggleButton
+                          label={label}
+                          pinned={isPinned(item.to)}
+                          touch={isMobile}
+                          onToggle={(): void => togglePinOf(item)}
+                        />
+                      </div>
                     );
                   })}
                 </div>
@@ -1364,8 +1451,12 @@ export function AppShell(): ReactNode {
         ) : null}
       </aside>
 
+      <div role="status" aria-live="polite" className="sr-only" data-testid="sidebar-pin-status">
+        {pinAnnouncement}
+      </div>
+
       {/* ============ Main column (topbar + content) ============ */}
-      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+      <div className="flex min-w-0 flex-col">
         <div className="b2b-topbar">
           {isMobile ? (
             <button
@@ -1380,13 +1471,12 @@ export function AppShell(): ReactNode {
           ) : null}
           <div className={isCmsRoute ? 'b2b-topbar__crumbs-inner b2b-page b2b-page--wide' : 'b2b-topbar__crumbs'}>
             {crumbs.map((c, i) => (
-              <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <span key={i} className="inline-flex items-center gap-1.5">
                 {i > 0 ? <ChevronRight size={12} className="crumb-sep" /> : null}
                 {c.href ? (
                   <NavLink
                     to={c.href}
                     className="crumb-link"
-                    style={{ color: 'inherit', textDecoration: 'none' }}
                   >
                     {c.labelKey !== undefined ? tScoped(c.labelScope ?? 'core', c.labelKey) : c.literal}
                   </NavLink>
@@ -1409,24 +1499,23 @@ export function AppShell(): ReactNode {
               <Search size={16} />
             </button>
             {/*
-              Issue #112 — the bell is a surface like any other: it renders only
-              where the operator holds the code its feed is gated on and the
-              owning module is present. It used to render for every
-              authenticated admin and poll every 30 s, so a restricted role got a
-              permanent 403 and a deactivated `admin_notifications` a 503.
+              Issue #112 — the bell renders only while the owning module is
+              present, so a deactivated `admin_notifications` contributes no
+              widget polling a 503. Issue #518 — and for every signed-in admin:
+              the feed answers each admin their own notifications with no
+              permission code, and `admin:read` decides only whether the
+              `all_admins` broadcasts are among them.
             */}
-            {isModulePresent('admin_notifications') && hasPermission('admin:read') ? (
+            {isModulePresent('admin_notifications') ? (
               <NotificationBell />
             ) : null}
-            <button
-              type="button"
-              className="b2b-topbar__icon-btn b2b-topbar__hide-mobile"
-              title={t('appShell.topbar.help')}
-              aria-label={t('appShell.topbar.help')}
-            >
-              <HelpCircle size={16} />
-            </button>
-            <div style={{ width: 1, height: 22, background: 'var(--border-color)', margin: '0 4px' }} />
+            {/*
+              Issue #1480 — the top bar carried a Help button with no action. A
+              control that looks interactive and does nothing is worse than no
+              control (Jakob's Law, Similarity); it returns once there is a
+              help destination to point it at.
+            */}
+            <Separator orientation="vertical" className="mx-1 h-5.5" />
             {/*
               Feature 019 / FR-017 — language picker. Same backend round-trip
               as ProfilePage's language section, exposed inline so the user
@@ -1439,14 +1528,14 @@ export function AppShell(): ReactNode {
                 className="b2b-avatar"
                 title={`${fullName || me.adminUser.email} — ${t('appShell.profileMenu.profile')}`}
                 aria-label={t('appShell.profileMenu.profile')}
-                style={{ textDecoration: 'none', cursor: 'pointer' }}
               >
                 {(fullName || me.adminUser.email).slice(0, 2).toUpperCase()}
               </NavLink>
             ) : null}
           </div>
         </div>
-        <main className="b2b-main" style={{ flex: 1, overflow: 'auto' }}>
+        <PreferencesSaveNotice />
+        <main className="b2b-main flex-1 overflow-auto">
           <div className="b2b-impersonation-slot" data-impersonation-banner />
           {/* Issue #140 — a session whose role is null reaches no gated
               surface, so the shell says why instead of showing an empty panel. */}
@@ -1456,6 +1545,7 @@ export function AppShell(): ReactNode {
       </div>
 
       <CommandPalette
+        pinTargets={pinTargets}
         open={paletteOpen}
         onClose={(): void => setPaletteOpen(false)}
         onNavigate={(to): void => {
@@ -1485,10 +1575,21 @@ interface RailSectionProps {
   section: NavSection;
   visibleItems: NavItem[];
   translatedLabel: string;
+  /**
+   * Feature 164 — the Pinned section's rail form (US1 AS-9): its own icon, a
+   * popover even for one pin, each row the original's `end` flag and an unpin
+   * control. Not a `menu`: a menu may hold only menu items, and the row holds a
+   * link and a button.
+   */
+  pinned?: {
+    icon: LucideIcon;
+    endOf: (item: NavItem) => boolean;
+    onUnpin: (item: NavItem) => void;
+  };
 }
 
 function RailSection(props: RailSectionProps): ReactNode {
-  const { section, visibleItems, translatedLabel } = props;
+  const { section, visibleItems, translatedLabel, pinned } = props;
   const navLabel = useNavLabel();
   const [hover, setHover] = useState(false);
   const [sticky, setSticky] = useState(false);
@@ -1536,12 +1637,12 @@ function RailSection(props: RailSectionProps): ReactNode {
 
   const railSource = visibleItems[0] ?? section.items[0];
   if (!railSource) return null;
-  const RailIcon = railSource.icon;
+  const RailIcon = pinned?.icon ?? railSource.icon;
   const headerLabel = translatedLabel || (visibleItems[0] ? navLabel(visibleItems[0]) : '');
 
   // Single-item section: render a plain link with no popover. The
   // hover area is the link itself; tooltip carries the label.
-  if (visibleItems.length === 1) {
+  if (visibleItems.length === 1 && pinned === undefined) {
     const only = visibleItems[0]!;
     const Icon = only.icon;
     const onlyLabel = navLabel(only);
@@ -1580,30 +1681,61 @@ function RailSection(props: RailSectionProps): ReactNode {
           open && 'is-open',
         )}
         onClick={(): void => setSticky((prev) => !prev)}
-        aria-haspopup="menu"
+        {...(pinned === undefined ? { 'aria-haspopup': 'menu' as const } : {})}
         aria-expanded={open}
         aria-label={headerLabel}
         title={headerLabel}
       >
         <RailIcon size={18} />
       </button>
-      {open ? (
+      {open && pinned !== undefined ? (
+        <div className="b2b-sidebar__rail-popover">
+          {headerLabel ? (
+            <div className="b2b-sidebar__rail-popover-header">{headerLabel}</div>
+          ) : null}
+          {visibleItems.map((item) => {
+            const Icon = item.icon;
+            const label = navLabel(item);
+            return (
+              <div key={item.to} className="b2b-sidebar__rail-popover-row">
+                <NavLink
+                  to={item.to}
+                  end={pinned.endOf(item)}
+                  className={({ isActive }): string =>
+                    cn('b2b-sidebar__rail-popover-item', isActive && 'is-active')
+                  }
+                  onClick={(): void => {
+                    setSticky(false);
+                    setHover(false);
+                  }}
+                >
+                  <Icon size={14} />
+                  <span>{label}</span>
+                </NavLink>
+                <PinToggleButton label={label} pinned onToggle={(): void => pinned.onUnpin(item)} />
+              </div>
+            );
+          })}
+        </div>
+      ) : open ? (
         <div className="b2b-sidebar__rail-popover" role="menu">
           {headerLabel ? (
             <div className="b2b-sidebar__rail-popover-header">{headerLabel}</div>
           ) : null}
           {visibleItems.map((item) => {
             const Icon = item.icon;
-            const hasNestedSibling = visibleItems.some(
-              (other) =>
-                other !== item &&
-                other.to.startsWith(item.to === '/' ? '/' : `${item.to}/`),
+            // The sidebar's rule (issue #1550): exact only while a more
+            // specific row is the active one.
+            const exact = navItemMatchesExactly(
+              item.to,
+              visibleItems.map((other) => other.to),
+              location.pathname,
             );
             return (
               <NavLink
                 key={item.to}
                 to={item.to}
-                end={item.to === '/' || hasNestedSibling}
+                end={exact}
                 role="menuitem"
                 className={({ isActive }): string =>
                   cn('b2b-sidebar__rail-popover-item', isActive && 'is-active')
@@ -1628,11 +1760,28 @@ interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
   onNavigate: (to: string) => void;
+  /**
+   * Feature 164, FR-027 — the sidebar's visible destinations (`AppShell`'s one
+   * map). A result whose destination is in it, from any group, gets a pin
+   * control; nothing else does, so the palette cannot offer a hidden surface.
+   */
+  pinTargets: ReadonlyMap<string, VisibleDestination>;
 }
+
+/** The `Alt+Enter` chord as the platform writes it (FR-027, research R-16). */
+const ALT_ENTER_GLYPH =
+  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌥↵' : 'Alt+↵';
 
 /** Sentinel route for the assistant entry row — switches the palette mode
  *  instead of navigating (feature 043; module_actions are navigation-only). */
 const PROMPT_MODE_SENTINEL = '__prompt_actions_mode__';
+
+/** Sentinel route for the "a confirmed prompt has finished" row (FR-018,
+ *  issue #1404) — opens prompt mode on the oldest unseen result. */
+const PROMPT_UNSEEN_SENTINEL = '__prompt_actions_unseen__';
+
+/** Words the assistant rows are matched on while typing, in both languages. */
+const ASSISTANT_KEYWORDS = 'assistant ai prompt ask asystent zapytaj';
 
 /**
  * The last answer the capability probe gave, kept at module level so a palette
@@ -1655,8 +1804,15 @@ export function resetPromptCapabilityCacheForTesting(): void {
 }
 
 function CommandPalette(props: CommandPaletteProps): ReactNode {
-  const { open, onClose, onNavigate } = props;
+  const { open, onClose, onNavigate, pinTargets } = props;
   const t = useTranslation('core');
+  const navLabel = useNavLabel();
+  const { isPinned, toggle: togglePin } = usePinActions();
+  // The palette is `aria-modal`, so assistive technology ignores the sidebar's
+  // region while it is open: it announces in its own (research R-16).
+  const [pinAnnouncement, setPinAnnouncement] = useState('');
+  const instructionsId = useId();
+  const listboxId = useId();
   const tp = useTranslation('prompt_actions');
   const { hasPermission } = useAuth();
   const isVisible = useSurfaceVisibility();
@@ -1763,10 +1919,30 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
         sub: tp('palette.entry.description'),
         icon: Sparkles,
         to: PROMPT_MODE_SENTINEL,
-        keywords: 'assistant ai prompt ask asystent zapytaj',
+        keywords: ASSISTANT_KEYWORDS,
       },
     ];
   }, [mayUseAssistant, assistantReady, tp]);
+
+  // FR-018 / issue #1404 — a prompt that finished while the palette was closed
+  // is an `option` of the listbox, listed first, so the arrow keys reach it,
+  // Enter opens it and a screen reader hears it as the highlighted row. It
+  // used to be a clickable `div` above the listbox that only a mouse could
+  // use.
+  const unseenItems = useMemo<PaletteItem[]>(() => {
+    if (unseen.length === 0) return [];
+    return [
+      {
+        group: 'Assistant',
+        labelMode: 'literal',
+        label: tp('panel.unseenNotice'),
+        sub: '',
+        icon: Sparkles,
+        to: PROMPT_UNSEEN_SENTINEL,
+        keywords: ASSISTANT_KEYWORDS,
+      },
+    ];
+  }, [unseen.length, tp]);
 
   // Global search's rows. Only selectable rows enter `items`, so the one
   // Arrow/Enter loop walks screens, actions and records as one list (FR-006);
@@ -1812,10 +1988,10 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
   }, [records.available, records.minimumQueryLength, query, t]);
 
   const itemsBeforeSeeAll = useMemo(() => {
-    if (!query.trim()) return [...assistantItems, ...navigateItems, ...actionItems];
+    if (!query.trim()) return [...unseenItems, ...assistantItems, ...navigateItems, ...actionItems];
     // Folded once here, then compared against every row — see `matchesQuery`.
-    const q = normalize(query);
-    const filteredAssistant = assistantItems.filter((i) =>
+    const q = searchTerms(query);
+    const filteredAssistant = [...unseenItems, ...assistantItems].filter((i) =>
       matchesQuery(q, i.label, i.sub, i.keywords),
     );
     // Navigate group: filter against the *translated* label + sub plus
@@ -1828,11 +2004,31 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
     // `resolveLabel` / `resolveSub` are render-scoped closures over `t`; the
     // list re-derives on every language change through the parent re-render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, actionItems, assistantItems, navigateItems, recordItems]);
+  }, [query, actionItems, unseenItems, assistantItems, navigateItems, recordItems]);
 
   const items = useMemo(
     () => (seeAllItem ? [...itemsBeforeSeeAll, seeAllItem] : itemsBeforeSeeAll),
     [itemsBeforeSeeAll, seeAllItem],
+  );
+
+  // FR-027 — a row is pinnable when its destination **is** a visible sidebar
+  // entry's. The assistant sentinel and "see all" (a path with a query) never
+  // match a destination, so they never carry the control.
+  const pinTargetOf = useCallback(
+    (it: PaletteItem): VisibleDestination | undefined =>
+      it.to === PROMPT_MODE_SENTINEL || it.to === PROMPT_UNSEEN_SENTINEL
+        ? undefined
+        : pinTargets.get(it.to),
+    [pinTargets],
+  );
+  const togglePinOf = useCallback(
+    (to: string): void => {
+      const target = pinTargets.get(to);
+      if (!target) return;
+      const outcome = togglePin(to);
+      setPinAnnouncement(pinAnnouncementText(t, outcome, navLabel(target.item)));
+    },
+    [pinTargets, togglePin, t, navLabel],
   );
 
   // Activating the assistant row switches the palette body instead of
@@ -1844,9 +2040,18 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
         setMode('prompt');
         return;
       }
+      if (to === PROMPT_UNSEEN_SENTINEL) {
+        const [next, ...rest] = unseen;
+        if (!next) return;
+        setInitialRequest(next);
+        setUnseen(rest);
+        setInitialPrompt('');
+        setMode('prompt');
+        return;
+      }
       onNavigate(to);
     },
-    [onNavigate],
+    [onNavigate, unseen],
   );
 
   // `/ai` shortcut: typing `/ai` (optionally followed by a command) in the
@@ -1871,8 +2076,21 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
     setCursor(0);
   }, [query, open]);
 
+  // Issue #1404 — the highlighted option is kept in view as the arrow keys
+  // walk past the visible part of the list. DOM focus stays in the input, so
+  // the browser would not scroll for it. `block: 'nearest'` moves the list
+  // only when the row is outside it, and without smooth scrolling, so a
+  // reduced-motion preference has no animation to opt out of.
+  useEffect(() => {
+    if (!open || mode !== 'search') return;
+    const row = document.getElementById(`${listboxId}-option-${cursor}`);
+    // `scrollIntoView` is absent from some non-browser DOMs (jsdom).
+    if (row && typeof row.scrollIntoView === 'function') row.scrollIntoView({ block: 'nearest' });
+  }, [open, mode, cursor, items, listboxId]);
+
   useEffect(() => {
     if (!open) {
+      setPinAnnouncement('');
       setQuery('');
       setMode('search');
       setInitialRequest(undefined);
@@ -1902,6 +2120,12 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         setCursor((c) => Math.max(0, c - 1));
+      } else if (e.key === 'Enter' && e.altKey) {
+        // Feature 164, FR-027 — `Alt+Enter` (⌥↵) pins or unpins the highlighted
+        // row and never navigates; focus stays in the input.
+        e.preventDefault();
+        const it = items[cursor];
+        if (it && pinTargetOf(it)) togglePinOf(it.to);
       } else if (e.key === 'Enter') {
         e.preventDefault();
         const it = items[cursor];
@@ -1912,7 +2136,7 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
     };
     window.addEventListener('keydown', onKey);
     return (): void => window.removeEventListener('keydown', onKey);
-  }, [open, mode, items, cursor, onClose, activate]);
+  }, [open, mode, items, cursor, onClose, activate, pinTargetOf, togglePinOf]);
 
   if (!open) return null;
 
@@ -1920,7 +2144,12 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
     return (
       <>
         <div className="b2b-scrim" onClick={onClose} />
-        <div className="b2b-palette" role="dialog" aria-modal="true">
+        <div
+          className="b2b-palette"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('appShell.palette.title')}
+        >
           <PromptModePanel
             onExit={(): void => {
               setInitialRequest(undefined);
@@ -1945,39 +2174,132 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
   const recordCount = records.groups.reduce((sum, group) => sum + group.hits.length, 0);
   const nothingAtAll = items.length === 0 && !recordsLoading && !records.groups.some((g) => g.status !== 'ok');
 
+  // Issue #481 — the ARIA combobox-with-listbox pattern. DOM focus stays in
+  // the input; `aria-activedescendant` names the highlighted `option` so a
+  // screen reader announces it as the arrow keys move. Option ids are derived
+  // from the row's position in `items`, the same index the cursor walks.
+  const optionId = (i: number): string => `${listboxId}-option-${i}`;
+  const showListbox = !nothingAtAll;
+  const activeItem = showListbox ? items[cursor] : undefined;
+
   const renderRow = (it: PaletteItem, i: number): ReactNode => {
     const Icon = it.icon;
     const label = resolveLabel(it);
     const sub = resolveSub(it);
+    const pinTarget = pinTargetOf(it);
+    const pinned = pinTarget !== undefined && isPinned(it.to);
+    const pinName =
+      pinTarget === undefined
+        ? ''
+        : t(pinned ? 'appShell.pinned.unpin' : 'appShell.pinned.pin', {
+            label: navLabel(pinTarget.item),
+          });
+    const current = i === cursor;
     return (
       <div
         key={`${it.group}-${it.groupKey ?? ''}-${it.to}-${i}`}
-        className={cn('b2b-palette__item', i === cursor && 'is-cur')}
+        id={optionId(i)}
+        role="option"
+        aria-selected={current}
+        // The pin chord acts on the highlighted row (feature 164, FR-027);
+        // advertised on the option because the option is what is announced.
+        {...(pinTarget !== undefined ? { 'aria-keyshortcuts': 'Alt+Enter' } : {})}
+        className={cn('b2b-palette__item', current && 'is-cur')}
         onMouseEnter={(): void => setCursor(i)}
         onClick={(): void => activate(it.to)}
       >
         <Icon size={16} aria-hidden="true" />
-        <div style={{ minWidth: 0, flex: 1 }}>
+        <div className="min-w-0 flex-1">
           <div>{label}</div>
-          {sub ? <div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{sub}</div> : null}
+          {sub ? <div className="text-[11px] text-muted-foreground">{sub}</div> : null}
         </div>
         {it.badge ? <Badge variant="secondary">{it.badge}</Badge> : null}
-        <span className="meta">{i === cursor ? <span className="b2b-kbd-sm">↵</span> : null}</span>
+        {/* The pin state, in the option's accessible name — the visual cue
+            (the Pin / PinOff glyph) is hidden from assistive technology. */}
+        {pinTarget !== undefined ? (
+          <span className="sr-only">
+            {t(pinned ? 'appShell.palette.pin.statePinned' : 'appShell.palette.pin.stateUnpinned')}
+          </span>
+        ) : null}
+        {pinTarget !== undefined && current ? (
+          <span className="b2b-palette__pin-hint" aria-hidden="true">
+            <span className="b2b-kbd-sm">{ALT_ENTER_GLYPH}</span>
+            {t(pinned ? 'appShell.palette.pin.hintUnpin' : 'appShell.palette.pin.hintPin')}
+          </span>
+        ) : null}
+        {pinTarget !== undefined ? (
+          // A pointer shortcut for `Alt+Enter`, not a second widget: an
+          // `option`'s children are presentational, so a nested button would
+          // be flattened by the browser and reported by axe
+          // (`nested-interactive`). Its state is in the option's name above.
+          <span
+            className="b2b-palette__pin"
+            aria-hidden="true"
+            data-palette-pin=""
+            data-pinned={pinned ? 'true' : 'false'}
+            title={pinName}
+            // Focus stays in the search input; the row's own activation (open
+            // the destination) must not fire.
+            onMouseDown={(event): void => event.preventDefault()}
+            onClick={(event): void => {
+              event.stopPropagation();
+              togglePinOf(it.to);
+            }}
+          >
+            {pinned ? <PinOff size={14} aria-hidden="true" /> : <Pin size={14} aria-hidden="true" />}
+          </span>
+        ) : null}
+        <span className="meta" aria-hidden="true">
+          {current ? <span className="b2b-kbd-sm">↵</span> : null}
+        </span>
       </div>
     );
   };
 
-  let lastGroup = '';
+  // The leading rows (assistant, Navigate, Actions) as runs of one group each,
+  // so every heading labels a `role="group"` holding that group's options.
+  const leadingGroups: Array<{ key: string; label: string; start: number; rows: PaletteItem[] }> = [];
+  leadingItems.forEach((it, i) => {
+    const last = leadingGroups[leadingGroups.length - 1];
+    if (last && last.key === it.group) {
+      last.rows.push(it);
+      return;
+    }
+    leadingGroups.push({
+      key: it.group,
+      label:
+        it.group === 'Navigate'
+          ? t('appShell.palette.group.navigate')
+          : it.group === 'Assistant'
+            ? tp('palette.group.label')
+            : t('appShell.palette.group.actions'),
+      start: i,
+      rows: [it],
+    });
+  });
+
   let recordIndex = firstRecordIndex;
   return (
     <>
       <div className="b2b-scrim" onClick={onClose} />
-      <div className="b2b-palette" role="dialog" aria-modal="true">
+      <div
+        className="b2b-palette"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('appShell.palette.title')}
+      >
         <div className="b2b-palette__input">
-          <Search size={18} style={{ color: 'var(--fg-muted)' }} />
+          <Search size={18} className="text-muted-foreground" aria-hidden="true" />
           <input
             ref={inputRef}
+            role="combobox"
+            aria-label={t('appShell.search.commandPalettePlaceholder')}
+            aria-autocomplete="list"
+            aria-expanded={showListbox}
+            {...(showListbox ? { 'aria-controls': listboxId } : {})}
+            {...(activeItem ? { 'aria-activedescendant': optionId(cursor) } : {})}
             placeholder={t('appShell.search.commandPalettePlaceholder')}
+            aria-describedby={instructionsId}
             value={query}
             onChange={(e): void => handleQueryChange(e.target.value)}
           />
@@ -1990,6 +2312,13 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
             }}
           />
           <span className="b2b-kbd-sm">esc</span>
+          <span id={instructionsId} className="sr-only">
+            {t('appShell.palette.pin.instructions')}
+          </span>
+        </div>
+        {/* Feature 164 — pin and unpin, announced inside the modal dialog. */}
+        <div role="status" aria-live="polite" className="sr-only" data-testid="palette-pin-status">
+          {pinAnnouncement}
         </div>
         {/* FR-033 — a settled record search is announced without moving focus.
             Mounted before it has text: a live region that arrives already
@@ -1999,90 +2328,88 @@ function CommandPalette(props: CommandPaletteProps): ReactNode {
             ? t('appShell.palette.records.announce', { count: recordCount })
             : ''}
         </div>
+        {/* FR-018 / issue #1404 — the finished-prompt row arrives after the
+            palette opens (it is fetched), so its arrival is announced here;
+            the region is mounted before it has text. */}
+        <div role="status" aria-live="polite" className="sr-only" data-testid="palette-unseen-status">
+          {unseenItems.length > 0 ? tp('panel.unseenNotice') : ''}
+        </div>
         <div className="b2b-palette__list" aria-busy={recordsLoading}>
-          {unseen.length > 0 ? (
-            <div
-              data-testid="prompt-unseen-notice"
-              className="b2b-palette__item"
-              style={{ cursor: 'pointer' }}
-              onClick={(): void => {
-                setInitialRequest(unseen[0]);
-                setUnseen((u) => u.slice(1));
-                setMode('prompt');
-              }}
-            >
-              <Sparkles size={16} />
-              <div>
-                <div>{tp('panel.unseenNotice')}</div>
-              </div>
-            </div>
-          ) : null}
           {nothingAtAll ? (
-            <div style={{ padding: 32, textAlign: 'center', color: 'var(--fg-muted)', fontSize: 13 }}>
+            <div className="p-8 text-center text-[13px] text-muted-foreground">
               {t('appShell.search.noMatches')}
             </div>
           ) : (
-            <>
-              {leadingItems.map((it, i) => {
-                const showGroup = it.group !== lastGroup;
-                lastGroup = it.group;
-                const groupHeader =
-                  it.group === 'Navigate'
-                    ? t('appShell.palette.group.navigate')
-                    : it.group === 'Assistant'
-                      ? tp('palette.group.label')
-                      : t('appShell.palette.group.actions');
+            <div id={listboxId} role="listbox" aria-label={t('appShell.palette.results')}>
+              {leadingGroups.map((group) => {
+                const headingId = `${listboxId}-group-${group.key}`;
                 return (
-                  <div key={`${it.group}-${it.label}`}>
-                    {showGroup ? <div className="b2b-palette__group">{groupHeader}</div> : null}
-                    {renderRow(it, i)}
+                  <div key={group.key} role="group" aria-labelledby={headingId}>
+                    <div className="b2b-palette__group" id={headingId}>
+                      {group.label}
+                    </div>
+                    {group.rows.map((it, offset) => renderRow(it, group.start + offset))}
                   </div>
                 );
               })}
               {recordsLoading ? (
                 <div
-                  className="b2b-palette__item"
+                  // `cursor-default!`: the unlayered `.b2b-palette__item` rule sets
+                  // `cursor: pointer`, which an unmarked utility cannot outrank.
+                  className="b2b-palette__item cursor-default! text-muted-foreground"
                   aria-hidden="true"
                   data-palette-note=""
                   data-testid="palette-records-searching"
-                  style={{ color: 'var(--fg-muted)', cursor: 'default' }}
                 >
                   <Search size={16} />
                   <div>{t('appShell.palette.records.searching')}</div>
                 </div>
               ) : null}
               {showRecords
-                ? records.groups.map((group) => (
-                    <div key={group.entityType} data-testid={`palette-records-${group.entityType}`}>
-                      <div className="b2b-palette__group">
-                        {group.label}
-                        {group.hasMore ? (
-                          <span style={{ marginLeft: 8, fontWeight: 400 }}>
-                            · {t('appShell.palette.records.more')}
-                          </span>
-                        ) : null}
-                      </div>
-                      {group.status === 'ok' ? (
-                        group.hits.map(() => {
-                          const index = recordIndex;
-                          recordIndex += 1;
-                          const it = items[index];
-                          return it ? renderRow(it, index) : null;
-                        })
-                      ) : (
-                        <div
-                          className="b2b-palette__item"
-                          data-palette-note=""
-                          style={{ color: 'var(--fg-muted)', cursor: 'default' }}
-                        >
-                          <div>{t('appShell.palette.records.unavailable', { label: group.label })}</div>
+                ? records.groups.map((group) => {
+                    const headingId = `${listboxId}-records-${group.entityType}`;
+                    return (
+                      <div
+                        key={group.entityType}
+                        role="group"
+                        aria-labelledby={headingId}
+                        data-testid={`palette-records-${group.entityType}`}
+                      >
+                        <div className="b2b-palette__group" id={headingId}>
+                          {group.label}
+                          {group.hasMore ? (
+                            <span className="ml-2 font-normal">
+                              · {t('appShell.palette.records.more')}
+                            </span>
+                          ) : null}
                         </div>
-                      )}
-                    </div>
-                  ))
+                        {group.status === 'ok' ? (
+                          group.hits.map(() => {
+                            const index = recordIndex;
+                            recordIndex += 1;
+                            const it = items[index];
+                            return it ? renderRow(it, index) : null;
+                          })
+                        ) : (
+                          // Never a row the cursor stops on, but still read
+                          // when the list is browsed: a disabled option.
+                          <div
+                            id={`${headingId}-note`}
+                            role="option"
+                            aria-selected={false}
+                            aria-disabled="true"
+                            className="b2b-palette__item cursor-default! text-muted-foreground"
+                            data-palette-note=""
+                          >
+                            <div>{t('appShell.palette.records.unavailable', { label: group.label })}</div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
                 : null}
               {seeAllItem ? renderRow(seeAllItem, items.length - 1) : null}
-            </>
+            </div>
           )}
         </div>
       </div>

@@ -30,7 +30,7 @@ function ownEntitiesOnly(): () => EntityManager {
   const create = (entity: unknown, data: Record<string, unknown>): Record<string, unknown> => {
     guard(entity);
     if (entity === Invoice) {
-      invoice = { id: 'inv-1', ...data };
+      invoice = { id: '00000000-0000-4000-8000-781000000010', ...data };
       return invoice;
     }
     const line = { id: `line-${lines.length + 1}`, ...data };
@@ -39,7 +39,7 @@ function ownEntitiesOnly(): () => EntityManager {
   };
   const tx = {
     create,
-    persistAndFlush: async () => {},
+    persist: () => ({ flush: async () => {} }),
     flush: async () => {},
   };
   const em = {
@@ -118,12 +118,14 @@ function orderItem(): OrderItemRecord {
 function readPort(order: OrderRecord, items: OrderItemRecord[]): OrderReadPort {
   return {
     findById: async () => order,
+    findByIdForCustomer: async () => order,
     findByIds: async () => [order],
     listAll: async () => [order],
     listItems: async () => items,
     findIdsByBusinessIdLike: async () => [order.id],
     salesChannelIdsForCustomer: async () => [order.salesChannelId],
     findStatusDefinition: async () => null,
+    isTerminal: async () => false,
   };
 }
 
@@ -177,6 +179,7 @@ const PENDING_DETAIL = {
   grossTotal: 123,
   paidTotal: 0,
   amountDue: 123,
+  overpayment: 0,
   total: 123,
   originalInvoiceId: null,
   templateId: null,
@@ -223,7 +226,7 @@ describe('invoices — vendor number hold (mode B)', () => {
       },
     );
 
-    // `InvoiceService.issue` asks `isOrgInScope`, which refuses outside a tenant
+    // `InvoiceService.issue` asks `orgInScope`, which refuses outside a tenant
     // context. The route supplies one in production and `backend`'s harness
     // supplied one to every test in the run (`backend/test/tenancy-setup.ts`);
     // this package's own vitest configuration installs no such default, so the

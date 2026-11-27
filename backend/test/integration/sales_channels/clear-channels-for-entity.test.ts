@@ -52,12 +52,11 @@ describe('membership: clearing every channel of an entity', () => {
       defaultCurrency: 'EUR',
       languages: ['en'],
       currencies: ['EUR'],
-      isPublic: false,
       active: true,
       systemDefault: false,
       version: 1,
     });
-    await em.persistAndFlush(second);
+    await em.persist(second).flush();
     return { def, second };
   }
 
@@ -88,7 +87,7 @@ describe('membership: clearing every channel of an entity', () => {
           currency: 'PLN',
           adapter: 'manual_courier',
         });
-        await em.persistAndFlush(row);
+        await em.persist(row).flush();
         return row.id;
       },
     },
@@ -105,7 +104,7 @@ describe('membership: clearing every channel of an entity', () => {
           statusOnSuccess: 'paid',
           statusOnFailure: 'cancelled',
         });
-        await em.persistAndFlush(row);
+        await em.persist(row).flush();
         return row.id;
       },
     },
@@ -154,14 +153,14 @@ describe('membership: clearing every channel of an entity', () => {
         sku: 'CLEAR-PRODUCT',
         slug: 'clear-product',
         type: 'simple',
-        status: 'draft',
-        name: { en: 'Clear product' },
-        description: { en: 'fixture' },
+        status: 'inactive',
+        name: 'Clear product',
+        description: 'fixture',
         visibility: 'public',
         attributeValues: {},
         allowedOrganizationIds: [],
       });
-      await em.persistAndFlush(product);
+      await em.persist(product).flush();
       const svc = service();
       await svc.addToChannel(def.id, 'product', product.id);
 
@@ -199,7 +198,7 @@ describe('membership: clearing every channel of an entity', () => {
         currency: 'PLN',
         adapter: 'manual_courier',
       });
-      await em.persistAndFlush(row);
+      await em.persist(row).flush();
       const svc = service();
       await svc.addToChannel(second.id, 'delivery-method', row.id);
 

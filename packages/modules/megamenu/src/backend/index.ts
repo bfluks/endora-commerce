@@ -1,21 +1,26 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { Redis } from 'ioredis';
 import {
+  ASSET_CHANGED_EVENT,
   CMS_CONTENT_CHANGED_EVENT,
   MEGAMENU_STOREFRONT_CACHE_TAG,
+  type AssetChangedEvent,
   type CmsContentChange,
 } from '@endora-commerce/contracts';
 import type {
   AssetReadPort,
   AssetReferenceRegistryPort,
-  AssetsLibraryPort,
   CatalogCategoryReadPort,
   CmsBlockReadPort,
   CmsExternalReferenceScanner,
   CmsPageReadPort,
+  CustomerAccountReadPort,
+  CustomerGroupReadPort,
   DictionaryValidator,
   DictionaryReferenceRegistryPort,
+  OrganizationDetailsPort,
 } from '@endora-commerce/contracts';
+import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import { lazyPort } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
@@ -89,10 +94,14 @@ interface MegamenuServices {
   readonly cache: MegamenuCache | undefined;
   /** What the write services hold: the Redis drop, then the storefront notice. */
   readonly invalidator: MegamenuInvalidator;
+  /** Feature 168 — the storefront route reads the viewer's customer group through these. */
+  readonly ports: MegamenuCrossModulePorts;
 }
 
 export interface MegamenuCradle {
   readonly emFactory: () => EntityManager;
+  /** Every menu write runs on it (Constitution XIII, feature 168 R-7). */
+  readonly commandBus: CommandBus;
   readonly redis: Redis | undefined;
   readonly requireAdmin: RequireAdminFactory;
   readonly dictionaryValidator: DictionaryValidator;
@@ -138,7 +147,7 @@ export function registerModule(ctx: ModuleContext): void {
 
     megamenuServices: ctx
       .asFunction(
-        ({ emFactory, redis, megamenuCacheOptions }: MegamenuCradle): MegamenuServices => {
+        ({ emFactory, commandBus, redis, megamenuCacheOptions }: MegamenuCradle): MegamenuServices => {
           const cache = redis ? new MegamenuCache(redis, megamenuCacheOptions) : undefined;
           // The revalidator is read per notice rather than captured, and the
           // request is not awaited: the write has its answer already.
@@ -149,6 +158,7 @@ export function registerModule(ctx: ModuleContext): void {
           });
           const menuService = new MegamenuService(
             emFactory,
+            commandBus,
             invalidator,
             lazyPort<DictionaryValidator>(ctx, 'dictionaryValidator'),
           );
@@ -159,23 +169,26 @@ export function registerModule(ctx: ModuleContext): void {
            * captures a gated registration — a captured gate keeps answering
            * after its owner is switched off.
            *
-           * Two of them are `assets_library`'s, because neither answers the
-           * whole question: `AssetRecord` carries the stored `kind` and no
-           * resolved URL, `AssetDetail` carries the URL and no `kind`, and
-           * `resolveUrl` is published on no port (D-223).
+           * `assets_library`'s is the read port alone: it answers the stored
+           * `kind` and, through `resolveUrls`, the URL — never `getAsset`, whose
+           * detail walks every page, block and menu for its "used by" list
+           * (issue #685).
            */
           const ports: MegamenuCrossModulePorts = {
             categories: lazyPort<CatalogCategoryReadPort>(ctx, 'catalogCategoryReadPort'),
             pages: lazyPort<CmsPageReadPort>(ctx, 'cmsPageReadPort'),
             blocks: lazyPort<CmsBlockReadPort>(ctx, 'cmsBlockReadPort'),
             assets: lazyPort<AssetReadPort>(ctx, 'assetReadPort'),
-            assetLibrary: lazyPort<AssetsLibraryPort>(ctx, 'assetsLibraryPort'),
+            customerGroups: lazyPort<CustomerGroupReadPort>(ctx, 'customerGroupReadPort'),
+            customerAccounts: lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
+            organizations: lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
           };
           return {
             menuService,
             cache,
             invalidator,
-            itemService: new MegamenuItemService(emFactory, menuService, ports, invalidator),
+            ports,
+            itemService: new MegamenuItemService(emFactory, commandBus, menuService, ports, invalidator),
             storefrontResolver: new StorefrontResolver(emFactory, ports, cache),
           };
         },
@@ -246,6 +259,25 @@ export function registerModule(ctx: ModuleContext): void {
     await ctx.cradle<MegamenuCradle>().megamenuServices.invalidator.invalidateAll();
   });
 
+  /**
+   * Issue #1089 — a menu payload also inlines assets: an `asset` item's URL and
+   * label, and every item's icon URL, each URL carrying `?v=<contentVersion>`.
+   * `assets_library` announces `assets_library.asset_changed.v1` after a
+   * committed write that changes how an asset renders (a replace, a permalink,
+   * a soft delete, an alt-text edit, …), the event `cms` follows for the same
+   * reason (issue #363).
+   *
+   * Nothing records which menu embeds which asset, so any announced asset drops
+   * every menu, as a block change does. An event and not a call: this module
+   * holds nothing of `assets_library` for it, so an absent library announces
+   * nothing, and `ctx.subscribe` stops the handler with this module.
+   */
+  ctx.subscribe(ASSET_CHANGED_EVENT, async (payload) => {
+    const event = payload as EventBase & AssetChangedEvent;
+    if (event.assetIds.length === 0) return;
+    await ctx.cradle<MegamenuCradle>().megamenuServices.invalidator.invalidateAll();
+  });
+
   ctx.routes(async (app) => {
     const { megamenuServices, megamenuStorefrontRevalidator, requireAdmin } =
       ctx.cradle<MegamenuCradle>();
@@ -259,6 +291,7 @@ export function registerModule(ctx: ModuleContext): void {
     });
     await registerMegamenuStorefrontRoutes(app, {
       storefrontResolver: megamenuServices.storefrontResolver,
+      ports: megamenuServices.ports,
     });
   });
 

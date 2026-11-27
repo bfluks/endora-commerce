@@ -1,4 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
+import type { OutboxData } from '@endora-commerce/contracts';
 import type { EventBase } from '../events/bus.js';
 
 /**
@@ -18,13 +19,26 @@ export type AuditState = Record<string, unknown> | null;
 /**
  * The acting principal for a Command, derived server-side from the ambient
  * TenantContext (never from a request body). Maps directly onto the audit
- * `actorAdminUserId` / `impersonatedCustomerAccountId` columns.
+ * `actorAdminUserId` / `impersonatedCustomerAccountId` /
+ * `actorCustomerAccountId` columns.
  */
 export interface CommandActor {
   /** The Admin User who acted. `null` for a system/worker actor (or a plain customer action). */
   readonly actorAdminUserId: string | null;
   /** The impersonated Customer Account, when an admin acted on a customer's behalf. */
   readonly impersonatedCustomerAccountId: string | null;
+  /**
+   * The Customer Account that acted **for itself** (`specs/170-organization-roles/`,
+   * research R-21). Without it a storefront administrator's change recorded no
+   * actor at all. `null` for an operator, a system or API-key actor, and under
+   * impersonation — where the administrator acted, and the two fields above say so.
+   *
+   * Always set on an actor the bus resolved (`actorFromContext`). Optional on
+   * the type only so that an actor built by hand — a module's no-bus fallback,
+   * a test fake — written before this field still compiles; read it as
+   * `actor.actorCustomerAccountId ?? null`.
+   */
+  readonly actorCustomerAccountId?: string | null;
   /** The originating tenant-actor kind, for callers that need to branch on it. */
   readonly kind: 'admin' | 'customer' | 'system' | 'api_key';
 }
@@ -40,6 +54,31 @@ export interface CommandContext {
   /** The transactional EntityManager. All of the Command's writes MUST run on this em. */
   readonly em: EntityManager;
   readonly actor: CommandActor;
+  /**
+   * Run a **child** Command inside this one (`specs/170-organization-roles/`,
+   * research R-22).
+   *
+   * The child's `capture` and `run` execute on this Command's transactional
+   * `em` and actor; the bus records the child's own single audit entry inside
+   * the same transaction (none when it answers `skipAudit`) and buffers its
+   * event in the same `EventBus.run` scope, so it dispatches once, on the
+   * parent's commit. Parent and children commit or roll back together: a
+   * throwing child — rethrown by this call — rolls back the parent and every
+   * sibling's entry, unless the parent catches it and continues.
+   *
+   * Every Command still records exactly one entry of its own (Principle XIII):
+   * this is how a composite write — a role deletion and the reassignment of
+   * each member — is atomic *and* audited per member without a second
+   * `CommandBus.run`, which would open a second transaction.
+   *
+   * **Always present on a context the {@link CommandBus} built.** Optional on
+   * the type only so that a context built by hand before this member existed —
+   * a module's no-bus fallback, a test fake — still compiles. A Command that
+   * runs children therefore requires the bus, and when `run` is absent it
+   * **throws**; it never skips the children (`ctx.run?.(…)` would be a silent
+   * partial write).
+   */
+  readonly run?: <TChild>(child: Command<TChild>) => Promise<TChild>;
 }
 
 /** What a Command's `run` returns: the caller-facing result plus the audit state. */
@@ -82,4 +121,33 @@ export interface Command<TResult = unknown> {
 
   /** Optional domain event, dispatched exactly once after commit (dropped on rollback). */
   event?(result: TResult): CommandEvent | undefined;
+
+  /**
+   * The data a `beforeCommit` hook receives (`specs/176-command-hooks-outbox/`
+   * FR-018, FR-023). Required when `action` is declared hookable: the bus
+   * refuses a hooked Command without it (`500 COMMAND_HOOK_DATA_MISSING`).
+   * Called after `run`, so it reads the uncommitted result. Held in memory and
+   * never stored, so it may carry values.
+   */
+  hookData?(result: TResult): unknown;
+
+  /**
+   * The data an `afterCommit` row stores (176 P3, FR-030, FR-031):
+   * `audit-state.md` list 1 only — ids, codes, booleans, counts, dates, field
+   * names. Required when `action` is declared hookable with `afterCommit` and a
+   * present handler is registered (`500 COMMAND_HOOK_DATA_MISSING` otherwise);
+   * called after `run`, once per Command, and refused with a 500 that names the
+   * offending keys when a value is nested, longer than a code or has
+   * whitespace in it. `organizationId`, when present, is also the row's routing:
+   * the handler runs in a scope pinned to that Organization.
+   */
+  outboxData?(result: TResult): OutboxData & { readonly organizationId?: string | null };
+
+  /**
+   * Caller-supplied extension input, keyed by module id (FR-018, FR-019). Each
+   * hook sees only its own module's key; a key no present hook module on this
+   * action claims is refused `422 COMMAND_EXTENSION_UNCLAIMED` before any
+   * write.
+   */
+  readonly extensions?: Readonly<Record<string, unknown>>;
 }

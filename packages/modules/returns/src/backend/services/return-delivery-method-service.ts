@@ -1,5 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { ERROR_CODES, roundHalfUp, isUuidShape } from '@endora-commerce/contracts';
 import type { ReturnDeliveryMethodDto } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
@@ -55,7 +55,7 @@ export class ReturnDeliveryMethodService {
     const em = this.deps.emFactory();
     const row = em.create(ReturnDeliveryMethod, {
       deliveryMethodId: input.deliveryMethodId,
-      returnCost: input.returnCost.toFixed(2),
+      returnCost: roundHalfUp(input.returnCost),
       currency: input.currency,
       isActive: input.isActive ?? true,
     });
@@ -78,9 +78,10 @@ export class ReturnDeliveryMethodService {
     },
   ): Promise<ReturnDeliveryMethodDto> {
     const em = this.deps.emFactory();
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Return delivery method not found.');
     const row = await em.findOne(ReturnDeliveryMethod, { id });
     if (!row) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Return delivery method not found.');
-    if (patch.returnCost !== undefined) row.returnCost = patch.returnCost.toFixed(2);
+    if (patch.returnCost !== undefined) row.returnCost = roundHalfUp(patch.returnCost);
     if (patch.currency !== undefined) row.currency = patch.currency;
     if (patch.isActive !== undefined) row.isActive = patch.isActive;
     this.#audit(em, 'return_delivery_method.update', 'return_delivery_method', row.id, null, {
@@ -94,12 +95,13 @@ export class ReturnDeliveryMethodService {
 
   async remove(id: string): Promise<void> {
     const em = this.deps.emFactory();
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Return delivery method not found.');
     const row = await em.findOne(ReturnDeliveryMethod, { id });
     if (!row) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Return delivery method not found.');
     this.#audit(em, 'return_delivery_method.delete', 'return_delivery_method', row.id, {
       deliveryMethodId: row.deliveryMethodId,
     }, null);
-    await em.removeAndFlush(row);
+    await em.remove(row).flush();
   }
 
   /** Apply an allowed return delivery method to a case and resolve cost + bearer. */
@@ -109,16 +111,24 @@ export class ReturnDeliveryMethodService {
     returnDeliveryMethodId: string,
   ): Promise<{ appliedReturnCost: number; returnCostBearer: 'customer' | 'shop'; currency: string }> {
     const em = this.deps.emFactory();
+    if (!isUuidShape(caseId)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Return case not found.');
     const rc = await em.findOne(ReturnCase, { id: caseId, customerAccountId });
     if (!rc) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Return case not found.');
     const graph = await this.deps.graphService.loadGraph();
     if (graph.isTerminal(rc.statusCode)) {
-      throw new HttpError(409, ERROR_CODES.VALIDATION_FAILED, 'The case is closed.', { code: 'case_terminal' });
+      throw new HttpError(409, ERROR_CODES.RETURN_CASE_CLOSED, 'The case is closed.', {
+        returnCaseId: rc.id,
+        statusCode: rc.statusCode,
+      });
     }
-    const method = await em.findOne(ReturnDeliveryMethod, { id: returnDeliveryMethodId, isActive: true });
+    // An id of no method and an inactive method are one answer to the buyer:
+    // the method they chose is not offered (issue #625).
+    const method = isUuidShape(returnDeliveryMethodId)
+      ? await em.findOne(ReturnDeliveryMethod, { id: returnDeliveryMethodId, isActive: true })
+      : null;
     if (!method) {
-      throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'Return delivery method is not available.', {
-        code: 'method_not_allowed',
+      throw new HttpError(422, ERROR_CODES.RETURN_DELIVERY_METHOD_UNAVAILABLE, 'Return delivery method is not available.', {
+        returnDeliveryMethodId,
       });
     }
 

@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
+import { UnsavedChangesHint, useConfirmDialog, useUnsavedChangesGuard } from '@endora-commerce/admin-kit/components';
 import { useParams, useNavigate } from 'react-router-dom';
 import type { Data } from '@puckeditor/core';
 import type {
   SalesChannelListResponse,
   TransactionalEmailDetail,
 } from '@endora-commerce/contracts';
-import { apiClient, useAuth } from '@endora-commerce/admin-kit/lib';
-import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { apiClient, isDraftEqual, useAuth } from '@endora-commerce/admin-kit/lib';
+import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import { Alert, AlertDescription, Button, Label, PageHeader, SaveButtonGroup, Select } from '@endora-commerce/admin-kit/ui';
 import { transactionalEmailsClient } from '../api/transactional-emails-client.js';
+import { channelDisplayName, emailSourceLabels } from '../lib/labels.js';
 import {
   EmailSubjectWithVariables,
   EmailVariablesProvider,
@@ -53,12 +55,14 @@ const emptyData: Data = { root: { props: {} }, content: [] };
  */
 export function EmailEditor(): React.ReactElement {
   const t = useTranslation('transactional_emails');
+  const { language: adminLanguage } = useTranslationContext();
+  const { confirm, confirmDialog } = useConfirmDialog();
   const { code = '' } = useParams<{ code: string }>();
   const navigate = useNavigate();
   const { hasPermission } = useAuth();
   const canWrite = hasPermission('transactional_emails:write');
 
-  const [channels, setChannels] = useState<Array<{ id: string; code: string }>>([]);
+  const [channels, setChannels] = useState<Array<{ id: string; code: string; name: Record<string, string> }>>([]);
   const [channelId, setChannelId] = useState<string | null>(null);
   const [language, setLanguage] = useState<string>('');
   const [detail, setDetail] = useState<TransactionalEmailDetail | null>(null);
@@ -72,7 +76,7 @@ export function EmailEditor(): React.ReactElement {
   useEffect(() => {
     let live = true;
     void listActiveSalesChannels().then((res) => {
-      if (live) setChannels(res.items.map((c) => ({ id: c.id, code: c.code })));
+      if (live) setChannels(res.items.map((c) => ({ id: c.id, code: c.code, name: c.name })));
     });
     return () => {
       live = false;
@@ -130,8 +134,25 @@ export function EmailEditor(): React.ReactElement {
     if (await save()) navigate('/transactional-emails');
   };
 
+  // Issue #1461 (CONTENT-02) — the subject and canvas against what was loaded.
+  // Switching the channel or the language reloads both, so those switches ask
+  // first too, not only a link out of the editor.
+  const dirty =
+    detail !== null &&
+    (subject !== detail.effective.subject || !isDraftEqual(content, detail.effective.content));
+  const unsavedGuard = useUnsavedChangesGuard({
+    dirty,
+    onSave: canWrite ? save : undefined,
+    onDiscard: () => {
+      if (!detail) return;
+      setSubject(detail.effective.subject);
+      setContent(detail.effective.content as Data);
+    },
+  });
+
   const reset = async (): Promise<void> => {
-    if (!window.confirm(t('editor.resetConfirm'))) return;
+    const ok = await confirm({ message: t('editor.resetConfirm'), confirmLabel: t('editor.reset'), destructive: true });
+    if (!ok) return;
     setBusy(true);
     setError(null);
     try {
@@ -160,9 +181,10 @@ export function EmailEditor(): React.ReactElement {
           <>
             <PageHeader
               title={detail?.name ?? code}
-              description={t('editor.source', { source: detail?.effective.source ?? '—' })}
+              description={detail ? emailSourceLabels.label(t, detail.effective.source) : undefined}
               actions={
                 <div className="flex flex-wrap items-center gap-2">
+                  <UnsavedChangesHint dirty={dirty} />
                   <Button variant="outline" onClick={() => void reset()} disabled={!canWrite || busy}>
                     {t('editor.reset')}
                   </Button>
@@ -172,7 +194,7 @@ export function EmailEditor(): React.ReactElement {
                     saving={busy}
                     disabled={!canWrite}
                     saveLabel={t('editor.save')}
-                    savingLabel={t('editor.save')}
+                    savingLabel={t('editor.saving')}
                     saveAndExitLabel={t('editor.saveAndExit')}
                   />
                 </div>
@@ -203,12 +225,15 @@ export function EmailEditor(): React.ReactElement {
               <Select
                 id="te-scope"
                 value={channelId ?? ''}
-                onChange={(e) => setChannelId(e.target.value === '' ? null : e.target.value)}
+                onChange={(e) => {
+                  const next = e.target.value === '' ? null : e.target.value;
+                  unsavedGuard.confirm(() => setChannelId(next));
+                }}
               >
                 <option value="">{t('scope.global')}</option>
                 {channels.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.code}
+                    {channelDisplayName(c, adminLanguage)}
                   </option>
                 ))}
               </Select>
@@ -219,8 +244,11 @@ export function EmailEditor(): React.ReactElement {
                 id="te-lang"
                 value={language}
                 onChange={(e) => {
-                  setLanguage(e.target.value);
-                  void load(e.target.value);
+                  const next = e.target.value;
+                  unsavedGuard.confirm(() => {
+                    setLanguage(next);
+                    void load(next);
+                  });
                 }}
               >
                 {(detail?.languages ?? []).map((l) => (
@@ -271,6 +299,8 @@ export function EmailEditor(): React.ReactElement {
           />
         }
       />
+      {confirmDialog}
+      {unsavedGuard.dialog}
     </EmailVariablesProvider>
   );
 }

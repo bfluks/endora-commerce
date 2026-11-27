@@ -87,9 +87,12 @@ const ORDER = {
   placedAt: '2026-05-22T12:00:00Z',
 };
 
-function renderDetail(): void {
+function renderDetail(
+  entry = `/orders/${ORDER_ID}`,
+  { order = ORDER, definitions = [DEFINITION] }: { order?: typeof ORDER; definitions?: unknown[] } = {},
+): void {
   getSpy.mockImplementation((path: string) => {
-    if (path === `/api/v1/admin/orders/${ORDER_ID}`) return Promise.resolve({ data: ORDER });
+    if (path === `/api/v1/admin/orders/${ORDER_ID}`) return Promise.resolve({ data: order });
     if (path === '/api/v1/admin/orders/statuses') {
       return Promise.resolve({
         data: {
@@ -99,13 +102,13 @@ function renderDetail(): void {
       });
     }
     if (path === '/api/v1/admin/custom-fields/definitions?entityType=order') {
-      return Promise.resolve({ data: [DEFINITION] });
+      return Promise.resolve({ data: definitions });
     }
     return Promise.resolve({ data: [] });
   });
   renderWithI18n(
     withSession(
-      <MemoryRouter initialEntries={[`/orders/${ORDER_ID}`]}>
+      <MemoryRouter initialEntries={[entry]}>
         <Routes>
           <Route path="/orders/:id" element={<OrderDetail />} />
         </Routes>
@@ -154,5 +157,66 @@ describe('OrderDetail — custom fields, through the published panel', () => {
         getSpy.mock.calls.filter((call) => call[0] === `/api/v1/admin/orders/${ORDER_ID}`),
       ).toHaveLength(2),
     );
+  });
+});
+
+describe('OrderDetail — the custom-fields write names only the keys the operator changed (issue #1007)', () => {
+  /**
+   * The route merges per key under a row lock (issue #399), so a key the request
+   * leaves out keeps the value it holds when the write commits. A key the request
+   * carries is written as the request has it — so a panel that sent every key it
+   * loaded would write a stale value over one another writer changed since.
+   */
+  const SOURCE = {
+    ...DEFINITION,
+    id: '00000000-0000-4000-8000-00000000d003',
+    key: 'source',
+    label: { en: 'Source' },
+    labelDefault: 'Source',
+    sortOrder: 1,
+  };
+  const order = { ...ORDER, customFieldValues: { po_number: 'PO-1', source: 'web' } };
+
+  it('leaves an unchanged key out of the request', async () => {
+    renderDetail(undefined, { order, definitions: [DEFINITION, SOURCE] });
+
+    const input = await screen.findByLabelText('PO number');
+    expect(screen.getByLabelText('Source')).toHaveValue('web');
+    await userEvent.clear(input);
+    await userEvent.type(input, 'PO-2');
+    await userEvent.click(screen.getByRole('button', { name: CORE_EN['customFields.save'] as string }));
+
+    await waitFor(() => expect(patchSpy).toHaveBeenCalledTimes(1));
+    expect(patchSpy.mock.calls[0]?.[1]).toStrictEqual({ po_number: 'PO-2' });
+  });
+
+  it('still sends a cleared key, as empty', async () => {
+    renderDetail(undefined, { order, definitions: [DEFINITION, SOURCE] });
+
+    await userEvent.clear(await screen.findByLabelText('Source'));
+    await userEvent.click(screen.getByRole('button', { name: CORE_EN['customFields.save'] as string }));
+
+    await waitFor(() => expect(patchSpy).toHaveBeenCalledTimes(1));
+    expect(patchSpy.mock.calls[0]?.[1]).toStrictEqual({ source: '' });
+  });
+});
+
+describe('OrderDetail — the way back (specs/158-crm-opportunity-inline-editing/, FR-020)', () => {
+  it('leads to the Orders list when it was opened from nowhere in particular', async () => {
+    renderDetail();
+    const back = await screen.findByRole('link', { name: CORE_EN['orders.page.title'] as string });
+    expect(back).toHaveAttribute('href', '/orders');
+  });
+
+  it('leads back to the screen that opened it, and says only "Back"', async () => {
+    renderDetail(`/orders/${ORDER_ID}?returnTo=${encodeURIComponent('/crm/opportunities/abc?tab=links')}`);
+    const back = await screen.findByRole('link', { name: CORE_EN['common.action.back'] as string });
+    expect(back).toHaveAttribute('href', '/crm/opportunities/abc?tab=links');
+  });
+
+  it('ignores a return address outside the application', async () => {
+    renderDetail(`/orders/${ORDER_ID}?returnTo=${encodeURIComponent('//evil.example/')}`);
+    const back = await screen.findByRole('link', { name: CORE_EN['orders.page.title'] as string });
+    expect(back).toHaveAttribute('href', '/orders');
   });
 });

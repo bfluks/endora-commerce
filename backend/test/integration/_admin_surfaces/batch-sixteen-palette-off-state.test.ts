@@ -92,6 +92,10 @@ const SUBJECTS: readonly Subject[] = [
     actions: [
       'new-page',
       'open-blocks',
+      // Feature 163 — the brand screen, `/cms/brand`.
+      'open-cms-brand',
+      // Feature 169 (FR-023) — the contact form's recipients, on `/settings`.
+      'open-contact-form-settings',
       'open-hooks',
       'open-page-builder-translation-settings',
       'open-pages',
@@ -100,22 +104,40 @@ const SUBJECTS: readonly Subject[] = [
     axis: 'deactivated',
     admin: cmsAdmin,
   },
-  { module: 'blog', actions: ['new-post'], axis: 'deactivated', admin: blogAdmin },
+  // Issue #510 (Principle XVI): the three screens the sidebar lists gained the
+  // actions that open them, beside the create form's. Feature 171 added the
+  // addresses screen, `/blog/addresses`.
+  {
+    module: 'blog',
+    actions: [
+      'new-post',
+      'open-blog-addresses',
+      'open-blog-categories',
+      'open-blog-posts',
+      'open-blog-tags',
+    ],
+    axis: 'deactivated',
+    admin: blogAdmin,
+  },
 ];
 
 /**
  * Actions that deliberately open a screen another module owns, and the owner.
  *
- * Feature 151 added `cms`' entry to the Page Builder translation settings. The
- * generic Settings screen has no per-group address, so the entry opens it —
- * the precedent of `seo` and `google_tag_manager`. It is not the borrowed
- * advertisement the route-ownership cases below guard against: the action is
+ * Feature 151 added `cms`' entry to the Page Builder translation settings, and
+ * feature 169 its entry to the contact form's recipients. The generic Settings
+ * screen has no per-group address, so each entry opens it —
+ * the precedent of `seo` and `google_tag_manager`. Neither is the borrowed
+ * advertisement the route-ownership cases below guard against: each action is
  * still `cms`' own and goes when `cms` does, and the screen's owner is a
  * **binding** dependency of `cms`, so it cannot be withdrawn underneath the row.
  * Both halves are asserted where the exemption is taken.
  */
 const FOREIGN_TARGETS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  cms: { 'open-page-builder-translation-settings': 'settings' },
+  cms: {
+    'open-contact-form-settings': 'settings',
+    'open-page-builder-translation-settings': 'settings',
+  },
 };
 
 /** Whether `action` of `moduleId` is an exempt foreign target, asserting why. */

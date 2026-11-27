@@ -10,11 +10,14 @@ zawierać wszystko, co oferuje Page Builder, w tym tekst formatowany w bloku tek
 
 ## Dla operatorów
 
-Otwórz **Katalog → Kategorie** i w wierszu kategorii wybierz **Treść**. Ekran treści zawiera:
+Otwórz **Katalog → Kategorie** i w menu akcji wiersza kategorii wybierz **Treść**. Ekran treści zawiera:
 
 - przełącznik **języka** — treść jest przechowywana osobno dla każdego języka, tak jak nazwa
   kategorii. Każdy język ma własny dokument, a dla języka pozostawionego bez treści sklep pokazuje
-  treść w innym języku zamiast pustego miejsca;
+  treść w innym języku zamiast pustego miejsca. Przełącznik oferuje języki aktywnych kanałów
+  sprzedaży, a po nich każdy inny język, w którym zapisano nazwę lub treść; taki język jest wymieniony
+  pod przełącznikiem jako tylko do odczytu, a jego dokument zostaje zachowany i zapisany bez zmian,
+  ale nie jest edytowany;
 - obszar roboczy **Page Buildera** dla wybranego języka;
 - przycisk **Zapisz treść** — jedno zapisanie utrwala wszystkie edytowane języki.
 
@@ -27,14 +30,20 @@ Akcja **Treść** jest widoczna tylko wtedy, gdy włączony jest moduł dostarcz
 (moduł CMS) i masz do niego dostęp. Zapisana już treść pozostaje zachowana, gdy ten moduł jest
 wyłączony.
 
+W odróżnieniu od [treści produktu](./product-content.md), która przy wyłączonym module CMS jest
+ukryta, treść kategorii jest nadal wyświetlana w sklepie.
+
 ## W sklepie
 
 Strona kategorii wyświetla treść między nagłówkiem kategorii a paskiem narzędzi listy, wyłącznie
 na **pierwszej stronie** listy — klient przeglądający kolejne strony produktów nie widzi
 wprowadzenia ponownie nad każdą z nich.
 
-Dokument jest dobierany do jednego języka w tej kolejności: język klienta, domyślny język kanału
-sprzedaży, angielski, a następnie dowolny język, który ma treść. Język, którego dokument nie
+Dokument jest dobierany do jednego języka w tej kolejności: język klienta w postaci oferowanej przez kanał
+sprzedaży, a jeśli kanał go nie oferuje — domyślny język kanału; dalej domyślny język kanału,
+angielski, a następnie dowolny język, który ma treść. Językiem klienta jest pierwszy wpis
+`Accept-Language` według wagi, który kanał oferuje (`pl` pasuje do `pl-PL` kanału); język, którego
+kanał nie oferuje, nigdy nie jest używany, nawet jeśli zapisano w nim dokument. Język, którego dokument nie
 zawiera żadnego bloku, jest pomijany.
 
 Treść podlega widoczności kategorii: kategoria nieaktywna albo znajdująca się pod nieaktywną

@@ -39,7 +39,7 @@ function customerRecord(over: Partial<CustomerAccountRecord> = {}): CustomerAcco
     email: 'buyer@example.test',
     firstName: 'Buyer',
     lastName: 'One',
-    role: 'regular_user',
+    organizationRoleId: '00000000-0000-4000-8000-0000000170b2',
     emailVerifiedAt: null,
     twoFactorEnabled: false,
     lastLoginAt: null,
@@ -56,6 +56,7 @@ function customerRecord(over: Partial<CustomerAccountRecord> = {}): CustomerAcco
     blockedByCustomerAccountId: null,
     deletionRequestedByAdminUserId: null,
     anonymizedAt: null,
+    preferredLanguage: null,
     ...over,
   };
 }
@@ -69,6 +70,8 @@ function readPort(
   };
   return {
     findById: unreachable('findById') as unknown as OrderReadPort['findById'],
+    findByIdForCustomer:
+      unreachable('findByIdForCustomer') as unknown as OrderReadPort['findByIdForCustomer'],
     findByIds: unreachable('findByIds') as unknown as OrderReadPort['findByIds'],
     listAll: unreachable('listAll') as unknown as () => Promise<OrderRecord[]>,
     listItems: unreachable('listItems') as unknown as OrderReadPort['listItems'],
@@ -77,6 +80,7 @@ function readPort(
     salesChannelIdsForCustomer,
     findStatusDefinition:
       unreachable('findStatusDefinition') as unknown as OrderReadPort['findStatusDefinition'],
+    isTerminal: unreachable('isTerminal') as unknown as OrderReadPort['isTerminal'],
   };
 }
 

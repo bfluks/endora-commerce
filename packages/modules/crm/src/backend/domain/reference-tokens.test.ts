@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { formatOpportunityReferenceToken } from '@endora-commerce/contracts';
+// The shared linear-time protocol (issue #953): a test-only module of
+// `@endora-commerce/contracts`, reached through its source path and never published.
+import { GROWTH, LINEAR_BOUND, growthRatio } from '../../../../../contracts/src/linear-time.cases.js';
 import { referenceTokensOf } from './reference-tokens.js';
 
 const PRODUCT = '11111111-1111-4111-8111-111111111111';
@@ -67,21 +70,22 @@ describe('referenceTokensOf', () => {
     ]);
   });
 
-  it('stays linear on hostile input — 10 000 characters of almost-tokens', () => {
+  it('stays linear on hostile input — long runs of almost-tokens', async () => {
     // The shapes that make a careless expression backtrack: long runs of
     // opening brackets, of a valid prefix, and of hex that never closes.
-    const hostile = [
-      '['.repeat(10_000),
-      '[[product:'.repeat(1_000),
-      `[[product:${'a'.repeat(9_990)}`,
-      `[[order:${'1234abcd-'.repeat(1_100)}`.slice(0, 10_000),
-      `${'[[product:11111111-1111-4111-8111-11111111111'.repeat(220)}`.slice(0, 10_000),
+    const length = 32_000;
+    const hostile: ReadonlyArray<(size: number) => string> = [
+      (size) => '['.repeat(size),
+      (size) => '[[product:'.repeat(size / 10),
+      (size) => `[[product:${'a'.repeat(size - 10)}`,
+      (size) => `[[order:${'1234abcd-'.repeat(Math.ceil(size / 9))}`.slice(0, size),
+      (size) => '[[product:11111111-1111-4111-8111-11111111111'.repeat(Math.ceil(size / 45)).slice(0, size),
     ];
-    for (const text of hostile) {
-      expect(text.length).toBeGreaterThanOrEqual(9_000);
-      const started = performance.now();
-      expect(referenceTokensOf(text)).toEqual([]);
-      expect(performance.now() - started).toBeLessThan(250);
+    for (const shape of hostile) {
+      expect(shape(length).length).toBeGreaterThanOrEqual(length * 0.9);
+      expect(referenceTokensOf(shape(length))).toEqual([]);
+      const ratio = await growthRatio(referenceTokensOf, shape, length);
+      expect(ratio, `${shape(24)}…: ${GROWTH}× the text, ${ratio.toFixed(2)}× the time`).toBeLessThan(LINEAR_BOUND);
     }
   });
 

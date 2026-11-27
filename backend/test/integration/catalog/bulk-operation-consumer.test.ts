@@ -10,6 +10,7 @@ import type {
   CatalogBulkUpdateService,
   BulkUpdateResult,
 } from '../../../../packages/modules/catalog/dist/backend/services/catalog-bulk-update.service.js';
+import { SYSTEM_PRODUCT_SCOPE } from '../../../../packages/modules/catalog/dist/backend/services/admin-product-visibility.js';
 
 /**
  * Consumer-side contract for the queued bulk-operation path (Constitution
@@ -33,11 +34,12 @@ describe('Bulk-operation queue consumer — processById', () => {
     await teardownBackendServer(h);
   });
 
-  const ADMIN_ID = '00000000-0000-0000-0000-000000000000';
+  // Not the all-zero sentinel: a product write needs a known requester (163 S-L3).
+  const ADMIN_ID = '00000000-0000-4000-8000-0000000000a1';
 
   function fakeBulkUpdateService(onCall: () => void): CatalogBulkUpdateService {
     return {
-      bulkUpdate: async (req: { productIds: string[] }): Promise<BulkUpdateResult> => {
+      bulkUpdate: async (_scope: unknown, req: { productIds: string[] }): Promise<BulkUpdateResult> => {
         onCall();
         const total = req.productIds.length;
         return {
@@ -75,17 +77,17 @@ describe('Bulk-operation queue consumer — processById', () => {
     // Consumer runs the handler once and the row reaches `completed`.
     await svc.processById(op.id);
     expect(runs).toBe(1);
-    const after = await svc.get(op.id);
+    const after = await svc.get(SYSTEM_PRODUCT_SCOPE, op.id);
     expect(after?.status).toBe('completed');
     expect(after?.succeeded).toBe(3);
     // The log trail grew with start + completion entries.
-    expect(after?.logs?.some((l) => l.message.includes('Rozpoczęto'))).toBe(true);
-    expect(after?.logs?.some((l) => l.message.includes('Zakończono'))).toBe(true);
+    expect(after?.logs?.some((l) => l.messageKey?.key === 'bulkOperations.log.started')).toBe(true);
+    expect(after?.logs?.some((l) => l.messageKey?.key === 'bulkOperations.log.finished')).toBe(true);
 
     // Redelivery / a second worker claiming the same job is a no-op.
     await svc.processById(op.id);
     expect(runs).toBe(1);
-    const again = await svc.get(op.id);
+    const again = await svc.get(SYSTEM_PRODUCT_SCOPE, op.id);
     expect(again?.status).toBe('completed');
   });
 
@@ -106,7 +108,7 @@ describe('Bulk-operation queue consumer — processById', () => {
 
     await svc.processById(op.id);
     expect(reindexRuns).toBe(1);
-    const after = await svc.get(op.id);
+    const after = await svc.get(SYSTEM_PRODUCT_SCOPE, op.id);
     expect(after?.status).toBe('completed');
     expect(after?.processed).toBe(42);
 

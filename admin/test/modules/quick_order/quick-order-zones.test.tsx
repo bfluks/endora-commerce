@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AdminZone } from '@endora-commerce/admin-kit/zones';
+import { INERT_SAVE_SESSION } from '@endora-commerce/admin-kit/lib';
 import type { AdminZoneName } from '@endora-commerce/contracts';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
@@ -70,7 +71,6 @@ const REGISTRY = [{ moduleId: 'quick_order', contributions: quickOrder.contribut
 
 const BUNDLE = passthroughBundle('core', [
   'defaultPreferences.title',
-  'defaultPreferences.description',
   'defaultPreferences.paymentMethod',
   'defaultPreferences.deliveryMethod',
   'defaultPreferences.billingAddress',
@@ -98,7 +98,7 @@ function renderZone(options: {
             the cast is the harness's and not a host's. */}
         <AdminZone
           name={options.name as 'organization.detail.after'}
-          props={options.props as { organizationId: string }}
+          props={{ ...(options.props as { organizationId: string }), saveSession: INERT_SAVE_SESSION }}
         />
       </MemoryRouter>,
       {
@@ -172,10 +172,14 @@ describe('quick_order contributes the organization and customer detail zones', (
       props: { organizationId: ORG_ID },
     });
     await waitFor(() => expect(container.textContent).toContain('defaultPreferences.title'));
-    expect(getSpy).toHaveBeenCalledWith(
-      `/api/v1/admin/quick-order/preferences?scope=organization&scopeId=${ORG_ID}`,
-    );
-    expect(getSpy).toHaveBeenCalledWith(`/api/v1/admin/organizations/${ORG_ID}/addresses`);
+    // The title is in the commit that mounts the panel, and the panel starts its
+    // reads from that commit's effect: wait for them (issue #418).
+    await waitFor(() => {
+      expect(getSpy).toHaveBeenCalledWith(
+        `/api/v1/admin/quick-order/preferences?scope=organization&scopeId=${ORG_ID}`,
+      );
+      expect(getSpy).toHaveBeenCalledWith(`/api/v1/admin/organizations/${ORG_ID}/addresses`);
+    });
   });
 
   it('renders the defaults panel with the customer scope', async () => {
@@ -184,12 +188,14 @@ describe('quick_order contributes the organization and customer detail zones', (
       props: { customerId: CUSTOMER_ID },
     });
     await waitFor(() => expect(container.textContent).toContain('defaultPreferences.title'));
-    expect(getSpy).toHaveBeenCalledWith(
-      `/api/v1/admin/quick-order/preferences?scope=customer&scopeId=${CUSTOMER_ID}`,
-    );
-    // The scope decides the address route, which is the one behaviour the two
-    // wrappers do not share.
-    expect(getSpy).toHaveBeenCalledWith(`/api/v1/admin/customers/${CUSTOMER_ID}/addresses`);
+    await waitFor(() => {
+      expect(getSpy).toHaveBeenCalledWith(
+        `/api/v1/admin/quick-order/preferences?scope=customer&scopeId=${CUSTOMER_ID}`,
+      );
+      // The scope decides the address route, which is the one behaviour the two
+      // wrappers do not share.
+      expect(getSpy).toHaveBeenCalledWith(`/api/v1/admin/customers/${CUSTOMER_ID}/addresses`);
+    });
   });
 
   it('renders neither zone while the module is switched off, and fetches no chunk', async () => {

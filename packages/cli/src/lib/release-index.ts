@@ -38,12 +38,23 @@ export interface PublishablePackage {
   readonly dir: string;
   /** Absent when the manifest declares none; the index refuses such a package. */
   readonly version: string | undefined;
+  /** The `endora.id` of a package declaring `endora.type: "module"`; absent otherwise. */
+  readonly moduleId?: string | undefined;
 }
 
 /** One entry of the index. */
 export interface ReleaseIndexEntry {
   readonly name: string;
   readonly version: string;
+  /**
+   * The module this package carries, for a module package — its own
+   * `endora.id`. A manifest names the modules it needs by id and never by
+   * package, so this is how `endora generate` finds the package carrying a
+   * module the installed ones need and the instance does not declare yet.
+   * Absent from an index an older build wrote, and from every package that is
+   * not a module.
+   */
+  readonly moduleId?: string | undefined;
 }
 
 /** The whole index: this CLI's release, sorted by name. */
@@ -60,6 +71,35 @@ export interface ReleaseIndex {
    * index an older build wrote.
    */
   readonly packageManager?: string | undefined;
+}
+
+/**
+ * An exact version with an optional `^` or `~` — the only spec a release range
+ * is ever moved in, or copied from.
+ */
+const MOVABLE = /^([~^]?)(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
+
+/**
+ * The spec moved to `target` with its operator kept, or `null` when the spec
+ * is not a version range a release may move (`specs/140-instance-upgrade/`
+ * FR-003): an exact pin stays exact — the reason it is exact is that the
+ * release moves as one number — `^` stays `^` and `~` stays `~`. Anything else
+ * (`file:`, `workspace:`, a tag, a range with a bound) was written by somebody
+ * on purpose, so it is theirs.
+ *
+ * Here rather than in `upgrade/` because two commands write a release range:
+ * `endora upgrade` moving one, and `endora generate` declaring a release module
+ * at the range the platform is declared at.
+ */
+export function rewriteRange(spec: string, target: string): string | null {
+  const match = MOVABLE.exec(spec.trim());
+  if (match === null) return null;
+  return `${match[1]!}${target}`;
+}
+
+/** The version a spec {@link rewriteRange} may move names, or `null`. */
+export function movableVersion(spec: string): string | null {
+  return MOVABLE.exec(spec.trim())?.[2] ?? null;
 }
 
 /**
@@ -85,12 +125,18 @@ export function publishablePackages(packagesRoot: string): readonly PublishableP
         name?: unknown;
         version?: unknown;
         private?: unknown;
+        endora?: { type?: unknown; id?: unknown } | null;
       };
       if (manifest.private === true || typeof manifest.name !== 'string') continue;
+      const moduleId =
+        manifest.endora?.type === 'module' && typeof manifest.endora.id === 'string'
+          ? manifest.endora.id
+          : undefined;
       found.push({
         name: manifest.name,
         dir,
         version: typeof manifest.version === 'string' ? manifest.version : undefined,
+        ...(moduleId === undefined ? {} : { moduleId }),
       });
     }
   };
@@ -115,7 +161,11 @@ export function releaseIndexOf(packagesRoot: string, scope: string): ReleaseInde
           'release index cannot say which version of it this release carries.',
       );
     }
-    packages.push({ name: pkg.name, version: pkg.version });
+    packages.push({
+      name: pkg.name,
+      version: pkg.version,
+      ...(pkg.moduleId === undefined ? {} : { moduleId: pkg.moduleId }),
+    });
   }
   packages.sort((a, b) => a.name.localeCompare(b.name));
   return { packages };
@@ -139,10 +189,11 @@ export function parseReleaseIndex(text: string, source: string): ReleaseIndex {
   for (const entry of packages) {
     const name = (entry as { name?: unknown } | null)?.name;
     const version = (entry as { version?: unknown } | null)?.version;
+    const moduleId = (entry as { moduleId?: unknown } | null)?.moduleId;
     if (typeof name !== 'string' || typeof version !== 'string') {
       throw new Error(`${source} holds an entry with no string \`name\` or \`version\`.`);
     }
-    entries.push({ name, version });
+    entries.push(typeof moduleId === 'string' ? { name, version, moduleId } : { name, version });
   }
   if (entries.length === 0) {
     throw new Error(`${source} names no package, so there is nothing to install from it.`);

@@ -37,8 +37,6 @@ const { GlobalSearchConfigurationPage } = await import(
 
 const KEYS = [
   'page.configuration.title',
-  'page.configuration.description',
-  'page.configuration.settingsNote',
   'page.configuration.settingsLink',
   'page.configuration.include',
   'page.configuration.fieldsLegend',
@@ -154,6 +152,22 @@ describe('GlobalSearchConfigurationPage (spec 150)', () => {
       entities: [{ entityType: 'orders.order', enabled: true, fields: ['number', 'billingTaxId'] }],
     });
     await waitFor(() => expect(screen.getAllByText('page.configuration.saved').length).toBeGreaterThan(0));
+  });
+
+  // Issue #1499 (UX audit SALES-17, DEC-12 a): "Saved" is said once, beside Save,
+  // in a region mounted before it has text, and not in a success banner at the top.
+  it('says "Saved" beside the Save button, with no success banner', async () => {
+    putSpy.mockResolvedValue(view({ version: 'v2' }));
+    renderPage();
+    await waitFor(() => expect(card('orders.order')).toBeTruthy());
+    const region = screen.getByRole('status');
+    expect(region.textContent).toBe('');
+    expect(region.parentElement?.contains(saveButton())).toBe(true);
+    fireEvent.click(within(card('orders.order')).getByLabelText(/Billing tax ID/));
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(region).toHaveTextContent('page.configuration.saved'));
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(document.querySelector('[data-slot="alert"][data-variant="success"]')).toBeNull();
   });
 
   it('restores a customised type to its defaults by removing its entry', async () => {

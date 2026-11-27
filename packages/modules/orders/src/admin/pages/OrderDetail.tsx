@@ -1,30 +1,43 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   ClipboardList,
   Copy,
   CreditCard,
   FileDown,
   FileText,
+  Loader2,
   MessageSquare,
   RotateCcw,
   Truck,
 } from 'lucide-react';
-import { ApiError, apiBaseUrl, apiClient, cn, formatDateTime, formatMoney, issueInvoiceNotice, statusBadgeStyle, useUnsavedChangesPrompt } from '@endora-commerce/admin-kit/lib';
-import { Alert, AlertDescription, Badge, Button, Card, CardContent, Label, PageHeader, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Section } from '@endora-commerce/admin-kit/ui';
-import { CustomFieldValuesPanel } from '@endora-commerce/admin-kit/components';
-import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { ApiError, apiBaseUrl, apiClient, cn, formatDateTime, formatMoney, issueInvoiceNotice, readReturnTo, statusBadgeStyle, useAuth, useDetailResource, useUnsavedChangesPrompt } from '@endora-commerce/admin-kit/lib';
+import { Alert, AlertDescription, Badge, Button, Card, CardContent, DetailSkeleton, FormField, PageHeader, RecordTabs, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Section, Textarea, useInlineStatus } from '@endora-commerce/admin-kit/ui';
+import { CustomFieldValuesPanel, DetailHeaderActions, RowActionMenuItem, StatusChangeControl, resolveCustomFieldLabel } from '@endora-commerce/admin-kit/components';
+import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import { AdminZone, useAdminZone } from '@endora-commerce/admin-kit/zones';
+import { OrderExternalReferences } from '../components/OrderExternalReferences.js';
 import { OrderPendingEffectsNotice } from '../components/OrderPendingEffectsNotice.js';
 import { OrderShipmentsTab } from '../components/OrderShipmentsTab.js';
+import { orderStatusName } from '../lib/status-name.js';
+import { paymentStatusConsequenceKey, paymentStatusLabelKey, paymentStatusTargets } from '../lib/paymentStatus.js';
 import {
-  SELECTABLE_PAYMENT_STATUSES,
-  paymentStatusLabelKey,
-  paymentStatusOptions,
-} from '../lib/paymentStatus.js';
-import type { IssueInvoiceEmailOutcome, OrderPendingEffect } from '@endora-commerce/contracts';
+  arrangeLineGroups,
+  customFieldCarrySkipReasonSchema,
+  lineAmountHalfUp,
+  orderCommentSystemNoteSchema,
+  type AdminOrderExternalReference,
+  type IssueInvoiceEmailOutcome,
+  type LineGroup,
+  type OrderCommentSystemNote,
+  type OrderPendingEffect,
+} from '@endora-commerce/contracts';
+import { OrderSectionSummary, orderSectionTotals, useOrderSectionSummaryText } from '../line-groups.js';
 
 type OrderTab = 'overview' | 'payment' | 'delivery' | 'comments';
+
+/** The header actions that send a request (issue #1497). */
+type HeaderAction = 'reorder' | 'cloneToQuote' | 'issueInvoice';
 
 interface OrderItem {
   id: string;
@@ -35,6 +48,9 @@ interface OrderItem {
   unitPrice: number;
   taxRate: number;
   lineTotal: number;
+  /** Feature 159 — the line's group (`itemGroups[].id`), `null` = ungrouped. */
+  groupId?: string | null;
+  position?: number;
 }
 
 interface OrderAddress {
@@ -52,7 +68,9 @@ interface OrderOrganization {
   id: string;
   name: string;
   legalName: string | null;
-  taxId: string;
+  /** `null` for a personal Organization, whose tax id is a placeholder (#767). */
+  taxId: string | null;
+  isPersonal?: boolean;
   vatStatus: string;
 }
 interface OrderCustomer {
@@ -74,8 +92,17 @@ interface OrderDetail {
   customFieldValues?: Record<string, unknown>;
   deliveryAddress: OrderAddress;
   billingAddress: OrderAddress;
-  deliveryMethod: { code: string; name: Record<string, string>; cost: number };
-  paymentMethod: { code: string; name: Record<string, string>; kind: string };
+  /** `specs/182-related-payers/` — who pays for and is invoiced for the order, when not the buyer. */
+  payer?: { organizationId: string; name: string; taxId: string; terms: 'buyer' | 'payer' } | null;
+  /**
+   * The method as the buyer saw it at placement. `name` is the snapshot's
+   * string; an older shape carried a per-language map, read by `methodName`.
+   */
+  deliveryMethod: { code: string; name: string | Record<string, string>; cost: number };
+  paymentMethod: { code: string; name: string | Record<string, string>; kind: string };
+  /** Feature 159 — the order's groups, by position; absent from an older server. */
+  itemGroups?: LineGroup[];
+  /** In display order. */
   items: OrderItem[];
   subtotal: number;
   taxTotal: number;
@@ -91,6 +118,8 @@ interface OrderDetail {
    * Present only when something is outstanding.
    */
   pendingEffects?: OrderPendingEffect[];
+  /** Issue #1030 — what each external system reported; absent from an older server. */
+  externalReferences?: AdminOrderExternalReference[];
 }
 
 interface StatusDef {
@@ -104,23 +133,26 @@ interface StatusGraph {
   transitions: Array<{ fromStatusCode: string; toStatusCode: string }>;
 }
 
-function statusName(graph: StatusGraph | null, code: string): string {
-  const s = graph?.statuses.find((x) => x.code === code);
-  if (!s) return code;
-  return s.name['en'] ?? Object.values(s.name)[0] ?? code;
+function statusName(graph: StatusGraph | null, code: string, language = 'en'): string {
+  return orderStatusName(graph?.statuses.find((x) => x.code === code), language, code);
 }
 
 function statusColor(graph: StatusGraph | null, code: string): string {
   return graph?.statuses.find((x) => x.code === code)?.color ?? 'neutral';
 }
 
-/** Current status plus the statuses reachable from it (valid next transitions). */
-function statusOptions(graph: StatusGraph | null, current: string): string[] {
-  if (!graph) return [current];
+/**
+ * The statuses reachable from `current` — the configured transition graph's
+ * outgoing edges, deduplicated, never `current` itself (issue #1470). The
+ * server enforces the same graph on `POST …/status`; this only decides what the
+ * "Change…" dialog offers. No graph loaded: nothing is offered.
+ */
+function orderStatusTargets(graph: StatusGraph | null, current: string): string[] {
+  if (!graph) return [];
   const targets = graph.transitions
-    .filter((tr) => tr.fromStatusCode === current)
+    .filter((tr) => tr.fromStatusCode === current && tr.toStatusCode !== current)
     .map((tr) => tr.toStatusCode);
-  return [current, ...targets.filter((c, i) => targets.indexOf(c) === i)];
+  return targets.filter((c, i) => targets.indexOf(c) === i);
 }
 
 // The displayable/selectable split this screen introduced (feature 085 Phase C,
@@ -135,7 +167,91 @@ interface OrderCommentRow {
   notifyCustomer: boolean;
   authorAdminUserId: string | null;
   authorCustomerAccountId: string | null;
+  /** Feature 162 — present on a note the platform wrote (both authors `null`). */
+  systemNote?: OrderCommentSystemNote | null;
   createdAt: string;
+}
+
+/** A field name shown to an operator is cut here. */
+const SHOWN_KEY_LIMIT = 64;
+const SKIP_REASONS: ReadonlySet<string> = new Set(customFieldCarrySkipReasonSchema.options);
+// The note's own schema names the sources, so this host page names no contributor module.
+const NOTE_SOURCES: ReadonlySet<string> = new Set(orderCommentSystemNoteSchema.shape.source.shape.entityType.options);
+
+type Translate = (key: string, params?: Record<string, string | number>) => string;
+
+/**
+ * A delivery or payment method's name as the order recorded it (issue #1477),
+ * never its code unless no name was recorded. A per-language map is read in
+ * the admin's language, then its regional variant, then any entry.
+ */
+function methodName(method: { code: string; name: string | Record<string, string> }, language: string): string {
+  if (typeof method.name === 'string') return method.name.trim() || method.code;
+  const regional = Object.keys(method.name).find((key) => key.startsWith(`${language}-`));
+  return (
+    method.name[language] ||
+    (regional ? method.name[regional] : undefined) ||
+    Object.values(method.name).find((name) => name.trim() !== '') ||
+    method.code
+  );
+}
+
+/**
+ * The name a skip line gives its field (owner ruling V3, 2026-10-21): the
+ * source field's label as stored with the skip, in the reader's language,
+ * then its default label, then — for a note written before the label was
+ * stored — the key; cut at {@link SHOWN_KEY_LIMIT}. Needs no definition read,
+ * so whoever may read the Order reads the name.
+ */
+function skippedFieldName(skip: OrderCommentSystemNote['skipped'][number], language: string): string {
+  const name = skip.label ? resolveCustomFieldLabel(skip.label.labels, skip.label.labelDefault, language) : '';
+  const shown = name === '' ? skip.key : name;
+  return shown.length > SHOWN_KEY_LIMIT ? `${shown.slice(0, SHOWN_KEY_LIMIT)}…` : shown;
+}
+
+/**
+ * A system note as the operator reads it, in their language (feature 162,
+ * `specs/162-custom-fields-value-carry/contracts/admin-surfaces.md` §2): which
+ * record the values came from, then a line per value not carried — the
+ * field's stored label, else its key — with the reason. A source or a reason
+ * this screen has no sentence for falls back to the stored English `body`,
+ * never to a code.
+ */
+function SystemNoteBody({
+  note,
+  body,
+  language,
+  t,
+}: {
+  note: OrderCommentSystemNote;
+  body: string;
+  language: string;
+  t: Translate;
+}): ReactNode {
+  const readable =
+    note.kind === 'custom_field_carry_skipped' &&
+    NOTE_SOURCES.has(note.source.entityType) &&
+    note.skipped.every((skip) => SKIP_REASONS.has(skip.reason));
+  if (!readable) return <p className="whitespace-pre-wrap break-words">{body}</p>;
+  return (
+    <div className="space-y-1">
+      <p className="break-words">
+        {t(`orderDetail.comments.systemNote.customFieldCarrySkipped.${note.source.entityType}`, {
+          reference: note.source.reference,
+        })}
+      </p>
+      <ul className="list-disc space-y-0.5 pl-5">
+        {note.skipped.map((skip) => (
+          <li key={skip.key} className="break-words">
+            {t('orderDetail.comments.carryLine', {
+              field: skippedFieldName(skip, language),
+              reason: t(`orderDetail.comments.carryReason.${skip.reason}`),
+            })}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 /** Invoice row for this order, from the admin invoices list endpoint. */
@@ -150,18 +266,39 @@ interface OrderInvoiceRow {
 
 export function OrderDetail(): ReactNode {
   const t = useTranslation('core');
+  const tOrders = useTranslation('orders');
+  const sectionSummaryText = useOrderSectionSummaryText();
+  // Feature 162 — the system note's sentences are this module's own.
+  const { language } = useTranslationContext();
+  const { hasPermission } = useAuth();
+  // Both status writes are gated on `orders:write` server-side (`routes.ts`).
+  const canWrite = hasPermission('orders:write');
   const { id = '' } = useParams<{ id: string }>();
-  const [order, setOrder] = useState<OrderDetail | null>(null);
+  const [searchParams] = useSearchParams();
+  const returnTo = readReturnTo(searchParams);
   const [invoices, setInvoices] = useState<OrderInvoiceRow[]>([]);
+  // Issue #1497 — the header's primary depends on whether the order has an
+  // invoice, so it is not drawn until the first read of the list has answered.
+  const [invoicesLoaded, setInvoicesLoaded] = useState(false);
   const [graph, setGraph] = useState<StatusGraph | null>(null);
   const [comments, setComments] = useState<OrderCommentRow[]>([]);
   const [commentBody, setCommentBody] = useState('');
   const [commentVisible, setCommentVisible] = useState(true);
   const [commentNotify, setCommentNotify] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
+  /**
+   * Issue #1499 (SALES-17, DEC-12 a) — a header action's result, the copied number's
+   * included, is said beside the header's buttons, in a region mounted empty from the
+   * first render, rather than as a success banner above the tabs.
+   */
+  const actionStatus = useInlineStatus();
   const [tab, setTab] = useState<OrderTab>('overview');
+  /**
+   * Issue #1497 (SALES-12) — the header action whose request is in flight. Every
+   * header action waits for it, so a second press cannot send it twice
+   * (Doherty), and the control that started it shows the spinner.
+   */
+  const [pendingAction, setPendingAction] = useState<HeaderAction | null>(null);
 
   /**
    * Feature 091 / P7d, Z15 — the Payment tab's button is a count of its own
@@ -181,30 +318,41 @@ export function OrderDetail(): ReactNode {
    * what it stops knowing is which module fills it.
    */
   const paymentContributions = useAdminZone('order.detail.payment', { orderId: id });
+  /**
+   * Issue #1452 (UX audit DS-20) — the sidebar column is drawn only while
+   * something fills it: with every contributor off, or refused, the screen is
+   * the single column it was, byte for byte (the empty-zone rule).
+   */
+  const sidebarShown = useAdminZone('order.detail.sidebar', { orderId: id }).length > 0;
 
   // Warn before leaving with an unsent comment draft.
   useUnsavedChangesPrompt(commentBody.trim() !== '');
 
-  const refresh = useCallback(async (): Promise<void> => {
-    setLoading(true);
-    setError(null);
+  // Issue #1447 (DS-14, SALES-06) — the first load is the only one that shows a
+  // skeleton; every re-read after an action keeps the page, its open tab, the
+  // scroll position and the focus, and marks the content `aria-busy`.
+  const resource = useDetailResource<OrderDetail>(id, async () => {
     try {
       const res = await apiClient.get<{ data: OrderDetail }>(`/api/v1/admin/orders/${id}`);
-      setOrder(res.data);
+      return res.data;
     } catch (err) {
-      if (err instanceof ApiError && err.envelope.error.code === 'ORDER_NOT_FOUND') {
-        setOrder(null);
-      } else {
-        setError(err instanceof ApiError ? err.envelope.error.message : 'Failed to load.');
-      }
-    } finally {
-      setLoading(false);
+      if (err instanceof ApiError && err.envelope.error.code === 'ORDER_NOT_FOUND') return null;
+      throw err;
     }
-  }, [id]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  });
+  const order = resource.data;
+  const reread = resource.refresh;
+  // A re-read clears the previous action's error, as the old full reload did.
+  const refresh = useCallback(async (): Promise<void> => {
+    setError(null);
+    await reread();
+  }, [reread]);
+  const loadError =
+    resource.error === null
+      ? null
+      : resource.error instanceof ApiError
+        ? resource.error.envelope.error.message
+        : t('orderDetail.errors.load');
 
   // Load the configurable status graph so the selector offers only valid
   // next transitions (feature 038 US1).
@@ -238,6 +386,8 @@ export function OrderDetail(): ReactNode {
       setInvoices(res.data);
     } catch {
       setInvoices([]);
+    } finally {
+      setInvoicesLoaded(true);
     }
   }, [id]);
 
@@ -264,39 +414,46 @@ export function OrderDetail(): ReactNode {
     if (!order) return;
     try {
       await navigator.clipboard.writeText(order.businessId);
-      setInfo(t('orderDetail.copied', { id: order.businessId }));
+      actionStatus.show(t('orderDetail.copied', { id: order.businessId }), 'info');
     } catch {
-      setError(t('orderDetail.copyError'));
+      actionStatus.show(t('orderDetail.copyError'), 'error');
     }
-  }, [order, t]);
+  }, [order, t, actionStatus]);
 
   const handleReorder = useCallback(async (): Promise<void> => {
+    setPendingAction('reorder');
+    actionStatus.clear();
     try {
       const res = await apiClient.post<{ data: { unavailableItems: unknown[] } }>(
         `/api/v1/admin/orders/${id}/reorder`,
         {},
       );
       const unavailable = res.data.unavailableItems.length;
-      setInfo(
-        unavailable > 0
-          ? t('orderDetail.reorder.doneWithSkips', { count: unavailable })
-          : t('orderDetail.reorder.done'),
-      );
+      if (unavailable > 0) actionStatus.show(t('orderDetail.reorder.doneWithSkips', { count: unavailable }), 'warning');
+      else actionStatus.show(t('orderDetail.reorder.done'));
     } catch (err) {
       setError(err instanceof ApiError ? err.envelope.error.message : t('orderDetail.reorder.error'));
+    } finally {
+      setPendingAction(null);
     }
-  }, [id, t]);
+  }, [id, t, actionStatus]);
 
   const handleCloneToQuote = useCallback(async (): Promise<void> => {
+    setPendingAction('cloneToQuote');
+    actionStatus.clear();
     try {
       await apiClient.post(`/api/v1/admin/orders/${id}/clone-to-quote`, {});
-      setInfo(t('orderDetail.cloneToQuote.done'));
+      actionStatus.show(t('orderDetail.cloneToQuote.done'));
     } catch (err) {
       setError(err instanceof ApiError ? err.envelope.error.message : t('orderDetail.cloneToQuote.error'));
+    } finally {
+      setPendingAction(null);
     }
-  }, [id, t]);
+  }, [id, t, actionStatus]);
 
   const handleIssueInvoice = useCallback(async (): Promise<void> => {
+    setPendingAction('issueInvoice');
+    actionStatus.clear();
     try {
       const res = await apiClient.post<{ email?: IssueInvoiceEmailOutcome }>(
         `/api/v1/admin/orders/${id}/invoices`,
@@ -305,45 +462,48 @@ export function OrderDetail(): ReactNode {
       // Issue #149 — the invoice was issued either way, so this is never an
       // error; the notification is the part that varies, and it is said out
       // loud instead of being reported as an unqualified success.
-      setInfo(issueInvoiceNotice(res.email, t));
+      // Issued without its e-mail is a result that went through only in part.
+      actionStatus.show(issueInvoiceNotice(res.email, t), res.email?.status === 'not_sent' ? 'warning' : 'success');
       await loadInvoices();
     } catch (err) {
       setError(err instanceof ApiError ? err.envelope.error.message : t('orderDetail.issueInvoice.error'));
+    } finally {
+      setPendingAction(null);
     }
-  }, [id, loadInvoices, t]);
+  }, [id, loadInvoices, t, actionStatus]);
 
+  // Both run from the confirm step of a `StatusChangeControl` dialog (issue
+  // #1470, DS-18) and let a refusal propagate, so the dialog stays open and
+  // shows it. The control announces the committed change itself and its badge
+  // shows the new value, so the page adds no banner of its own (#1499, SALES-17).
   const handleStatus = useCallback(
     async (to: string): Promise<void> => {
-      try {
-        await apiClient.post<{ data: OrderDetail }>(`/api/v1/admin/orders/${id}/status`, { to });
-        setInfo(t('orderDetail.messages.orderMoved', { status: statusName(graph, to) }));
-        await refresh();
-      } catch (err) {
-        setError(err instanceof ApiError ? err.envelope.error.message : t('orderDetail.errors.statusChange'));
-      }
-    },
-    [id, refresh, graph, t],
-  );
-
-  const handlePaymentStatus = useCallback(
-    async (to: string): Promise<void> => {
-      try {
-        await apiClient.post<{ data: OrderDetail }>(
-          `/api/v1/admin/orders/${id}/payment-status`,
-          { to },
-        );
-        setInfo(t('orderDetail.messages.paymentMoved', { status: t(paymentStatusLabelKey(to)) }));
-        await refresh();
-      } catch (err) {
-        setError(err instanceof ApiError ? err.envelope.error.message : t('orderDetail.errors.paymentChange'));
-      }
+      await apiClient.post<{ data: OrderDetail }>(`/api/v1/admin/orders/${id}/status`, { to });
+      await refresh();
     },
     [id, refresh],
   );
 
-  if (loading) return <p className="text-sm text-muted-foreground">{t('common.state.loading')}</p>;
+  const handlePaymentStatus = useCallback(
+    async (to: string): Promise<void> => {
+      await apiClient.post<{ data: OrderDetail }>(`/api/v1/admin/orders/${id}/payment-status`, { to });
+      await refresh();
+    },
+    [id, refresh],
+  );
+
+  if (resource.initialLoading) return <DetailSkeleton />;
   if (!order)
-    return (
+    return loadError !== null ? (
+      <Alert variant="destructive">
+        <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+          {loadError}
+          <Button variant="outline" size="sm" onClick={(): void => void refresh()}>
+            {t('common.action.retry')}
+          </Button>
+        </AlertDescription>
+      </Alert>
+    ) : (
       <Alert variant="warning">
         <AlertDescription>{t('orderDetail.notFound')}</AlertDescription>
       </Alert>
@@ -352,7 +512,11 @@ export function OrderDetail(): ReactNode {
   return (
     <>
       <PageHeader
-        back={{ label: t('orders.page.title'), to: '/orders' }}
+        back={
+          // Opened from another screen that named its own address: the way back leads
+          // there, and says only "Back".
+          returnTo ? { label: t('common.action.back'), to: returnTo } : { label: t('orders.page.title'), to: '/orders' }
+        }
         title={
           <>
             <button
@@ -365,463 +529,542 @@ export function OrderDetail(): ReactNode {
               <Copy className="size-3.5 opacity-60" />
             </button>
             <Badge className="text-xs font-medium" style={statusBadgeStyle(statusColor(graph, order.status))}>
-              {statusName(graph, order.status)}
+              {statusName(graph, order.status, language)}
             </Badge>
           </>
         }
-        description={
-          <span>
-            {t('orderDetail.placedAt', { date: formatDateTime(order.placedAt) })}{' '}
-            <code className="font-mono text-xs">({order.id})</code>
-          </span>
-        }
-        actions={
-          <>
-            <Button
-              variant="outline"
-              size="sm"
-              className="bg-card"
-              onClick={(): void => void handleReorder()}
-            >
-              <RotateCcw />
-              {t('orderDetail.reorder.action')}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="bg-card"
-              onClick={(): void => void handleCloneToQuote()}
-            >
-              <FileText />
-              {t('orderDetail.cloneToQuote.action')}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="bg-card"
-              onClick={(): void => void handleIssueInvoice()}
-            >
-              <FileText />
+        description={<span>{t('orderDetail.placedAt', { date: formatDateTime(order.placedAt, language) })}</span>}
+        actions={(() => {
+          // Issue #1497 (SALES-12) — one primary per view (`DetailHeaderActions`).
+          // The order's next step is its invoice: *Issue invoice* is the one
+          // filled button while the order has none, and once it has one the
+          // header has no primary (Von Restorff). The rest is the long tail and
+          // lives in "More" (Hick). Until the invoice list has answered, the
+          // slot stays empty: a primary that appears and then jumps into the
+          // menu would break that rule and move a control under the pointer.
+          const hasInvoice = invoices.some((inv) => inv.kind === 'invoice');
+          // Newest invoice first (the list is ordered issuedAt desc); only a
+          // fully rendered invoice exposes a downloadable PDF.
+          const readyPdf = invoices.find((inv) => inv.pdfReady);
+          const busy = pendingAction !== null;
+          const issueInvoiceLabel = (
+            <>
+              {pendingAction === 'issueInvoice' ? (
+                <Loader2 aria-hidden="true" className="motion-safe:animate-spin" />
+              ) : (
+                <FileText aria-hidden="true" />
+              )}
               {t('orderDetail.issueInvoice.action')}
-            </Button>
-            {(() => {
-              // Newest invoice first (the list is ordered issuedAt desc); only
-              // a fully rendered invoice exposes a downloadable PDF.
-              const ready = invoices.find((inv) => inv.pdfReady);
-              if (!ready) return null;
-              return (
-                <Button asChild variant="outline" size="sm" className="bg-card">
+            </>
+          );
+          return (
+            <DetailHeaderActions
+              primary={
+                !invoicesLoaded || hasInvoice ? null : (
+                  <Button
+                    onClick={(): void => void handleIssueInvoice()}
+                    disabled={busy}
+                    {...(pendingAction === 'issueInvoice' ? { 'aria-busy': true } : {})}
+                  >
+                    {issueInvoiceLabel}
+                  </Button>
+                )
+              }
+              moreDisabled={busy}
+              status={actionStatus.props}
+              moreBusy={pendingAction === 'reorder' || pendingAction === 'cloneToQuote' || (hasInvoice && pendingAction === 'issueInvoice')}
+            >
+              <RowActionMenuItem onSelect={(): void => void handleReorder()}>
+                <RotateCcw aria-hidden="true" />
+                {t('orderDetail.reorder.action')}
+              </RowActionMenuItem>
+              <RowActionMenuItem onSelect={(): void => void handleCloneToQuote()}>
+                <FileText aria-hidden="true" />
+                {t('orderDetail.cloneToQuote.action')}
+              </RowActionMenuItem>
+              {hasInvoice ? (
+                <RowActionMenuItem onSelect={(): void => void handleIssueInvoice()}>
+                  {issueInvoiceLabel}
+                </RowActionMenuItem>
+              ) : null}
+              {readyPdf ? (
+                <RowActionMenuItem asChild>
                   <a
-                    href={`${apiBaseUrl}/api/v1/admin/invoices/${ready.id}/pdf`}
+                    href={`${apiBaseUrl}/api/v1/admin/invoices/${readyPdf.id}/pdf`}
                     target="_blank"
                     rel="noreferrer"
                   >
-                    <FileDown />
+                    <FileDown aria-hidden="true" />
                     {t('orderDetail.invoicePdf')}
                   </a>
-                </Button>
-              );
-            })()}
-          </>
-        }
+                </RowActionMenuItem>
+              ) : null}
+            </DetailHeaderActions>
+          );
+        })()}
       />
 
-      {error ? (
+      {(error ?? loadError) ? (
         <Alert variant="destructive" className="mb-4">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      ) : null}
-      {info ? (
-        <Alert variant="success" className="mb-4">
-          <AlertDescription>{info}</AlertDescription>
+          <AlertDescription>{error ?? loadError}</AlertDescription>
         </Alert>
       ) : null}
 
       <OrderPendingEffectsNotice pendingEffects={order.pendingEffects} />
 
-      <Card className="mb-4 overflow-hidden">
-        <div style={{ padding: '4px 4px 0', overflow: 'hidden' }}>
-          <div className="b2b-tabs-scroll">
-            <div className="b2b-tabs" role="tablist">
-              <TabBtn
-                id="overview"
-                label={t('orderDetail.tabs.overview')}
-                icon={<ClipboardList size={14} />}
-                active={tab}
-                onChange={setTab}
-              />
-              {paymentContributions.length > 0 ? (
-                <TabBtn
-                  id="payment"
-                  label={t('orderDetail.tabs.payment')}
-                  icon={<CreditCard size={14} />}
-                  active={tab}
-                  onChange={setTab}
-                />
-              ) : null}
-              <TabBtn
-                id="delivery"
-                label={t('orderDetail.tabs.delivery')}
-                icon={<Truck size={14} />}
-                active={tab}
-                onChange={setTab}
-              />
-              <TabBtn
-                id="comments"
-                label={t('orderDetail.tabs.comments')}
-                icon={<MessageSquare size={14} />}
-                active={tab}
-                onChange={setTab}
-              />
-            </div>
-          </div>
-        </div>
-
-        <CardContent className="divide-y divide-border pt-6 [&>*]:py-6 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
-          {tab === 'overview' ? (
-            <>
-              <Section title={t('orderDetail.sections.status')}>
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="ostat">{t('orderDetail.fields.orderStatus')}</Label>
-                    <Select
-                      id="ostat"
-                      value={order.status}
-                      onChange={(e): void => {
-                        if (e.target.value !== order.status) void handleStatus(e.target.value);
-                      }}
-                    >
-                      {statusOptions(graph, order.status).map((code) => (
-                        <option key={code} value={code}>
-                          {statusName(graph, code)}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="pstat">{t('orderDetail.fields.paymentStatus')}</Label>
-                    <Select
-                      id="pstat"
-                      value={order.paymentStatus}
-                      onChange={(e): void => void handlePaymentStatus(e.target.value)}
-                    >
-                      {paymentStatusOptions(order.paymentStatus).map((s) => (
-                        <option
-                          key={s}
-                          value={s}
-                          disabled={!SELECTABLE_PAYMENT_STATUSES.includes(s)}
-                        >
-                          {t(paymentStatusLabelKey(s))}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-                </div>
-              </Section>
-
-              <div className="grid gap-6 md:grid-cols-2">
-                <Section title={t('orderDetail.sections.organization')}>
-                  {order.organization ? (
-                    <div className="space-y-1 text-sm">
-                      <p className="font-medium">{order.organization.name}</p>
-                      {order.organization.legalName &&
-                      order.organization.legalName !== order.organization.name ? (
-                        <p className="text-muted-foreground">{order.organization.legalName}</p>
-                      ) : null}
-                      <p className="text-muted-foreground">
-                        {t('orderDetail.org.taxId')}: <strong>{order.organization.taxId}</strong>
-                      </p>
-                      <p className="text-muted-foreground">
-                        {t('orderDetail.org.vat')}:{' '}
-                        {t(`orderDetail.vatStatus.${order.organization.vatStatus}`)}
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">
-                      <code className="font-mono text-xs">{order.organizationId}</code>
-                    </p>
-                  )}
-                </Section>
-                <Section title={t('orderDetail.sections.customer')}>
-                  {order.customer ? (
-                    <div className="space-y-1 text-sm">
-                      <p className="font-medium">
-                        {`${order.customer.firstName} ${order.customer.lastName}`.trim() ||
-                          order.customer.email}
-                      </p>
-                      <p className="text-muted-foreground">
-                        <a className="underline underline-offset-2" href={`mailto:${order.customer.email}`}>
-                          {order.customer.email}
-                        </a>
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">
-                      <code className="font-mono text-xs">{order.placedByCustomerAccountId}</code>
-                    </p>
-                  )}
-                </Section>
-              </div>
-
-              <div className="grid gap-6 md:grid-cols-2">
-                <Section title={t('orderDetail.sections.delivery')}>
-                  <div className="space-y-2 text-sm">
-                    <p>
-                      {order.deliveryAddress.recipientName ? (
-                        <>
-                          <strong>{order.deliveryAddress.recipientName}</strong>
-                          <br />
-                        </>
-                      ) : null}
-                      {order.deliveryAddress.street}
-                      <br />
-                      {order.deliveryAddress.postalCode} {order.deliveryAddress.city}
-                      <br />
-                      {order.deliveryAddress.country}
-                    </p>
-                    <p className="text-muted-foreground">
-                      {t('orderDetail.deliveryVia')} <strong>{order.deliveryMethod.code}</strong>
-                    </p>
-                  </div>
-                </Section>
-                <Section title={t('orderDetail.sections.billing')}>
-                  <div className="space-y-2 text-sm">
-                    <p>
-                      {order.billingAddress.companyName ? (
-                        <>
-                          <strong>{order.billingAddress.companyName}</strong>
-                          <br />
-                        </>
-                      ) : null}
-                      {order.billingAddress.taxId ? (
-                        <>
-                          {t('orderDetail.taxId')}: {order.billingAddress.taxId}
-                          <br />
-                        </>
-                      ) : null}
-                      {order.billingAddress.recipientName ? (
-                        <>
-                          {order.billingAddress.recipientName}
-                          <br />
-                        </>
-                      ) : null}
-                      {order.billingAddress.street}
-                      <br />
-                      {order.billingAddress.postalCode} {order.billingAddress.city}
-                      <br />
-                      {order.billingAddress.country}
-                    </p>
-                    <p className="text-muted-foreground">
-                      {t('orderDetail.paidBy')} <strong>{order.paymentMethod.code}</strong> (
-                      {order.paymentMethod.kind})
-                    </p>
-                  </div>
-                </Section>
-              </div>
-
-              {order.customerNote ? (
-                <Section title={t('orderDetail.sections.buyerNote')}>
-                  <p className="text-sm">{order.customerNote}</p>
-                </Section>
-              ) : null}
-
-              <Section title={t('orderDetail.sections.items')}>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>{t('orderDetail.columns.product')}</TableHead>
-                      <TableHead>{t('orderDetail.columns.qty')}</TableHead>
-                      <TableHead>{t('orderDetail.columns.unit')}</TableHead>
-                      <TableHead>{t('orderDetail.columns.tax')}</TableHead>
-                      <TableHead className="text-right">{t('orderDetail.columns.line')}</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {order.items.map((it) => (
-                      <TableRow key={it.id}>
-                        <TableCell>
-                          <Link
-                            to={`/catalog/products/${it.productId}`}
-                            className="font-medium text-primary hover:underline"
-                          >
-                            {it.productSnapshot.name}
-                          </Link>
-                          <div className="font-mono text-xs text-muted-foreground">
-                            {it.variantSnapshot ? `${it.variantSnapshot.label} · ` : ''}
-                            {it.productSnapshot.sku}
-                          </div>
-                        </TableCell>
-                        <TableCell>{it.quantity}</TableCell>
-                        <TableCell className="tabular-nums">
-                          {formatMoney(it.unitPrice, order.currency)}
-                        </TableCell>
-                        <TableCell>{(it.taxRate * 100).toFixed(1)}%</TableCell>
-                        <TableCell className="tabular-nums text-right">
-                          {formatMoney(it.lineTotal, order.currency)}
-                        </TableCell>
+      {/* Issue #1445 (DS-12) — the kit's record tabs: one tab in the tab order,
+          ←/→/Home/End, every tab controlling the one panel. Payment is a tab
+          only while something fills it (Z15), so it is left out, not disabled. */}
+      <DetailSidebarLayout
+        sidebar={
+          sidebarShown ? (
+            // Issue #1452 (UX audit DS-20) — what other modules say about the order, as
+            // sections of one card at a sidebar's width; never a card in a card.
+            <aside aria-label={tOrders('detail.sidebar.label')} className="mb-4 min-w-0 lg:col-start-2 lg:row-start-1">
+              <Card>
+                <CardContent className="space-y-(--section-gap)">
+                  <AdminZone name="order.detail.sidebar" props={{ orderId: id }} chrome="section" />
+                </CardContent>
+              </Card>
+            </aside>
+          ) : null
+        }
+      >
+        <RecordTabs
+          className={cn('mb-4 overflow-hidden', sidebarShown && 'min-w-0 lg:col-start-1')}
+          items={[
+            { value: 'overview', label: t('orderDetail.tabs.overview'), icon: <ClipboardList /> },
+            ...(paymentContributions.length > 0
+              ? [{ value: 'payment' as const, label: t('orderDetail.tabs.payment'), icon: <CreditCard /> }]
+              : []),
+            { value: 'delivery', label: t('orderDetail.tabs.delivery'), icon: <Truck /> },
+            // Issue #1545 (SALES-21) — the tab says how much it holds, so an order
+            // with a conversation is told apart from one without before opening it.
+            { value: 'comments', label: t('orderDetail.tabs.comments'), icon: <MessageSquare />, count: comments.length },
+          ]}
+          value={tab}
+          onValueChange={setTab}
+          idBase="order-detail"
+          aria-label={tOrders('detail.tabs.label')}
+          panelProps={{
+            ...resource.busyProps,
+            className: 'divide-y divide-border [&>*]:py-6 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0',
+          }}
+        >
+            {tab === 'overview' ? (
+              <>
+                {/* Issue #1545 (SALES-21) — the items and totals are what an order is
+                    opened for, so they come first (Serial Position); the buyer's note
+                    about them follows, then who and where, then the status controls. */}
+                <Section title={t('orderDetail.sections.items')}>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>{t('orderDetail.columns.product')}</TableHead>
+                        <TableHead>{t('orderDetail.columns.qty')}</TableHead>
+                        <TableHead>{t('orderDetail.columns.unit')}</TableHead>
+                        <TableHead>{t('orderDetail.columns.tax')}</TableHead>
+                        <TableHead className="text-right">{t('orderDetail.columns.line')}</TableHead>
                       </TableRow>
+                    </TableHeader>
+                    {/* Feature 159 — with groups, one row group per section (FR-032); read-only (FR-063). */}
+                    {orderLineSections(order, tOrders('lineGroups.otherItems')).map((section) => (
+                      <TableBody key={section.key} aria-label={section.heading ?? undefined}>
+                        {section.heading !== null ? (
+                          <TableRow className="bg-muted/40 hover:bg-muted/40">
+                            <TableHead colSpan={5} scope="colgroup" className="font-semibold text-foreground">
+                              {section.heading}
+                            </TableHead>
+                          </TableRow>
+                        ) : null}
+                        {section.items.map((it) => (
+                          <TableRow key={it.id}>
+                            <TableCell>
+                              <Link
+                                to={`/catalog/products/${it.productId}`}
+                                className="font-medium text-primary hover:underline"
+                              >
+                                {it.productSnapshot.name}
+                              </Link>
+                              <div className="font-mono text-xs text-muted-foreground">
+                                {it.variantSnapshot ? `${it.variantSnapshot.label} · ` : ''}
+                                {it.productSnapshot.sku}
+                              </div>
+                            </TableCell>
+                            <TableCell>{it.quantity}</TableCell>
+                            <TableCell className="tabular-nums">
+                              {formatMoney(it.unitPrice, order.currency, undefined, { unitPrice: true })}
+                            </TableCell>
+                            <TableCell>{(it.taxRate * 100).toFixed(1)}%</TableCell>
+                            <TableCell className="tabular-nums text-right">
+                              {formatMoney(it.lineTotal, order.currency)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                        {section.heading !== null ? (
+                          <TableRow>
+                            <TableCell colSpan={5}>
+                              <OrderSectionSummary
+                                text={sectionSummaryText(
+                                  orderSectionTotals(
+                                    section.items.map((it) => ({
+                                      net: lineAmountHalfUp(it.unitPrice, it.quantity),
+                                      taxRate: it.taxRate,
+                                    })),
+                                  ),
+                                  order.currency,
+                                )}
+                              />
+                            </TableCell>
+                          </TableRow>
+                        ) : null}
+                      </TableBody>
                     ))}
-                  </TableBody>
-                  <tfoot className="border-t [&_td]:p-2 [&_th]:p-2">
-                    <tr>
-                      <th colSpan={4} className="text-right font-medium text-muted-foreground">
-                        {t('orderDetail.totals.subtotal')}
-                      </th>
-                      <td className="tabular-nums text-right">
-                        {formatMoney(order.subtotal, order.currency)}
-                      </td>
-                    </tr>
-                    <tr>
-                      <th colSpan={4} className="text-right font-medium text-muted-foreground">
-                        {t('orderDetail.totals.tax')}
-                      </th>
-                      <td className="tabular-nums text-right">
-                        {formatMoney(order.taxTotal, order.currency)}
-                      </td>
-                    </tr>
-                    {order.discountTotal > 0 ? (
+                    <tfoot className="border-t [&_td]:p-2 [&_th]:p-2">
                       <tr>
                         <th colSpan={4} className="text-right font-medium text-muted-foreground">
-                          {t('orderDetail.totals.discount')}
-                          {order.appliedPromotions && order.appliedPromotions.length > 0
-                            ? ` (${order.appliedPromotions.length})`
-                            : ''}
+                          {t('orderDetail.totals.subtotal')}
                         </th>
-                        <td className="tabular-nums text-right text-ok">
-                          −{formatMoney(order.discountTotal, order.currency)}
+                        <td className="tabular-nums text-right">
+                          {formatMoney(order.subtotal, order.currency)}
                         </td>
                       </tr>
-                    ) : null}
-                    <tr>
-                      <th colSpan={4} className="text-right font-medium text-muted-foreground">
-                        {t('orderDetail.totals.delivery')}
-                      </th>
-                      <td className="tabular-nums text-right">
-                        {formatMoney(order.deliveryTotal, order.currency)}
-                      </td>
-                    </tr>
-                    <tr>
-                      <th colSpan={4} className="text-right font-semibold">
-                        {t('orderDetail.totals.total')}
-                      </th>
-                      <td className="tabular-nums text-right font-semibold">
-                        {formatMoney(order.total, order.currency)}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </Table>
-              </Section>
-              {/* Feature 055 — operator-defined custom fields for this order. */}
-              <CustomFieldValuesPanel
-                entityType="order"
-                values={order.customFieldValues ?? {}}
-                save={async (values): Promise<void> => {
-                  await apiClient.patch(`/api/v1/admin/orders/${id}/custom-fields`, values);
-                  await refresh();
-                }}
-              />
-            </>
-          ) : null}
+                      <tr>
+                        <th colSpan={4} className="text-right font-medium text-muted-foreground">
+                          {t('orderDetail.totals.tax')}
+                        </th>
+                        <td className="tabular-nums text-right">
+                          {formatMoney(order.taxTotal, order.currency)}
+                        </td>
+                      </tr>
+                      {order.discountTotal > 0 ? (
+                        <tr>
+                          <th colSpan={4} className="text-right font-medium text-muted-foreground">
+                            {t('orderDetail.totals.discount')}
+                            {order.appliedPromotions && order.appliedPromotions.length > 0
+                              ? ` (${order.appliedPromotions.length})`
+                              : ''}
+                          </th>
+                          <td className="tabular-nums text-right text-ok">
+                            −{formatMoney(order.discountTotal, order.currency)}
+                          </td>
+                        </tr>
+                      ) : null}
+                      <tr>
+                        <th colSpan={4} className="text-right font-medium text-muted-foreground">
+                          {t('orderDetail.totals.delivery')}
+                        </th>
+                        <td className="tabular-nums text-right">
+                          {formatMoney(order.deliveryTotal, order.currency)}
+                        </td>
+                      </tr>
+                      <tr>
+                        <th colSpan={4} className="text-right font-semibold">
+                          {t('orderDetail.totals.total')}
+                        </th>
+                        <td className="tabular-nums text-right font-semibold">
+                          {formatMoney(order.total, order.currency)}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </Table>
+                </Section>
 
-          {tab === 'payment' ? (
-            <AdminZone name="order.detail.payment" props={{ orderId: id }} />
-          ) : null}
-          {tab === 'delivery' ? (
-            <OrderShipmentsTab orderId={id} deliveryMethodCode={order.deliveryMethod.code} />
-          ) : null}
+                {order.customerNote ? (
+                  <Section title={t('orderDetail.sections.buyerNote')}>
+                    <p className="text-sm">{order.customerNote}</p>
+                  </Section>
+                ) : null}
 
-          {tab === 'comments' ? (
-            <Section title={t('orderDetail.sections.comments')}>
-              {comments.length === 0 ? (
-                <p className="text-sm text-muted-foreground">{t('orderDetail.comments.empty')}</p>
-              ) : (
-                <ul className="space-y-2">
-                  {comments.map((c) => (
-                    <li key={c.id} className="rounded-md border p-3 text-sm" data-testid="order-comment">
-                      <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
-                        <span>{formatDateTime(c.createdAt)}</span>
-                        {c.authorCustomerAccountId ? (
-                          <span>{t('orderDetail.comments.byCustomer')}</span>
+                {/* Issue #1545 (SALES-21) — who and where as one region: one section,
+                    one two-column description list, instead of four cards of two
+                    lines each (Common Region). */}
+                <Section title={tOrders('detail.sections.parties')}>
+                  <dl className="grid gap-x-6 gap-y-5 text-sm md:grid-cols-2">
+                    <div className="space-y-1">
+                      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        {t('orderDetail.sections.organization')}
+                      </dt>
+                      <dd className="space-y-1">
+                        {order.organization ? (
+                          <>
+                            <p className="font-medium">{order.organization.name}</p>
+                            {order.organization.legalName &&
+                            order.organization.legalName !== order.organization.name ? (
+                              <p className="text-muted-foreground">{order.organization.legalName}</p>
+                            ) : null}
+                            {order.organization.isPersonal ? (
+                              <p className="text-muted-foreground">{t('orderDetail.org.individualCustomer')}</p>
+                            ) : order.organization.taxId ? (
+                              <p className="text-muted-foreground">
+                                {t('orderDetail.org.taxId')}: <strong>{order.organization.taxId}</strong>
+                              </p>
+                            ) : null}
+                            <p className="text-muted-foreground">
+                              {t('orderDetail.org.vat')}:{' '}
+                              {t(`orderDetail.vatStatus.${order.organization.vatStatus}`)}
+                            </p>
+                          </>
                         ) : (
-                          <span>{t('orderDetail.comments.byStaff')}</span>
+                          <p className="text-muted-foreground">{t('orderDetail.org.unavailable')}</p>
                         )}
-                        {!c.isCustomerVisible ? (
-                          <span className="rounded bg-muted px-1.5 py-0.5">
-                            {t('orderDetail.comments.internal')}
-                          </span>
+                      </dd>
+                    </div>
+                    <div className="space-y-1">
+                      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        {t('orderDetail.sections.customer')}
+                      </dt>
+                      <dd className="space-y-1">
+                        {order.customer ? (
+                          <>
+                            <p className="font-medium">
+                              {`${order.customer.firstName} ${order.customer.lastName}`.trim() ||
+                                order.customer.email}
+                            </p>
+                            <p className="text-muted-foreground">
+                              <a className="underline underline-offset-2" href={`mailto:${order.customer.email}`}>
+                                {order.customer.email}
+                              </a>
+                            </p>
+                          </>
+                        ) : (
+                          <p className="text-muted-foreground">{t('orderDetail.customer.unavailable')}</p>
+                        )}
+                      </dd>
+                    </div>
+                    <div className="space-y-1">
+                      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        {t('orderDetail.sections.delivery')}
+                      </dt>
+                      <dd className="space-y-2">
+                        <p>
+                          {order.deliveryAddress.recipientName ? (
+                            <>
+                              <strong>{order.deliveryAddress.recipientName}</strong>
+                              <br />
+                            </>
+                          ) : null}
+                          {order.deliveryAddress.street}
+                          <br />
+                          {order.deliveryAddress.postalCode} {order.deliveryAddress.city}
+                          <br />
+                          {order.deliveryAddress.country}
+                        </p>
+                        <p className="text-muted-foreground">
+                          {t('orderDetail.deliveryVia')} <strong>{methodName(order.deliveryMethod, language)}</strong>
+                        </p>
+                      </dd>
+                    </div>
+                    <div className="space-y-1">
+                      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        {t('orderDetail.sections.billing')}
+                      </dt>
+                      <dd className="space-y-2">
+                        <p>
+                          {order.billingAddress.companyName ? (
+                            <>
+                              <strong>{order.billingAddress.companyName}</strong>
+                              <br />
+                            </>
+                          ) : null}
+                          {order.billingAddress.taxId ? (
+                            <>
+                              {t('orderDetail.taxId')}: {order.billingAddress.taxId}
+                              <br />
+                            </>
+                          ) : null}
+                          {order.billingAddress.recipientName ? (
+                            <>
+                              {order.billingAddress.recipientName}
+                              <br />
+                            </>
+                          ) : null}
+                          {order.billingAddress.street}
+                          <br />
+                          {order.billingAddress.postalCode} {order.billingAddress.city}
+                          <br />
+                          {order.billingAddress.country}
+                        </p>
+                        <p className="text-muted-foreground">
+                          {t('orderDetail.paidBy')} <strong>{methodName(order.paymentMethod, language)}</strong>
+                        </p>
+                        {/* `specs/182-related-payers/` FR-073 — the payer, as order data. */}
+                        {order.payer ? (
+                          <p>
+                            <span>{tOrders('orderDetail.payer')}:</span>{' '}
+                            <Link to={`/organizations/${order.payer.organizationId}`} className="font-medium underline underline-offset-2">
+                              {order.payer.name}
+                            </Link>{' '}
+                            <span className="text-muted-foreground">{tOrders(`orderDetail.payerTerms.${order.payer.terms}`)}</span>
+                          </p>
                         ) : null}
-                      </div>
-                      <p>{c.body}</p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className="space-y-2 border-t pt-3">
-                <textarea
-                  aria-label="comment-body"
-                  className="min-h-20 w-full rounded-md border p-2 text-sm"
-                  value={commentBody}
-                  onChange={(e): void => setCommentBody(e.target.value)}
-                  placeholder={t('orderDetail.comments.placeholder')}
+                      </dd>
+                    </div>
+                  </dl>
+                </Section>
+
+                <Section title={t('orderDetail.sections.status')}>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <StatusChangeControl
+                      label={t('orderDetail.fields.orderStatus')}
+                      dialogTitle={t('orderDetail.statusChange.orderTitle')}
+                      current={order.status}
+                      currentLabel={statusName(graph, order.status, language)}
+                      badgeStyle={statusBadgeStyle(statusColor(graph, order.status))}
+                      options={orderStatusTargets(graph, order.status).map((code) => ({
+                        value: code,
+                        label: statusName(graph, code, language),
+                      }))}
+                      onConfirm={handleStatus}
+                      consequence={(): string => t('orderDetail.statusChange.orderConsequence')}
+                      errorMessage={(err): string =>
+                        err instanceof ApiError ? err.envelope.error.message : t('orderDetail.errors.statusChange')
+                      }
+                      disabledReason={canWrite ? undefined : t('orderDetail.statusChange.noPermission')}
+                    />
+                    <StatusChangeControl
+                      label={t('orderDetail.fields.paymentStatus')}
+                      dialogTitle={t('orderDetail.statusChange.paymentTitle')}
+                      current={order.paymentStatus}
+                      currentLabel={t(paymentStatusLabelKey(order.paymentStatus))}
+                      options={paymentStatusTargets(order.paymentStatus).map((code) => ({
+                        value: code,
+                        label: t(paymentStatusLabelKey(code)),
+                      }))}
+                      onConfirm={handlePaymentStatus}
+                      consequence={(to): string => t(paymentStatusConsequenceKey(to))}
+                      errorMessage={(err): string =>
+                        err instanceof ApiError ? err.envelope.error.message : t('orderDetail.errors.paymentChange')
+                      }
+                      disabledReason={canWrite ? undefined : t('orderDetail.statusChange.noPermission')}
+                    />
+                  </div>
+                </Section>
+
+                <OrderExternalReferences references={order.externalReferences} />
+
+                {/* Feature 055 — operator-defined custom fields for this order. */}
+                <CustomFieldValuesPanel
+                  entityType="order"
+                  values={order.customFieldValues ?? {}}
+                  save={async (values): Promise<void> => {
+                    await apiClient.patch(`/api/v1/admin/orders/${id}/custom-fields`, values);
+                    await refresh();
+                  }}
                 />
-                <div className="flex flex-wrap items-center gap-4">
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={commentVisible}
-                      onChange={(e): void => setCommentVisible(e.target.checked)}
+              </>
+            ) : null}
+
+            {tab === 'payment' ? (
+              <AdminZone name="order.detail.payment" props={{ orderId: id }} />
+            ) : null}
+            {tab === 'delivery' ? (
+              <OrderShipmentsTab orderId={id} deliveryMethodCode={order.deliveryMethod.code} />
+            ) : null}
+
+            {tab === 'comments' ? (
+              <Section title={t('orderDetail.sections.comments')}>
+                {comments.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">{t('orderDetail.comments.empty')}</p>
+                ) : (
+                  // Rows divided by a rule, not a bordered box per comment: the tab
+                  // card is the one region (Common Region, issue #1498).
+                  <ul className="divide-y divide-border">
+                    {comments.map((c) => (
+                      <li key={c.id} className="py-3 text-sm first:pt-0 last:pb-0" data-testid="order-comment">
+                        <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
+                          <span>{formatDateTime(c.createdAt, language)}</span>
+                          {c.systemNote ? (
+                            <span>{tOrders('orderDetail.comments.systemAuthor')}</span>
+                          ) : c.authorCustomerAccountId ? (
+                            <span>{t('orderDetail.comments.byCustomer')}</span>
+                          ) : (
+                            <span>{t('orderDetail.comments.byStaff')}</span>
+                          )}
+                          {!c.isCustomerVisible ? (
+                            <span className="rounded bg-muted px-1.5 py-0.5">
+                              {t('orderDetail.comments.internal')}
+                            </span>
+                          ) : null}
+                        </div>
+                        {c.systemNote ? (
+                          <SystemNoteBody
+                            note={c.systemNote}
+                            body={c.body}
+                            language={language}
+                            t={tOrders}
+                          />
+                        ) : (
+                          <p>{c.body}</p>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="space-y-2 border-t pt-3">
+                  {/* A visible label, not a placeholder or a developer id, names the box (#1475). */}
+                  <FormField label={tOrders('detail.comments.label')}>
+                    <Textarea
+                      className="min-h-20"
+                      value={commentBody}
+                      onChange={(e): void => setCommentBody(e.target.value)}
+                      placeholder={t('orderDetail.comments.placeholder')}
                     />
-                    {t('orderDetail.comments.customerVisible')}
-                  </label>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={commentNotify}
-                      onChange={(e): void => setCommentNotify(e.target.checked)}
-                    />
-                    {t('orderDetail.comments.notify')}
-                  </label>
-                  <Button
-                    size="sm"
-                    disabled={!commentBody.trim()}
-                    onClick={(): void => void handleAddComment()}
-                  >
-                    {t('orderDetail.comments.add')}
-                  </Button>
+                  </FormField>
+                  <div className="flex flex-wrap items-center gap-4">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={commentVisible}
+                        onChange={(e): void => setCommentVisible(e.target.checked)}
+                      />
+                      {t('orderDetail.comments.customerVisible')}
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={commentNotify}
+                        onChange={(e): void => setCommentNotify(e.target.checked)}
+                      />
+                      {t('orderDetail.comments.notify')}
+                    </label>
+                    <Button
+                      size="sm"
+                      disabled={!commentBody.trim()}
+                      onClick={(): void => void handleAddComment()}
+                    >
+                      {t('orderDetail.comments.add')}
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            </Section>
-          ) : null}
-        </CardContent>
-      </Card>
+              </Section>
+            ) : null}
+        </RecordTabs>
+      </DetailSidebarLayout>
 
       {/* The panels other modules add to an order, below the tab panels so they
-          are there whichever tab is open. No chrome around the zone: every
-          contribution renders its own card, and an empty zone renders nothing
-          at all — the screen is then exactly the one above. */}
-      <AdminZone name="order.detail.after" props={{ orderId: id }} />
+          are there whichever tab is open. No chrome around the zone: at page
+          level each contribution is a card of its own (`chrome="card"`, issue
+          #1437), and an empty zone renders nothing at all — the screen is then
+          exactly the one above. */}
+      <AdminZone name="order.detail.after" props={{ orderId: id }} chrome="card" />
     </>
   );
 }
 
-function TabBtn(props: {
-  id: OrderTab;
-  label: string;
-  icon: ReactNode;
-  active: OrderTab;
-  onChange: (id: OrderTab) => void;
-}): ReactNode {
+/**
+ * The tabs alone, or the tabs and a sidebar beside them (issue #1452, UX audit
+ * DS-20) — the grid of the Task detail screen. With no sidebar it adds no element,
+ * so the screen is the single column it was. In DOM order the sidebar follows
+ * the tabs, so the main content comes first on a narrow screen.
+ */
+function DetailSidebarLayout({ sidebar, children }: { sidebar: ReactNode; children: ReactNode }): ReactNode {
+  if (sidebar === null) return children;
   return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={props.active === props.id}
-      className={cn('b2b-tab', props.active === props.id && 'is-active')}
-      onClick={(): void => props.onChange(props.id)}
-    >
-      {props.icon}
-      {props.label}
-    </button>
+    <div className="grid items-start gap-x-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      {children}
+      {sidebar}
+    </div>
   );
 }
 
@@ -831,3 +1074,24 @@ function TabBtn(props: {
  * own siblings and tests use.
  */
 export default OrderDetail;
+
+/**
+ * Feature 159 — the items table's sections: with no group holding a line, one
+ * section with no heading (the table as it was, FR-033); otherwise each group by
+ * name, then the ungrouped lines under `otherItems`. Empty groups are never
+ * shown read-only, and an order stores none (D2).
+ */
+function orderLineSections(
+  order: OrderDetail,
+  otherItems: string,
+): Array<{ key: string; heading: string | null; items: OrderItem[] }> {
+  const sections = arrangeLineGroups(order.itemGroups ?? [], order.items);
+  if (!sections.some((section) => section.kind === 'group')) {
+    return [{ key: 'all', heading: null, items: order.items }];
+  }
+  return sections.map((section) => ({
+    key: section.group?.id ?? 'ungrouped',
+    heading: section.group?.name ?? otherItems,
+    items: [...section.lines],
+  }));
+}

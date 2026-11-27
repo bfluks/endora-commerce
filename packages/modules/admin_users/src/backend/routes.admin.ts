@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
   ADMIN_SESSION_COOKIE_NAME,
+  ENCRYPTION_KEY_MISSING,
   createAdminUserRequestSchema,
   resetAdminUserPasswordRequestSchema,
   updateAdminUserRequestSchema,
@@ -8,7 +9,10 @@ import {
   upsertAdminRoleRequestSchema,
   type AdminAuthenticationThrottlePort,
   type AdminRolePort,
+  type AdminPreferences,
   type AdminRoleRecord,
+  type AdminRoleTwoFactorNotice,
+  type AdminUser as AdminUserView,
   type PermissionCataloguePort,
   type PermissionReadPort,
 } from '@endora-commerce/contracts';
@@ -16,8 +20,10 @@ import { readKnownDevice } from './known-device-cookie.js';
 import type { AdminUserService } from './services/admin-user-service.js';
 import type { AdminUser } from './entities/admin-user.entity.js';
 import type { TwoFactorEnrolmentReader } from './services/two-factor-enrolments.js';
+import { roleTwoFactorRefusal, turnsTwoFactorOn } from './services/role-two-factor.js';
 import type { RequireAdminFactory, SettingsReadPort } from '@endora-commerce/platform/kernel';
 import { readIdleLogoutMinutes } from './services/idle-logout-policy.js';
+import type { AdminPreferenceService } from './services/admin-preference-service.js';
 
 /**
  * Admin user + role CRUD (T193 / FR-080..FR-083). All gated by
@@ -51,6 +57,11 @@ export interface AdminUsersAdminDeps {
    * held to the configured window too (the settings admin API refuses them).
    */
   settingsReadPort: SettingsReadPort;
+  /**
+   * Feature 164 — `GET /admin/me` carries the admin's own preferences, so the
+   * shell's first paint is already pinned, folded and railed (FR-016).
+   */
+  adminPreferenceService: AdminPreferenceService;
 }
 
 export async function registerAdminUsersAdminRoutes(
@@ -66,6 +77,7 @@ export async function registerAdminUsersAdminRoutes(
     resolveAdminContext,
     twoFactorEnrolments,
     settingsReadPort,
+    adminPreferenceService,
   } = deps;
 
   /** One `mfa` read per response, whether the response carries one admin or a page. */
@@ -107,12 +119,28 @@ export async function registerAdminUsersAdminRoutes(
       const role = adminUser.adminRoleId
         ? await adminRolePort.getById(adminUser.adminRoleId)
         : null;
+      // A preference is a convenience and never a sign-in dependency (FR-018):
+      // a failed read answers `null` — the Admin UI then opens with the
+      // defaults and saves nothing — and is logged. The `try` is around this
+      // module's own service, not a port, so no `ModuleDisabledError` can be
+      // swallowed here.
+      let preferences: AdminPreferences | null;
+      try {
+        preferences = await adminPreferenceService.read(adminUser.id);
+      } catch (error) {
+        adminPreferenceService.log.warn(
+          { err: error, adminUserId: adminUser.id },
+          'admin preferences unreadable; serving none',
+        );
+        preferences = null;
+      }
       return {
         data: {
           adminUser: await serializeOneAdminUser(adminUser),
           role: role ? serializeAdminRole(role) : null,
           permissions,
           idleLogoutMinutes: await readIdleLogoutMinutes(settingsReadPort),
+          preferences,
         },
       };
     },
@@ -150,6 +178,9 @@ export async function registerAdminUsersAdminRoutes(
           ...(body.password !== undefined
             ? { password: body.password, currentPassword: body.currentPassword }
             : {}),
+          // Feature 171 (US6) — the author profile.
+          ...(body.avatarAssetId !== undefined ? { avatarAssetId: body.avatarAssetId } : {}),
+          ...(body.bio !== undefined ? { bio: body.bio } : {}),
         },
         {
           sessionCookieValue: cookies?.[ADMIN_SESSION_COOKIE_NAME],
@@ -235,8 +266,14 @@ export async function registerAdminUsersAdminRoutes(
           ...(body.lastName !== undefined ? { lastName: body.lastName } : {}),
           ...(body.adminRoleId !== undefined ? { adminRoleId: body.adminRoleId } : {}),
           ...(body.status !== undefined ? { status: body.status } : {}),
+          ...(body.avatarAssetId !== undefined ? { avatarAssetId: body.avatarAssetId } : {}),
+          ...(body.bio !== undefined ? { bio: body.bio } : {}),
         },
         await actorAuthority(request),
+        {
+          actingAdminUserId: resolveAdminContext(request).adminUserId,
+          sessionCookieValue: request.cookies?.[ADMIN_SESSION_COOKIE_NAME],
+        },
       );
       return { data: await serializeOneAdminUser(user) };
     },
@@ -291,12 +328,43 @@ export async function registerAdminUsersAdminRoutes(
   );
 
   // --- Admin roles -----------------------------------------------------------
+  /**
+   * Issue #948, owner ruling Q6 — without `mfa`'s encryption key a role's
+   * `requiresTwoFactor` is not applied, so the read says so beside a role that
+   * sets it, as the Settings read says it of `mfa.admin.totp_enforced`.
+   * `undefined` everywhere else, including while `mfa` is off: the Roles
+   * screen already says that from module presence.
+   */
+  const roleTwoFactorNoticeOf = async (): Promise<AdminRoleTwoFactorNotice | undefined> =>
+    (await adminUserService.roleTwoFactorUnavailableReason()) === ENCRYPTION_KEY_MISSING
+      ? ROLE_TWO_FACTOR_KEYLESS_NOTICE
+      : undefined;
+
   app.get(
     '/api/v1/admin/admin-roles',
     { preHandler: requireAdmin('admin_users:manage') },
     async () => {
       const rows = await adminRolePort.list();
-      return { data: rows.map(serializeAdminRole) };
+      const notice = await roleTwoFactorNoticeOf();
+      return { data: rows.map((row) => serializeAdminRole(row, notice)) };
+    },
+  );
+
+  /**
+   * Issue #349 — how many holders of a role have no enrolled second factor,
+   * so the editor can say how many will be signed out before it turns the
+   * requirement on. `null` while `mfa` is absent. An unknown code previews
+   * nobody, because a role that does not exist yet has no holders.
+   */
+  app.get<{ Params: { code: string } }>(
+    '/api/v1/admin/admin-roles/:code/two-factor-impact',
+    { preHandler: requireAdmin('admin_users:manage') },
+    async (request) => {
+      const role = await adminRolePort.findByCode(request.params.code);
+      const unprotectedAdministrators = await adminUserService.countUnprotectedHoldersOfRole(
+        role?.id ?? null,
+      );
+      return { data: { unprotectedAdministrators } };
     },
   );
 
@@ -308,6 +376,15 @@ export async function registerAdminUsersAdminRoutes(
     },
     async (request) => {
       const body = upsertAdminRoleRequestSchema.parse(request.body);
+      // Issue #349 — the flag is enforced by `mfa` at sign-in, so it may only
+      // start binding people where `mfa` can meet it. Decided before the write;
+      // turning it off is never refused.
+      const before = await adminRolePort.findByCode(request.params.code);
+      const turningOn = turnsTwoFactorOn(before?.requiresTwoFactor ?? null, body.requiresTwoFactor);
+      if (turningOn) {
+        const unavailable = await adminUserService.roleTwoFactorUnavailableReason();
+        if (unavailable !== null) throw roleTwoFactorRefusal(unavailable);
+      }
       // An operator write: held to the actor's own permissions, and refused
       // on a seeded role unless the actor holds the wildcard.
       const role = await adminRolePort.upsertByCode(
@@ -321,7 +398,22 @@ export async function registerAdminUsersAdminRoutes(
         },
         { grantor: await actorAuthority(request) },
       );
-      return { data: serializeAdminRole(role) };
+      // After the write, so a refused one signs nobody out: the holders who
+      // opened their sessions without a second factor lose them now rather
+      // than in up to thirty days. The acting administrator keeps this one.
+      const signedOutAdministrators =
+        turningOn && role.requiresTwoFactor
+          ? await adminUserService.endUnprotectedSessionsOfRole(role, {
+              actingAdminUserId: resolveAdminContext(request).adminUserId,
+              sessionCookieValue: request.cookies?.[ADMIN_SESSION_COOKIE_NAME],
+            })
+          : 0;
+      return {
+        data: {
+          ...serializeAdminRole(role, await roleTwoFactorNoticeOf()),
+          signedOutAdministrators,
+        },
+      };
     },
   );
 
@@ -335,7 +427,8 @@ export async function registerAdminUsersAdminRoutes(
   );
 }
 
-function serializeAdminUser(u: AdminUser, twoFactorEnabled: boolean) {
+/** The published `adminUserSchema` (issue #599). */
+function serializeAdminUser(u: AdminUser, twoFactorEnabled: boolean): AdminUserView {
   return {
     id: u.id,
     email: u.email,
@@ -347,19 +440,30 @@ function serializeAdminUser(u: AdminUser, twoFactorEnabled: boolean) {
     // Feature 019: surface the per-user Admin UI language preference so the
     // SPA's TranslationProvider can seed itself without a separate fetch.
     preferredLanguage: u.preferredLanguage ?? null,
+    // Feature 171 (US6) — the public author profile.
+    avatarAssetId: u.avatarAssetId ?? null,
+    bio: u.bio ?? null,
     lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
     createdAt: u.createdAt.toISOString(),
     updatedAt: u.updatedAt.toISOString(),
   };
 }
 
-function serializeAdminRole(r: AdminRoleRecord) {
+/** Issue #948 — the Roles screen translates it from `roles.twoFactor.notice.<code>`. */
+const ROLE_TWO_FACTOR_KEYLESS_NOTICE: AdminRoleTwoFactorNotice = {
+  code: ENCRYPTION_KEY_MISSING,
+  message: 'Not in force: no encryption key (MFA_SECRET_ENCRYPTION_KEY).',
+};
+
+/** `notice` is attached only to a role that sets the flag; absent means no key at all. */
+function serializeAdminRole(r: AdminRoleRecord, notice?: AdminRoleTwoFactorNotice) {
   return {
     id: r.id,
     code: r.code,
     name: r.name,
     permissions: r.permissions,
     requiresTwoFactor: r.requiresTwoFactor,
+    ...(notice !== undefined && r.requiresTwoFactor ? { twoFactorNotice: notice } : {}),
     createdAt: r.createdAt.toISOString(),
     updatedAt: r.updatedAt.toISOString(),
   };

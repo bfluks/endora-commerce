@@ -116,7 +116,8 @@ const settings = defineModuleSettingsManifest({
     {
       code: INVENTORY_SETTING_CODES.LOW_STOCK_ALERT_RECIPIENT_EMAIL,
       name: 'Low-stock alert recipient email',
-      description: 'Email to receive low-stock alerts. Empty falls back to the platform admin.',
+      description:
+        'Receives low-stock alerts. While empty, INVENTORY_LOW_STOCK_RECIPIENT is used; without it no alert is sent.',
       groupCode: 'inventory',
       valueType: 'string',
       defaultValue: '',
@@ -216,6 +217,19 @@ export const manifest = defineModuleManifest({
         'effectively present, so an absent contributor costs the host nothing and an ' +
         'absent host holds a table nobody walks. Declaring the edge would make an ' +
         'optional assistant undeactivatable for as long as stock is tracked.',
+    },
+    {
+      moduleId: 'product_visibility_rules',
+      name: 'adminProductVisibilityPort',
+      kind: 'degrades-without',
+      whenAbsent:
+        'the inventory admin lists and the set-stock assistant tool are not narrowed by role: every ' +
+        'administrator sees and addresses every product, exactly as before the feature',
+      reason:
+        'Spec 193 (T052, FR-083, FR-081). The stock lists embed the caller\'s product predicate and ' +
+        'the set-stock tool asks whether the product is hidden. `product_visibility_rules` is ' +
+        'deactivatable and off by default: presence is probed in front of the port (`index.ts`), ' +
+        'absent reads as the system scope, and a call made while present is never caught.',
     },
   ],
   /**
@@ -342,8 +356,57 @@ export const manifest = defineModuleManifest({
       // route, which is a derivation, and never asks whether the route's code is
       // the right authority, which is a judgement.
       requiredPermission: 'inventory:read',
-      keywords: ['stock', 'inventory', 'warehouse', 'magazyn', 'zapasy'],
+      keywords: ['stock', 'inventory', 'warehouse'],
+      keywordsKey: 'actions.openInventory.keywords',
       weight: 230,
+    },
+    // Issue #516 (Principle XVI): the four other sidebar screens were reachable
+    // from the sidebar alone. Each declares the code its route enforces —
+    // `inventory:read` for the three lists, `inventory:write` for the import
+    // wizard, whose only purpose is a write.
+    {
+      id: 'open-warehouses',
+      labelKey: 'actions.openWarehouses.label',
+      descriptionKey: 'actions.openWarehouses.description',
+      icon: 'Warehouse',
+      targetRoute: '/warehouses',
+      requiredPermission: 'inventory:read',
+      keywords: ['warehouse', 'warehouses', 'location'],
+      keywordsKey: 'actions.openWarehouses.keywords',
+      weight: 231,
+    },
+    {
+      id: 'open-low-stock',
+      labelKey: 'actions.openLowStock.label',
+      descriptionKey: 'actions.openLowStock.description',
+      icon: 'TrendingDown',
+      targetRoute: '/inventory/low-stock',
+      requiredPermission: 'inventory:read',
+      keywords: ['low stock', 'stock', 'threshold', 'reorder'],
+      keywordsKey: 'actions.openLowStock.keywords',
+      weight: 232,
+    },
+    {
+      id: 'open-stock-notifications',
+      labelKey: 'actions.openStockNotifications.label',
+      descriptionKey: 'actions.openStockNotifications.description',
+      icon: 'Bell',
+      targetRoute: '/inventory/notifications',
+      requiredPermission: 'inventory:read',
+      keywords: ['notify', 'back in stock', 'availability', 'notifications'],
+      keywordsKey: 'actions.openStockNotifications.keywords',
+      weight: 233,
+    },
+    {
+      id: 'import-stock',
+      labelKey: 'actions.importStock.label',
+      descriptionKey: 'actions.importStock.description',
+      icon: 'PackageOpen',
+      targetRoute: '/inventory/import',
+      requiredPermission: 'inventory:write',
+      keywords: ['import', 'stock', 'csv', 'upload'],
+      keywordsKey: 'actions.importStock.keywords',
+      weight: 234,
     },
   ],
 });

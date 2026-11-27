@@ -1,5 +1,109 @@
 # @endora-commerce/email-components
 
+## 0.112.0
+
+### Patch Changes
+
+- 2d6d031: `renderEmailHtml` omits the entire image row for `EmailImage` and `EmailLogo` when a standalone variable source resolves to an empty value, instead of producing `<img src="">`.
+- Updated dependencies [c878440]
+- Updated dependencies [7b8006e]
+- Updated dependencies [ed3feda]
+- Updated dependencies [99042ee]
+- Updated dependencies [52d0617]
+  - @endora-commerce/page-builder-core@0.112.0
+
+## 0.111.0
+
+### Minor Changes
+
+- 52831b7: A button whose address is one `{{var path}}` directive and nothing else is now left out of the HTML
+  and the text part while that variable is empty or unset. Before, the HTML part rendered a button
+  pointing at `#`, and the text part rendered the label with no address. A button with a literal
+  address, or one that only contains a variable (`https://example.com/{{var id}}`), renders as before.
+
+  `renderEmailHtml` and `renderEmailText` apply it at render time, so a seeded template and an
+  operator-edited one behave alike. `guardLoneVariableHref(href, rendered)` from
+  `@endora-commerce/email-components/render/render-email-html` is the shared helper. It wraps
+  `rendered` in `{{if path}}…{{/if}}` when `href` is the lone variable `path`.
+
+### Patch Changes
+
+- ed57923: Published tarballs no longer carry source maps (issue #107). Every package publishes `dist` and
+  not `src`, so each `.js.map` and `.d.ts.map` pointed at source files no consumer had; they were
+  about a third of a tarball's unpacked size. Each package's `files` list now ends with
+  `"!dist/**/*.map"`: `@endora-commerce/mod-quick-order` packs 69 files instead of 131 (243.6 kB
+  unpacked instead of 359.9 kB), and `@endora-commerce/test-kit` packs 25 instead of 47. The
+  compiled JavaScript, the type declarations and every other shipped file are unchanged, and so is
+  every export. A stack trace from an installed package now names the compiled `dist` file rather
+  than a source path that does not exist in the install.
+- cd05402: The four packages now declare `sideEffects` in `package.json`, so a bundler can drop the modules a consumer imports through a barrel but never uses:
+
+  - `@endora-commerce/contracts`: `false`. Its modules build Zod schemas, constants and pure helpers, and none of them does anything when it is imported.
+  - `@endora-commerce/cms-components`: `["*.css"]`, so `@endora-commerce/cms-components/styles.css` imported from JavaScript is still kept.
+  - `@endora-commerce/email-components`: `["*.css"]`, for the published `tailwind.css`.
+  - `@endora-commerce/page-builder-admin`: `["*.css", "./dist/email/EmailEditorPane.js"]`. The e-mail editor pane imports the CMS and Puck stylesheets, so it is kept.
+
+  The exported API does not change, and a consumer does not need to change anything. In this repository's admin build, the JavaScript loaded with the entry page shrank from 931.6 kB to 649.6 kB (gzip: 266.1 kB to 193.4 kB), and in the storefront build the first-load JavaScript of the CMS, catalogue, product and checkout pages shrank by 73 to 79 kB per page (`/` 729 kB to 650 kB, `/checkout` 271 kB to 198 kB). The stylesheets are the same.
+
+- Updated dependencies [ed57923]
+  - @endora-commerce/page-builder-core@0.111.0
+
+## 0.110.0
+
+### Patch Changes
+
+- 06cf85b: Transactional e-mails no longer carry an empty Unsubscribe link (issue #520). The shared footer (`default_email_footer`) links to `{{var unsubscribeUrl}}`, a variable only newsletter sends set, so every transactional message rendered `<a href="">Unsubscribe</a>`. The `EmailFooterLegal` renderer now wraps that anchor in `{{if unsubscribeUrl}}…{{/if}}`, so it is dropped whenever the variable is empty or unset. This covers the seeded footer and any operator-edited copy, and needs no data change. Newsletter campaigns and automations, which always inject the URL, keep the link.
+
+  The plain-text part of an `EmailFooterLegal` block no longer contains raw HTML. Its anchors are written as "label: url", or as the bare URL when the URL is its own label, and every other tag is stripped. This changes the text part of newsletter messages too: the footer line now reads `Unsubscribe: https://…` instead of `<a href="https://…">Unsubscribe</a>`. A new export, `footerLegalPlainText` (`render/render-email-html`), is that conversion.
+
+  `defaultFooterTree()` is unchanged.
+
+- @endora-commerce/page-builder-core@0.110.0
+
+## 0.109.0
+
+### Patch Changes
+
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [eeed924]
+  - @endora-commerce/page-builder-core@0.109.0
+
+## 0.108.0
+
+### Patch Changes
+
+- @endora-commerce/page-builder-core@0.108.0
+
+## 0.107.0
+
+### Patch Changes
+
+- ad55813: `sanitizeEmailHtml` reads its input in one left-to-right scan: every `<` either starts a tag that is rebuilt from the allowlist or dropped, or is written out as `&lt;`. Removing a tag can no longer join the surrounding text into a new tag, and HTML comments are dropped.
+- Updated dependencies [dd939be]
+  - @endora-commerce/page-builder-core@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

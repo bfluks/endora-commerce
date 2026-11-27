@@ -40,6 +40,7 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 | `sales_channels` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `settings` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `transactional_emails` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
+| `product_visibility_rules` | nie | degrades-without `adminProductVisibilityPort` — listy magazynowe w panelu i narzędzie asystenta do ustawiania stanu nie są zawężane według roli: każdy administrator widzi i wskazuje każdy produkt, dokładnie jak przed wprowadzeniem tej funkcji |
 | `prompt_actions` | nie | contributes-to `promptActionToolRegistry` |
 
 ## Uprawnienia
@@ -53,7 +54,11 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 
 | Akcja | Otwiera | Uprawnienie |
 | --- | --- | --- |
+| `import-stock` | `/inventory/import` | `inventory:write` |
 | `open-inventory` | `/inventory` | `inventory:read` |
+| `open-low-stock` | `/inventory/low-stock` | `inventory:read` |
+| `open-stock-notifications` | `/inventory/notifications` | `inventory:read` |
+| `open-warehouses` | `/warehouses` | `inventory:read` |
 
 ## Ustawienia
 

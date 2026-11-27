@@ -1,9 +1,12 @@
 import { randomUUID } from 'crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { ERROR_CODES, compareDecimals, isUuidShape, returnCaseOrderLockKey, roundHalfUp } from '@endora-commerce/contracts';
 import type {
+  CorrectiveInvoiceInput,
   CorrectiveInvoicePort,
   CreditTopupPort,
+  OrderReturnContext,
+  OrderReturnContextPort,
   PaymentRefundPort,
   SettlementPrefill,
   SettlementRequest,
@@ -16,9 +19,25 @@ import { ReturnCase } from '../entities/return-case.entity.js';
 import { ReturnCaseItem } from '../entities/return-case-item.entity.js';
 import { Refund } from '../entities/refund.entity.js';
 import { RETURN_STATUS_RESOLVED } from '../domain/return-status-graph.js';
-import { exceedsCap, sumApproved } from '../domain/refund-math.js';
+import { approvedAmount, carriedDiscount, settlementApproved, sumApproved } from '../domain/refund-math.js';
+import { isLineReturnable } from './return-eligibility.js';
+import { chargeApproved, isWithinWithdrawalWindow, type ChargeRefund } from '../domain/charge-refunds.js';
+import { withdrawalPeriodAnchor } from '../domain/withdrawal-period.js';
+import { caseCharges, caseDefaults, loadOrderCases, type OrderCases } from './default-refund-service.js';
+import {
+  consentRequiredFor,
+  defaultResolution,
+  refundMethodDiffers,
+  resolutionNeedsConsent,
+  type ConsentState,
+} from '../domain/consumer-withdrawal.js';
 import type { ReturnTransitionService } from './return-transition-service.js';
 import type { ReturnStatusGraphService } from './return-status-graph-service.js';
+
+/** How long a settlement waits for another settlement of the same order. */
+const SETTLEMENT_LOCK_TIMEOUT = '15s';
+/** PostgreSQL's `lock_not_available`, raised when `lock_timeout` elapses. */
+const LOCK_NOT_AVAILABLE = '55P03';
 
 export interface ReturnSettlementServiceDeps {
   emFactory: () => EntityManager;
@@ -28,7 +47,56 @@ export interface ReturnSettlementServiceDeps {
   paymentRefund: PaymentRefundPort;
   correctiveInvoice: CorrectiveInvoicePort;
   creditTopup: CreditTopupPort;
+  /**
+   * `orders`' return context (a hard manifest dependency): the order facts the
+   * default refund is recomputed from at settlement (issue #875), and the
+   * order's own payment method, which the refund of a consumer withdrawal
+   * proposes and is compared with (issue #905, design D1).
+   */
+  orderContext: OrderReturnContextPort;
+  /**
+   * Whether the order's Organization is personal (B2C), through
+   * `organizations`' port (issue #876): a consumer's withdrawal that completes
+   * the order refunds the delivery and the payment surcharge. Absent: no
+   * Organization is, and no case refunds a charge.
+   */
+  isPersonalOrganization?: (organizationId: string | null, placedAt?: Date) => Promise<boolean>;
+  /**
+   * `returns.time_zone` for a sales channel (issue #905): the zone the
+   * withdrawal window that decides the charges' default counts calendar days
+   * in, as `ReturnCaseService` counts the free-return window.
+   */
+  resolveTimeZone: (salesChannelId: string) => Promise<string>;
   auditLog?: AuditPort;
+}
+
+/** The order's two charges as recomputed for this case (issue #876). */
+interface CaseChargeRefunds {
+  delivery: ChargeRefund;
+  surcharge: ChargeRefund;
+}
+
+/** A line's default as recomputed for this settlement (issues #874, #875). */
+interface LineDefault {
+  /** The default of the goods, stored on the line: the next case's telescoping `earlier`. */
+  refund: string;
+  discount: string;
+  /** What may be refunded: the default, bounded by the line ceiling. */
+  effective: string;
+  /** Whether the line was returnable when bought — a non-returnable complaint line's 0 is an amount. */
+  returnable: boolean;
+}
+
+/**
+ * `specs/182-related-payers/` (FR-082, RP-7) — whose credit a return's credit resolution tops up:
+ * the payer's when a related payer paid for the order, the buyer's otherwise. The return itself
+ * stays the buyer's case to start and follow.
+ */
+export function creditTopupOrganizationId(
+  caseOrganizationId: string | null,
+  context: { readonly payerOrganizationId?: string | null } | null,
+): string | null {
+  return context?.payerOrganizationId ?? caseOrganizationId;
 }
 
 /**
@@ -45,7 +113,10 @@ export interface ReturnSettlementServiceDeps {
  * of work as the `Refund` row that records what happened.** In order:
  *
  *  1. **Validate** — the graph transition, the refund method, the per-line
- *     caps. Nothing is assigned and nothing is flushed.
+ *     caps. The default of each line is recomputed from the cases settled by
+ *     now (issue #875): an amount equal to a default settles at the recomputed
+ *     one, a lower one is kept, anything else is refused. Nothing is assigned
+ *     and nothing is flushed.
  *  2. **Attempt every external effect: money, then document.** The gateway
  *     refund or the store credit, then the corrective invoice. Outcomes are
  *     held in memory. A refusal here — a `ModuleDisabledError` from a
@@ -54,7 +125,7 @@ export interface ReturnSettlementServiceDeps {
  *     still `received` and the whole settlement is retryable.
  *  3. **Build the `Refund` row from those outcomes**, including its
  *     `settlementState` and its provider details.
- *  4. **One unit of work** — the item amounts, the `Refund` row, the audit
+ *  4. **One unit of work** — the item amounts and recomputed defaults, the `Refund` row, the audit
  *     entry and the transition to `resolved`, in the transition's single flush.
  *     Either the case is resolved with a complete record of what happened, or
  *     it is untouched.
@@ -79,26 +150,216 @@ export class ReturnSettlementService {
 
   async getPrefill(id: string): Promise<SettlementPrefill> {
     const em = this.deps.emFactory();
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Return case not found.');
     const rc = await em.findOne(ReturnCase, { id });
     if (!rc) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Return case not found.');
     const items = await em.find(ReturnCaseItem, { returnCaseId: id });
+    if (rc.orderId == null) return this.#offPlatformPrefill(rc, items);
+    // An open case previews what the settlement would recompute (issue #875):
+    // the default on the settled basis, bounded by the line ceiling, and the
+    // stored approved amount mapped onto it as the settlement maps it. Read
+    // without the lock, so another settlement of the order may still move it;
+    // the settlement itself decides. A settled case shows what it settled at.
+    const order = await this.deps.orderContext.getReturnContext(orderIdOf(rc));
+    const context = rc.resolutionType == null ? order : null;
+    const history = context ? await loadOrderCases(em, orderIdOf(rc)) : null;
+    const defaults = context && history ? await this.#recompute(em, rc, items, context, history) : null;
+    const charges = context && history ? await this.#charges(rc, items, context, history) : null;
     return {
       currency: rc.currency,
+      ...this.#prefillCharges(rc, charges),
       resolutionOptions: ['refund', 'credit', 'replacement', 'repair'],
-      items: items.map((it) => ({
-        returnCaseItemId: it.id,
-        productName: it.productName,
-        quantity: it.quantity,
-        defaultRefundAmount: Number(it.defaultRefundAmount),
-        approvedRefundAmount: Number(it.approvedRefundAmount),
-      })),
+      // Issue #905 (design D1) — a consumer withdrawal settles as a refund to
+      // the order's own method; the other resolutions wait for consent.
+      defaultResolution: defaultResolution(),
+      consentRequiredFor: consentRequiredFor(consentStateOf(rc)),
+      defaultRefundPaymentMethodId: order?.paymentMethodId ?? null,
+      items: items.map((it) => {
+        const d = defaults?.get(it.id);
+        if (!d) {
+          return {
+            returnCaseItemId: it.id,
+            productName: it.productName,
+            quantity: it.quantity,
+            defaultRefundAmount: Number(it.defaultRefundAmount),
+            approvedRefundAmount: Number(it.approvedRefundAmount),
+          };
+        }
+        const mapped = this.#approved(rc, it, d, it.approvedRefundAmount);
+        return {
+          returnCaseItemId: it.id,
+          productName: it.productName,
+          quantity: it.quantity,
+          // The most the operator may approve.
+          defaultRefundAmount: Number(d.effective),
+          approvedRefundAmount: Number('approved' in mapped ? mapped.approved : d.effective),
+        };
+      }),
     };
   }
 
+  /**
+   * The charges the prefill shows (issue #876): on an open case, each charge
+   * whose recomputed cap is above 0, at its recomputed default — what an
+   * omitted field settles at (ruling Q2 on PR #965); on a settled case, what it
+   * settled at, with `cap` equal to `approved` and a charge settled at 0 left
+   * out (ruling Q4: the cap at settlement is in the `return.settled` audit
+   * entry). Absent when there is none, so a business customer's or a partial
+   * case shows nothing.
+   */
+  #prefillCharges(rc: ReturnCase, charges: CaseChargeRefunds | null): Pick<SettlementPrefill, 'charges'> {
+    const out: NonNullable<SettlementPrefill['charges']> = {};
+    const one = (key: 'delivery' | 'surcharge', approved: string) => {
+      if (charges) {
+        const recomputed = charges[key];
+        if (compareDecimals(recomputed.cap, 0) <= 0) return;
+        out[key] = { cap: Number(recomputed.cap), approved: Number(recomputed.default) };
+        return;
+      }
+      if (rc.resolutionType == null) return;
+      if (compareDecimals(approved, 0) > 0) out[key] = { cap: Number(approved), approved: Number(approved) };
+    };
+    one('delivery', rc.approvedDeliveryRefund);
+    one('surcharge', rc.approvedSurchargeRefund);
+    return Object.keys(out).length > 0 ? { charges: out } : {};
+  }
+
+  /**
+   * The order's charges `rc` refunds, recomputed on the settled basis (issue
+   * #876): the cap and the default of the delivery and of the surcharge, over
+   * the same cases as the goods ({@link caseCharges}). The window is the case's:
+   * the channel's free-return window it was opened in, or the statutory 14 days
+   * from the order's completing status.
+   */
+  async #charges(
+    rc: ReturnCase,
+    items: readonly ReturnCaseItem[],
+    context: OrderReturnContext,
+    history: OrderCases,
+  ): Promise<CaseChargeRefunds> {
+    return caseCharges({
+      context,
+      history,
+      basis: 'settled',
+      excludeCaseId: rc.id,
+      kind: rc.kind,
+      current: items.map((it) => ({ orderItemId: orderItemIdOf(it), quantity: it.quantity })),
+      isPersonal: (await this.deps.isPersonalOrganization?.(context.organizationId, context.placedAt)) ?? false,
+      withinWindow: isWithinWithdrawalWindow({
+        freeReturnEligible: rc.freeReturnEligible,
+        submittedAt: rc.submittedAt,
+        completingAt: withdrawalPeriodAnchor(context),
+        timeZone: await this.deps.resolveTimeZone(context.salesChannelId),
+      }),
+    });
+  }
+
+  /**
+   * The default of each line of `rc`, recomputed from the order's other cases
+   * on the settled basis (issues #874, #875): the kept state is the returns
+   * settled with money, and a complaint settled with money counts against
+   * what is left paid and against its line. `null` when the order cannot be
+   * read: the prefill then shows the stored figures, and the settlement has
+   * already refused.
+   */
+  async #recompute(
+    em: EntityManager,
+    rc: ReturnCase,
+    items: readonly ReturnCaseItem[],
+    known?: OrderReturnContext,
+    loaded?: OrderCases,
+  ): Promise<Map<string, LineDefault> | null> {
+    const context = known ?? (await this.deps.orderContext.getReturnContext(orderIdOf(rc)));
+    if (!context) return null;
+    const history = loaded ?? (await loadOrderCases(em, orderIdOf(rc)));
+    const computed = caseDefaults({
+      context,
+      history,
+      basis: 'settled',
+      excludeCaseId: rc.id,
+      kind: rc.kind,
+      current: items.map((it) => ({ orderItemId: orderItemIdOf(it), quantity: it.quantity })),
+    });
+    const returnable = new Map(context.lines.map((l) => [l.orderItemId, isLineReturnable(l.returnableAtPurchase)]));
+    return new Map(
+      items.map((it, i) => {
+        const c = computed[i]!;
+        return [
+          it.id,
+          { refund: c.refund, discount: c.discount, effective: c.effective, returnable: returnable.get(orderItemIdOf(it)) ?? true },
+        ] as const;
+      }),
+    );
+  }
+
+  /** What `requested` settles at on line `it`, against its recomputed default ({@link settlementApproved}). */
+  #approved(rc: ReturnCase, it: ReturnCaseItem, d: LineDefault, requested: string | number) {
+    return settlementApproved({
+      requested,
+      previousDefault: it.defaultRefundAmount,
+      recomputedDefault: d.refund,
+      effectiveDefault: d.effective,
+      zeroIsAmount: rc.kind === 'complaint' && !d.returnable,
+    });
+  }
+
+  /**
+   * One settlement of an order at a time (issue #417, review of PR #423): a
+   * correction reads the earlier corrections of the invoice — the cap and the
+   * cumulative nets — so two cases of one order settled at once would both read
+   * the same ones. The lock is the one case creation takes, keyed by the order,
+   * held on a connection of its own for the whole settlement: the ports keep
+   * their own units of work, so the ordering law below is unchanged. A
+   * settlement that waits longer than {@link SETTLEMENT_LOCK_TIMEOUT} for it is
+   * refused as retryable, with nothing written, rather than holding a
+   * connection the one it waits for may need.
+   */
   async settle(id: string, adminUserId: string, input: SettlementRequest): Promise<SettlementResult> {
     const em = this.deps.emFactory();
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Return case not found.');
     const rc = await em.findOne(ReturnCase, { id });
     if (!rc) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Return case not found.');
+    // 180 R-10, R-19 — a case without a platform order takes no order lock and
+    // reaches no money port; `settled_outside` is that case's alone.
+    if (rc.orderId == null) return this.#settleOffPlatform(rc, adminUserId, input);
+    if (input.resolutionType === 'settled_outside') throw unavailableOffPlatform('settled_outside');
+    const connection = em.getConnection();
+    return connection.transactional(async (lock) => {
+      await connection.execute(`select set_config('lock_timeout', ?, true)`, [SETTLEMENT_LOCK_TIMEOUT], 'all', lock);
+      try {
+        await connection.execute(
+          'select pg_advisory_xact_lock(hashtext(?))',
+          [returnCaseOrderLockKey(orderIdOf(rc))],
+          'all',
+          lock,
+        );
+      } catch (err) {
+        if ((err as { code?: string }).code !== LOCK_NOT_AVAILABLE) throw err;
+        throw new HttpError(
+          409,
+          ERROR_CODES.RETURN_SETTLEMENT_IN_PROGRESS,
+          'Another return of this order is being settled. Try again in a moment.',
+          { orderId: rc.orderId },
+        );
+      }
+      return this.#settle(id, adminUserId, input);
+    });
+  }
+
+  async #settle(id: string, adminUserId: string, input: SettlementRequest): Promise<SettlementResult> {
+    // Read again under the lock: a settlement that waited sees what the one it
+    // waited for wrote — the case it may have resolved, the correction it issued.
+    const em = this.deps.emFactory();
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Return case not found.');
+    const rc = await em.findOne(ReturnCase, { id });
+    if (!rc) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Return case not found.');
+
+    // The default is recomputed from the order (issue #875), so an order that
+    // cannot be read refuses the settlement, before any effect and with nothing
+    // written — as case creation does. A switched-off `orders` throws its own
+    // `ModuleDisabledError` (503), which is never caught here.
+    const context = await this.deps.orderContext.getReturnContext(orderIdOf(rc));
+    if (!context) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Order not found.');
 
     // Fail fast if the case cannot reach `resolved` before mutating anything.
     const graph = await this.deps.graphService.loadGraph();
@@ -114,35 +375,195 @@ export class ReturnSettlementService {
         code: 'payment_method_required',
       });
     }
+    // Issue #905 (design D1) — a consumer withdrawal settles otherwise than by
+    // a refund only with the consumer's consent to that resolution on record.
+    if (resolutionNeedsConsent(consentStateOf(rc), input.resolutionType)) {
+      throw new HttpError(
+        422,
+        ERROR_CODES.RETURN_ALTERNATIVE_RESOLUTION_CONSENT_REQUIRED,
+        `A consumer withdrawal is settled as a refund unless the consumer has agreed to a ${input.resolutionType}. Record their consent first.`,
+        { resolution: input.resolutionType },
+      );
+    }
+    const withdrawalAudit = await this.#withdrawalAudit(rc, input);
 
     // Step 1 — validate. The approved amounts are computed into a map and
     // **not** assigned: an assignment on a managed entity is a write the next
     // flush carries, and under the ordering law nothing is written until step 4.
     const items = await em.find(ReturnCaseItem, { returnCaseId: id });
     const byId = new Map(items.map((it) => [it.id, it]));
-    const approvedByItemId = new Map<string, number>();
-    const perLine: number[] = [];
+    const requestedByItemId = new Map<string, number>();
     for (const line of input.lines) {
-      const item = byId.get(line.returnCaseItemId);
-      if (!item) {
+      if (!byId.has(line.returnCaseItemId)) {
         throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'Unknown return line.', {
           code: 'unknown_line',
         });
       }
-      if (exceedsCap(line.approvedRefundAmount, Number(item.defaultRefundAmount))) {
+      requestedByItemId.set(line.returnCaseItemId, line.approvedRefundAmount);
+    }
+    // The default, recomputed under the lock from the cases settled by now
+    // (issue #875): a case settled out of creation order, or after an earlier
+    // case was rejected, refunds what leaves the kept goods' invoice equal to
+    // what is left paid, and a complaint is outside the kept state (issue
+    // #874), bounded with the returns of its line by what the line was paid
+    // (the line ceiling).
+    const history = await loadOrderCases(em, orderIdOf(rc));
+    const recomputed = await this.#recompute(em, rc, items, context, history);
+    const defaultOf = (it: ReturnCaseItem): LineDefault =>
+      recomputed?.get(it.id) ?? {
+        refund: roundHalfUp(it.defaultRefundAmount),
+        discount: roundHalfUp(it.defaultDiscountAmount),
+        effective: roundHalfUp(it.defaultRefundAmount),
+        returnable: true,
+      };
+    // What this settlement refunds, over **every** line of the case: a line the
+    // request leaves out settles at its stored approved amount, and the
+    // correction below credits it at that amount, so the refund and the
+    // correction come from one set of lines (review of PR #423, B1). An amount
+    // equal to a default is the default approved, and settles at the
+    // recomputed one; a lower one is kept as typed; anything else is refused.
+    const approvedByItemId = new Map<string, number>();
+    for (const it of items) {
+      const requested = requestedByItemId.get(it.id) ?? it.approvedRefundAmount;
+      const outcome = this.#approved(rc, it, defaultOf(it), requested);
+      if ('refused' in outcome) {
+        // The amounts are two-decimal strings: the envelope fills a placeholder
+        // with `String(value)` (issue #625).
         throw new HttpError(
           422,
-          ERROR_CODES.VALIDATION_FAILED,
+          ERROR_CODES.RETURN_REFUND_EXCEEDS_PAID,
           'Refund amount cannot exceed the amount paid for the line.',
-          { code: 'refund_exceeds_paid' },
+          {
+            returnCaseItemId: it.id,
+            requested: approvedAmount(requested),
+            maximum: approvedAmount(defaultOf(it).effective),
+            currency: rc.currency,
+          },
         );
       }
-      approvedByItemId.set(line.returnCaseItemId, line.approvedRefundAmount);
-      perLine.push(line.approvedRefundAmount);
+      // At the two places it is stored at, half-up (issue #417).
+      approvedByItemId.set(it.id, Number(outcome.approved));
     }
-    const total = sumApproved(perLine);
+    const approvedOf = (it: ReturnCaseItem): number => approvedByItemId.get(it.id)!;
+    // Issue #876 — the order's delivery cost and payment surcharge, recomputed
+    // under the lock from the cases settled by now: only a consumer's
+    // withdrawal that completes the order has a cap above 0, and within the
+    // window its default is the cap. An omitted amount settles at the
+    // recomputed default; a present one exactly as sent, 0 included, when it
+    // is within the cap (ruling Q2 on PR #965; art. 13(2)); anything above the
+    // cap is refused — a partial case cannot be given a charge (ruling E1).
+    // A replacement or a repair is not a withdrawal: the buyer keeps the
+    // goods, so its cap is 0 (ruling Q1) and an amount above 0 is refused.
+    const withdraws = input.resolutionType === 'refund' || input.resolutionType === 'credit';
+    const NO_CHARGE: ChargeRefund = { cap: '0.00', default: '0.00' };
+    const recomputedCharges = await this.#charges(rc, items, context, history);
+    const charges: CaseChargeRefunds = withdraws ? recomputedCharges : { delivery: NO_CHARGE, surcharge: NO_CHARGE };
+    const chargeOutcome = (
+      charge: 'delivery' | 'surcharge',
+      requested: number | undefined,
+      recomputed: ChargeRefund,
+    ): string => {
+      const outcome = chargeApproved({ requested, recomputed });
+      if ('refused' in outcome) {
+        // The line's code, with the charge as the token that picks its sentence.
+        throw new HttpError(
+          422,
+          ERROR_CODES.RETURN_REFUND_EXCEEDS_PAID,
+          'Refund amount cannot exceed what was paid for the charge.',
+          {
+            code: charge,
+            requested: roundHalfUp(requested ?? 0),
+            maximum: roundHalfUp(recomputed.cap),
+            currency: rc.currency,
+          },
+        );
+      }
+      return outcome.approved;
+    };
+    const deliveryRefund = chargeOutcome('delivery', input.deliveryRefundAmount, charges.delivery);
+    const surchargeRefund = chargeOutcome('surcharge', input.surchargeRefundAmount, charges.surcharge);
+    // What the money moves: the goods, plus the charges (issue #876) — so on a
+    // consumer's completing withdrawal it is more than the sum of the lines.
+    const total = sumApproved([...items.map(approvedOf), deliveryRefund, surchargeRefund]);
+    // Which charges were refunded, by kind — never how much (#470, D-288: the
+    // audit log is read without the Organization's reach).
+    const refundedCharges = (
+      [
+        ['delivery', deliveryRefund],
+        ['surcharge', surchargeRefund],
+      ] as const
+    )
+      .filter(([, approved]) => compareDecimals(approved, 0) > 0)
+      .map(([kind]) => kind);
+    const chargesAudited = refundedCharges.length > 0 ? { refundedCharges } : {};
+    // What the audit entry records of the recompute: which line's default
+    // moved, and which line the ceiling bound — by id, never by amount (#470).
+    const recomputedDefaultItemIds = items
+      .filter((it) => compareDecimals(defaultOf(it).refund, it.defaultRefundAmount) !== 0)
+      .map((it) => it.id);
+    const ceilingBoundItemIds = items
+      .filter((it) => compareDecimals(defaultOf(it).effective, defaultOf(it).refund) < 0)
+      .map((it) => it.id);
 
     const movesMoney = input.resolutionType === 'refund' || input.resolutionType === 'credit';
+
+    // The correction this settlement will ask for, built once and validated
+    // **before** any money moves (issue #417, review of PR #423): a correction
+    // that cannot be made must never follow a refund that was.
+    const wantsCorrection = movesMoney && (input.createCorrectiveInvoice ?? true);
+    // A complaint settled with money is a price reduction of goods the buyer
+    // keeps (issue #885, product-owner ruling of 2026-11-07): it credits no
+    // quantity and carries no discount, because the discount stays with the
+    // kept goods. A complaint resolved by replacement or repair moves no money
+    // and asks for no correction.
+    const priceReduction = rc.kind === 'complaint';
+    const correctionInput: CorrectiveInvoiceInput = {
+      orderId: orderIdOf(rc),
+      lines: items.map((it) => {
+        // The approved amount for this settlement, which is not on the row
+        // yet: the rows are written in step 4.
+        const amount = approvedOf(it);
+        const line = {
+          // The order item is what ties this credit to the invoice line it
+          // corrects, so the correction can mirror that line's VAT rate.
+          orderItemId: orderItemIdOf(it),
+          productName: it.productName,
+          quantity: it.quantity,
+          amount,
+        };
+        if (priceReduction) return { ...line, basis: 'price_reduction' as const };
+        // Against the effective default: a return approved at it carries its
+        // full default discount, because the goods leave and their share of
+        // the discount leaves with them (the #885 amendment, section 4).
+        const d = defaultOf(it);
+        const discount = carriedDiscount(d.discount, d.effective, amount);
+        return {
+          ...line,
+          basis: 'returned_goods' as const,
+          // The order-level discount this amount carries (issue #417).
+          ...(compareDecimals(discount, 0) > 0 ? { discount: Number(discount) } : {}),
+        };
+      }),
+      total,
+      currency: rc.currency,
+      // One correction per return case, however often the settlement is
+      // retried. Not per order: a second partial return against the same
+      // order is a different case and gets its own document.
+      idempotencyKey: rc.id,
+      // The case a price-reduction line names (issue #885).
+      ...(priceReduction && rc.rmaNumber ? { caseReference: rc.rmaNumber } : {}),
+      // Issue #876 — the charges a consumer's completing withdrawal refunds,
+      // credited on the invoice's delivery and surcharge lines.
+      ...(compareDecimals(deliveryRefund, 0) > 0 || compareDecimals(surchargeRefund, 0) > 0
+        ? {
+            charges: {
+              ...(compareDecimals(deliveryRefund, 0) > 0 ? { delivery: Number(deliveryRefund) } : {}),
+              ...(compareDecimals(surchargeRefund, 0) > 0 ? { surcharge: Number(surchargeRefund) } : {}),
+            },
+          }
+        : {}),
+    };
+    if (wantsCorrection) await this.deps.correctiveInvoice.validateCorrection(correctionInput);
 
     // Step 2 — every external effect, money first, then the document. A refusal
     // from any of them propagates with the case still in `received` and nothing
@@ -154,30 +575,30 @@ export class ReturnSettlementService {
     if (movesMoney) {
       if (input.resolutionType === 'refund') {
         gatewayOutcome = await this.deps.paymentRefund.refund({
-          orderId: rc.orderId,
+          orderId: orderIdOf(rc),
           amount: total,
           currency: rc.currency,
           ...(input.refundPaymentMethodId ? { paymentMethodId: input.refundPaymentMethodId } : {}),
           idempotencyKey: rc.id,
         });
         if (gatewayOutcome.state === 'failed') {
-          throw new HttpError(
-            502,
-            ERROR_CODES.VALIDATION_FAILED,
-            gatewayOutcome.failureReason ?? 'Payment gateway rejected the refund.',
-            {
-              code: 'gateway_refund_failed',
-              settlementState: gatewayOutcome.state,
-              providerDetails: gatewayOutcome.providerDetails ?? null,
-            },
-          );
+          // The gateway's own words travel as `failureReason`, never as the
+          // sentence: they are in whatever language the provider writes
+          // (issue #625).
+          throw new HttpError(502, ERROR_CODES.RETURN_REFUND_GATEWAY_FAILED, 'Payment gateway rejected the refund.', {
+            settlementState: gatewayOutcome.state,
+            failureReason: gatewayOutcome.failureReason ?? null,
+            providerDetails: gatewayOutcome.providerDetails ?? null,
+          });
         }
       } else {
         // `credit_limits` applies once per return case, so this survives the
         // retry the law above makes reachable.
-        const credit = rc.organizationId
+        // `specs/182-related-payers/` (FR-082, RP-7) — a paid order's credit is the payer's.
+        const creditOrganizationId = creditTopupOrganizationId(rc.organizationId ?? null, context);
+        const credit = creditOrganizationId
           ? await this.deps.creditTopup.creditFromReturn({
-              organizationId: rc.organizationId,
+              organizationId: creditOrganizationId,
               amount: total,
               currency: rc.currency,
               returnCaseId: rc.id,
@@ -186,27 +607,7 @@ export class ReturnSettlementService {
         creditApplied = credit.applied;
       }
 
-      if (input.createCorrectiveInvoice ?? true) {
-        correction = await this.deps.correctiveInvoice.createCorrection({
-          orderId: rc.orderId,
-          lines: items.map((it) => ({
-            // The order item is what ties this credit to the invoice line it
-            // corrects, so the correction can mirror that line's VAT rate.
-            orderItemId: it.orderItemId,
-            productName: it.productName,
-            quantity: it.quantity,
-            // The approved amount for this settlement, which is not on the row
-            // yet: the rows are written in step 4.
-            amount: approvedByItemId.get(it.id) ?? Number(it.approvedRefundAmount),
-          })),
-          total,
-          currency: rc.currency,
-          // One correction per return case, however often the settlement is
-          // retried. Not per order: a second partial return against the same
-          // order is a different case and gets its own document.
-          idempotencyKey: rc.id,
-        });
-      }
+      if (wantsCorrection) correction = await this.deps.correctiveInvoice.createCorrection(correctionInput);
     }
 
     // Step 3 — the outcomes, as the values the row and the response carry.
@@ -217,7 +618,7 @@ export class ReturnSettlementService {
           resolutionType: (input.resolutionType === 'refund' ? 'refund' : 'credit') as
             | 'refund'
             | 'credit',
-          amount: total.toFixed(2),
+          amount: approvedAmount(total),
           currency: rc.currency,
           paymentMethodId: input.refundPaymentMethodId ?? null,
           settlementState: 'pending_manual' as Refund['settlementState'],
@@ -287,12 +688,25 @@ export class ReturnSettlementService {
         mutate: async (target, tx) => {
           target.resolutionType = input.resolutionType;
           target.refundPaymentMethodId = input.refundPaymentMethodId ?? null;
-          target.totalRefundAmount = total.toFixed(2);
+          target.totalRefundAmount = approvedAmount(total);
+          // Issue #876 — the recomputed default and the approved amount of each charge.
+          target.defaultDeliveryRefund = charges.delivery.default;
+          target.approvedDeliveryRefund = deliveryRefund;
+          target.defaultSurchargeRefund = charges.surcharge.default;
+          target.approvedSurchargeRefund = surchargeRefund;
           target.resolvedAt = new Date();
 
           for (const it of await tx.find(ReturnCaseItem, { returnCaseId: id })) {
             const approved = approvedByItemId.get(it.id);
-            if (approved !== undefined) it.approvedRefundAmount = approved.toFixed(2);
+            if (approved !== undefined) it.approvedRefundAmount = approvedAmount(approved);
+            // The recomputed default of the goods, which the next case of the
+            // order reads as `earlier` (issue #875).
+            const original = byId.get(it.id);
+            if (original) {
+              const d = defaultOf(original);
+              it.defaultRefundAmount = d.refund;
+              it.defaultDiscountAmount = d.discount;
+            }
           }
 
           if (refundFields) {
@@ -311,7 +725,7 @@ export class ReturnSettlementService {
             objectId: rc.id,
             stateAfter: {
               resolutionType: input.resolutionType,
-              amount: total.toFixed(2),
+              // No amount (#470): what was refunded is on the refund and the case.
               currency: rc.currency,
               settlementState: refundFields?.settlementState ?? null,
               // Says which of the three happened — issued, not due, or never
@@ -322,6 +736,10 @@ export class ReturnSettlementService {
                   ? 'issued'
                   : result.correctiveInvoice.reason
                 : 'not_requested',
+              ...withdrawalAudit,
+              ...(recomputedDefaultItemIds.length > 0 ? { recomputedDefaultItemIds } : {}),
+              ...(ceilingBoundItemIds.length > 0 ? { ceilingBoundItemIds } : {}),
+              ...chargesAudited,
             },
           });
         },
@@ -331,6 +749,114 @@ export class ReturnSettlementService {
     // Step 5 — after commit.
     this.emitSettled(rc, refund, total);
     return result;
+  }
+
+  /**
+   * The prefill of a case without a platform order (`specs/180-off-platform-complaints/`
+   * FR-B33, FR-B33a, D-5, research R-19): served from authorization onwards. Until the
+   * graph lets the case reach `resolved` (in practice from `received`) only
+   * `settled_outside` is offered; then repair (the default), replacement and
+   * `settled_outside`. No money, no payment method, no charges.
+   */
+  async #offPlatformPrefill(rc: ReturnCase, items: readonly ReturnCaseItem[]): Promise<SettlementPrefill> {
+    const options = await this.#offPlatformOptions(rc);
+    return {
+      currency: rc.currency,
+      resolutionOptions: options,
+      defaultResolution: options.includes('repair') ? 'repair' : options[0]!,
+      consentRequiredFor: [],
+      defaultRefundPaymentMethodId: null,
+      items: items.map((it) => ({
+        returnCaseItemId: it.id,
+        productName: it.productName,
+        quantity: it.quantity,
+        defaultRefundAmount: 0,
+        approvedRefundAmount: 0,
+      })),
+    };
+  }
+
+  /** What an off-platform case may be settled as now; refused before authorization. */
+  async #offPlatformOptions(rc: ReturnCase): Promise<SettlementPrefill['resolutionOptions']> {
+    if (rc.resolutionType) return [rc.resolutionType];
+    const graph = await this.deps.graphService.loadGraph();
+    if (!rc.authorizedAt || graph.isTerminal(rc.statusCode)) {
+      throw new HttpError(409, ERROR_CODES.INVALID_TRANSITION, `Cannot settle a case in status "${rc.statusCode}".`);
+    }
+    return graph.canTransition(rc.statusCode, RETURN_STATUS_RESOLVED)
+      ? ['replacement', 'repair', 'settled_outside']
+      : ['settled_outside'];
+  }
+
+  /**
+   * Settle a case without a platform order (FR-B33, FR-B33a, R-19): repair or
+   * replacement where the graph reaches `resolved`, or `settled_outside` — with a note
+   * — from authorization until the case is closed. No refund row, no money port, no
+   * correction; the settlement audit records `hasNote`, never the note.
+   */
+  async #settleOffPlatform(rc: ReturnCase, adminUserId: string, input: SettlementRequest): Promise<SettlementResult> {
+    if (input.resolutionType === 'refund' || input.resolutionType === 'credit') throw unavailableOffPlatform(input.resolutionType);
+    if (input.createCorrectiveInvoice === true) throw unavailableOffPlatform(input.resolutionType);
+    if (rc.resolutionType) {
+      throw new HttpError(409, ERROR_CODES.INVALID_TRANSITION, 'This case is already settled.');
+    }
+    const options = await this.#offPlatformOptions(rc);
+    if (!options.includes(input.resolutionType)) {
+      throw new HttpError(409, ERROR_CODES.INVALID_TRANSITION, `Cannot settle a case in status "${rc.statusCode}".`);
+    }
+    const outside = input.resolutionType === 'settled_outside';
+    if (outside && !input.resolutionNote) {
+      throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'Say how the case was settled.', {
+        code: 'resolution_note_required',
+      });
+    }
+    await this.deps.transitions.apply(
+      rc.id,
+      RETURN_STATUS_RESOLVED,
+      { kind: 'admin', adminUserId, source: 'settlement' },
+      {
+        viaOutsideSettlement: outside,
+        mutate: async (target, tx) => {
+          target.resolutionType = input.resolutionType;
+          target.resolutionNote = outside ? input.resolutionNote! : null;
+          target.totalRefundAmount = approvedAmount(0);
+          target.resolvedAt = new Date();
+          this.deps.auditLog?.recordWithin(tx, {
+            actorAdminUserId: adminUserId,
+            action: 'return.settled',
+            objectType: 'return_case',
+            objectId: rc.id,
+            stateAfter: {
+              resolutionType: input.resolutionType,
+              currency: rc.currency,
+              offPlatform: true,
+              // That there is a note, never its text (D-288).
+              hasNote: outside,
+              correctiveInvoice: 'not_requested',
+            },
+          });
+        },
+      },
+    );
+    const settled = await this.deps.emFactory().findOneOrFail(ReturnCase, { id: rc.id });
+    this.emitSettled(settled, null, 0);
+    return { totalRefundAmount: 0 };
+  }
+
+  /**
+   * What the audit row says about a consumer withdrawal (issue #905, design
+   * D1): that it was one, and — for a refund — whether the money went to
+   * another payment method than the order's own. Not refused: a
+   * cash-on-delivery order cannot be refunded by the same means.
+   */
+  async #withdrawalAudit(rc: ReturnCase, input: SettlementRequest): Promise<Record<string, unknown>> {
+    if (rc.consumerWithdrawal !== true) return {};
+    if (input.resolutionType !== 'refund') return { consumerWithdrawal: true };
+    const order = await this.deps.orderContext.getReturnContext(orderIdOf(rc));
+    return {
+      consumerWithdrawal: true,
+      refundMethodDiffers: refundMethodDiffers(consentStateOf(rc), input.refundPaymentMethodId, order?.paymentMethodId ?? null),
+    };
   }
 
   private emitSettled(rc: ReturnCase, refund: Refund | null, total: number): void {
@@ -346,4 +872,40 @@ export class ReturnSettlementService {
     };
     this.deps.events.emit('return.refund.settled.v1', payload);
   }
+}
+
+/** The two facts of a case the consent gate reads (issue #905). */
+function consentStateOf(rc: ReturnCase): ConsentState {
+  return {
+    consumerWithdrawal: rc.consumerWithdrawal ?? null,
+    alternativeConsentResolution: rc.alternativeConsentResolution ?? null,
+  };
+}
+
+/**
+ * The order of a case against one. A case without a platform order
+ * (`specs/180-off-platform-complaints/` R5) takes its own branch before any order
+ * path (research R-10), so reaching here with one is a defect, not a refusal.
+ */
+function orderIdOf(rc: ReturnCase): string {
+  if (rc.orderId == null) throw new Error(`Return case ${rc.id} has no platform order.`);
+  return rc.orderId;
+}
+
+/** The order line of a line of a case against an order (see {@link orderIdOf}). */
+function orderItemIdOf(it: ReturnCaseItem): string {
+  if (it.orderItemId == null) throw new Error(`Return line ${it.id} names no order line.`);
+  return it.orderItemId;
+}
+
+/** 180 FR-B33 — money through the platform, or `settled_outside` on an order case. */
+function unavailableOffPlatform(resolution: string): HttpError {
+  return new HttpError(
+    422,
+    ERROR_CODES.RETURN_RESOLUTION_UNAVAILABLE_OFF_PLATFORM,
+    resolution === 'settled_outside'
+      ? 'Only a case without a platform order is settled outside the platform.'
+      : 'A case without a platform order is settled by repair, replacement or outside the platform.',
+    { resolution },
+  );
 }

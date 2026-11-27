@@ -1,6 +1,4 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import {
   addOrderComment,
   cancelMyOrder,
@@ -15,16 +13,28 @@ import { retryOrderPayment } from '../../../../lib/api/payments';
 import { offersCancellation } from '../../../../lib/order-cancel';
 import { offersPaymentRetry, paymentRetryDestination } from '../../../../lib/payment-retry';
 import { getReturnable } from '../../../../lib/api/returns';
+import { mayStartReturn, orderReturnAction, type OrderReturnAction } from '../../../../lib/returns/returnForm';
+import { getMe } from '../../../../lib/api/account';
+import { memberSession } from '../../../../lib/commerce-permissions';
+import { orderBuyerActions } from '../../../../lib/orders/order-actions';
 import { listMyOrderInvoices, invoiceDownloadUrl } from '../../../../lib/api/invoices';
 import { getSessionCookie } from '../../../../lib/session';
 import { getServerContext } from '../../../../lib/server-context';
 import { StorefrontApiError } from '../../../../lib/api/client';
+import { isRecordId } from '../../../../lib/record-id';
 import { formatMoney } from '../../../../lib/i18n/money';
 import { tForLocale } from '../../../../lib/i18n/messages';
 import { resolvePaymentReturnNotice } from '../../../../lib/orders/payment-return-notice';
+import { OrderItemRows } from '../../../../components/orders/OrderItemRows';
+import { OrderPayerLine } from '../../../../components/account/PaidOrders';
 import { PurchaseTracker } from '../../../../components/analytics/EcommerceTrackers';
 import { purchaseTrackingPayload } from '../../../../lib/analytics/purchase-eligibility';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
+import { ORDER_ERRORS, paymentRetryRefusedHref } from '../../../../lib/orders/order-errors';
+import { LocalizedLink } from '../../../../lib/i18n/localized-link';
+import { format } from '../../../../lib/i18n/format';
+import { codeLabel, richText } from '../../../../lib/account/labels';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -62,20 +72,26 @@ export default async function OrderConfirmationPage({
   const session = await getSessionCookie();
   const { id } = await params;
   const { payment: paymentReturn, error: actionError } = (await searchParams) ?? {};
-  if (!session) redirect(`/login?next=/orders/${id}`);
+  if (!session) return await localeRedirect(`/login?next=/orders/${id}`);
+
+  const { locale, modules } = await getServerContext();
+  const t = tForLocale(locale);
+  const actionErrorKey = ORDER_ERRORS.errorKey(actionError?.trim());
+
+  const notFound = (
+    <div className="b2b-auth">
+      <h1>{t('account.order.notFound.heading')}</h1>
+      <p className="b2b-auth__error">{t('account.order.notFound.body')}</p>
+    </div>
+  );
+  // Issue #749 — an id that cannot name an order is not asked for: the API answers it 500.
+  if (!isRecordId(id)) return notFound;
 
   let order;
   try {
     order = await getMyOrder(session, id);
   } catch (err) {
-    if (err instanceof StorefrontApiError && err.status === 404) {
-      return (
-        <div className="b2b-auth">
-          <h1>Order not found</h1>
-          <p className="b2b-auth__error">We couldn&apos;t find that order.</p>
-        </div>
-      );
-    }
+    if (err instanceof StorefrontApiError && err.status === 404) return notFound;
     throw err;
   }
 
@@ -86,8 +102,6 @@ export default async function OrderConfirmationPage({
     comments = [];
   }
 
-  const { locale } = await getServerContext();
-  const t = tForLocale(locale);
   const paymentNotice = resolvePaymentReturnNotice(paymentReturn, order.paymentStatus);
   /**
    * The GA4 `purchase` conversion for this order (issue #277).
@@ -129,15 +143,37 @@ export default async function OrderConfirmationPage({
   // platform decides it and sends the answer; see `lib/order-cancel.ts`.
   const canCancel = offersCancellation(order);
 
-  // Surface a return/complaint entry point directly on the order — only when the
-  // order is actually eligible (entered a completing status, items still
-  // returnable). Falls back to hidden on any error so the page never breaks.
-  let returnEligible = false;
-  try {
-    const returnable = await getReturnable(session, id);
-    returnEligible = returnable.eligible;
-  } catch {
-    returnEligible = false;
+  // Feature 170 (`specs/170-organization-roles/`, FR-057) — the member's role decides which of
+  // the order's actions are offered: *Order again → cart* with `carts.create`, *Order again →
+  // quote request* with `quote_requests.create` (WP-16), a return with `returns.create` (WP-14b).
+  // Read once for all three; a session that cannot be read keeps today's page, the API being the
+  // gate.
+  const member = memberSession(await getMe(session).catch(() => null));
+  const roleActions = orderBuyerActions(member);
+  // Issue #672 (Principle XVII item 5) — the clone into a quote request is `quote_requests`'s, and
+  // is offered only while it is present; both gates must allow.
+  const actions = {
+    ...roleActions,
+    cloneToQuote: roleActions.cloneToQuote && modules.isPresent('quote_requests'),
+  };
+
+  // Surface a return/complaint entry point directly on the order — a return when
+  // any line is returnable, a complaint when none is (feature 155, FR-018/FR-021:
+  // `eligible: false` with `no_returnable_lines` still takes a complaint), nothing
+  // otherwise. Falls back to hidden on any error so the page never breaks.
+  //
+  // Feature 170 (FR-052, FR-057): only for a member whose role holds `returns.create`. A session
+  // that cannot be read keeps today's entry — `POST /api/v1/returns` is the gate.
+  //
+  // Issue #672 — and only while `returns` is present: off, it is not even asked.
+  let returnAction: OrderReturnAction | null = null;
+  if (modules.isPresent('returns')) {
+    try {
+      const returnable = await getReturnable(session, id);
+      returnAction = orderReturnAction(returnable, order.id, locale, mayStartReturn(member));
+    } catch {
+      returnAction = null;
+    }
   }
 
   // Invoices attached to this order (feature 047). Hidden when none are ready.
@@ -152,24 +188,25 @@ export default async function OrderConfirmationPage({
     <div className="b2b-auth max-w-[720px]">
       {/* Feature 049 — GA4 purchase (no-op unless Enhanced Ecommerce is on). */}
       {purchase ? <PurchaseTracker order={purchase} orderId={order.id} /> : null}
-      <h1>Thank you — order placed</h1>
+      <h1>{t('account.order.heading')}</h1>
       <p className="b2b-auth__success">
-        Order <strong>{order.businessId}</strong> has been received.
+        {richText(t('account.order.received'), { number: <strong>{order.businessId}</strong> })}
       </p>
 
-      {actionError && actionError.trim().length > 0 ? (
+      {/* Issue #745 — `?error=` is a code; one this page does not know reads as its generic failure. */}
+      {actionErrorKey ? (
         <p role="alert" className="b2b-auth__error">
-          {actionError}
+          {t(actionErrorKey)}
         </p>
       ) : null}
 
       {paymentNotice ? <p className="b2b-auth__hint">{t(paymentNotice)}</p> : null}
 
+      {/* `specs/182-related-payers/` FR-073 — who is billed, when it is not the buyer. */}
+      <OrderPayerLine payer={order.payer} locale={locale} />
+
       {order.nextAction?.kind === 'awaiting_transfer' ? (
-        <p>
-          Pay by bank transfer using the reference printed on the proforma invoice we&apos;ll
-          email shortly. We&apos;ll update the order once the payment clears.
-        </p>
+        <p>{t('account.order.bankTransfer')}</p>
       ) : null}
 
       {canRetryPayment ? (
@@ -197,22 +234,26 @@ export default async function OrderConfirmationPage({
       ) : null}
 
       <div className="mb-6 flex flex-wrap gap-2">
-        <form action={reorderAction} className="inline">
-          <input type="hidden" name="id" value={order.id} />
-          <button type="submit" className="btn btn--outline btn--sm">
-            Order again → cart
-          </button>
-        </form>
-        <form action={reorderToQuoteAction} className="inline">
-          <input type="hidden" name="id" value={order.id} />
-          <button type="submit" className="btn btn--outline btn--sm">
-            Order again → quote request
-          </button>
-        </form>
-        {returnEligible ? (
-          <Link href={`/returns/new?orderId=${order.id}`} className="btn btn--outline btn--sm">
-            Request return / complaint
-          </Link>
+        {actions.reorder ? (
+          <form action={reorderAction} className="inline">
+            <input type="hidden" name="id" value={order.id} />
+            <button type="submit" className="btn btn--outline btn--sm">
+              {t('account.order.reorderToCart')}
+            </button>
+          </form>
+        ) : null}
+        {actions.cloneToQuote ? (
+          <form action={reorderToQuoteAction} className="inline">
+            <input type="hidden" name="id" value={order.id} />
+            <button type="submit" className="btn btn--outline btn--sm">
+              {t('account.order.reorderToQuote')}
+            </button>
+          </form>
+        ) : null}
+        {returnAction ? (
+          <LocalizedLink href={returnAction.href} className="btn btn--outline btn--sm">
+            {returnAction.label}
+          </LocalizedLink>
         ) : null}
         {(invoices ?? []).map((inv) => (
           <a
@@ -222,66 +263,49 @@ export default async function OrderConfirmationPage({
             rel="noreferrer"
             className="btn btn--outline btn--sm"
           >
-            Download invoice {inv.number}
+            {format(t('account.order.downloadInvoice'), { number: inv.number })}
           </a>
         ))}
-        <Link href="/orders" className="btn btn--ghost btn--sm">
-          See all orders
-        </Link>
+        <LocalizedLink href="/orders" className="btn btn--ghost btn--sm">
+          {t('account.order.allOrders')}
+        </LocalizedLink>
       </div>
 
-      <h2 className="mt-10">Status</h2>
+      <h2 className="mt-10">{t('account.common.status')}</h2>
       <table className="b2b-account__table">
         <tbody>
           <tr>
-            <th scope="row">Order status</th>
+            <th scope="row">{t('account.order.status.order')}</th>
             <td>{resolveOrderStatusLabel(order, locale)}</td>
           </tr>
           <tr>
-            <th scope="row">Payment status</th>
-            <td>{order.paymentStatus}</td>
+            <th scope="row">{t('account.order.status.payment')}</th>
+            <td>{codeLabel(t, 'account.paymentStatus', order.paymentStatus)}</td>
           </tr>
           <tr>
-            <th scope="row">Placed</th>
-            <td>{new Date(order.placedAt).toLocaleString()}</td>
+            <th scope="row">{t('account.order.status.placed')}</th>
+            <td>{new Date(order.placedAt).toLocaleString(locale)}</td>
           </tr>
         </tbody>
       </table>
 
-      <h2 className="mt-10">Items</h2>
+      <h2 className="mt-10">{t('account.common.items')}</h2>
       <table className="b2b-account__table">
         <thead>
           <tr>
-            <th>Product</th>
-            <th>Qty</th>
-            <th>Unit</th>
-            <th className="text-right">Line</th>
+            <th>{t('account.common.product')}</th>
+            <th>{t('account.common.quantity')}</th>
+            <th>{t('account.order.items.unitPrice')}</th>
+            <th className="text-right">{t('account.order.items.lineTotal')}</th>
           </tr>
         </thead>
         <tbody>
-          {order.items.map((it) => (
-            <tr key={it.id}>
-              <td>
-                <Link href={`/p/${it.productId}`}>{it.productSnapshot.name}</Link>
-                <br />
-                <small className="text-subtle">
-                  SKU: {it.variantSnapshot?.sku ?? it.productSnapshot.sku}
-                </small>
-              </td>
-              <td>{it.quantity}</td>
-              <td>
-                {formatMoney(it.unitPrice, order.currency, locale)}
-              </td>
-              <td className="text-right">
-                {formatMoney(it.lineTotal, order.currency, locale)}
-              </td>
-            </tr>
-          ))}
+          <OrderItemRows order={order} locale={locale} />
         </tbody>
         <tfoot>
           <tr>
             <th colSpan={3} className="text-right">
-              Subtotal
+              {t('account.order.totals.subtotal')}
             </th>
             <td className="text-right">
               {formatMoney(order.subtotal, order.currency, locale)}
@@ -289,7 +313,7 @@ export default async function OrderConfirmationPage({
           </tr>
           <tr>
             <th colSpan={3} className="text-right">
-              Tax
+              {t('account.order.totals.tax')}
             </th>
             <td className="text-right">
               {formatMoney(order.taxTotal, order.currency, locale)}
@@ -298,7 +322,7 @@ export default async function OrderConfirmationPage({
           {order.discountTotal > 0 ? (
             <tr>
               <th colSpan={3} className="text-right">
-                Discount
+                {t('account.order.totals.discount')}
               </th>
               <td className="text-right">
                 −{formatMoney(order.discountTotal, order.currency, locale)}
@@ -307,7 +331,7 @@ export default async function OrderConfirmationPage({
           ) : null}
           <tr>
             <th colSpan={3} className="text-right">
-              Delivery
+              {t('account.order.totals.delivery')}
             </th>
             <td className="text-right">
               {formatMoney(order.deliveryTotal, order.currency, locale)}
@@ -315,7 +339,7 @@ export default async function OrderConfirmationPage({
           </tr>
           <tr>
             <th colSpan={3} className="text-right">
-              <strong>Total</strong>
+              <strong>{t('account.common.total')}</strong>
             </th>
             <td className="text-right">
               <strong>
@@ -328,42 +352,42 @@ export default async function OrderConfirmationPage({
 
       {awaitingPayment ? (
         <p className="b2b-auth__hint">
-          This order is awaiting payment.{' '}
+          {t('account.order.awaitingPayment')}{' '}
           {order.nextAction?.kind === 'awaiting_transfer'
-            ? 'Use the bank-transfer details above to pay.'
-            : 'Complete payment to proceed.'}
+            ? t('account.order.awaitingTransfer')
+            : t('account.order.completePayment')}
         </p>
       ) : null}
 
-      <h2 className="mt-10">Comments</h2>
+      <h2 className="mt-10">{t('account.order.comments.heading')}</h2>
       {comments.length === 0 ? (
-        <p className="b2b-auth__hint">No comments yet.</p>
+        <p className="b2b-auth__hint">{t('account.order.comments.none')}</p>
       ) : (
         <ul className="b2b-account__comments">
           {comments.map((c) => (
             <li key={c.id}>
-              <small>{new Date(c.createdAt).toLocaleString()}</small>
+              <small>{new Date(c.createdAt).toLocaleString(locale)}</small>
               <p>{c.body}</p>
             </li>
           ))}
         </ul>
       )}
       {isTerminal ? (
-        <p className="b2b-auth__hint">Commenting is closed for this order.</p>
+        <p className="b2b-auth__hint">{t('account.order.comments.closed')}</p>
       ) : (
         <form action={addCommentAction} className="mt-4">
           <input type="hidden" name="id" value={order.id} />
           <textarea
             name="body"
             required
-            aria-label="Add a comment"
+            aria-label={t('account.order.comments.label')}
             rows={4}
-            placeholder="Write a message to our team…"
+            placeholder={t('account.order.comments.placeholder')}
             className="w-full resize-y rounded-md border border-line bg-surface px-[12px] py-[10px] text-[14px] leading-[1.5] text-fg placeholder:text-muted focus:border-line-strong focus:outline-none"
           />
           <div className="mt-4">
             <button type="submit" className="btn btn--outline btn--sm">
-              Add comment
+              {t('account.order.comments.submit')}
             </button>
           </div>
         </form>
@@ -375,34 +399,32 @@ export default async function OrderConfirmationPage({
 async function addCommentAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const id = (formData.get('id') as string) ?? '';
   const body = ((formData.get('body') as string) ?? '').trim();
   if (body) {
     try {
       await addOrderComment(session, id, body);
     } catch (err) {
-      const message = err instanceof StorefrontApiError ? err.message : 'Could not add comment.';
-      redirect(`/orders/${id}?error=${encodeURIComponent(message)}`);
+      return await localeRedirect(`/orders/${id}?error=${ORDER_ERRORS.failureCode(err, 'COMMENT_FAILED')}`);
     }
   }
-  redirect(`/orders/${id}`);
+  return await localeRedirect(`/orders/${id}`);
 }
 
 async function reorderAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const id = (formData.get('id') as string) ?? '';
   let target = '/cart';
   try {
     const result = await reorderOrder(session, id);
     target = result.checkoutUrl || '/cart';
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Could not reorder.';
-    redirect(`/orders/${id}?error=${encodeURIComponent(message)}`);
+    return await localeRedirect(`/orders/${id}?error=${ORDER_ERRORS.failureCode(err, 'REORDER_FAILED')}`);
   }
-  redirect(target);
+  return await localeRedirect(target);
 }
 
 /**
@@ -415,25 +437,17 @@ async function reorderAction(formData: FormData): Promise<void> {
 async function retryPaymentAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const id = (formData.get('id') as string) ?? '';
-  const { locale } = await getServerContext();
-  const t = tForLocale(locale);
 
   let target: string;
   try {
     const result = await retryOrderPayment(session, id);
-    target =
-      paymentRetryDestination(result) ??
-      `/orders/${id}?error=${encodeURIComponent(
-        result.opened ? t('order.payment.retry.failed') : t('order.payment.retry.inProgress'),
-      )}`;
+    target = paymentRetryDestination(result) ?? paymentRetryRefusedHref(id, result.opened);
   } catch (err) {
-    const message =
-      err instanceof StorefrontApiError ? err.message : t('order.payment.retry.failed');
-    target = `/orders/${id}?error=${encodeURIComponent(message)}`;
+    target = `/orders/${id}?error=${ORDER_ERRORS.failureCode(err, 'PAYMENT_RETRY_FAILED')}`;
   }
-  redirect(target);
+  return await localeRedirect(target);
 }
 
 /**
@@ -442,36 +456,32 @@ async function retryPaymentAction(formData: FormData): Promise<void> {
  * The buyer **cancels** — the owner's ruling is that there is no approval step
  * and no pending state — so this is one call and a reload of the same page,
  * which then shows the order cancelled and no longer offers the control. A
- * refusal comes back through the page's own `?error=` channel; the server owns
- * the sentence, because the server owns the rule.
+ * refusal comes back through the page's own `?error=` channel, as a code the
+ * page words (issue #745).
  */
 async function cancelOrderAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const id = (formData.get('id') as string) ?? '';
-  const { locale } = await getServerContext();
-  const t = tForLocale(locale);
   try {
     await cancelMyOrder(session, id);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : t('order.cancel.failed');
-    redirect(`/orders/${id}?error=${encodeURIComponent(message)}`);
+    return await localeRedirect(`/orders/${id}?error=${ORDER_ERRORS.failureCode(err, 'CANCEL_FAILED')}`);
   }
-  redirect(`/orders/${id}`);
+  return await localeRedirect(`/orders/${id}`);
 }
 
 async function reorderToQuoteAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const id = (formData.get('id') as string) ?? '';
   try {
     const { ctx } = await getServerContext();
     await cloneOrderToQuote(session, id, ctx);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Could not create quote request.';
-    redirect(`/orders/${id}?error=${encodeURIComponent(message)}`);
+    return await localeRedirect(`/orders/${id}?error=${ORDER_ERRORS.failureCode(err, 'REORDER_TO_QUOTE_FAILED')}`);
   }
-  redirect('/quote-requests');
+  return await localeRedirect('/quote-requests');
 }

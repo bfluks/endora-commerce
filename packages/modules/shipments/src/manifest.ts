@@ -8,7 +8,7 @@ export const shipmentsSettingsManifest = defineModuleSettingsManifest({
       code: 'shipments.enabled',
       name: 'Shipments enabled',
       description:
-        'Switches the shipment lifecycle on or off: creating a shipment for an order (which is also how a failed one is retried), the carrier receive_shipment ingress and the per-order shipment history. Nothing is dropped — every shipment, its status transitions and its carrier references stay in the database, and an order mid-fulfilment resumes exactly where it was.',
+        'Switches shipment creation, carrier updates and shipment history on or off. Nothing is deleted while it is off.',
       groupCode: 'shipments',
       valueType: 'boolean',
       defaultValue: true,
@@ -36,6 +36,8 @@ export const shipmentsSettingsManifest = defineModuleSettingsManifest({
 export const manifest = defineModuleManifest({
   id: 'shipments',
   docs: { dir: 'docs' },
+  // Issue #884 — the bundle carries the settings group's translated heading.
+  i18n: { bundlesDir: 'i18n' },
   name: 'Shipments',
   description: 'Shipment record and the order_created / shipment_created / receive_shipment lifecycle.',
   version: '1.0.0',
@@ -52,6 +54,15 @@ export const manifest = defineModuleManifest({
   // only became real in T124: until this module registered its own routes there
   // was no seam for a gate to sit on.
   activation: { settingCode: 'shipments.enabled', default: true },
+  /**
+   * Issue #637 (#86) — the module's first code. Both raise sites refuse a write
+   * because a shipment was already generated successfully: generating again
+   * (`ShipmentService.createShipment`, token `generate`) and the
+   * `receive_shipment` ingress marking it failed (`ReceiveShipmentHandler`,
+   * token `mark_failed`). One state, so one code; the token picks the
+   * sentence. The noun is the shipment, which this module owns.
+   */
+  errorCodes: [{ code: 'SHIPMENT_ALREADY_GENERATED', tokens: ['generate', 'mark_failed'] }],
   settings: shipmentsSettingsManifest,
   // Feature 047 — admin-editable transactional email owned by this module.
   transactionalEmails: [

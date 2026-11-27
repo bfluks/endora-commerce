@@ -1,9 +1,9 @@
 ---
-title: credit_limits
+title: Limity kredytowe
 description: Przyznawanie limitów kredytowych i atomowa rezerwacja
 ---
 
-# `credit_limits`
+# Limity kredytowe (`credit_limits`)
 
 Metoda płatności „limit kredytowy”. Administratorzy przyznają limit organizacji, a klienci
 korzystają z niego przy składaniu zamówienia. Rezerwacje są atomowe i zwalniane idempotentnie po
@@ -16,7 +16,7 @@ Wszystkie trasy administracyjne wymagają uprawnienia `credit_limits:manage`.
 | Metoda i ścieżka | Kto | Przeznaczenie |
 | --- | --- | --- |
 | `GET /api/v1/me/credit-limit` | klient | Podgląd przyznanego limitu i kwoty obecnie zarezerwowanej (404 `CREDIT_LIMIT_NOT_GRANTED`, gdy limitu nie ma) |
-| `GET /api/v1/admin/credit-limits` | administrator | Zestawienie wszystkich przyznanych limitów z aktywnymi rezerwacjami |
+| `GET /api/v1/admin/credit-limits?page=&pageSize=` | administrator | Jedna strona przyznanych limitów z aktywnymi rezerwacjami, od najnowszego przyznania, z `meta: { page, pageSize, total }`; bez `pageSize` całe zestawienie (issue #1664) |
 | `GET /api/v1/admin/organizations/:id/credit-limit` | administrator | Limit jednej organizacji z rezerwacjami |
 | `POST /api/v1/admin/organizations/:id/credit-limit` | administrator | Przyznanie początkowego limitu |
 | `PATCH /api/v1/admin/organizations/:id/credit-limit` | administrator | Korekta kwoty (odrzuca kwotę niższą niż aktywne rezerwacje, chyba że ustawiono `allowOverAllocation`) |
@@ -24,6 +24,25 @@ Wszystkie trasy administracyjne wymagają uprawnienia `credit_limits:manage`.
 W storefroncie profil konta i strona checkoutu wyświetlają `CreditLimitWidget` (limit przyznany,
 dostępny i rozbicie rezerwacji), gdy limit istnieje; metody płatności typu `credit_limit` są
 ukrywane w checkoucie, gdy limit nie został przyznany albo suma koszyka przekracza dostępny kredyt.
+
+W panelu ekran **Limity kredytowe** zawiera wszystkie przyznane limity; *Przyznaj limit
+kredytowy* oraz *Koryguj limit* w wierszu otwierają jedno okno dialogowe. Zakładka **Handel** na
+ekranie organizacji zawiera podsumowanie *Limit kredytowy* tylko do odczytu — kwotę przyznaną,
+zarezerwowaną i dostępną oraz liczbę aktywnych rezerwacji albo informację, że limitu nie
+przyznano — z odnośnikiem *Koryguj limit* / *Przyznaj limit kredytowy*, który otwiera to okno dla
+tej organizacji (`/credit-limits?organizationId=<id>`). Podsumowanie widzi tylko osoba
+z uprawnieniem `credit_limits:manage`, a gdy moduł jest wyłączony, nie ma go wcale (issue #1544).
+
+Które rezerwacje widzi klient: limit jest wspólny, więc kwota przyznana, kwota dostępna
+i `activeReservationCount` to zawsze wartości dla całej organizacji. Lista `activeReservations`
+zawiera tylko rezerwacje zamówień, które klient może odczytać: jego własnych albo wszystkich
+zamówień organizacji, gdy jego rola w organizacji ma uprawnienie `orders.view_organization`
+(rola Administrator ma je domyślnie). Trasy administracyjne zawsze pokazują wszystkie rezerwacje.
+
+Każda wymieniona rezerwacja ma `orderBusinessId`, numer zamówienia widoczny dla klienta (`null`
+dla zamówienia, którego moduł `orders` nie zwrócił), zarówno w trasie klienta, jak i w trzech
+widokach administracyjnych. Ekran limitów kredytowych w panelu pokazuje ten numer w tabeli
+rezerwacji, z odnośnikiem do zamówienia.
 
 ## Współbieżność
 
@@ -67,8 +86,26 @@ w całości; ścisły schemat to `CreditLimitAdjustedEventV1Schema` w `@endora-c
   odrzucana; zapisane subskrypcje zostają i nic nie dostają, dopóki moduł nie zostanie włączony
   ponownie.
 
+## Zamówienia opłacane przez płatnika powiązanego {#orders-paid-by-a-related-payer}
+
+Zamówienie złożone z płatnikiem powiązanym (moduł *Related payers*) rezerwuje kredyt **płatnika**,
+albo właściciela jego kredytu, gdy płatnik korzysta ze wspólnej puli organizacji nadrzędnej; kredyt
+kupującego pozostaje nietknięty. `credit_limits` publikuje `creditAvailabilityReadPort`, przez który
+checkout odczytuje dostępny kredyt płatnika, żeby zdecydować, czy oferować metodę płatności w ramach
+limitu kredytowego.
+
+## W dzienniku audytu
+
+Przyznanie, zmiana i zaliczenie limitu ze zwrotu to każde jeden wpis w dzienniku audytu całej
+platformy (`credit_limit.grant`, `credit_limit.adjust`, `credit_limit.credit_from_return`),
+zapisany dla organizacji. Dziennik audytu czyta każdy, kto ma `audit_log:read`, bez względu na
+to, które organizacje widzi, dlatego wpis mówi, co się zmieniło — `changedFields: ['grantedAmount']`,
+a przy zaliczeniu identyfikator sprawy zwrotu — i nie zawiera żadnej kwoty. Bieżący limit jest na
+ekranie limitu kredytowego organizacji. Wpisy zapisane przed tą zmianą zachowują kwoty, z którymi
+zostały zapisane.
+
 ## Punkty rozszerzenia
 
-- **Powody zwolnienia** — `releaseByOrder(reason)` przyjmuje dziś `'invoice_paid'` i
-  `'order_cancelled'`. Nowe powody (np. `'manual_override'`) dodaje się, rozszerzając wyliczenie i
+- **Powody zwolnienia** — `releaseByOrder(reason)` przyjmuje dziś `'invoice_paid'`,
+  `'order_cancelled'` i `'admin_revocation'`. Nowe powody (np. `'manual_override'`) dodaje się, rozszerzając wyliczenie i
   podłączając wywołanie.

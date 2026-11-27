@@ -68,6 +68,8 @@ import { realpathSync } from 'node:fs';
 
 import ts from 'typescript';
 
+import * as publishedContracts from '@endora-commerce/contracts';
+import { commandActionFiltersOverlap } from '@endora-commerce/contracts';
 import type {
   DivergenceBoundary,
   DivergenceDetail,
@@ -75,6 +77,8 @@ import type {
   DivergenceKind,
   DivergenceReport,
 } from '@endora-commerce/contracts';
+
+import { commandMiddlewareDeclarationsIn, isManifestFile } from './command-middleware-declarations.js';
 
 // ---------------------------------------------------------------------------
 // 1. The seam classification — every `ModuleContext` member has exactly one home
@@ -116,6 +120,17 @@ export const SEAM_CLASSIFICATION: Readonly<Record<string, SeamClassification>> =
   'di.decorate': { verdict: 'divergence', kind: 'decoration', rung: 4 },
   subscribe: { verdict: 'divergence', kind: 'subscription', rung: 1 },
   interceptors: { verdict: 'divergence', kind: 'interceptor', rung: 2 },
+  // `specs/176-command-hooks-outbox/` P2 — rung 2's second mechanism: an
+  // interceptor runs around an endpoint the owner serves, a command hook runs
+  // inside a write the owner declared hookable. Both are a published identity
+  // the owner versions, and both may veto.
+  commandHooks: { verdict: 'divergence', kind: 'command-hook', rung: 2 },
+  // `specs/189-command-middleware/` FR-034 — rung 2 beside hooks: code on the
+  // Command Bus for every matching Command, `admit` before it runs and
+  // `observe` after it settled. The entries are derived from the overlay's
+  // manifest declaration, which carries the filter; the `ctx.commandMiddleware`
+  // call that registers the code is not a second site.
+  commandMiddleware: { verdict: 'divergence', kind: 'command-middleware', rung: 2 },
   rootPlugin: { verdict: 'divergence', kind: 'root-plugin', rung: 4 },
   worker: { verdict: 'divergence', kind: 'worker', rung: null },
 
@@ -126,6 +141,13 @@ export const SEAM_CLASSIFICATION: Readonly<Record<string, SeamClassification>> =
   ungatedRoutes: {
     verdict: 'own-surface',
     why: "the module's own route, outside the module's own gate; the reason string is required at the call and is read there, and it removes no other module's gate",
+  },
+  // `specs/187-side-table-extensions/` B1 — data ladder D1, not a code rung: the
+  // loader reads the module's own declared side table, and a host read port
+  // attaches it only when its caller names this module in `include`.
+  entityExtensionLoaders: {
+    verdict: 'own-surface',
+    why: "the module's own side table, read only for a caller that names this module in `include`; without it the host's read answers exactly as core does",
   },
   onBoot: {
     verdict: 'own-surface',
@@ -226,6 +248,11 @@ export interface SeamSite {
   readonly interceptor?: {
     readonly phase: 'pre' | 'post';
     readonly order: number;
+    readonly id: string;
+  };
+  /** A command hook's phase and id (176); its subject is the hooked action. */
+  readonly commandHook?: {
+    readonly phase: 'beforeCommit' | 'afterCommit';
     readonly id: string;
   };
   readonly declaredReason?: string;
@@ -440,6 +467,79 @@ function workerBindings(sf: ts.SourceFile, bindings: ReadonlyMap<string, string>
   return workers;
 }
 
+/**
+ * Every hookable-action ref `@endora-commerce/contracts` publishes, keyed
+ * `<export>.<member>` — how a hook author spells one
+ * (`ORGANIZATION_HOOKABLE_ACTIONS.register`). Read off the package's runtime
+ * exports rather than written down, so a ref an owner adds is resolvable the
+ * day it is published (D-100).
+ */
+let publishedRefs: ReadonlyMap<string, string> | null = null;
+function publishedHookableActions(): ReadonlyMap<string, string> {
+  if (publishedRefs !== null) return publishedRefs;
+  const refs = new Map<string, string>();
+  for (const [exportName, value] of Object.entries(publishedContracts as Record<string, unknown>)) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) continue;
+    for (const [member, candidate] of Object.entries(value as Record<string, unknown>)) {
+      if (candidate === null || typeof candidate !== 'object') continue;
+      const ref = candidate as { action?: unknown; objectType?: unknown; phases?: unknown };
+      if (typeof ref.action === 'string' && typeof ref.objectType === 'string' && Array.isArray(ref.phases)) {
+        refs.set(`${exportName}.${member}`, ref.action);
+      }
+    }
+  }
+  publishedRefs = refs;
+  return refs;
+}
+
+/** Local name → export name, for every binding this file imports from `@endora-commerce/contracts`. */
+function contractsImports(sf: ts.SourceFile): Map<string, string> {
+  const imports = new Map<string, string>();
+  for (const statement of sf.statements) {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      statement.moduleSpecifier.text !== '@endora-commerce/contracts'
+    ) {
+      continue;
+    }
+    const bindings = statement.importClause?.namedBindings;
+    if (bindings === undefined || !ts.isNamedImports(bindings)) continue;
+    for (const element of bindings.elements) {
+      imports.set(element.name.text, (element.propertyName ?? element.name).text);
+    }
+  }
+  return imports;
+}
+
+/**
+ * The action a command hook's `on:` names, or `null`. Three spellings resolve
+ * and nothing else does: a published ref (`ORG.register`, through the file's
+ * own import), a `hookableAction('<action>', …)` call, and a literal
+ * `{ action: '<action>', … }` — the last is how a package with no runtime
+ * dependency on `@endora-commerce/contracts` writes one. A ref bound to a local
+ * is a `computed-subject`, never a skip.
+ */
+function hookedActionOf(
+  node: ts.Expression | undefined,
+  bindings: ReadonlyMap<string, string>,
+  imports: ReadonlyMap<string, string>,
+): string | null {
+  if (node === undefined) return null;
+  if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression)) {
+    const exported = imports.get(node.expression.text);
+    if (exported === undefined) return null;
+    return publishedHookableActions().get(`${exported}.${node.name.text}`) ?? null;
+  }
+  if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'hookableAction') {
+    return resolveSubject(node.arguments[0], bindings);
+  }
+  if (ts.isObjectLiteralExpression(node)) {
+    return resolveSubject(propertyOf(node, 'action'), bindings);
+  }
+  return null;
+}
+
 const CALL_TEXT_LIMIT = 120;
 
 function callText(node: ts.Node, sf: ts.SourceFile): string {
@@ -462,6 +562,7 @@ export function deriveSeamSites(sources: readonly OverlaySource[]): SeamSite[] {
     const contexts = contextBindings(sf);
     const bindings = literalBindings(sf);
     const workers = workerBindings(sf, bindings);
+    const imports = contractsImports(sf);
     const lineOf = (node: ts.Node): number =>
       sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
 
@@ -555,6 +656,36 @@ export function deriveSeamSites(sources: readonly OverlaySource[]): SeamSite[] {
                     interceptor: {
                       phase: phaseText === 'post' ? 'post' : 'pre',
                       order,
+                      id: idText,
+                    },
+                  });
+                }
+                if (first.elements.length === 0) push(node, seam, { subject: null });
+              } else {
+                push(node, seam, { subject: null });
+              }
+              break;
+            }
+            case 'commandHooks': {
+              if (first !== undefined && ts.isArrayLiteralExpression(first)) {
+                for (const element of first.elements) {
+                  if (!ts.isObjectLiteralExpression(element)) {
+                    push(element, seam, { subject: null });
+                    continue;
+                  }
+                  const action = hookedActionOf(propertyOf(element, 'on'), bindings, imports);
+                  const phaseText = resolveSubject(propertyOf(element, 'phase'), bindings);
+                  const idText = resolveSubject(propertyOf(element, 'id'), bindings);
+                  // The key carries the id, so an unreadable one is a
+                  // `computed-subject` exactly as an unreadable action is.
+                  if (action === null || phaseText === null || idText === null) {
+                    push(element, seam, { subject: null });
+                    continue;
+                  }
+                  push(element, seam, {
+                    subject: action,
+                    commandHook: {
+                      phase: phaseText === 'afterCommit' ? 'afterCommit' : 'beforeCommit',
                       id: idText,
                     },
                   });
@@ -698,6 +829,164 @@ export function routeIdentities(sources: Iterable<RouteSource>): Map<string, str
   return identities;
 }
 
+/**
+ * One `defineColumnExtension(…)` call an overlay source spells
+ * (`specs/190-overlay-full-modules/` FR-047, `contracts/overlay-lifecycle.md` §3).
+ *
+ * Not a `ModuleContext` seam: a module **exports** its column declarations
+ * (`schemaExtensions`), and the platform reads them at discovery. So this is a
+ * walk of its own, over the same sources, keyed on the one function a
+ * declaration can be made with — the brand `defineColumnExtension` stamps is
+ * what the platform refuses a look-alike object without.
+ */
+export interface ColumnExtensionSite {
+  readonly moduleId: string;
+  readonly file: string;
+  readonly line: number;
+  /** The call's source text, for a finding a reader can act on. */
+  readonly text: string;
+  /** The host table, or `null` when it is not written as a literal. */
+  readonly host: string | null;
+  /**
+   * The physical `x_<module>_*` columns the call declares, sorted — or `null`
+   * when they are not written as literal keys of an object literal (a spread,
+   * a computed key, a `columns` value held in a variable). A partial list would
+   * be a guess, so it is `computed-subject` like an unreadable host (#1941).
+   */
+  readonly columns: readonly string[] | null;
+}
+
+/** `erpCode` → `erp_code` — the platform's `snakeCase` (`kernel/schema-extensions/naming.ts`). */
+function snakeCase(key: string): string {
+  return key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+}
+
+function propertyNameText(name: ts.PropertyName): string | null {
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNoSubstitutionTemplateLiteral(name)) {
+    return name.text;
+  }
+  return null;
+}
+
+function stringLiteralOf(node: ts.Expression): string | null {
+  let current = node;
+  while (ts.isAsExpression(current) || ts.isSatisfiesExpression(current) || ts.isParenthesizedExpression(current)) {
+    current = current.expression;
+  }
+  return ts.isStringLiteral(current) || ts.isNoSubstitutionTemplateLiteral(current) ? current.text : null;
+}
+
+/**
+ * Every `defineColumnExtension(…)` call in the deployment's overlay sources.
+ *
+ * The host is read only when it is written as a literal — a value the analysis
+ * cannot read is `computed-subject`, never a guess, as every other subject is.
+ * Column names are the physical ones (`x_<moduleId>_<snake_case(key)>`), with
+ * the module the **file** belongs to: the platform refuses a declaration whose
+ * `module` is not its declaring module (V10), so the two agree on any tree that
+ * boots.
+ */
+export function deriveColumnExtensionSites(sources: readonly OverlaySource[]): ColumnExtensionSite[] {
+  const sites: ColumnExtensionSite[] = [];
+  for (const source of sources) {
+    if (!source.text.includes('defineColumnExtension')) continue;
+    const sf = ts.createSourceFile(source.file, source.text, ts.ScriptTarget.Latest, true);
+    // The local names the function goes by in this file: its own name, and every
+    // alias an import binds it to (`import { defineColumnExtension as col }`), so
+    // a rename is still a declaration rather than a call the walk does not see.
+    const callees = new Set(['defineColumnExtension']);
+    for (const statement of sf.statements) {
+      const bindings = ts.isImportDeclaration(statement) ? statement.importClause?.namedBindings : undefined;
+      if (bindings === undefined || !ts.isNamedImports(bindings)) continue;
+      for (const element of bindings.elements) {
+        if ((element.propertyName ?? element.name).text === 'defineColumnExtension') {
+          callees.add(element.name.text);
+        }
+      }
+    }
+    const visit = (node: ts.Node): void => {
+      if (
+        ts.isCallExpression(node) &&
+        (ts.isIdentifier(node.expression)
+          ? callees.has(node.expression.text)
+          : ts.isPropertyAccessExpression(node.expression) &&
+            node.expression.name.text === 'defineColumnExtension')
+      ) {
+        const argument = node.arguments[0];
+        let host: string | null = null;
+        let columns: string[] | null = null;
+        if (argument !== undefined && ts.isObjectLiteralExpression(argument)) {
+          // A spread beside the named properties may carry `columns` (or more of
+          // them), so nothing read off the literal is the whole declaration.
+          const spread = argument.properties.some((property) => ts.isSpreadAssignment(property));
+          for (const property of argument.properties) {
+            if (!ts.isPropertyAssignment(property)) continue;
+            const name = propertyNameText(property.name);
+            if (name === 'host') host = stringLiteralOf(property.initializer);
+            if (name === 'columns' && !spread) columns = literalColumnKeys(property.initializer);
+          }
+        }
+        sites.push({
+          moduleId: source.moduleId,
+          file: source.file,
+          line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
+          text: node.getText(sf).replace(/\s+/g, ' ').slice(0, 160),
+          host,
+          columns: columns?.map((key) => `x_${source.moduleId}_${snakeCase(key)}`).sort() ?? null,
+        });
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+  }
+  return sites;
+}
+
+/** The literal keys of a `columns` object literal, or `null` when any is not one. */
+function literalColumnKeys(initializer: ts.Expression): string[] | null {
+  let current = initializer;
+  while (ts.isAsExpression(current) || ts.isSatisfiesExpression(current) || ts.isParenthesizedExpression(current)) {
+    current = current.expression;
+  }
+  if (!ts.isObjectLiteralExpression(current)) return null;
+  const keys: string[] = [];
+  for (const column of current.properties) {
+    const key = column.name === undefined ? null : propertyNameText(column.name);
+    if (key === null) return null;
+    keys.push(key);
+  }
+  return keys;
+}
+
+/**
+ * Extensible host table → the module that owns it, from the one registry the
+ * platform derives its own list from (`CUSTOM_FIELD_HOST_BINDINGS`). The CLI
+ * reads an instance without loading the platform, and the contracts package is
+ * what both share.
+ */
+export function extensibleHostOwners(): ReadonlyMap<string, string> {
+  // Read through the namespace rather than as a named import so a contracts
+  // build without the registry reaches this refusal instead of a link error
+  // that names no remedy. An empty map here would turn every declaration into
+  // `unowned-subject` — blaming the deployment for the toolchain (#1941).
+  const bindings = (publishedContracts as { CUSTOM_FIELD_HOST_BINDINGS?: unknown }).CUSTOM_FIELD_HOST_BINDINGS;
+  const entries =
+    typeof bindings === 'object' && bindings !== null
+      ? (Object.values(bindings) as { table?: unknown; ownerModuleId?: unknown }[])
+      : [];
+  if (
+    entries.length === 0 ||
+    entries.some((binding) => typeof binding.table !== 'string' || typeof binding.ownerModuleId !== 'string')
+  ) {
+    throw new Error(
+      '[divergence] @endora-commerce/contracts exports no usable CUSTOM_FIELD_HOST_BINDINGS, so no ' +
+        'extensible host table has an owner and every column extension would read as unowned. ' +
+        'The CLI and the contracts package it resolved disagree: reinstall so both come from one release.',
+    );
+  }
+  return new Map(entries.map((binding) => [binding.table as string, binding.ownerModuleId as string]));
+}
+
 // ---------------------------------------------------------------------------
 // 3. The findings
 // ---------------------------------------------------------------------------
@@ -720,7 +1009,11 @@ export type DivergenceFindingKind =
   /** An order entry naming a module that is not one of this deployment's. */
   | 'foreign-order-member'
   /** An order entry naming fewer modules than decorate that name. */
-  | 'incomplete-order';
+  | 'incomplete-order'
+  /** A `commandMiddlewareOrder` entry naming no `admit` contributor of this deployment (189). */
+  | 'stale-middleware-order'
+  /** A `commandMiddlewareOrder` naming one module of a tie and not the other (189). */
+  | 'incomplete-middleware-order';
 
 export interface DivergenceFinding {
   readonly kind: DivergenceFindingKind;
@@ -773,6 +1066,16 @@ export const DIVERGENCE_REMEDIES: Readonly<Record<DivergenceFindingKind, string>
     'A `decorationOrder` entry names fewer modules than decorate that registration. A partial order\n' +
     'refuses the composition at boot (`AmbiguousDecorationError`) rather than ordering it, so the\n' +
     'entry reads as a decision and behaves as a comment.',
+  'stale-middleware-order':
+    'A `commandMiddlewareOrder` entry names a module that contributes no `admit` command middleware\n' +
+    'to this deployment. The composer refuses it at boot (`StaleCommandMiddlewareOrderError`): an\n' +
+    'order for a module that is not there orders nothing, and will order the wrong thing later.\n' +
+    'Remove the entry from `divergence.ts`.',
+  'incomplete-middleware-order':
+    'A `commandMiddlewareOrder` names one module of a tie and not the other: two `admit` command\n' +
+    'middlewares whose filters can match one Command, from modules neither of which depends on the\n' +
+    'other. The composer refuses the pair at boot (`UnorderedCommandMiddlewareError`) unless both\n' +
+    'are named — add the missing module where it should run (first runs first).',
 };
 
 /**
@@ -807,7 +1110,10 @@ export function divergenceBoundary(
   // `port-consumed` is a kind with no `ModuleContext` member — it comes from
   // `lazyPort` over the cradle — and `omission` comes from the declaration and
   // from no seam at all. Both are recorded, so both are named here.
-  for (const kind of ['port-consumed', 'omission'] as const) {
+  //
+  // `column-extension` is the third with no member: a module exports its column
+  // declarations rather than calling a seam (190, FR-047).
+  for (const kind of ['port-consumed', 'omission', 'column-extension'] as const) {
     if (!recorded.includes(kind)) recorded.push(kind);
   }
   recorded.sort();
@@ -822,6 +1128,20 @@ export function divergenceBoundary(
   notRecorded.push({
     seam: 'manifest.ts declarations (permissions, palette actions, i18n bundles, CLI commands)',
     why: 'each is a module declaring its own surface, and each is already swept by the instrument that owns it — the permission inventory, the bundle-shape test, the action-route check',
+  });
+  // `specs/190-overlay-full-modules/` FR-047. An overlay module's own tables are
+  // the schema form of its own routes: recording each would be noise that trains
+  // a reader to skip the report (R-16). What it adds to **another** module's
+  // table is recorded, as `column-extension`.
+  notRecorded.push({
+    seam: "an overlay module's own entities and migrations",
+    why: 'a table an overlay module creates is its own surface, migrated under the foreign-schema guard with no exemption, so it cannot touch a table it does not own; what it declares on another module\'s table is recorded, as a column extension',
+  });
+
+  // `specs/190-overlay-full-modules/contracts/overlay-ports.md` §5.
+  notRecorded.push({
+    seam: 'a port an overlay module consumes from a sibling overlay module',
+    why: "the port is the deployment's own surface and diverges from nothing in core — its provider's `port-provided` is recorded; the consumer's import is held by the overlay boundary analysis (`check:module-boundary`, `endora generate`) and its edge by the manifest `dependencies`",
   });
 
   // Appended rather than merged into the sort above: the seam entries are the
@@ -868,11 +1188,25 @@ export interface DivergenceInput {
   readonly owners: ReadonlyMap<string, string>;
   /** Names a composition root supplies, which no module owns. */
   readonly rootSupplied: ReadonlySet<string>;
+  /**
+   * Hookable action → the module that declares it (176). The owner of a
+   * `command-hook` entry; absent or missing a key, the entry's owner is `null`
+   * — a host that cannot attribute it says so in `hostNotRecorded`.
+   */
+  readonly actionOwners?: ReadonlyMap<string, string>;
+  /**
+   * Extensible host table → the module that owns it: the owner of a
+   * `column-extension` entry (190, FR-047). Defaults to
+   * {@link extensibleHostOwners}; a test passes its own.
+   */
+  readonly hostOwners?: ReadonlyMap<string, string>;
   /** The deployment's declaration. */
   readonly declaration: {
     readonly omittedModules: ReadonlyArray<{ readonly moduleId: string; readonly reason: string }>;
     readonly decorationOrder: Readonly<Record<string, readonly string[]>>;
     readonly reasons: Readonly<Record<string, string>>;
+    /** `specs/189-command-middleware/` FR-031 — the `admit` tie-break; absent means none. */
+    readonly commandMiddlewareOrder?: readonly string[] | undefined;
   };
   /** `ModuleContext`'s own members, from the platform's source. */
   readonly seams: readonly string[];
@@ -899,15 +1233,24 @@ export interface DivergenceResult {
   readonly sites: readonly SeamSite[];
 }
 
-/** `<kind>:<module>:<subject>`, with an interceptor's `#<phase>`. */
+/**
+ * `<kind>:<module>:<subject>`, with an interceptor's `#<phase>` and a command
+ * hook's `#<id>` — one module may register several hooks on one action, and
+ * each is a divergence with its own reason.
+ */
 export function divergenceKeyOf(entry: {
   kind: DivergenceKind;
   module: string;
   subject: string;
   detail: DivergenceDetail;
 }): string {
-  const phase = entry.detail.kind === 'interceptor' ? `#${entry.detail.phase}` : '';
-  return `${entry.kind}:${entry.module}:${entry.subject}${phase}`;
+  const suffix =
+    entry.detail.kind === 'interceptor'
+      ? `#${entry.detail.phase}`
+      : entry.detail.kind === 'command-hook'
+        ? `#${entry.detail.id}`
+        : '';
+  return `${entry.kind}:${entry.module}:${entry.subject}${suffix}`;
 }
 
 const SEAM_TO_KIND = (
@@ -1003,10 +1346,25 @@ export function deriveDivergence(input: DivergenceInput): DivergenceResult {
         continue;
       }
       owner = registered ?? null;
+      // `specs/190-overlay-full-modules/contracts/overlay-ports.md` §5 — a port a
+      // **sibling overlay module** of this deployment provides is the deployment's
+      // own surface: it diverges from nothing in core, so it asks for no reason.
+      // What polices it is the overlay boundary analysis and the manifest
+      // dependency; `notRecorded` says so. The provider's `port-provided` stays.
+      if (
+        kind === 'port-consumed' &&
+        owner !== null &&
+        owner !== site.moduleId &&
+        overlaySet.has(owner)
+      ) {
+        continue;
+      }
     } else if (kind === 'interceptor') {
       owner = input.routes.get(site.subject) ?? null;
     } else if (kind === 'subscription') {
       owner = null;
+    } else if (kind === 'command-hook') {
+      owner = input.actionOwners?.get(site.subject) ?? null;
     } else {
       owner = input.owners.get(site.subject) ?? null;
     }
@@ -1022,6 +1380,94 @@ export function deriveDivergence(input: DivergenceInput): DivergenceResult {
       detail,
       reason: input.declaration.reasons[key] ?? '',
     });
+  }
+
+  // `column-extension` (190, FR-047): what an overlay declares on another
+  // module's table. Owned by the host's module; a host no binding names is
+  // `unowned-subject`, as a decorated name no module registers is.
+  const hostOwners = input.hostOwners ?? extensibleHostOwners();
+  for (const site of deriveColumnExtensionSites(input.sources)) {
+    if (site.host === null) {
+      note(
+        'computed-subject',
+        `${site.file}:${site.line}`,
+        `\`defineColumnExtension\` names a host table the analysis cannot resolve to a literal: ${site.text}`,
+      );
+      continue;
+    }
+    if (site.columns === null) {
+      note(
+        'computed-subject',
+        `${site.file}:${site.line}`,
+        `\`defineColumnExtension\` declares columns the analysis cannot resolve to literal keys ` +
+          `(a spread, a computed key or a value held elsewhere): ${site.text}`,
+      );
+      continue;
+    }
+    const owner = hostOwners.get(site.host);
+    if (owner === undefined) {
+      note(
+        'unowned-subject',
+        `${site.file}:${site.line}`,
+        `'${site.host}' is not an extensible host table, so no module owns the columns declared on it`,
+      );
+      continue;
+    }
+    const detail: DivergenceDetail = { kind: 'column-extension', dataRung: 'D2', columns: site.columns };
+    const key = divergenceKeyOf({ kind: 'column-extension', module: site.moduleId, subject: site.host, detail });
+    entries.push({
+      key,
+      kind: 'column-extension',
+      module: site.moduleId,
+      subject: site.host,
+      owner,
+      rung: null,
+      detail,
+      reason: input.declaration.reasons[key] ?? '',
+    });
+  }
+
+  // `command-middleware` (189, FR-034): what an overlay module declares in its
+  // manifest — the declaration carries the filter, and is what the composer
+  // matches the registration against. The subject is the middleware's id; the
+  // owner is `null`, because the subject is the bus, which no module owns.
+  const admitContributors = new Map<string, Array<'*' | readonly string[]>>();
+  const manifestDependencies = new Map<string, readonly string[]>();
+  for (const source of input.sources) {
+    if (!isManifestFile(source.file)) continue;
+    const reading = commandMiddlewareDeclarationsIn(source.text, source.file);
+    if (reading.dependencies !== null) manifestDependencies.set(source.moduleId, reading.dependencies);
+    for (const site of reading.unresolved) {
+      note(
+        'computed-subject',
+        `${source.file}:${site.line}`,
+        `\`commandMiddleware\` declares a middleware the analysis cannot read as literals: ${site.text}`,
+      );
+    }
+    for (const declaration of reading.declarations) {
+      const detail: DivergenceDetail = {
+        kind: 'command-middleware',
+        phase: declaration.phase,
+        id: declaration.id,
+        actions: declaration.actions,
+      };
+      const key = divergenceKeyOf({ kind: 'command-middleware', module: source.moduleId, subject: declaration.id, detail });
+      entries.push({
+        key,
+        kind: 'command-middleware',
+        module: source.moduleId,
+        subject: declaration.id,
+        owner: null,
+        rung: RUNG_OF(classification, 'commandMiddleware'),
+        detail,
+        reason: input.declaration.reasons[key] ?? '',
+      });
+      if (declaration.phase === 'admit') {
+        const filters = admitContributors.get(source.moduleId) ?? [];
+        filters.push(declaration.actions);
+        admitContributors.set(source.moduleId, filters);
+      }
+    }
   }
 
   // The omissions, from the declaration and from no seam at all. They are the
@@ -1124,6 +1570,52 @@ export function deriveDivergence(input: DivergenceInput): DivergenceResult {
     }
   }
 
+  // `commandMiddlewareOrder` (189, FR-031), at build time: the two shapes a
+  // reviewer can act on before the composer refuses them at boot.
+  const middlewareOrder = input.declaration.commandMiddlewareOrder ?? [];
+  for (const member of middlewareOrder) {
+    if (!admitContributors.has(member)) {
+      note(
+        'stale-middleware-order',
+        declarationPath,
+        `\`commandMiddlewareOrder\` names '${member}', which contributes no admit command middleware to this deployment`,
+      );
+    }
+  }
+  if (middlewareOrder.length > 0) {
+    const reaches = (from: string, to: string): boolean => {
+      const seen = new Set<string>();
+      const stack = [...(manifestDependencies.get(from) ?? [])];
+      while (stack.length > 0) {
+        const next = stack.pop()!;
+        if (next === to) return true;
+        if (seen.has(next)) continue;
+        seen.add(next);
+        stack.push(...(manifestDependencies.get(next) ?? []));
+      }
+      return false;
+    };
+    const ties = (a: string, b: string): boolean =>
+      !reaches(a, b) &&
+      !reaches(b, a) &&
+      admitContributors.get(a)!.some((left) => admitContributors.get(b)!.some((right) => commandActionFiltersOverlap(left, right)));
+    const contributors = [...admitContributors.keys()].sort();
+    const missing = new Set<string>();
+    for (const member of middlewareOrder) {
+      if (!admitContributors.has(member)) continue;
+      for (const other of contributors) {
+        if (other !== member && !middlewareOrder.includes(other) && ties(member, other)) missing.add(other);
+      }
+    }
+    for (const other of [...missing].sort()) {
+      note(
+        'incomplete-middleware-order',
+        declarationPath,
+        `\`commandMiddlewareOrder\` omits '${other}', whose admit command middleware ties with a module it names`,
+      );
+    }
+  }
+
   findings.sort((a, b) =>
     a.kind === b.kind ? a.where.localeCompare(b.where) : a.kind.localeCompare(b.kind),
   );
@@ -1171,8 +1663,20 @@ function detailFor(
       return { kind: 'registration' };
     case 'worker':
       return { kind: 'worker' };
+    case 'command-hook': {
+      const facts = site.commandHook ?? { phase: 'beforeCommit' as const, id: '' };
+      return { kind: 'command-hook', phase: facts.phase, id: facts.id };
+    }
     case 'omission':
       return { kind: 'omission' };
+    case 'column-extension':
+      // No `ModuleContext` member is classified to this kind, so no seam site
+      // reaches here; its entries are built from `deriveColumnExtensionSites`.
+      throw new Error(`a seam site was classified as 'column-extension': ${site.text}`);
+    case 'command-middleware':
+      // `deriveSeamSites` pushes no site for `ctx.commandMiddleware`; the
+      // entries are built from the manifest declaration.
+      throw new Error(`a seam site was classified as 'command-middleware': ${site.text}`);
   }
 }
 
@@ -1196,8 +1700,14 @@ export function describeEntry(entry: DivergenceEntry): string {
       return `'${entry.module}' mounts a plugin at the server root`;
     case 'worker':
       return `'${entry.module}' consumes the queue '${entry.subject}'`;
+    case 'command-hook':
+      return `'${entry.module}' runs ${entry.detail.kind === 'command-hook' ? `'${entry.detail.id}' ${entry.detail.phase}` : ''} inside '${entry.subject}'${entry.owner === null ? '' : `, which ${owner} declares hookable`}`;
     case 'omission':
       return `this deployment does not ship '${entry.subject}'`;
+    case 'column-extension':
+      return `'${entry.module}' declares columns on '${entry.subject}', which ${owner} owns`;
+    case 'command-middleware':
+      return `'${entry.module}' runs ${entry.detail.kind === 'command-middleware' ? entry.detail.phase : ''} command middleware '${entry.subject}' on ${entry.detail.kind === 'command-middleware' && entry.detail.actions === '*' ? 'every Command' : 'matching Commands'}`;
   }
 }
 

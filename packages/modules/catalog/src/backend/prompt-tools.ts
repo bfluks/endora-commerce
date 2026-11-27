@@ -1,11 +1,15 @@
 import {
+  ArchiveProductsParamsSchema,
   AssignProductsToCategoryParamsSchema,
+  RestoreProductsParamsSchema,
   RemoveProductsFromCategoryParamsSchema,
   SearchCategoriesParamsSchema,
   SearchProductsParamsSchema,
   SetProductStatusParamsSchema,
   SetProductsVisibilityParamsSchema,
+  type ArchiveProductsParams,
   type AssignProductsToCategoryParams,
+  type RestoreProductsParams,
   type RemoveProductsFromCategoryParams,
   type SearchCategoriesParams,
   type SearchProductsParams,
@@ -15,16 +19,24 @@ import {
   type BulkProgressSnapshot,
   type PromptActionTool,
   type ToolContext,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { Redis } from 'ioredis';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { EventBus } from '@endora-commerce/platform/events';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { CommandBus } from '@endora-commerce/platform/commands';
+import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import { Category } from './entities/category.entity.js';
 import { Product } from './entities/product.entity.js';
 import { CatalogAdminService, type CatalogEventBus } from './services/catalog-admin.service.js';
 import { CategoryAdminService } from './services/category-admin.service.js';
+import {
+  SYSTEM_PRODUCT_SCOPE,
+  type AdminProductReadScope,
+  type CatalogAdminProductVisibility,
+} from './services/admin-product-visibility.js';
 import { CatalogBulkUpdateService } from './services/catalog-bulk-update.service.js';
 import { BulkOperationService } from './services/bulk-operation.service.js';
 import {
@@ -54,6 +66,27 @@ export interface CatalogPromptToolsDeps {
   salesChannelMembership?: SalesChannelMembershipPort;
   /** Enables queue delegation for > BULK_ASYNC_THRESHOLD selections. */
   redis?: Redis;
+  /**
+   * Feature 163 (P-1 = A) — the bus the Archive / Restore tools run their
+   * `product.archive` / `product.restore` Commands through, so the audit entry is
+   * written co-transactionally with the acting admin the bus derives from the
+   * confirming request. Without it those two tools are not contributed: the
+   * service's bus-less fallback writes no audit entry. Since issue #241 the
+   * four older mutations run their per-product writes through it too (the
+   * `product.update` Command), and without it no mutation tool is contributed.
+   */
+  commandBus?: CommandBus;
+  /**
+   * Spec 193 (FR-081, TM-3 (2)) — `product_visibility_rules`' admin scope, presence-decided by
+   * the wiring. Each tool resolves the **invoking** administrator's scope at execution (and again
+   * on a later confirm), never from an ambient request. Without it every tool reads as the system.
+   */
+  adminProductVisibility?: CatalogAdminProductVisibility;
+}
+
+/** The invoking administrator's scope, at execution. */
+async function toolScope(deps: CatalogPromptToolsDeps, adminUserId: string): Promise<AdminProductReadScope> {
+  return deps.adminProductVisibility ? deps.adminProductVisibility.scopeFor(adminUserId) : SYSTEM_PRODUCT_SCOPE;
 }
 
 /** Mirrors the feature-022 route threshold (catalog/routes.admin.ts). */
@@ -71,6 +104,16 @@ export function catalogPromptResolverTools(deps: CatalogPromptToolsDeps): Prompt
     deps.emFactory,
     deps.events as CatalogEventBus,
     deps.auditLogService,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    deps.adminProductVisibility,
   );
   const categoryService = new CategoryAdminService(deps.emFactory);
 
@@ -79,19 +122,24 @@ export function catalogPromptResolverTools(deps: CatalogPromptToolsDeps): Prompt
     moduleId: 'catalog',
     kind: 'resolver',
     description:
-      'Search products by a name, SKU or slug fragment (case- and diacritic-insensitive substring). Returns up to 20 matches as {id, sku, label, status}. Use the returned id in mutation tools; never invent ids.',
+      'Search products by a name, SKU or slug fragment (case- and diacritic-insensitive substring), archived products included. Returns up to 20 matches as {id, sku, label, status, archived}; archived is independent of status. Use the returned id in mutation tools; never invent ids.',
     requiredPermission: 'catalog:read',
     paramsSchema: SearchProductsParamsSchema,
-    execute: async (params) => {
-      const result = await adminService.listProducts({
+    execute: async (params, ctx) => {
+      // Feature 163 (P-1 = A) — archived products included, so that
+      // `catalog.restore_product` can be resolved at all; the admin list's own
+      // default (`exclude`) would hide every product it applies to.
+      const result = await adminService.listProducts(await toolScope(deps, ctx.adminUserId), {
         q: params.q,
+        archived: 'include',
         pageSize: Math.min(params.limit ?? 10, RESULT_LIMIT),
       });
       return result.items.map((p) => ({
         id: p.id,
         sku: p.sku,
-        label: localizedLabel(p.name),
+        label: p.name || p.sku,
         status: p.status,
+        archived: (p.archivedAt ?? null) !== null,
       }));
     },
   };
@@ -124,15 +172,32 @@ export function catalogPromptResolverTools(deps: CatalogPromptToolsDeps): Prompt
 // US2 — bulk category assignment (mutation) + delegated-progress resolver
 // ---------------------------------------------------------------------------
 
-function buildBulkServices(deps: CatalogPromptToolsDeps): {
+interface BulkServices {
   bulkOperationService: BulkOperationService;
   bulkUpdateService: CatalogBulkUpdateService;
-} {
+  adminService: CatalogAdminService;
+  /** Spec 193 — the invoking admin's scope, resolved at execution. */
+  scopeFor(adminUserId: string): Promise<AdminProductReadScope>;
+}
+
+function buildBulkServices(deps: CatalogPromptToolsDeps): BulkServices {
+  // Issue #241 — the bus is what audits each product a bulk mutation writes: the
+  // bulk edit runs the `product.update` Command per product, and without a bus that
+  // Command falls back to the unaudited write.
   const adminService = new CatalogAdminService(
     deps.emFactory,
     deps.events as CatalogEventBus,
     deps.auditLogService,
     deps.salesChannelMembership,
+    deps.commandBus,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    deps.adminProductVisibility,
   );
   const bulkUpdateService = new CatalogBulkUpdateService(
     deps.emFactory,
@@ -142,6 +207,7 @@ function buildBulkServices(deps: CatalogPromptToolsDeps): {
   );
   const queue = deps.redis ? createBulkOperationQueue(deps.redis) : undefined;
   const bulkOperationService = new BulkOperationService(deps.emFactory, bulkUpdateService, {
+    ...(deps.adminProductVisibility ? { visibility: deps.adminProductVisibility } : {}),
     ...(queue
       ? {
           onEnqueued: async (operationId: string): Promise<void> => {
@@ -150,25 +216,29 @@ function buildBulkServices(deps: CatalogPromptToolsDeps): {
         }
       : {}),
   });
-  return { bulkOperationService, bulkUpdateService };
+  return { bulkOperationService, bulkUpdateService, adminService, scopeFor: (adminUserId) => toolScope(deps, adminUserId) };
 }
 
 /** Shared bulk-fields execution: ≤ threshold runs sync; larger delegates to the queue. */
 async function runBulkFieldsUpdate(
-  services: { bulkOperationService: BulkOperationService; bulkUpdateService: CatalogBulkUpdateService },
+  services: BulkServices,
   fields: Record<string, unknown>,
   productIds: string[],
   ctx: ToolContext,
 ): Promise<unknown> {
-  const request = { productIds, fields };
-  if (productIds.length > BULK_ASYNC_THRESHOLD) {
+  // Spec 193 (FR-081, TM-3 (2)) — the invoking admin's scope at execution: a hidden id goes the
+  // way a missing one does, before the threshold and the queue.
+  const scope = await services.scopeFor(ctx.adminUserId);
+  const visibleIds = await services.adminService.narrowProductIds(scope, productIds);
+  const request = { productIds: visibleIds, fields };
+  if (visibleIds.length > BULK_ASYNC_THRESHOLD) {
     const op = await services.bulkOperationService.create({
       requestedByAdminUserId: ctx.adminUserId,
       payload: request,
     });
     return { delegated: true, bulkOperationId: op.id };
   }
-  const result = await services.bulkUpdateService.bulkUpdate(request, {
+  const result = await services.bulkUpdateService.bulkUpdate(scope, request, {
     actorAdminUserId: ctx.adminUserId,
     impersonatedCustomerAccountId: null,
     ipAddress: ctx.auditCtx.ipAddress ?? null,
@@ -193,21 +263,28 @@ async function previewProducts(
   em: EntityManager,
   productIds: string[],
   headline: string,
+  /** Spec 193 (FR-081) — the products hidden from the invoking admin: previewed as missing. */
+  hidden: ReadonlySet<string>,
 ): Promise<{ headline: string; affectedCount: number; sample: Array<{ id: string; label: string }> }> {
-  const products = await em.find(Product, { id: { $in: productIds } }, { fields: ['id', 'name', 'sku'] });
+  const products = (await em.find(Product, { id: { $in: productIds } }, { fields: ['id', 'name', 'sku'] })).filter(
+    (p) => !hidden.has(p.id),
+  );
   if (products.length !== productIds.length) {
     throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'One or more products were not found.');
   }
   return {
     headline,
     affectedCount: products.length,
-    sample: products.slice(0, 10).map((p) => ({ id: p.id, label: localizedLabel(p.name) })),
+    sample: products.slice(0, 10).map((p) => ({ id: p.id, label: p.name || p.sku })),
   };
 }
 
 export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): PromptActionTool[] {
   const services = buildBulkServices(deps);
-  const { bulkOperationService, bulkUpdateService } = services;
+  /** Spec 193 (FR-081) — the named products hidden from the invoking admin, at preview time. */
+  const hiddenFor = async (ctx: ToolContext, productIds: readonly string[]): Promise<ReadonlySet<string>> =>
+    services.adminService.hiddenProductIds(await services.scopeFor(ctx.adminUserId), productIds);
+  const { bulkOperationService, bulkUpdateService, adminService } = services;
 
   const assignToCategory: PromptActionTool<AssignProductsToCategoryParams> = {
     id: 'catalog.assign_products_to_category',
@@ -217,21 +294,22 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
       'Assign one or more products to a category (additive — existing category assignments are kept). Resolve products via catalog.search_products and the category via catalog.search_categories first. Captured into a plan the operator must confirm; not executed immediately.',
     requiredPermission: 'catalog:write',
     paramsSchema: AssignProductsToCategoryParamsSchema,
-    preview: async (params) => {
+    preview: async (params, ctx) => {
       // D-75 — this module's own fork, not the caller's manager. A preview
       // reads committed rows: the request row it would have shared a unit of
       // work with is flushed before the interpreter runs, and nothing here
       // writes.
       const em = deps.emFactory();
+      if (!isUuidShape(params.categoryId)) throw new HttpError(404, 'NOT_FOUND', 'Category not found.');
       const category = await em.findOne(Category, { id: params.categoryId, deletedAt: null });
       if (!category) throw new HttpError(404, 'NOT_FOUND', 'Category not found.');
       // The preview runs the same membership query execution will use: the
       // ids are validated to exist so the affected count is honest (FR-004).
-      const products = await em.find(
-        Product,
-        { id: { $in: params.productIds } },
-        { fields: ['id', 'name', 'sku'] },
-      );
+      // Spec 193 (FR-081) — a product hidden from the invoking admin previews as a missing one.
+      const hidden = await services.adminService.hiddenProductIds(await services.scopeFor(ctx.adminUserId), params.productIds);
+      const products = (
+        await em.find(Product, { id: { $in: params.productIds } }, { fields: ['id', 'name', 'sku'] })
+      ).filter((p) => !hidden.has(p.id));
       if (products.length !== params.productIds.length) {
         throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'One or more products were not found.');
       }
@@ -241,23 +319,26 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
         affectedCount: products.length,
         sample: products.slice(0, 10).map((p) => ({
           id: p.id,
-          label: p.name['en'] ?? Object.values(p.name)[0] ?? p.sku,
+          label: p.name || p.sku,
         })),
       };
     },
     execute: async (params, ctx: ToolContext) => {
+      // Spec 193 (FR-081, TM-3 (2)) — narrowed for the invoking admin at execution.
+      const scope = await services.scopeFor(ctx.adminUserId);
+      const productIds = await adminService.narrowProductIds(scope, params.productIds);
       const request = {
-        productIds: params.productIds,
+        productIds,
         fields: { categories: { mode: 'add' as const, categoryIds: [params.categoryId] } },
       };
-      if (params.productIds.length > BULK_ASYNC_THRESHOLD) {
+      if (productIds.length > BULK_ASYNC_THRESHOLD) {
         const op = await bulkOperationService.create({
           requestedByAdminUserId: ctx.adminUserId,
           payload: request,
         });
         return { delegated: true, bulkOperationId: op.id };
       }
-      const result = await bulkUpdateService.bulkUpdate(request, {
+      const result = await bulkUpdateService.bulkUpdate(scope, request, {
         actorAdminUserId: ctx.adminUserId,
         impersonatedCustomerAccountId: null,
         ipAddress: ctx.auditCtx.ipAddress ?? null,
@@ -289,19 +370,20 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
       'Remove one or more products from a category (subtractive — only the named category is removed, other category assignments are kept). Resolve products via catalog.search_products and the category via catalog.search_categories first. Captured into a plan the operator must confirm; not executed immediately.',
     requiredPermission: 'catalog:write',
     paramsSchema: RemoveProductsFromCategoryParamsSchema,
-    preview: async (params) => {
+    preview: async (params, ctx) => {
       // D-75 — this module's own fork, not the caller's manager. A preview
       // reads committed rows: the request row it would have shared a unit of
       // work with is flushed before the interpreter runs, and nothing here
       // writes.
       const em = deps.emFactory();
+      if (!isUuidShape(params.categoryId)) throw new HttpError(404, 'NOT_FOUND', 'Category not found.');
       const category = await em.findOne(Category, { id: params.categoryId, deletedAt: null });
       if (!category) throw new HttpError(404, 'NOT_FOUND', 'Category not found.');
-      const products = await em.find(
-        Product,
-        { id: { $in: params.productIds } },
-        { fields: ['id', 'name', 'sku'] },
-      );
+      // Spec 193 (FR-081) — a product hidden from the invoking admin previews as a missing one.
+      const hidden = await services.adminService.hiddenProductIds(await services.scopeFor(ctx.adminUserId), params.productIds);
+      const products = (
+        await em.find(Product, { id: { $in: params.productIds } }, { fields: ['id', 'name', 'sku'] })
+      ).filter((p) => !hidden.has(p.id));
       if (products.length !== params.productIds.length) {
         throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'One or more products were not found.');
       }
@@ -311,7 +393,7 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
         affectedCount: products.length,
         sample: products.slice(0, 10).map((p) => ({
           id: p.id,
-          label: p.name['en'] ?? Object.values(p.name)[0] ?? p.sku,
+          label: p.name || p.sku,
         })),
       };
     },
@@ -329,14 +411,15 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
     moduleId: 'catalog',
     kind: 'mutation',
     description:
-      'Set the status (draft | active | inactive) of one or more products. Resolve products via catalog.search_products first. Captured into a plan the operator must confirm; not executed immediately.',
+      'Set the status (active | inactive) of one or more products: inactive switches a product off and does not archive it, and active does not restore an archived product. To archive or restore, use catalog.archive_product or catalog.restore_product. Resolve products via catalog.search_products first. Captured into a plan the operator must confirm; not executed immediately.',
     requiredPermission: 'catalog:write',
     paramsSchema: SetProductStatusParamsSchema,
-    preview: async (params) =>
+    preview: async (params, ctx) =>
       previewProducts(
         deps.emFactory(),
         params.productIds,
         `Set status of ${params.productIds.length} product(s) to "${params.status}"`,
+        await hiddenFor(ctx, params.productIds),
       ),
     execute: async (params, ctx: ToolContext) =>
       runBulkFieldsUpdate(services, { status: params.status }, params.productIds, ctx),
@@ -350,22 +433,167 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
       'Set the storefront visibility (public | logged_in_only | organization_restricted) of one or more products as a bulk action. Resolve products via catalog.search_products first. Captured into a plan the operator must confirm; not executed immediately.',
     requiredPermission: 'catalog:write',
     paramsSchema: SetProductsVisibilityParamsSchema,
-    preview: async (params) =>
+    preview: async (params, ctx) =>
       previewProducts(
         deps.emFactory(),
         params.productIds,
         `Set visibility of ${params.productIds.length} product(s) to "${params.visibility}"`,
+        await hiddenFor(ctx, params.productIds),
       ),
     execute: async (params, ctx: ToolContext) =>
       runBulkFieldsUpdate(services, { visibility: params.visibility }, params.productIds, ctx),
   };
 
+  // Issue #241 — without the bus no product mutation is offered: each would write
+  // unaudited (the bulk edit refuses to run, and Archive / Restore have no Command).
+  if (!deps.commandBus) return [];
   return [
     assignToCategory as PromptActionTool,
     removeFromCategory as PromptActionTool,
     setProductStatus as PromptActionTool,
     setProductsVisibility as PromptActionTool,
-  ];
+    ...archiveRestoreTools(deps, deps.commandBus, bulkOperationService),
+  ].map(withUniqueProductIds);
+}
+
+/**
+ * Feature 163, checkpoint F (S-1) — a model may name one product twice. Every product
+ * mutation tool sees each id once, in first-seen order: a repeated id neither fails the
+ * preview's existence count (`id in (…)` answers one row for it) nor runs twice.
+ */
+function withUniqueProductIds(tool: PromptActionTool): PromptActionTool {
+  const unique = (params: unknown): unknown => {
+    if (typeof params !== 'object' || params === null) return params;
+    const ids = (params as { productIds?: unknown }).productIds;
+    return Array.isArray(ids) ? { ...params, productIds: [...new Set(ids)] } : params;
+  };
+  const preview = tool.preview;
+  return {
+    ...tool,
+    execute: (params, ctx) => tool.execute(unique(params), ctx),
+    ...(preview ? { preview: (params: unknown, ctx: ToolContext) => preview.call(tool, unique(params), ctx) } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Feature 163, owner decision P-1 = A — Archive / Restore
+// ---------------------------------------------------------------------------
+
+/**
+ * `catalog.archive_product` and `catalog.restore_product` (FR-019): the same
+ * audited Commands as `POST /api/v1/admin/catalog/products/:id/archive` and
+ * `…/restore`, run through a bus-backed {@link CatalogAdminService} so each
+ * product gets its own `product.archive` / `product.restore` entry with the
+ * confirming admin as actor. The plan / confirm step is the confirmation; the
+ * preview headline says what is hard to undo.
+ *
+ * Up to {@link BULK_ASYNC_THRESHOLD} products run at confirm time, one Command
+ * each (a product already in the requested state succeeds with no entry and no
+ * event, O-6). A larger selection is the bulk Archive / Restore of FR-053 on the
+ * durable `catalog.bulk-operation` queue — `fields: { archived }` alone — whose
+ * worker runs the same Command per product, audited with the requesting admin
+ * as actor (S-W2), and whose operation page carries the undo.
+ */
+function archiveRestoreTools(
+  deps: CatalogPromptToolsDeps,
+  commandBus: CommandBus,
+  bulkOperationService: BulkOperationService,
+): PromptActionTool[] {
+  const adminService = new CatalogAdminService(
+    deps.emFactory,
+    deps.events as CatalogEventBus,
+    deps.auditLogService,
+    deps.salesChannelMembership,
+    commandBus,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    deps.adminProductVisibility,
+  );
+  /** Spec 193 (FR-081, TM-3 (2)) — the invoking admin's scope, resolved now (preview or confirm). */
+  const hiddenFor = async (ctx: ToolContext, productIds: readonly string[]): Promise<ReadonlySet<string>> =>
+    adminService.hiddenProductIds(await toolScope(deps, ctx.adminUserId), productIds);
+
+  const run = async (requested: string[], archive: boolean, ctx: ToolContext): Promise<unknown> => {
+    // A product hidden from the confirming admin goes the way a missing one does: it is reported
+    // "Product not found." (the archive Command's own answer) and never queued or written.
+    const hidden = await hiddenFor(ctx, requested);
+    const productIds = requested.filter((id) => !hidden.has(id));
+    const notFound = requested.filter((id) => hidden.has(id)).map((id) => ({ id, reason: 'Product not found.' }));
+    if (productIds.length > BULK_ASYNC_THRESHOLD) {
+      const op = await bulkOperationService.create({
+        requestedByAdminUserId: ctx.adminUserId,
+        payload: { productIds, fields: { archived: archive } },
+      });
+      return { delegated: true, bulkOperationId: op.id };
+    }
+    const failures: Array<{ id: string; reason: string }> = [...notFound];
+    for (const id of productIds) {
+      try {
+        if (archive) await adminService.archiveProduct(id);
+        else await adminService.restoreProduct(id);
+      } catch (err) {
+        // A per-item tolerance: one product's failure never rolls back
+        // another's (FR-011). A disabled module is not a per-item failure,
+        // so it still fails the whole run closed.
+        rethrowIfModuleDisabled(err);
+        // Feature 163, checkpoint F (S-2) — the reason reaches the assistant's
+        // transcript: only an HttpError's message is written for a reader; any other
+        // error's text (a driver message, a stack detail) stays in the server log.
+        failures.push({ id, reason: err instanceof HttpError ? err.message : 'failed' });
+      }
+    }
+    return {
+      summary: {
+        total: requested.length,
+        succeeded: requested.length - failures.length,
+        failed: failures.length,
+        failures: failures.slice(0, 50),
+      },
+    };
+  };
+
+  const archiveProduct: PromptActionTool<ArchiveProductsParams> = {
+    id: 'catalog.archive_product',
+    moduleId: 'catalog',
+    kind: 'mutation',
+    description:
+      'Archive one or more products: an archived product leaves every sales channel and its page answers "gone", whatever its status. It stays archived until catalog.restore_product restores it; setting its status does not. Archiving an already archived product changes nothing. Resolve products via catalog.search_products first. Captured into a plan the operator must confirm; not executed immediately.',
+    requiredPermission: 'catalog:write',
+    paramsSchema: ArchiveProductsParamsSchema,
+    preview: async (params, ctx) =>
+      previewProducts(
+        deps.emFactory(),
+        params.productIds,
+        `Archive ${params.productIds.length} product(s): they leave every sales channel, and only Restore brings them back`,
+        await hiddenFor(ctx, params.productIds),
+      ),
+    execute: async (params, ctx: ToolContext) => run(params.productIds, true, ctx),
+  };
+
+  const restoreProduct: PromptActionTool<RestoreProductsParams> = {
+    id: 'catalog.restore_product',
+    moduleId: 'catalog',
+    kind: 'mutation',
+    description:
+      'Restore one or more archived products. Restore does not change the status: a restored inactive product stays switched off. Restoring a product that is not archived changes nothing. Resolve products via catalog.search_products first (it reports archived). Captured into a plan the operator must confirm; not executed immediately.',
+    requiredPermission: 'catalog:write',
+    paramsSchema: RestoreProductsParamsSchema,
+    preview: async (params, ctx) =>
+      previewProducts(
+        deps.emFactory(),
+        params.productIds,
+        `Restore ${params.productIds.length} archived product(s); their status stays as it is`,
+        await hiddenFor(ctx, params.productIds),
+      ),
+    execute: async (params, ctx: ToolContext) => run(params.productIds, false, ctx),
+  };
+
+  return [archiveProduct as PromptActionTool, restoreProduct as PromptActionTool];
 }
 
 /**
@@ -387,7 +615,9 @@ export function catalogPromptMutationTools(deps: CatalogPromptToolsDeps): Prompt
 export function catalogBulkProgressReader(deps: CatalogPromptToolsDeps): BulkProgressReader {
   const { bulkOperationService } = buildBulkServices(deps);
   return async (bulkOperationId): Promise<BulkProgressSnapshot | null> => {
-    const op = await bulkOperationService.get(bulkOperationId);
+    // The operation was queued by a tool for the invoking admin, its selection narrowed for them
+    // then; this reads its progress for `prompt_actions`, which owns who may see the request.
+    const op = await bulkOperationService.get(SYSTEM_PRODUCT_SCOPE, bulkOperationId);
     if (!op) return null;
     return {
       total: op.total,

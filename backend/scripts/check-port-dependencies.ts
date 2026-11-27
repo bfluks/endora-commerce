@@ -189,6 +189,11 @@ export const PLATFORM_OWNED_NAMES: ReadonlySet<string> = new Set([
   'eventBus',
   'commandBus',
   'apiInterceptors',
+  // `specs/176-command-hooks-outbox/` P2 — the command-hook registry the root
+  // builds beside `commandBus` and hands to it and to `composeModules`, which
+  // seals it. Platform infrastructure as `apiInterceptors` is: `_lifecycle`
+  // reads it for the execution plan, and no module owns it.
+  'commandHookRegistry',
   'settingsReadPort',
   // The same kernel object as `settingsReadPort`, seen from the writing side:
   // `composeSettingsKernel` builds one `SettingsCache` and a root contributes
@@ -200,6 +205,19 @@ export const PLATFORM_OWNED_NAMES: ReadonlySet<string> = new Set([
   // modules a deployment ships is not something a module may decide.
   'resolvedModuleRegistry',
   'auditLogService',
+  // Issue #844 — the redaction port beside the writer: the kernel writes its
+  // own table, so no module owns the name and there is no owner to switch off.
+  // The customers retention sweep reads it.
+  'auditRedactionService',
+  // `specs/178-extensible-columns/` FR-051 — the reader of declared extension
+  // columns an extensible host's admin reads attach. Built by both roots over
+  // the ORM's declarations and the effective state; no module owns the name.
+  'schemaExtensionReads',
+  // `specs/187-side-table-extensions/` FR-054 — its side-table twin: the reads
+  // service an extensible host's read ports hand their records to, built by both
+  // roots over the composition's loader registry and the effective state; no
+  // module owns the name.
+  'entityExtensionReads',
   'commandBus',
   // Who an admin actor is, resolved differently by production and the harness
   // — which is exactly the difference a composition root exists to hold.
@@ -220,6 +238,11 @@ export const PLATFORM_OWNED_NAMES: ReadonlySet<string> = new Set([
   // `newsletter` would take it out of the judged population and leave the
   // declaration reading as an `unread-input`.
   'newsletterTokenSecret',
+  // What a listing seals a cursor with when its next position may name a row
+  // the client must not learn about (issue #497). The platform's, for the same
+  // reason as the key above: it is derived from `SESSION_COOKIE_SECRET`, an
+  // input the platform declares, and its value expression names no module.
+  'cursorSeal',
   // `configurationTypeRegistry` left this list in T143a. It read "the root
   // creates and populates it", and the second half stopped being true: each
   // configuration type is declared by the module that owns it, from that
@@ -232,6 +255,16 @@ export const PLATFORM_OWNED_NAMES: ReadonlySet<string> = new Set([
   'settingsChannelResolver',
   'salesChannelResolutionPort',
   'salesChannelMembershipPort',
+  // Spec 193 (R-10, TM-10) — the membership-governor contribution point, composed off
+  // `composeSalesChannelsKernel` and sealed after boot. `product_visibility_rules` registers its
+  // website-rule governor into it from a boot hook; no module owns the name.
+  'salesChannelMembershipGovernors',
+  // Feature 154 — the sales-channel access rule (`SalesChannelAccessPort`) and
+  // the invalidating half of its per-Organization cache, both composed off
+  // `composeSalesChannelsKernel` and contributed by both roots. The rule is a
+  // property of channel resolution, which no module owns.
+  'salesChannelAccessPort',
+  'salesChannelAccessCache',
   // The channel cache the kernel resolver reads through. Composed by the root
   // via `composeSalesChannelsKernel` (T110), because channel resolution backs
   // every channel-scoped read and must not be gated on any one module.
@@ -544,6 +577,9 @@ export const CAPTURABLE_NAMES: ReadonlySet<string> = new Set([
   'eventBus',
   'commandBus',
   'auditLogService',
+  // Issue #844 — built and registered beside `auditLogService`, before the
+  // modules compose, and with no owner to switch off: the same two facts.
+  'auditRedactionService',
   'resolvedModuleRegistry',
   'apiInterceptors',
   // Plain deployment values rather than gates: a string read from the
@@ -587,6 +623,9 @@ export const CAPTURABLE_NAMES: ReadonlySet<string> = new Set([
   // read from the environment, not a gate, so capturing one cannot outlive a
   // module being switched off.
   'newsletterTokenSecret',
+  // The cursor seal (issue #497): a plain object built from the session key,
+  // not a gate, so capturing it cannot outlive a module being switched off.
+  'cursorSeal',
 ]);
 
 /**
@@ -983,12 +1022,22 @@ export const CONTRIBUTION_POLICY_STATED: Readonly<Record<string, 'skip' | 'honou
   // whose recorded owner is not effectively present, and `PlanExecutorService`
   // re-checks at execution.
   'prompt_actions:promptActionToolRegistry': 'skip',
+  // Skipped: a surface. `CmsReservedSegmentRegistry.claimedIn` drops every contributor
+  // whose recorded module is not effectively present — a switched-off blog serves no
+  // address, so a page may take it (feature 171, research R5).
+  'cms:cmsReservedSegmentRegistry': 'skip',
   // Skipped: a surface. `AdminSearchProviderRegistry.listPresent` /
   // `listVisible` drop every provider whose recorded module is not effectively
   // present, so a switched-off owner's record type is neither searched nor
   // offered on the configuration screen; `all()` stays presence-blind for
   // diagnostics (`specs/150-admin-global-search/`).
   'admin_search:adminSearchProviderRegistry': 'skip',
+  // Skipped: `SettingWriteValidatorRegistry.forCode` enumerates only validators
+  // whose recorded contributor is effectively present, as the class states.
+  // Listed for `assets_library`'s retention validator (issue #332), the first
+  // contributor reaching the registry through `acknowledgedDependencies`
+  // rather than `dependencies`: `settings` declares `assets_library`.
+  'settings:settingWriteValidatorRegistry': 'skip',
   // Skipped: a surface. `DocumentTypeRegistry.get` / `list` / `blocks` answer a
   // document type — and each contributed block — only while its recorded module
   // is effectively present, so a switched-off host's type, blocks and templates
@@ -1063,6 +1112,12 @@ export const CONTRIBUTION_POLICY_STATED: Readonly<Record<string, 'skip' | 'honou
   // when the owner is back. `owners()` stays presence-blind
   // (`specs/143-crm-sales-opportunities/`, research R-27).
   'webhooks:webhookEventRegistry': 'skip',
+  // Skipped, and fail-closed: `TaskContextRegistry.present` / `presentFor`
+  // leave out a descriptor whose owner is not effectively present, asked on
+  // every read, so the Tasks of that context are hidden from every list, count
+  // and read by id — and return unchanged, without a restart, when the owner is
+  // back. Nothing is deleted (`specs/163-projects-and-tasks/`, research R-9).
+  'tasks:taskContextRegistry': 'skip',
 };
 
 /**

@@ -4,21 +4,31 @@ import { useMemo, type ReactElement } from 'react';
 import type { Field } from '@puckeditor/core';
 import { createColorField } from './color-field.js';
 import { normalizeBackground, type BackgroundKind, type BackgroundProp, type BackgroundValue, type MediaSourceKind } from '../types/background.js';
+import { PB_FIELD_INPUT_CLASS, PB_FIELD_LABEL_CLASS } from './field-classes.js';
+import { useFieldText, type PageBuilderFieldTextKey } from './field-text.js';
 
-const inputClassName = '_Input-input_bsxfo_26';
+const inputClassName = PB_FIELD_INPUT_CLASS;
 
-const KIND_OPTIONS: { label: string; value: BackgroundKind }[] = [
-  { label: 'None', value: 'none' },
-  { label: 'Solid color', value: 'solid' },
-  { label: 'Gradient', value: 'gradient' },
-  { label: 'Image', value: 'image' },
-  { label: 'Video', value: 'video' },
+// R17 (T201): the words are the section background's field text, translated by the host.
+const KIND_OPTIONS: { label: PageBuilderFieldTextKey; value: BackgroundKind }[] = [
+  { label: 'section.background.none', value: 'none' },
+  { label: 'section.background.solid', value: 'solid' },
+  { label: 'section.background.gradient', value: 'gradient' },
+  { label: 'section.background.image', value: 'image' },
+  { label: 'section.background.video', value: 'video' },
 ];
 
-const SOURCE_OPTIONS: { label: string; value: MediaSourceKind }[] = [
-  { label: 'URL', value: 'url' },
-  { label: 'Asset library', value: 'library' },
+// R17 (T214): the library first, as every image and video source of the page builder.
+const SOURCE_OPTIONS: { label: PageBuilderFieldTextKey; value: MediaSourceKind }[] = [
+  { label: 'section.source.library', value: 'library' },
+  { label: 'section.source.url', value: 'url' },
 ];
+
+/** The source shown: the stored one; with none, the URL when there is one (it renders by URL then), else the library. */
+function shownSource(stored: MediaSourceKind | undefined, url: string | undefined): MediaSourceKind {
+  if (stored === 'url' || stored === 'library') return stored;
+  return typeof url === 'string' && url.trim() !== '' ? 'url' : 'library';
+}
 
 const SOLID_COLOR_FIELD = createColorField({ label: 'Color' });
 const GRADIENT_FROM_FIELD = createColorField({ label: 'Gradient from' });
@@ -39,13 +49,16 @@ function BackgroundFieldControl({
   readOnly?: boolean;
   label: string;
 }): ReactElement {
+  const text = useFieldText();
   const current = useMemo(() => ({ kind: 'none' as const, ...value }), [value]);
+  const imageSource = shownSource(current.imageSource, current.imageUrl);
+  const videoSource = shownSource(current.videoSource, current.videoUrl);
 
   const set = (patch: Partial<BackgroundValue>): void => onChange(mergeBackground(current, patch));
 
   return (
     <div className="flex flex-col gap-2">
-      <label className="text-xs font-medium opacity-80">{label}</label>
+      <label className={PB_FIELD_LABEL_CLASS}>{label}</label>
       <select
         className={inputClassName}
         disabled={readOnly === true}
@@ -54,14 +67,14 @@ function BackgroundFieldControl({
       >
         {KIND_OPTIONS.map((opt) => (
           <option key={opt.value} value={opt.value}>
-            {opt.label}
+            {text(opt.label)}
           </option>
         ))}
       </select>
 
       {current.kind === 'solid' ? (
         <SOLID_COLOR_FIELD.render
-          field={SOLID_COLOR_FIELD}
+          field={{ ...SOLID_COLOR_FIELD, label: text('section.backgroundColor') }}
           id="pb-bg-solid"
           name="background.color"
           value={current.color ?? 'transparent'}
@@ -73,7 +86,7 @@ function BackgroundFieldControl({
       {current.kind === 'gradient' ? (
         <div className="flex flex-col gap-2">
           <GRADIENT_FROM_FIELD.render
-            field={GRADIENT_FROM_FIELD}
+            field={{ ...GRADIENT_FROM_FIELD, label: text('section.gradientFrom') }}
             id="pb-bg-gradient-from"
             name="background.gradientFrom"
             value={current.gradientFrom ?? '#ffffff'}
@@ -81,14 +94,14 @@ function BackgroundFieldControl({
             {...(readOnly === true ? { readOnly: true } : {})}
           />
           <GRADIENT_TO_FIELD.render
-            field={GRADIENT_TO_FIELD}
+            field={{ ...GRADIENT_TO_FIELD, label: text('section.gradientTo') }}
             id="pb-bg-gradient-to"
             name="background.gradientTo"
             value={current.gradientTo ?? '#334155'}
             onChange={(color): void => set({ gradientTo: color ?? '#334155' })}
             {...(readOnly === true ? { readOnly: true } : {})}
           />
-          <label className="text-xs font-medium opacity-80">Angle (deg)</label>
+          <label className={PB_FIELD_LABEL_CLASS}>{text('section.gradientAngle')}</label>
           <input
             type="number"
             className={inputClassName}
@@ -103,25 +116,25 @@ function BackgroundFieldControl({
 
       {current.kind === 'image' ? (
         <div className="flex flex-col gap-2">
-          <label className="text-xs font-medium opacity-80">Image source</label>
+          <label className={PB_FIELD_LABEL_CLASS}>{text('section.imageSource')}</label>
           <select
             className={inputClassName}
             disabled={readOnly === true}
-            value={current.imageSource ?? 'url'}
+            value={imageSource}
             onChange={(e): void => set({ imageSource: e.target.value as MediaSourceKind })}
           >
             {SOURCE_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
-                {opt.label}
+                {text(opt.label)}
               </option>
             ))}
           </select>
-          {current.imageSource === 'library' ? (
+          {imageSource === 'library' ? (
             <input
               className={inputClassName}
               readOnly={readOnly === true}
               value={current.imageAssetId ?? ''}
-              placeholder="Asset ID"
+              aria-label={text('section.image')}
               onChange={(e): void => set({ imageAssetId: e.target.value })}
             />
           ) : (
@@ -129,7 +142,7 @@ function BackgroundFieldControl({
               className={inputClassName}
               readOnly={readOnly === true}
               value={current.imageUrl ?? ''}
-              placeholder="Image URL"
+              aria-label={text('section.imageUrl')}
               onChange={(e): void => set({ imageUrl: e.target.value })}
             />
           )}
@@ -138,25 +151,25 @@ function BackgroundFieldControl({
 
       {current.kind === 'video' ? (
         <div className="flex flex-col gap-2">
-          <label className="text-xs font-medium opacity-80">Video source</label>
+          <label className={PB_FIELD_LABEL_CLASS}>{text('section.videoSource')}</label>
           <select
             className={inputClassName}
             disabled={readOnly === true}
-            value={current.videoSource ?? 'url'}
+            value={videoSource}
             onChange={(e): void => set({ videoSource: e.target.value as MediaSourceKind })}
           >
             {SOURCE_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
-                {opt.label}
+                {text(opt.label)}
               </option>
             ))}
           </select>
-          {current.videoSource === 'library' ? (
+          {videoSource === 'library' ? (
             <input
               className={inputClassName}
               readOnly={readOnly === true}
               value={current.videoAssetId ?? ''}
-              placeholder="Asset ID"
+              aria-label={text('section.video')}
               onChange={(e): void => set({ videoAssetId: e.target.value })}
             />
           ) : (
@@ -164,7 +177,7 @@ function BackgroundFieldControl({
               className={inputClassName}
               readOnly={readOnly === true}
               value={current.videoUrl ?? ''}
-              placeholder="Video URL"
+              aria-label={text('section.videoUrl')}
               onChange={(e): void => set({ videoUrl: e.target.value })}
             />
           )}

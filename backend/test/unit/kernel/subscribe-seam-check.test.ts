@@ -11,6 +11,8 @@ import {
   findSeamForwarders,
   findWorkerFactories,
   keyOf,
+  listingOf,
+  scanSubscribeSeam,
 } from '../../../scripts/check-subscribe-seam.js';
 
 /**
@@ -299,8 +301,47 @@ describe('findWorkerFactories / findWorkerSites — the queue-consumer spellings
     expect(checkWorkerSeam({ sources }, {}).sites).toHaveLength(0);
   });
 
+  // Issue #90: an arrow whose body *is* the call was the only shape recognised as
+  // handing the worker to its caller. A conditional, parentheses, `as` and `!`
+  // pass the value through unchanged, so each is the same hand-off.
+  it.each([
+    ['a conditional', 'cond ? createPushDeliveryWorker(r, p) : null'],
+    ['parentheses', '(createPushDeliveryWorker(r, p))'],
+    ['an `as` assertion', 'createPushDeliveryWorker(r, p) as Worker'],
+    ['a non-null assertion', 'createPushDeliveryWorker(r, p)!'],
+    ['nested wrappers', '(cond ? (createPushDeliveryWorker(r, p) as Worker) : undefined)!'],
+  ])('accepts a factory call an arrow returns through %s', (_label, body) => {
+    const result = checkWorkerSeam(
+      { sources: workerTree(`export const makeWorker = () => ${body};`) },
+      {},
+    );
+    expect(result.violations).toHaveLength(0);
+  });
+
+  it('reads an arrow that returns `new Worker` through a conditional as a factory', () => {
+    const sources = new Map([
+      [
+        'modules/pwa/services/push-delivery-queue.ts',
+        "import { Worker } from 'bullmq';\n" +
+          'export const createPushDeliveryWorker = (redis: Redis | null) =>\n' +
+          '  redis ? new Worker(QUEUE, handler, { connection: redis }) : null;',
+      ],
+    ]);
+    expect([...findWorkerFactories({ sources })]).toEqual(['createPushDeliveryWorker']);
+    expect(checkWorkerSeam({ sources }, {}).violations).toHaveLength(0);
+  });
+
+  it('still reports a call that is only the condition of the returned conditional', () => {
+    // The call's value picks the branch; it is not what the arrow returns.
+    const result = checkWorkerSeam(
+      { sources: workerTree('export const probe = () => (createPushDeliveryWorker(r, p) ? 1 : 0);') },
+      {},
+    );
+    expect(result.violations.map((v) => v.spelling)).toEqual(['createPushDeliveryWorker']);
+  });
+
   it('is a two-way ratchet: ledgered passes, and a stale entry fails', () => {
-    const ungated = workerTree('createPushDeliveryWorker(options.redis, processor);');
+    const ungated =workerTree('createPushDeliveryWorker(options.redis, processor);');
     const key = 'modules/pwa/plugin.ts:createPushDeliveryWorker';
     expect(checkWorkerSeam({ sources: ungated }, { [key]: 'a reason' }).violations).toHaveLength(0);
 
@@ -308,6 +349,35 @@ describe('findWorkerFactories / findWorkerSites — the queue-consumer spellings
       "defineModuleWorker('pwa', createPushDeliveryWorker(options.redis, processor));",
     );
     expect(checkWorkerSeam({ sources: fixed }, { [key]: 'stale now' }).stale).toEqual([key]);
+  });
+});
+
+describe('--list attributes the way the verdict does (issue #919)', () => {
+  // A host-resident module's directory carries no `modules/<id>/` segment, so
+  // its owner comes from `hostResidentModules` alone. The verdict always took
+  // the map; `--list` did not, and so listed a different population from the
+  // one the verdict judged. Both outputs come from one scan here, the one the
+  // CLI runs, so the two cannot be compared over different inputs.
+  const sources = new Map([
+    [
+      'lifecycle/services/reconcile-listener.ts',
+      "eventBus.on('module.activation_changed.v1', async (p) => { await reconcile(p); });",
+    ],
+  ]);
+  const hostResidentModules = new Map([['lifecycle', '_lifecycle']]);
+
+  it('names the host-resident owner in the listing that the verdict judged', () => {
+    const scan = scanSubscribeSeam({ sources, hostResidentModules });
+
+    expect(scan.result.violations.map((v) => `${v.file} ${v.moduleId}`)).toEqual([
+      'lifecycle/services/reconcile-listener.ts _lifecycle',
+    ]);
+    expect(scan.subscriptions.map((s) => `${s.file} ${s.moduleId}`)).toEqual(
+      scan.result.violations.map((v) => `${v.file} ${v.moduleId}`),
+    );
+    expect(listingOf(scan)).toEqual([
+      "BARE     lifecycle/services/reconcile-listener.ts:1  [_lifecycle] eventBus.on('module.activation_changed.v1')",
+    ]);
   });
 });
 
@@ -324,6 +394,22 @@ describe('the tree itself', () => {
   // reads, so the two cannot come to disagree about what the tree is.
   let layout: ModuleTreeLayout;
   let sources: Map<string, string>;
+  // One scan, the one the CLI runs: inside a shared-parse scope it reads each
+  // source once for both halves, where calling each half on its own parsed the
+  // tree four times and timed out under load in `test:unit:fast` (issue #910).
+  // **A budget sized for the scan, not for a unit case** (issue #250). #918
+  // did not add cost here, it moved it: before it, one case parsed the module
+  // roots four times (18.1 s idle) under its own 30 s; now one scan, with the
+  // tree read, runs in this hook (7.4 s idle) under the hook's 30 s. Measured
+  // on 2026-11-08 on a 16-thread machine: 7.4 s idle, 34.7 s at load ~35-40
+  // (16 CPU burners beside two other agents' runs) — past the 30 s — and 16.4 s
+  // and 18.2 s on CI's 4-vCPU runner, where `test:unit:fast` runs four forks at
+  // once (run 42427743082, both attempts). Nothing in it repeats any more.
+  // 120 s is the budget `check-module-boundary.test.ts` gives its one
+  // whole-tree case (#908): over three times the loaded measurement, and still
+  // a bound, so a walk that stopped terminating still fails.
+  const TREE_SCAN_BUDGET_MS = 120_000;
+  let scan: ReturnType<typeof scanSubscribeSeam>;
 
   beforeAll(async () => {
     layout = await requireModuleLayout('[subscribe-seam-test]');
@@ -331,10 +417,12 @@ describe('the tree itself', () => {
     for (const root of layout.sourceRoots) {
       for (const [key, text] of readTree(root)) sources.set(key, text);
     }
-  });
+    scan = scanSubscribeSeam({ sources });
+  }, TREE_SCAN_BUDGET_MS);
 
   it('has no queue consumer outside the seam, and an empty ledger', () => {
-    const result = checkWorkerSeam({ sources }, WORKERS_OUTSIDE_THE_SEAM);
+    // The scan judges against the shipped ledger, `WORKERS_OUTSIDE_THE_SEAM`.
+    const result = scan.workers;
     // The vacuous-pass guard the check itself exits 2 on: this tree has queue
     // consumers, so reading none means the analysis stopped working.
     expect(result.sites.length, 'no worker site read — a vacuous pass').toBeGreaterThan(10);
@@ -345,7 +433,8 @@ describe('the tree itself', () => {
 
   it('has no bare subscription left, and an empty ledger', () => {
     expect(sources.size, 'no sources found — a vacuous pass').toBeGreaterThan(100);
-    const result = checkSubscribeSeam({ sources }, BARE_SUBSCRIPTIONS_TO_DRAIN);
+    // The scan judges against the shipped ledger, `BARE_SUBSCRIPTIONS_TO_DRAIN`.
+    const result = scan.result;
     expect(result.violations.map((v) => `${v.file}:${v.event}`)).toEqual([]);
     expect(result.stale).toEqual([]);
     expect(Object.keys(BARE_SUBSCRIPTIONS_TO_DRAIN)).toEqual([]);

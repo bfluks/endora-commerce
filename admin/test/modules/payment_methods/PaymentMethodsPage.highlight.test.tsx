@@ -76,7 +76,6 @@ const SESSION = adminSession({ permissions: ['payment_methods:read'] });
 
 const KEYS = [
   'legacyMethods.payment.title',
-  'legacyMethods.payment.description',
   'legacyMethods.payment.empty',
   'legacyMethods.columns.code',
   'legacyMethods.columns.name',
@@ -85,7 +84,6 @@ const KEYS = [
   'legacyMethods.fields.status',
   'legacyMethods.status.active',
   'legacyMethods.status.inactive',
-  'legacyMethods.formTitle',
   'legacyMethods.editTitle',
   'common.state.loading',
   'common.action.edit',

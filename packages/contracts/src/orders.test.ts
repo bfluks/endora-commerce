@@ -1,14 +1,42 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE,
   adminOrderDetailSchema,
   adminOrderPreviewMessageCodeSchema,
   adminOrderPreviewResponseSchema,
+  adminOrdersListQuerySchema,
+  adminCreateOrderRequestSchema,
+  adminOrderPreviewRequestSchema,
   createOrderSavedViewRequestSchema,
+  orderItemSchema,
+  orderCommentSchema,
+  orderCommentSystemNoteSchema,
   orderSavedViewSchema,
   orderSchema,
   updateOrderSavedViewRequestSchema,
+  ORDER_EXTERNAL_REFERENCE_MESSAGE_MAX,
+  ORDER_EXTERNAL_REFERENCE_PORT,
+  ORDER_EXTERNAL_REFERENCE_STATES,
+  orderExternalReferenceSystemSchema,
+  orderExternalReferenceWriteSchema,
+  adminOrderPaymentStatusTransitionSchema,
+  orderPaymentStatusRefusalDetailsSchema,
+  PAYMENT_STATUS_TRANSITIONS,
+  paymentStatusTargets,
+  paymentStatusTransitionActorSchema,
 } from './orders.js';
+import { paymentStatusSchema } from './common.js';
+import {
+  orderPayerSchema,
+  orderPreviewTotalRequestSchema,
+  paidOrderDetailSchema,
+  paidOrderListQuerySchema,
+  placeOrderRequestSchema,
+  PAYER_BILLING_OVERRIDE_CONFLICT,
+  type PaidOrderDetail,
+  type PaidOrderReadPort,
+} from './orders.js';
+import type { OrderReturnContext } from './returns.js';
 
 const ADDRESS = {
   recipientName: 'Jan Kowalski',
@@ -62,6 +90,7 @@ const ORGANIZATION = {
   name: 'Acme',
   legalName: null,
   taxId: 'PL0000000099',
+  isPersonal: false,
   vatStatus: 'vat_payer',
 };
 const CUSTOMER = {
@@ -83,6 +112,12 @@ describe('orderSchema — customFieldValues', () => {
 });
 
 describe('adminOrderDetailSchema', () => {
+  it('carries a personal Organization with no tax id and its kind (#767)', () => {
+    const personal = { ...ORGANIZATION, name: 'Jan Kowalski', taxId: null, isPersonal: true, vatStatus: 'vat_exempt' };
+    const parsed = adminOrderDetailSchema.parse({ ...ORDER, organization: personal, customer: CUSTOMER });
+    expect(parsed.organization).toEqual(personal);
+  });
+
   it('keeps the organization and the customer of the admin detail', () => {
     const parsed = adminOrderDetailSchema.parse({
       ...ORDER,
@@ -109,12 +144,20 @@ describe('adminOrderDetailSchema', () => {
 describe('admin order preview message codes', () => {
   const PRECEDENCE = [
     'PRODUCT_NOT_FOUND',
+    // Issue #829 — an archived product (feature 163 FR-019) is refused on its own
+    // reason, `PRODUCT_ARCHIVED`, the one admin order create answers; it is
+    // product-wide, so it outranks the customer's visibility and the channel.
+    'PRODUCT_ARCHIVED',
     'PRODUCT_NOT_VISIBLE_TO_CUSTOMER',
     'PRODUCT_NOT_IN_SALES_CHANNEL',
     'QUOTE_ONLY',
+    // Feature 160 — a line no price book prices (no `defaultPrice` fallback).
+    'UNPRICED',
+    // Feature 155 — appended last: a line with an earlier code keeps that code.
+    'BELOW_MINIMUM_QUANTITY',
   ];
 
-  it('orders the four codes by precedence, first match wins', () => {
+  it('orders the seven codes by precedence, first match wins', () => {
     expect([...ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE]).toEqual(PRECEDENCE);
   });
 
@@ -139,6 +182,31 @@ describe('admin order preview message codes', () => {
     expect(adminOrderPreviewResponseSchema.parse(response).messages[0]?.code).toBe(
       'SOME_FUTURE_CODE',
     );
+  });
+
+  it('feature 159 — a priced line carries its tax rate; a line without one still parses', () => {
+    const line = {
+      productId: '00000000-0000-4000-8000-000000000007',
+      quantity: 2,
+      unitPrice: '10.00',
+      currency: 'PLN',
+      lineTotal: 20,
+    };
+    const summary = {
+      subtotal: 20,
+      taxTotal: 4.6,
+      deliveryTotal: 0,
+      paymentSurcharge: 0,
+      discountTotal: 0,
+      total: 24.6,
+      currency: 'PLN',
+    };
+    const parsed = adminOrderPreviewResponseSchema.parse({
+      lines: [{ ...line, taxRate: 0.23 }, line],
+      summary,
+      messages: [],
+    });
+    expect(parsed.lines.map((l) => l.taxRate)).toEqual([0.23, undefined]);
   });
 });
 
@@ -244,4 +312,455 @@ describe('order saved views (FR-003, R-8, S-05, S-06)', () => {
       });
     });
   }
+});
+
+describe('adminOrdersListQuerySchema customFieldFilters (specs/157-custom-fields-list-filters/)', () => {
+  it('parses the JSON parameter to the filter record', () => {
+    const parsed = adminOrdersListQuerySchema.parse({
+      customFieldFilters: '{"src":{"in":["a","b"]}}',
+    });
+    expect(parsed.customFieldFilters).toEqual({ src: { in: ['a', 'b'] } });
+  });
+
+  it('leaves it undefined when absent', () => {
+    expect(adminOrdersListQuerySchema.parse({}).customFieldFilters).toBeUndefined();
+  });
+
+  it('locates a malformed bound under the parameter, the key and the operator', () => {
+    const result = adminOrdersListQuerySchema.safeParse({
+      customFieldFilters: JSON.stringify({ src: { min: 'ten' } }),
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => issue.path)).toEqual([
+      ['customFieldFilters', 'src', 'min'],
+    ]);
+  });
+
+  it('survives the second parse the handlers perform after the route validator', () => {
+    const query = {
+      customFieldFilters: JSON.stringify({ src: { in: ['a'] }, amount: { min: '-12.5' } }),
+      status: ['pending', 'shipped'],
+      pageSize: '50',
+    };
+    const once = adminOrdersListQuerySchema.parse(query);
+    expect(adminOrdersListQuerySchema.parse(once)).toEqual(once);
+  });
+});
+
+// Feature 159 — line groups on orders (`specs/159-quote-request-item-groups/`).
+describe('order line groups (T007)', () => {
+  const ID = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const CREATE = {
+    customerAccountId: ID(3),
+    salesChannelId: ID(4),
+    deliveryMethodId: ID(5),
+    paymentMethodId: ID(6),
+    deliveryAddressId: ID(7),
+    billingAddressId: ID(7),
+  };
+  const ITEM = {
+    id: ID(20),
+    productId: ID(21),
+    productSnapshot: { sku: 'B-1', name: 'Bolt', primaryAssetUrl: null },
+    variantId: null,
+    variantSnapshot: null,
+    quantity: 2,
+    unitPrice: 10,
+    taxRate: 0.23,
+    lineTotal: 24.6,
+  };
+  const paths = (result: { error?: { issues: { path: PropertyKey[] }[] } }) =>
+    (result.error?.issues ?? []).map((issue) => issue.path.join('.'));
+
+  it('admin create accepts groups and per-line group keys', () => {
+    const parsed = adminCreateOrderRequestSchema.parse({
+      ...CREATE,
+      groups: [{ key: 'g1', name: ' Hall A ' }],
+      items: [
+        { productId: ID(30), quantity: 1, groupKey: 'g1' },
+        { productId: ID(31), quantity: 1 },
+      ],
+    });
+    expect(parsed.groups).toEqual([{ key: 'g1', name: 'Hall A' }]);
+    expect(parsed.items[0]?.groupKey).toBe('g1');
+  });
+
+  it('admin create refuses an id on a group, an unknown key, duplicate keys and 51 groups', () => {
+    expect(
+      adminCreateOrderRequestSchema.safeParse({
+        ...CREATE,
+        groups: [{ key: 'g1', id: ID(9), name: 'A' }],
+        items: [{ productId: ID(30), quantity: 1, groupKey: 'g1' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      paths(
+        adminCreateOrderRequestSchema.safeParse({
+          ...CREATE,
+          items: [{ productId: ID(30), quantity: 1, groupKey: 'nope' }],
+        }),
+      ),
+    ).toEqual(['items.0.groupKey']);
+    expect(
+      paths(
+        adminCreateOrderRequestSchema.safeParse({
+          ...CREATE,
+          groups: [
+            { key: 'a', name: 'A' },
+            { key: 'a', name: 'B' },
+          ],
+          items: [{ productId: ID(30), quantity: 1 }],
+        }),
+      ),
+    ).toEqual(['groups.1.key']);
+    const many = Array.from({ length: 51 }, (_, i) => ({ key: `k${i}`, name: `G${i}` }));
+    expect(
+      paths(
+        adminCreateOrderRequestSchema.safeParse({
+          ...CREATE,
+          groups: many,
+          items: [{ productId: ID(30), quantity: 1 }],
+        }),
+      ),
+    ).toContain('groups');
+  });
+
+  it('admin create still applies its address rule', () => {
+    const { deliveryAddressId: _omit, ...withoutDelivery } = CREATE;
+    expect(
+      paths(
+        adminCreateOrderRequestSchema.safeParse({
+          ...withoutDelivery,
+          items: [{ productId: ID(30), quantity: 1 }],
+        }),
+      ),
+    ).toEqual(['deliveryAddressId']);
+  });
+
+  it('the admin preview is unchanged: a groupKey is stripped, not refused', () => {
+    const parsed = adminOrderPreviewRequestSchema.parse({
+      customerAccountId: ID(3),
+      salesChannelId: ID(4),
+      items: [{ productId: ID(30), quantity: 1, groupKey: 'g1' }],
+    });
+    expect(parsed.items[0]).not.toHaveProperty('groupKey');
+  });
+
+  it('an order item defaults groupId and position; an order defaults itemGroups', () => {
+    const item = orderItemSchema.parse(ITEM);
+    expect(item.groupId).toBeNull();
+    expect(item.position).toBe(0);
+    expect(orderItemSchema.parse({ ...ITEM, groupId: ID(40), position: 2 })).toMatchObject({
+      groupId: ID(40),
+      position: 2,
+    });
+    expect(orderSchema.parse(ORDER).itemGroups).toEqual([]);
+    const groups = [{ id: ID(40), name: 'Hall A', position: 0 }];
+    expect(orderSchema.parse({ ...ORDER, itemGroups: groups }).itemGroups).toEqual(groups);
+  });
+});
+
+describe('feature 162 — the order comment system note', () => {
+  const NOTE = {
+    kind: 'custom_field_carry_skipped',
+    source: {
+      entityType: 'quote_request',
+      recordId: '0b8f5f0e-2a0e-4f55-8a53-0f3f7cbe0a02',
+      reference: 'QR-1042',
+    },
+    skipped: [{ key: 'order_source', reason: 'value_invalid' }],
+  };
+  const COMMENT = {
+    id: '0b8f5f0e-2a0e-4f55-8a53-0f3f7cbe0a03',
+    orderId: '0b8f5f0e-2a0e-4f55-8a53-0f3f7cbe0a04',
+    authorAdminUserId: null,
+    authorCustomerAccountId: null,
+    body: 'Custom field values were not carried.',
+    isCustomerVisible: false,
+    notifyCustomer: false,
+    createdAt: '2026-10-20T10:00:00.000Z',
+  };
+
+  it("parses the contract's example", () => {
+    expect(orderCommentSystemNoteSchema.parse(NOTE)).toEqual(NOTE);
+  });
+
+  it('refuses a note that skipped nothing', () => {
+    expect(orderCommentSystemNoteSchema.safeParse({ ...NOTE, skipped: [] }).success).toBe(false);
+  });
+
+  it('refuses an unknown reason', () => {
+    expect(
+      orderCommentSystemNoteSchema.safeParse({ ...NOTE, skipped: [{ key: 'order_source', reason: 'other' }] })
+        .success,
+    ).toBe(false);
+  });
+
+  it('refuses a source of another entity type', () => {
+    expect(
+      orderCommentSystemNoteSchema.safeParse({ ...NOTE, source: { ...NOTE.source, entityType: 'order' } }).success,
+    ).toBe(false);
+  });
+
+  it('a comment carries a note, no note, or no key at all', () => {
+    expect(orderCommentSchema.parse({ ...COMMENT, systemNote: NOTE }).systemNote).toEqual(NOTE);
+    expect(orderCommentSchema.parse({ ...COMMENT, systemNote: null }).systemNote).toBeNull();
+    expect(Object.hasOwn(orderCommentSchema.parse(COMMENT), 'systemNote')).toBe(false);
+  });
+});
+
+describe('order external references (issue #1030)', () => {
+  const REFERENCE = {
+    system: 'erp_connector',
+    reference: 'ZS/2026/1042',
+    state: 'synced',
+    message: null,
+    updatedAt: '2026-11-10T10:00:00.000Z',
+  };
+
+  it('publishes the container name as a constant', () => {
+    expect(ORDER_EXTERNAL_REFERENCE_PORT).toBe('orderExternalReferencePort');
+  });
+
+  it('carries the references on the admin detail, and an older reply parses as none', () => {
+    const parsed = adminOrderDetailSchema.parse({
+      ...ORDER,
+      organization: ORGANIZATION,
+      customer: CUSTOMER,
+      externalReferences: [REFERENCE],
+    });
+    expect(parsed.externalReferences).toEqual([REFERENCE]);
+    const older = adminOrderDetailSchema.parse({ ...ORDER, organization: null, customer: null });
+    expect(older.externalReferences).toEqual([]);
+  });
+
+  it('is not carried by the plain order schema', () => {
+    const parsed = orderSchema.parse({ ...ORDER, externalReferences: [REFERENCE] });
+    expect(parsed).not.toHaveProperty('externalReferences');
+  });
+
+  it('accepts the three states and nothing else', () => {
+    expect(ORDER_EXTERNAL_REFERENCE_STATES).toEqual(['pending', 'synced', 'error']);
+    for (const state of ORDER_EXTERNAL_REFERENCE_STATES) {
+      expect(orderExternalReferenceWriteSchema.safeParse({ state }).success).toBe(true);
+    }
+    expect(orderExternalReferenceWriteSchema.safeParse({ state: 'failed' }).success).toBe(false);
+  });
+
+  it('keys a system by a lower-case identifier of at most 64 characters', () => {
+    for (const ok of ['erp', 'erp_connector', 'wms-2', 'acme.erp', 'a'.repeat(64)]) {
+      expect(orderExternalReferenceSystemSchema.safeParse(ok).success, ok).toBe(true);
+    }
+    for (const bad of ['', 'ERP', '1erp', 'erp connector', 'erp/1', '_erp', 'a'.repeat(65)]) {
+      expect(orderExternalReferenceSystemSchema.safeParse(bad).success, bad).toBe(false);
+    }
+  });
+
+  it('bounds the message at 1000 characters of plain text', () => {
+    const longest = 'x'.repeat(ORDER_EXTERNAL_REFERENCE_MESSAGE_MAX);
+    expect(ORDER_EXTERNAL_REFERENCE_MESSAGE_MAX).toBe(1000);
+    const accepts = (message: string) =>
+      orderExternalReferenceWriteSchema.safeParse({ state: 'error', message }).success;
+    expect(accepts(longest)).toBe(true);
+    expect(accepts(`${longest}x`)).toBe(false);
+    expect(accepts('Item 1042\nis blocked\tfor sale')).toBe(true);
+    expect(accepts('nul\u0000')).toBe(false);
+    expect(accepts('bell\u0007')).toBe(false);
+  });
+
+  it('refuses an empty or overlong reference, and admits null', () => {
+    const accepts = (reference: string | null) =>
+      orderExternalReferenceWriteSchema.safeParse({ state: 'synced', reference }).success;
+    expect(accepts(null)).toBe(true);
+    expect(accepts('ZS/2026/1042')).toBe(true);
+    expect(accepts('')).toBe(false);
+    expect(accepts('   ')).toBe(false);
+    expect(accepts('r'.repeat(256))).toBe(false);
+  });
+});
+
+describe('payment-status transitions (issue #1574)', () => {
+  it('C1 — an operator may move an unpaid order to paid, a paid one to refunded, and a refunded one nowhere', () => {
+    expect(paymentStatusTargets('awaiting_payment', 'operator')).toEqual(['paid']);
+    expect(paymentStatusTargets('failed', 'operator')).toEqual(['paid']);
+    expect(paymentStatusTargets('deferred', 'operator')).toEqual(['paid']);
+    expect(paymentStatusTargets('paid', 'operator')).toEqual(['refunded']);
+    expect(paymentStatusTargets('refunded', 'operator')).toEqual([]);
+  });
+
+  it('C1 — the targets never include the current status', () => {
+    for (const from of paymentStatusSchema.options) {
+      for (const actor of paymentStatusTransitionActorSchema.options) {
+        expect(paymentStatusTargets(from, actor)).not.toContain(from);
+      }
+    }
+  });
+
+  it('C2 — the operator edges reach exactly what the admin route parses (the graph and the schema cannot drift)', () => {
+    const reachable = new Set(
+      PAYMENT_STATUS_TRANSITIONS.filter((edge) => edge.actors.includes('operator')).map((edge) => edge.to),
+    );
+    expect([...reachable].sort()).toEqual([...adminOrderPaymentStatusTransitionSchema.shape.to.options].sort());
+  });
+
+  it('C3 — settlement adds exactly awaiting_payment -> failed to the operator edges', () => {
+    const edges = (actor: 'operator' | 'settlement'): string[] =>
+      PAYMENT_STATUS_TRANSITIONS.filter((edge) => edge.actors.includes(actor))
+        .map((edge) => `${edge.from}->${edge.to}`)
+        .sort();
+    const operator = edges('operator');
+    const settlement = edges('settlement');
+    expect(operator.every((edge) => settlement.includes(edge))).toBe(true);
+    expect(settlement.filter((edge) => !operator.includes(edge))).toEqual(['awaiting_payment->failed']);
+  });
+
+  it('C3 — no edge leaves refunded, and none enters awaiting_payment or deferred', () => {
+    for (const edge of PAYMENT_STATUS_TRANSITIONS) {
+      expect(edge.from).not.toBe('refunded');
+      expect(['awaiting_payment', 'deferred']).not.toContain(edge.to);
+      expect(edge.from).not.toBe(edge.to);
+    }
+  });
+
+  it('describes a refusal by its token and the two statuses', () => {
+    expect(
+      orderPaymentStatusRefusalDetailsSchema.parse({ code: 'payment_refunded', from: 'refunded', to: 'paid' }),
+    ).toEqual({ code: 'payment_refunded', from: 'refunded', to: 'paid' });
+    expect(() =>
+      orderPaymentStatusRefusalDetailsSchema.parse({ code: 'other', from: 'refunded', to: 'paid' }),
+    ).toThrow();
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+//  `specs/182-related-payers/` — the payer of an order (contracts/ports.md §3, §5)
+// ──────────────────────────────────────────────────────────────────────────
+
+const PAYER_ORG = '00000000-0000-4000-8000-0000000000b2';
+const PLACE = {
+  deliveryAddressId: '00000000-0000-4000-8000-000000000011',
+  billingAddressId: '00000000-0000-4000-8000-000000000012',
+  deliveryMethodId: '00000000-0000-4000-8000-000000000005',
+  paymentMethodId: '00000000-0000-4000-8000-000000000006',
+};
+
+describe('placeOrderRequestSchema — payerOrganizationId (FR-062)', () => {
+  it('accepts an optional payer', () => {
+    expect(placeOrderRequestSchema.parse({ ...PLACE, payerOrganizationId: PAYER_ORG }).payerOrganizationId).toBe(
+      PAYER_ORG,
+    );
+    expect(placeOrderRequestSchema.parse(PLACE).payerOrganizationId).toBeUndefined();
+    expect(placeOrderRequestSchema.safeParse({ ...PLACE, payerOrganizationId: 'not-a-uuid' }).success).toBe(false);
+  });
+
+  it.each([
+    ['billingCompanyName', { billingCompanyName: 'Other Ltd' }],
+    ['billingTaxId', { billingTaxId: 'PL0000000000' }],
+  ])('refuses a payer together with a non-empty %s, with the conflict code', (field, override) => {
+    const result = placeOrderRequestSchema.safeParse({ ...PLACE, payerOrganizationId: PAYER_ORG, ...override });
+    expect(result.success).toBe(false);
+    const issue = result.error?.issues.find((i) => i.message === PAYER_BILLING_OVERRIDE_CONFLICT);
+    expect(issue).toBeDefined();
+    expect(issue?.path).toEqual([field]);
+    expect((issue as { params?: { code?: string } } | undefined)?.params?.code).toBe('payer_billing_override_conflict');
+  });
+
+  it('an empty override is no override, so it does not conflict', () => {
+    expect(
+      placeOrderRequestSchema.safeParse({ ...PLACE, payerOrganizationId: PAYER_ORG, billingCompanyName: '', billingTaxId: '' })
+        .success,
+    ).toBe(true);
+  });
+
+  it('accepts the override alone, as before', () => {
+    const parsed = placeOrderRequestSchema.parse({ ...PLACE, billingCompanyName: 'Other Ltd', billingTaxId: 'PL0000000000' });
+    expect(parsed.billingCompanyName).toBe('Other Ltd');
+  });
+
+  it('the preview takes the same payer (FR-064)', () => {
+    const preview = {
+      deliveryMethodId: PLACE.deliveryMethodId,
+      paymentMethodId: PLACE.paymentMethodId,
+      payerOrganizationId: PAYER_ORG,
+    };
+    expect(orderPreviewTotalRequestSchema.parse(preview).payerOrganizationId).toBe(PAYER_ORG);
+  });
+});
+
+describe('order shapes carry the payer (FR-067, FR-073)', () => {
+  const payer = { organizationId: PAYER_ORG, name: 'Payer SA', taxId: 'PL1234567890', terms: 'payer' };
+
+  it('an order without a payer reads payer: null, including a reply from before the field', () => {
+    expect(orderSchema.parse(ORDER).payer).toBeNull();
+    expect(orderSchema.parse({ ...ORDER, payer: null }).payer).toBeNull();
+  });
+
+  it('an order with a payer carries id, name, tax ID and terms', () => {
+    expect(orderSchema.parse({ ...ORDER, payer }).payer).toEqual(payer);
+    expect(orderPayerSchema.safeParse({ ...payer, terms: 'other' }).success).toBe(false);
+  });
+
+  it('the admin detail carries it too', () => {
+    const parsed = adminOrderDetailSchema.parse({ ...ORDER, payer, organization: ORGANIZATION, customer: CUSTOMER });
+    expect(parsed.payer).toEqual(payer);
+  });
+});
+
+describe('OrderReturnContext — the refund target (FR-082)', () => {
+  it('carries payerOrganizationId', () => {
+    expectTypeOf<OrderReturnContext['payerOrganizationId']>().toEqualTypeOf<string | null>();
+  });
+});
+
+describe('PaidOrderDetail — the payer\'s read-only projection (FR-071, ports.md §3)', () => {
+  const detail = {
+    id: ORDER.id,
+    businessId: '1',
+    placedAt: ORDER.placedAt,
+    status: 'new',
+    statusLabel: 'New',
+    paymentStatus: 'awaiting_payment',
+    buyerOrganizationId: ORDER.organizationId,
+    buyerName: 'Buyer Ltd',
+    items: [],
+    subtotal: 0,
+    taxTotal: 0,
+    discountTotal: 0,
+    deliveryTotal: 0,
+    total: 0,
+    currency: 'PLN',
+    billingAddress: { ...ADDRESS, companyName: 'Payer SA', taxId: 'PL1234567890' },
+    payer: { organizationId: PAYER_ORG, name: 'Payer SA', taxId: 'PL1234567890', terms: 'buyer' },
+    deliveryMethodName: 'Pickup',
+    invoices: [{ id: '00000000-0000-4000-8000-0000000000f1', number: 'FV/1/2026' }],
+  };
+
+  it('parses the projection', () => {
+    expect(paidOrderDetailSchema.safeParse(detail).success).toBe(true);
+  });
+
+  it('has no delivery phone, customer note or comment thread', () => {
+    const keys = Object.keys(paidOrderDetailSchema.shape);
+    for (const hidden of ['customerNote', 'comments', 'deliveryAddress', 'customFieldValues', 'nextAction']) {
+      expect(keys).not.toContain(hidden);
+    }
+    const parsed = paidOrderDetailSchema.parse({
+      ...detail,
+      customerNote: 'call me',
+      comments: [{ body: 'x' }],
+      deliveryAddress: { ...ADDRESS, phone: '+48 600 000 000' },
+    }) as PaidOrderDetail & Record<string, unknown>;
+    expect(parsed.customerNote).toBeUndefined();
+    expect(parsed.comments).toBeUndefined();
+    expect(parsed.deliveryAddress).toBeUndefined();
+  });
+
+  it('the list query is bounded', () => {
+    expect(paidOrderListQuerySchema.parse({}).limit).toBe(20);
+    expect(paidOrderListQuerySchema.safeParse({ limit: 201 }).success).toBe(false);
+  });
+
+  it('the port answers null for an order that does not name the payer', () => {
+    expectTypeOf<PaidOrderReadPort['find']>().returns.resolves.toEqualTypeOf<PaidOrderDetail | null>();
+  });
 });

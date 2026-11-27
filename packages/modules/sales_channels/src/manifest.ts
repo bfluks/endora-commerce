@@ -14,7 +14,7 @@ const settings = defineModuleSettingsManifest({
   groups: [
     {
       code: 'sales_channels',
-      name: 'Sales Channels',
+      name: 'Sales channels',
     },
   ],
   settings: [
@@ -33,7 +33,7 @@ const settings = defineModuleSettingsManifest({
 /** Module-lifecycle manifest (feature 018). */
 export const manifest = defineModuleManifest({
   id: 'sales_channels',
-  name: 'Sales Channels',
+  name: 'Sales channels',
   description: 'Multi-channel storefront resolver and channel registry.',
   version: '1.0.0',
   // Rule 2 (bridge owner) — specs/065-manifest-aware-migrations/research.md §R9.
@@ -58,7 +58,12 @@ export const manifest = defineModuleManifest({
   //
   // Forward-looking convention: a new bridge table for module X is owned by X's
   // migration, so X → sales_channels covers it and no new exception is needed.
-  dependencies: ['dictionaries', 'settings'],
+  //
+  // `assets_library` is declared since issue #544 for a port, not for the
+  // foreign key above: a channel's logo is set only when `assetReadPort`
+  // answers that the administrator may see the file. The edge adds no order —
+  // `settings` already declares `assets_library` — and closes no cycle.
+  dependencies: ['assets_library', 'dictionaries', 'settings'],
   settings,
   // Feature 074 (Constitution XVII), test C2 — functional base, and named by
   // ruling 1. Channel scoping is structural: Principle XII is non-negotiable,
@@ -153,13 +158,22 @@ export const manifest = defineModuleManifest({
    */
   errorCodes: [
     { code: 'CANNOT_MODIFY_SYSTEM_DEFAULT' },
+    // A manual membership write on a channel a website rule governs. Raised
+    // by the kernel's membership service; owned here by the domain noun (D-95.2).
+    { code: 'CHANNEL_MEMBERSHIP_GOVERNED' },
     { code: 'DUPLICATE_SALES_CHANNEL_CODE' },
-    { code: 'ENTITY_WOULD_HAVE_ZERO_CHANNELS' },
+    // A channel delete refused because the default is governed for products.
+    { code: 'ENTITY_WOULD_HAVE_ZERO_CHANNELS', tokens: ['default_channel_governed'] },
     { code: 'INACTIVE_SALES_CHANNEL' },
     { code: 'MISSING_SALES_CHANNEL_CONTEXT' },
     { code: 'SALES_CHANNEL_ATTRIBUTION_IMMUTABLE' },
     { code: 'SALES_CHANNEL_CODE_IMMUTABLE' },
     { code: 'SALES_CHANNEL_HAS_ATTRIBUTIONS' },
+    // Feature 154 — the two refusals of the access rule. Raised by the kernel's
+    // access step and by the customer sign-in paths; owned here by the domain
+    // noun, as `INACTIVE_SALES_CHANNEL` is for the same platform thrower.
+    { code: 'SALES_CHANNEL_NOT_PERMITTED' },
+    { code: 'SALES_CHANNEL_SIGN_IN_REQUIRED' },
     { code: 'STALE_SALES_CHANNEL_WRITE' },
     { code: 'UNKNOWN_CURRENCY_CODE' },
     { code: 'UNKNOWN_LANGUAGE_CODE' },
@@ -183,6 +197,11 @@ export const manifest = defineModuleManifest({
      * row's; the label and description are the two strings it rendered
      * (`appShell.nav.salesChannels`, `appShell.palette.sub.storefrontChannels`),
      * moved into this module's own bundle.
+     *
+     * `keywords` are English and match in every admin language; the Polish
+     * words are under `keywordsKey` (issue #573). The plural `kanały` there is
+     * the screen's Polish name: matching is "query word ⊂ keyword", so `kanał`
+     * alone left an operator typing `kanały` with nothing.
      */
     {
       id: 'open-sales-channels',
@@ -191,7 +210,8 @@ export const manifest = defineModuleManifest({
       icon: 'Store',
       targetRoute: '/sales-channels',
       requiredPermission: 'sales_channels:read',
-      keywords: ['sales', 'channel', 'channels', 'kanał', 'sprzedaży'],
+      keywords: ['sales', 'channel', 'channels'],
+      keywordsKey: 'actions.openSalesChannels.keywords',
       weight: 160,
     },
     {
@@ -201,7 +221,8 @@ export const manifest = defineModuleManifest({
       icon: 'Layers',
       targetRoute: '/sales-channels/new',
       requiredPermission: 'sales_channels:write',
-      keywords: ['channel', 'new', 'storefront', 'kanał', 'sprzedaży'],
+      keywords: ['channel', 'new', 'storefront'],
+      keywordsKey: 'actions.newSalesChannel.keywords',
       weight: 150,
     },
   ],

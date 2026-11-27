@@ -1,7 +1,7 @@
 import {
   ERROR_CODES,
   type AuthSessionPort,
-  type CustomerAccountLifecycleWritePort,
+  type CustomerAccountCommandPort,
   type CustomerAccountRecord,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -23,15 +23,16 @@ import { HttpError } from '@endora-commerce/platform/http';
  * `customer_accounts`' entity itself, hash the password with `auth`'s hasher,
  * and hand its own `EntityManager` to `organizations`' provisioner. All three
  * are owner-side now: the account and its audit row come from
- * `customerAccountLifecycleWritePort`, the hashing goes with them (a caller
+ * `customerAccountCommandPort` (its `customer_account.register_standalone`
+ * Command since `specs/186-aggregate-ports/`), the hashing goes with them (a caller
  * that hashes is a caller that has to be told which algorithm the owner uses),
  * and the organisation is provisioned inside that same write (D-178). What is left
  * here is the policy — whether a registration outside a company organization is
  * allowed at all — which is this module's setting.
  */
 export interface CustomerRegistrationDeps {
-  /** `customer_accounts`' account lifecycle. Creates the row and audits it. */
-  accounts: CustomerAccountLifecycleWritePort;
+  /** `customer_accounts`' aggregate port. Creates the row and records it. */
+  accounts: Pick<CustomerAccountCommandPort, 'createStandalone'>;
   /**
    * `auth`'s published session port (D-98.2), not the `SessionService` class
    * this used to import: the only method reached here is `createSession`, the
@@ -39,7 +40,10 @@ export interface CustomerRegistrationDeps {
    * publishes.
    */
   sessionService: AuthSessionPort;
-  /** Reads `customers.allow_registration_without_organization` (the per-channel B2C gate). */
+  /**
+   * Reads `customers.allow_registration_without_organization` (the per-channel
+   * B2C gate) for the request's resolved sales channel (issue #773).
+   */
   resolveAllowRegistrationWithoutOrganization: () => Promise<boolean>;
 }
 
@@ -48,6 +52,8 @@ export interface RegisterStandaloneInput {
   password: string;
   firstName: string;
   lastName: string;
+  /** Issue #652 (D-292) — the registering request's language, resolved against its channel. */
+  preferredLanguage?: string | null;
   ip?: string;
   userAgent?: string;
 }
@@ -61,12 +67,20 @@ export interface RegisterStandaloneResult {
 export class CustomerRegistrationService {
   constructor(private readonly deps: CustomerRegistrationDeps) {}
 
+  /**
+   * Whether standalone registration is offered at all (issue #756). The
+   * storefront asks this before it renders the form, and `registerStandalone`
+   * asks it again before it writes, so the page and the refusal share one
+   * answer.
+   */
+  async allowsStandalone(): Promise<boolean> {
+    return this.deps.resolveAllowRegistrationWithoutOrganization();
+  }
+
   async registerStandalone(
     input: RegisterStandaloneInput,
   ): Promise<RegisterStandaloneResult> {
-    const allowed =
-      await this.deps.resolveAllowRegistrationWithoutOrganization();
-    if (!allowed) {
+    if (!(await this.allowsStandalone())) {
       throw new HttpError(
         403,
         ERROR_CODES.REGISTRATION_REQUIRES_ORGANIZATION,
@@ -90,6 +104,7 @@ export class CustomerRegistrationService {
       password: input.password,
       firstName: input.firstName,
       lastName: input.lastName,
+      preferredLanguage: input.preferredLanguage ?? null,
     });
 
     const session = await this.deps.sessionService.createSession({

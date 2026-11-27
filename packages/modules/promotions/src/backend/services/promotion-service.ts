@@ -1,5 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import {
+  compareDecimals,
   DictionaryReferenceError,
   ERROR_CODES,
   dispatchValidatorMode,
@@ -11,9 +12,11 @@ import {
   type PromotionApplication,
   type PromotionCriterion,
   type PromotionRule,
+  isUuidShape,
 } from '@endora-commerce/contracts';
+import { linesGross, linesSubtotal, percentOf, round2 } from '../actions/util.js';
 import { HttpError } from '@endora-commerce/platform/http';
-import { recordAuditFromContext } from '@endora-commerce/platform/commands';
+import { recordAuditFromContext, type CommandBus } from '@endora-commerce/platform/commands';
 import type { AuditPort, SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { Promotion } from '../entities/promotion.entity.js';
 import { PromotionRuleEntity } from '../entities/promotion-rule.entity.js';
@@ -37,6 +40,11 @@ import {
   type UsageContext,
 } from './promotion-usage-service.js';
 import type { CartApplyContext } from '../actions/types.js';
+import { makeCreatePromotionCommand, type PromotionInputValidator } from '../commands/create-promotion.command.js';
+import { makeUpdatePromotionCommand } from '../commands/update-promotion.command.js';
+import type { UpsertPromotionInput } from './promotion-data.js';
+
+export type { UpsertPromotionInput } from './promotion-data.js';
 
 /**
  * The one question this service asks about promotion-rule attribute metadata.
@@ -172,6 +180,15 @@ export class PromotionService {
      * composition the absent branch described.
      */
     private readonly auditLog: AuditPort,
+    /**
+     * Issue #1844 — the Command Bus the promotion create and edit run through
+     * (Principle XIII). Both are hookable (`PROMOTION_HOOKABLE_ACTIONS`), so the
+     * bus records their one audit entry and runs the hooks on their
+     * transaction; `auditLog` above stays for the delete, which is not a
+     * Command yet. **Required**, for the reason the four before it are: every
+     * composition has a bus.
+     */
+    private readonly commandBus: Pick<CommandBus, 'run'>,
     /** Feature 012 / US8 — audit sink for FR-039 skip-on-toggle events. */
     private readonly auditLogger: PromotionAuditLogger = {
       info: (message, fields) => console.warn(`[audit] ${message}`, fields ?? {}),
@@ -222,46 +239,63 @@ export class PromotionService {
     return this.emFactory().find(Promotion, {}, { orderBy: { name: 'asc' } });
   }
 
+  /**
+   * One page of promotions by name, and the total across every page (issue
+   * #1664). `id` breaks a name tie, or a page boundary could repeat a row and
+   * skip another. No `limit` reads the whole list.
+   */
+  async listPage(page: { offset: number; limit?: number }): Promise<{ rows: Promotion[]; total: number }> {
+    const [rows, total] = await this.emFactory().findAndCount(
+      Promotion,
+      {},
+      {
+        orderBy: { name: 'asc', id: 'asc' },
+        offset: page.offset,
+        ...(page.limit === undefined ? {} : { limit: page.limit }),
+      },
+    );
+    return { rows, total };
+  }
+
   async getById(id: string): Promise<Promotion> {
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, `Promotion ${id} not found.`);
     const row = await this.emFactory().findOne(Promotion, { id });
     if (!row) throw new HttpError(404, ERROR_CODES.NOT_FOUND, `Promotion ${id} not found.`);
     return row;
   }
 
+  /**
+   * Create a promotion, or edit the one that already has `input.code` — the
+   * `promotion.create` and `promotion.update` Commands (issue #1844). A new
+   * promotion is bound to the system-default channel after its Command
+   * commits, as it was before the write was a Command.
+   */
   async upsert(input: UpsertPromotionInput): Promise<Promotion> {
-    const em = this.emFactory();
     const existing = input.code
-      ? await em.findOne(Promotion, { code: input.code })
+      ? await this.emFactory().findOne(Promotion, { code: input.code })
       : null;
-    await this.validateUpsertInput(em, input, existing);
-    const data = buildPromotionData(input);
     if (existing) {
-      Object.assign(existing, data);
-      this.#audit(em, 'promotion.update', existing.id, null, { name: existing.name, code: existing.code });
-      await em.flush();
-      return existing;
+      const { promotion } = await this.commandBus.run(
+        makeUpdatePromotionCommand({ promotionId: existing.id, input, validate: this.#validate }),
+      );
+      return promotion;
     }
-    // `data` is built from a partial input; `name` is always present per the
-    // schema, but the conditional spreads widen the inferred type.
-    const row = em.create(Promotion, data as unknown as Promotion);
-    em.persist(row);
-    this.#audit(em, 'promotion.create', row.id, null, { name: row.name, code: row.code });
-    await em.flush();
+    const row = await this.commandBus.run(makeCreatePromotionCommand({ input, validate: this.#validate }));
     await this.salesChannelMembership.bindToDefaultIfEmpty('promotion', row.id);
     return row;
   }
 
-  /** Feature 045 — update an existing promotion by id (admin edit path). */
+  /** Feature 045 — update an existing promotion by id (admin edit path): the `promotion.update` Command. */
   async updateById(id: string, input: UpsertPromotionInput): Promise<Promotion> {
-    const em = this.emFactory();
-    const existing = await em.findOne(Promotion, { id });
-    if (!existing) throw new HttpError(404, ERROR_CODES.NOT_FOUND, `Promotion ${id} not found.`);
-    await this.validateUpsertInput(em, input, existing);
-    Object.assign(existing, buildPromotionData(input));
-    this.#audit(em, 'promotion.update', existing.id, null, { name: existing.name, code: existing.code });
-    await em.flush();
-    return existing;
+    const { promotion } = await this.commandBus.run(
+      makeUpdatePromotionCommand({ promotionId: id, input, validate: this.#validate }),
+    );
+    return promotion;
   }
+
+  /** The input checks, as the promotion Commands run them on their own transaction. */
+  readonly #validate: PromotionInputValidator = (em, input, existing) =>
+    this.validateUpsertInput(em, input, existing);
 
   private async validateUpsertInput(
     em: EntityManager,
@@ -279,6 +313,9 @@ export class PromotionService {
       );
     }
     if (input.ruleId) {
+      if (!isUuidShape(input.ruleId)) {
+        throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, `rule_not_found: ${input.ruleId}`);
+      }
       const ruleRow = await em.findOne(PromotionRuleEntity, { id: input.ruleId });
       if (!ruleRow) {
         throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, `rule_not_found: ${input.ruleId}`);
@@ -294,10 +331,11 @@ export class PromotionService {
 
   async remove(id: string): Promise<void> {
     const em = this.emFactory();
+    if (!isUuidShape(id)) return;
     const row = await em.findOne(Promotion, { id });
     if (!row) return;
     this.#audit(em, 'promotion.delete', row.id, { name: row.name, code: row.code }, null);
-    await em.removeAndFlush(row);
+    await em.remove(row).flush();
   }
 
   private async validateCurrency(
@@ -325,12 +363,13 @@ export class PromotionService {
     const em = this.emFactory();
     const now = new Date();
 
-    const subtotal = round2(
-      snapshot.lines.reduce(
-        (acc, line) => acc + line.unitPrice.amount * line.quantity,
-        0,
-      ),
-    );
+    // The net subtotal, answered as `subtotal`, and the goods gross: what the
+    // buyer pays, what a percent-off or free-unit action computes on (issue
+    // #1350, owner ruling 2026-11-16), and what a minimum spend, a cart-total
+    // threshold, a "spend X" step and a fixed amount's cap compare (issue
+    // #1396, owner ruling 2026-11-17).
+    const subtotal = linesSubtotal(snapshot.lines);
+    const grossSubtotal = linesGross(snapshot.lines);
 
     const all = await em.find(Promotion, { isActive: true });
 
@@ -412,7 +451,7 @@ export class PromotionService {
       if (p.validUntil && now > p.validUntil) return false;
       if (
         p.minCartSubtotal != null &&
-        Number(p.minCartSubtotal) > subtotal
+        compareDecimals(p.minCartSubtotal, grossSubtotal) > 0
       ) {
         return false;
       }
@@ -484,11 +523,14 @@ export class PromotionService {
         ? snapshot
         : await this.hydrateLineAttributeValues(snapshot, [...referencedKeys]);
 
-    const ruleCtx = buildRuleContext(hydratedSnapshot, subtotal, attributeLookup, (info) =>
+    const ruleCtx = buildRuleContext(hydratedSnapshot, grossSubtotal, attributeLookup, (info) =>
       this.auditLogger.info('promotion_rule_attribute_skipped', info),
     );
 
+    // Every discount is a gross reduction (#926 D1): it comes off both running
+    // bases, and the gross is the cap — 100 % off frees the goods VAT included.
     let workingSubtotal = subtotal;
+    let workingGross = grossSubtotal;
     let workingDelivery = snapshot.deliveryTotal;
     let discountTotal = 0;
     const applied: PromotionApplication['appliedPromotions'] = [];
@@ -504,15 +546,17 @@ export class PromotionService {
         const applyCtx: CartApplyContext = {
           lines: hydratedSnapshot.lines,
           subtotal: workingSubtotal,
+          grossSubtotal: workingGross,
           deliveryTotal: workingDelivery,
           currency: snapshot.currency,
         };
         const result = this.actionRegistry.apply(action, applyCtx);
-        const subDelta = round2(Math.max(0, Math.min(result.discountSubtotalDelta, workingSubtotal)));
+        const subDelta = round2(Math.max(0, Math.min(result.discountSubtotalDelta, workingGross)));
         const delDelta = round2(Math.max(0, Math.min(result.discountDeliveryDelta, workingDelivery)));
         const amount = round2(subDelta + delDelta);
         if (amount <= 0) continue;
-        workingSubtotal = round2(workingSubtotal - subDelta);
+        workingSubtotal = Math.max(0, round2(workingSubtotal - subDelta));
+        workingGross = round2(workingGross - subDelta);
         workingDelivery = round2(workingDelivery - delDelta);
         discountTotal = round2(discountTotal + amount);
         applied.push({
@@ -527,15 +571,20 @@ export class PromotionService {
       }
 
       // Legacy kind/value promotion.
-      const lineBase = this.computeLineBase(hydratedSnapshot, promotion, attributeLookup);
+      // free_delivery reads no line; the others take the matching lines' exact sum (#417).
+      const matching =
+        promotion.kind === 'free_delivery' ? [] : this.matchingLines(hydratedSnapshot, promotion, attributeLookup);
+      const lineBase = promotion.kind === 'free_delivery' ? snapshot.deliveryTotal : linesSubtotal(matching);
       if (lineBase <= 0 && promotion.kind !== 'free_delivery') continue;
 
       let amount = 0;
       if (promotion.kind === 'percentage_off') {
-        amount = round2((lineBase * Number(promotion.value)) / 100);
+        // Of what the buyer pays for the matching lines (issue #1350).
+        amount = percentOf(linesGross(matching), promotion.value ?? 0);
       } else if (promotion.kind === 'amount_off') {
         if (promotion.currency && promotion.currency !== snapshot.currency) continue;
-        amount = round2(Math.min(Number(promotion.value), lineBase));
+        // Capped at what the buyer pays for the matching lines (issue #1396).
+        amount = round2(Math.min(Number(promotion.value), linesGross(matching)));
       } else if (promotion.kind === 'free_delivery') {
         amount = round2(workingDelivery);
         workingDelivery = 0;
@@ -544,6 +593,7 @@ export class PromotionService {
 
       if (promotion.kind !== 'free_delivery') {
         workingSubtotal = Math.max(0, round2(workingSubtotal - amount));
+        workingGross = Math.max(0, round2(workingGross - amount));
       }
       discountTotal = round2(discountTotal + amount);
       applied.push({
@@ -556,7 +606,8 @@ export class PromotionService {
       if (promotion.stopFurther) break;
     }
 
-    const total = round2(workingSubtotal + workingDelivery);
+    // What the buyer still pays: the goods gross left plus the delivery left.
+    const total = round2(workingGross + workingDelivery);
     return {
       subtotal,
       discountTotal,
@@ -585,10 +636,14 @@ export class PromotionService {
         );
       }
       if (!meta.isPromoRule) {
+        // The attribute exists and its own flag refuses it — catalogue
+        // configuration the operator can change, so a code of its own rather
+        // than `VALIDATION_FAILED` (issue #628).
         throw new HttpError(
           400,
-          ERROR_CODES.VALIDATION_FAILED,
-          `attribute_not_promo_eligible: ${c.attributeKey}`,
+          ERROR_CODES.PROMOTION_ATTRIBUTE_NOT_ELIGIBLE,
+          `The attribute ${c.attributeKey} is not usable in promotion rules.`,
+          { attributeKey: c.attributeKey },
         );
       }
       const allowed = allowedOpsFor(meta.valueType);
@@ -678,14 +733,12 @@ export class PromotionService {
     };
   }
 
-  private computeLineBase(
+  /** The lines a legacy promotion's product, category and criteria scope selects. */
+  private matchingLines(
     snapshot: CartSnapshot,
     p: Promotion,
     attributeLookup: PromotionRuleAttributeLookup,
-  ): number {
-    // free_delivery doesn't read line totals.
-    if (p.kind === 'free_delivery') return snapshot.deliveryTotal;
-
+  ): CartSnapshot['lines'] {
     const ctx: PromotionRuleEvaluationContext = {
       attributeLookup,
       promotionId: p.id,
@@ -698,12 +751,11 @@ export class PromotionService {
       },
     };
 
-    return snapshot.lines.reduce((acc, line) => {
-      if (p.productId && line.productId !== p.productId) return acc;
-      if (p.categoryId && !line.categoryIds.includes(p.categoryId)) return acc;
-      if (p.criteria.length > 0 && !lineMatchesAllCriteria(p.criteria, line, ctx)) return acc;
-      return acc + line.unitPrice.amount * line.quantity;
-    }, 0);
+    return snapshot.lines.filter((line) => {
+      if (p.productId && line.productId !== p.productId) return false;
+      if (p.categoryId && !line.categoryIds.includes(p.categoryId)) return false;
+      return p.criteria.length === 0 || lineMatchesAllCriteria(p.criteria, line, ctx);
+    });
   }
 }
 
@@ -787,89 +839,6 @@ function validateValuesShape(
   }
 }
 
-
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
-}
-
-export interface UpsertPromotionInput {
-  code?: string | null;
-  name: string;
-  kind?: 'percentage_off' | 'amount_off' | 'free_delivery';
-  value?: number;
-  currency?: string | null;
-  minCartSubtotal?: number | null;
-  validFrom?: string | null;
-  validUntil?: string | null;
-  organizationId?: string | null;
-  customerGroupId?: string | null;
-  categoryId?: string | null;
-  productId?: string | null;
-  criteria?: PromotionCriterion[];
-  isActive?: boolean;
-  // Feature 045 — engine fields.
-  description?: string | null;
-  priority?: number;
-  stopFurther?: boolean;
-  action?: PromotionAction;
-  ruleId?: string | null;
-  rule?: PromotionRule | null;
-  usageLimitGlobal?: number | null;
-  usageLimitPerOrganization?: number | null;
-  usageLimitPerCustomer?: number | null;
-}
-
-/** Map an upsert input into the entity-assignable data object. */
-function buildPromotionData(input: UpsertPromotionInput): Record<string, unknown> {
-  const { actionType, actionConfig } = splitAction(input.action);
-  return {
-    name: input.name,
-    ...(input.kind !== undefined ? { kind: input.kind } : {}),
-    ...(input.value !== undefined ? { value: String(input.value) } : {}),
-    ...(input.code !== undefined ? { code: input.code } : {}),
-    ...(input.currency !== undefined ? { currency: input.currency } : {}),
-    ...(input.minCartSubtotal !== undefined && input.minCartSubtotal !== null
-      ? { minCartSubtotal: String(input.minCartSubtotal) }
-      : {}),
-    ...(input.validFrom !== undefined
-      ? { validFrom: input.validFrom ? new Date(input.validFrom) : null }
-      : {}),
-    ...(input.validUntil !== undefined
-      ? { validUntil: input.validUntil ? new Date(input.validUntil) : null }
-      : {}),
-    ...(input.organizationId !== undefined ? { organizationId: input.organizationId } : {}),
-    ...(input.customerGroupId !== undefined ? { customerGroupId: input.customerGroupId } : {}),
-    ...(input.categoryId !== undefined ? { categoryId: input.categoryId } : {}),
-    ...(input.productId !== undefined ? { productId: input.productId } : {}),
-    ...(input.criteria !== undefined ? { criteria: input.criteria } : {}),
-    ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
-    ...(input.description !== undefined ? { description: input.description } : {}),
-    ...(input.priority !== undefined ? { priority: input.priority } : {}),
-    ...(input.stopFurther !== undefined ? { stopFurther: input.stopFurther } : {}),
-    ...(input.action !== undefined ? { actionType, actionConfig } : {}),
-    // A rule source set clears the other (mutually exclusive).
-    ...(input.ruleId !== undefined ? { ruleId: input.ruleId, ruleDefinition: null } : {}),
-    ...(input.rule !== undefined ? { ruleDefinition: input.rule, ruleId: null } : {}),
-    ...(input.usageLimitGlobal !== undefined ? { usageLimitGlobal: input.usageLimitGlobal } : {}),
-    ...(input.usageLimitPerOrganization !== undefined
-      ? { usageLimitPerOrganization: input.usageLimitPerOrganization }
-      : {}),
-    ...(input.usageLimitPerCustomer !== undefined
-      ? { usageLimitPerCustomer: input.usageLimitPerCustomer }
-      : {}),
-  };
-}
-
-/** Split a `PromotionAction` union into the stored `(type, config)` pair. */
-function splitAction(action?: PromotionAction): {
-  actionType: PromotionAction['type'] | null;
-  actionConfig: Record<string, unknown>;
-} {
-  if (!action) return { actionType: null, actionConfig: {} };
-  const { type, ...config } = action;
-  return { actionType: type, actionConfig: config };
-}
-
 /** Reconstruct a `PromotionAction` from the stored `(type, config)` pair. */
 function joinAction(promotion: Promotion): PromotionAction | null {
   if (!promotion.actionType) return null;
@@ -905,7 +874,8 @@ function coerceRuleValue(v: unknown): string | number | boolean {
 /** Build the cart-level rule-evaluation context from a hydrated snapshot. */
 function buildRuleContext(
   snapshot: CartSnapshot,
-  subtotal: number,
+  /** The goods gross the buyer pays — what `cartTotal` compares (issue #1396). */
+  grossSubtotal: number,
   attributeLookup: PromotionRuleAttributeLookup,
   onSkip: (info: { attributeKey: string; reason: 'attribute_not_promo_eligible' }) => void,
 ): PromotionRuleContext {
@@ -923,7 +893,7 @@ function buildRuleContext(
   }
   const categoryIds = [...new Set(snapshot.lines.flatMap((l) => l.categoryIds))];
   return {
-    cartTotal: subtotal,
+    cartTotal: grossSubtotal,
     paymentMethodCode: snapshot.paymentMethodCode ?? null,
     deliveryMethodCode: snapshot.deliveryMethodCode ?? null,
     deliveryCountry: snapshot.deliveryCountry ?? null,

@@ -42,7 +42,7 @@ const demo: ModuleDemoManifest<ModuleContext> = {
  */
 export const manifest = defineModuleManifest({
   id: 'admin_users',
-  name: 'Admin Users',
+  name: 'Admin users',
   description:
     'Admin user accounts, sessions, and impersonation flows.',
   version: '1.0.0',
@@ -101,6 +101,16 @@ export const manifest = defineModuleManifest({
         'impersonation that cannot identify its target refuses rather than minting a session ' +
         'against a customer nobody looked up.',
     },
+    {
+      moduleId: 'organizations',
+      port: 'organizationRoleReadPort',
+      reason:
+        'The impersonation start answer names the role the session acts under ' +
+        '(`specs/170-organization-roles/` FR-062), and roles belong to organizations, which ' +
+        'declares this module — declaring it back closes a cycle. With organizations absent ' +
+        'the seam fails closed: the start refuses rather than answer a session whose role ' +
+        'nobody can name.',
+    },
   ],
   /**
    * D-96 — `mfaLoginPort`, the second factor on admin login.
@@ -114,12 +124,26 @@ export const manifest = defineModuleManifest({
    */
   nonBindingDependencies: [
     {
+      moduleId: 'assets_library',
+      name: 'assetReadPort',
+      kind: 'degrades-without',
+      whenAbsent:
+        'An administrator cannot set an author avatar while the library is off; the one already ' +
+        'set is kept and comes back with the library. Everything else on the profile still saves.',
+      reason:
+        'Feature 171 (US6): the avatar must name a live library asset, which only `assets_library` ' +
+        'can answer. That module depends on this one (it reads `adminUserReadPort`), so the edge ' +
+        'cannot be a dependency without a cycle. The check asks for the module first and answers ' +
+        '`MODULE_DISABLED` without resolving the port, so nothing is laundered out of a closed gate.',
+    },
+    {
       moduleId: 'mfa',
       name: 'mfaLoginPort',
       kind: 'degrades-without',
       whenAbsent:
-        'Admin sign-in stops asking for a second factor and offers no Google/Microsoft button. ' +
-        'Every admin has a password a peer admin can reset, so no admin is locked out.',
+        'Admin sign-in asks for no second factor, applies no role\'s two-step requirement and ' +
+        'offers no Google/Microsoft button. A peer admin can reset any password, so nobody is ' +
+        'locked out.',
       reason:
         'AdminAuthService verifies the password first and then asks the second factor what to ' +
         'do. With `mfa` absent it asks nobody: `backend.ts` probes ' +
@@ -131,6 +155,22 @@ export const manifest = defineModuleManifest({
         'apply again on the way back, which is what the activation control promises. Admin ' +
         'accounts are never auto-created and always carry a human-chosen password a peer ' +
         'admin can reset, so no admin becomes unreachable while the module is off.',
+    },
+    {
+      moduleId: 'mfa',
+      name: 'mfaAdminEnforcementPort',
+      kind: 'degrades-without',
+      whenAbsent:
+        'No session is ended when a role starts requiring two-step verification, and no role ' +
+        'can start requiring it; a role that already does applies again when MFA is back.',
+      reason:
+        'Issue #349: a role\'s `requiresTwoFactor` is enforced by `mfa` at sign-in, and this ' +
+        'module hosts the two writes that make it start binding somebody. After either write it ' +
+        'asks `mfa` to end the sessions those administrators opened without a second factor, ' +
+        'and before turning the flag on it asks whether a factor can be enrolled at all. ' +
+        'Non-binding for the reason the login edge is: `mfa` declares this module in its own ' +
+        '`dependencies`. `backend.ts` probes `effectiveState.isPresent("mfa")` first and ' +
+        'resolves nothing when it is absent, so no `ModuleDisabledError` is caught.',
     },
     {
       moduleId: 'mfa',
@@ -200,7 +240,8 @@ export const manifest = defineModuleManifest({
       icon: 'Users',
       targetRoute: '/admin-users',
       requiredPermission: 'admin_users:manage',
-      keywords: ['admin', 'users', 'uzytkownicy', 'operators', 'operatorzy', 'staff', 'konta'],
+      keywords: ['admin', 'users', 'operators', 'staff'],
+      keywordsKey: 'actions.openAdminUsers.keywords',
       weight: 200,
     },
   ],
@@ -214,10 +255,16 @@ export const manifest = defineModuleManifest({
    * supplies the one they already have.
    */
   errorCodes: [
+    // Feature 171 (US6) — an author avatar that names no library asset.
+    { code: 'ADMIN_USER_AVATAR_NOT_FOUND' },
     { code: 'ADMIN_AUTHENTICATION_THROTTLED' },
     { code: 'ADMIN_AUTHENTICATION_UNAVAILABLE' },
     { code: 'ADMIN_USER_OUTRANKS_ACTOR' },
     { code: 'ADMIN_USER_ROLE_REQUIRED' },
+    // Issue #349 — the role write refuses to make a role require two-step
+    // verification where none can be enrolled. Raised while `mfa` may be
+    // absent, so this module's bundle translates it; the token says why.
+    { code: 'MFA_REQUIRED_FOR_ROLE_TWO_FACTOR', tokens: ['mfa_off', 'encryption_key_missing'] },
     { code: 'NEW_PASSWORD_UNCHANGED' },
   ],
   demo,

@@ -11,8 +11,13 @@ import {
   type DictionaryValidator,
   type PatchBlogPostRequest,
   type PutBlogPostContentRequest,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
+import { assertPostLanguagesComplete } from './blog-language-completeness.js';
+import { forgetEntityUrls, redirectFormerSlug } from './blog-url-keys.js';
+import type { BlogAuthors } from './blog-authors.js';
+import { assertLinkableAsset, assertLinkableContentAssets, type LinkableAssetReader } from './linkable-asset.js';
 import { assertSlugAvailable } from './blog-slug-collision.js';
 import type { BlogCacheService } from './blog-cache.js';
 
@@ -24,10 +29,12 @@ type PostRow = {
   status: BlogPostStatus;
   published_at: Date | string | null;
   description: string | null;
+  main_image_asset_id: string | null;
   meta_title: Record<string, string> | null;
   meta_description: Record<string, string> | null;
   meta_keywords: Record<string, string> | null;
   content: { schema_version?: number; languages?: Record<string, unknown> } | null;
+  author_admin_user_id?: string | null;
   version: number;
   created_at: Date | string;
   updated_at: Date | string;
@@ -67,6 +74,10 @@ export class BlogPostService {
     private readonly emFactory: () => EntityManager,
     private readonly cache?: BlogCacheService,
     private readonly dictionaryValidator?: DictionaryValidator,
+    /** Feature 166 (FR-006) — `assets_library`'s read port, asked before a main image is linked. */
+    private readonly assets?: LinkableAssetReader,
+    /** Feature 171 (US7) — the administrators a post can name as its author. */
+    private readonly authors?: BlogAuthors,
   ) {}
 
   // ────────────────────────────────────────────────────────────────────
@@ -148,6 +159,11 @@ export class BlogPostService {
     const em = this.emFactory();
     const id = randomUUID();
     const now = new Date();
+    // Feature 166 (FR-006) — a main image the caller may not see answers as a missing one.
+    if (input.mainImageAssetId) await assertLinkableAsset(this.assets, input.mainImageAssetId);
+    // Issue #544 — so does an asset the content embeds.
+    if (input.content) await assertLinkableContentAssets(this.assets, input.content, null);
+    if (input.authorAdminUserId) await this.assertAuthor(input.authorAdminUserId);
 
     return em.transactional(async (tx) => {
       // Slug-collision guard runs first so we don't pollute the post row
@@ -177,22 +193,24 @@ export class BlogPostService {
 
       await tx.execute(
         `insert into blog_posts
-           (id, name, slug, active, status, published_at, description,
+           (id, name, slug, active, status, published_at, description, main_image_asset_id,
             meta_title, meta_description, meta_keywords, content,
-            version, created_at, updated_at)
-           values (?, ?::jsonb, ?, ?, 'draft', null, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, 1, ?, ?)`,
+            version, created_at, updated_at, author_admin_user_id)
+           values (?, ?::jsonb, ?, ?, 'draft', null, ?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, 1, ?, ?, ?)`,
         [
           id,
           JSON.stringify(input.name),
           input.slug,
           input.active ?? true,
           input.description ?? null,
+          input.mainImageAssetId ?? null,
           input.metaTitle ? JSON.stringify(input.metaTitle) : null,
           input.metaDescription ? JSON.stringify(input.metaDescription) : null,
           input.metaKeywords ? JSON.stringify(input.metaKeywords) : null,
           input.content ? JSON.stringify(input.content) : '{}',
           now,
           now,
+          input.authorAdminUserId ?? null,
         ],
       );
 
@@ -241,6 +259,8 @@ export class BlogPostService {
         throw new HttpError(404, ERROR_CODES.BLOG_POST_NOT_FOUND, 'Blog post not found.');
       }
       this.assertVersion(existing.version, input.version);
+      // Feature 166 (FR-006) — a main image the caller may not see answers as a missing one.
+      if (input.mainImageAssetId) await assertLinkableAsset(this.assets, input.mainImageAssetId);
 
       const slugChange = input.slug !== undefined && input.slug !== existing.slug;
       const channelChange = input.salesChannelIds !== undefined;
@@ -276,6 +296,19 @@ export class BlogPostService {
         sets.push('description = ?');
         params.push(input.description);
       }
+      if (input.mainImageAssetId !== undefined) {
+        sets.push('main_image_asset_id = ?');
+        params.push(input.mainImageAssetId);
+      }
+      // Feature 171 (US7) — a new author must be an active administrator; keeping
+      // one who has since become inactive is allowed.
+      if (input.authorAdminUserId !== undefined) {
+        if (input.authorAdminUserId !== null && input.authorAdminUserId !== existing.author_admin_user_id) {
+          await this.assertAuthor(input.authorAdminUserId);
+        }
+        sets.push('author_admin_user_id = ?');
+        params.push(input.authorAdminUserId);
+      }
       if (input.metaTitle !== undefined) {
         sets.push('meta_title = ?::jsonb');
         params.push(input.metaTitle ? JSON.stringify(input.metaTitle) : null);
@@ -304,6 +337,8 @@ export class BlogPostService {
           `update blog_post_sales_channels set slug = ? where blog_post_id = ?`,
           [input.slug, id],
         );
+        // Feature 171 (OR-8) — the former slug keeps answering, as a redirect.
+        await redirectFormerSlug(tx, { kind: 'post', id }, existing.slug);
       }
 
       // Sync sales-channel scope.
@@ -328,6 +363,8 @@ export class BlogPostService {
         await this.replaceTags(tx, id, input.tagIds);
       }
 
+      // Feature 171 — a published post stays written in every language it is in.
+      if (existing.status === 'published') await assertPostLanguagesComplete(tx, id);
       const detail = await this.getByIdInTx(tx, id);
       await this.invalidateCacheForPost(existing.slug, detail.slug);
       return detail;
@@ -345,6 +382,8 @@ export class BlogPostService {
         throw new HttpError(404, ERROR_CODES.BLOG_POST_NOT_FOUND, 'Blog post not found.');
       }
       this.assertVersion(existing.version, input.version);
+      // Issue #544 — an asset the content newly embeds must be one the caller may see.
+      await assertLinkableContentAssets(this.assets, input.content, existing.content);
       await tx.execute(
         `update blog_posts
             set content = ?::jsonb,
@@ -353,6 +392,8 @@ export class BlogPostService {
           where id = ?`,
         [JSON.stringify(input.content), id],
       );
+      // Feature 171 — a published post stays written in every language it is in.
+      if (existing.status === 'published') await assertPostLanguagesComplete(tx, id);
       const detail = await this.getByIdInTx(tx, id);
       await this.invalidateCacheForPost(existing.slug, detail.slug);
       return detail;
@@ -494,6 +535,8 @@ export class BlogPostService {
         `update blog_posts set deleted_at = now(), updated_at = now() where id = ?`,
         [id],
       );
+      // Feature 171 — the post's keys and redirects go with it.
+      await forgetEntityUrls(tx, { kind: 'post', id });
       await tx.execute(
         `update blog_post_sales_channels set deleted_at = now() where blog_post_id = ?`,
         [id],
@@ -505,6 +548,7 @@ export class BlogPostService {
   }
 
   async getInboundReferences(id: string): Promise<BlogPostInboundReferencesResponse> {
+    if (!isUuidShape(id)) return { asRelatedPostBy: [] };
     const em = this.emFactory();
     const rows = (await em.execute(
       `select p.id::text as id, p.name, p.slug
@@ -547,6 +591,8 @@ export class BlogPostService {
         `update blog_posts set ${sets.join(', ')} where id = ?`,
         params,
       );
+      // Feature 171 — a post is published only when written in every assigned language.
+      if (nextStatus === 'published') await assertPostLanguagesComplete(tx, id);
       return this.getByIdInTx(tx, id);
     });
     // Invalidate AFTER the transaction commits. Doing it inside the
@@ -560,6 +606,7 @@ export class BlogPostService {
   }
 
   private async findRow(em: EntityManager, id: string): Promise<PostRow | null> {
+    if (!isUuidShape(id)) return null;
     const rows = (await em.execute(
       `select * from blog_posts where id = ? and deleted_at is null limit 1`,
       [id],
@@ -630,6 +677,7 @@ export class BlogPostService {
       status: row.status,
       publishedAt: this.toIso(row.published_at),
       description: row.description,
+      mainImageAssetId: row.main_image_asset_id ?? null,
       metaTitle: row.meta_title,
       metaDescription: row.meta_description,
       metaKeywords: row.meta_keywords,
@@ -645,8 +693,17 @@ export class BlogPostService {
       tags: tags.map((t) => ({ id: t.id, code: t.code, position: t.position })),
       relatedPostIds: relatedPosts.map((r) => r.id),
       relatedProductIds: relatedProducts.map((p) => p.id),
+      author: this.authors ? await this.authors.adminView(row.author_admin_user_id ?? null) : null,
     };
     return detail;
+  }
+
+  /** Feature 171 (US7) — refuse naming anyone but an active administrator. */
+  private async assertAuthor(adminUserId: string): Promise<void> {
+    if (!this.authors) {
+      throw new HttpError(422, ERROR_CODES.BLOG_AUTHOR_NOT_FOUND, 'No administrator directory to name an author from.');
+    }
+    await this.authors.assertAssignable(adminUserId);
   }
 
   private async toSummary(row: PostRow): Promise<BlogPostSummary> {
@@ -682,6 +739,7 @@ export class BlogPostService {
       active: row.active,
       publishedAt: this.toIso(row.published_at),
       description: row.description,
+      mainImageAssetId: row.main_image_asset_id ?? null,
       version: row.version,
       createdAt: this.toIsoNonNull(row.created_at),
       updatedAt: this.toIsoNonNull(row.updated_at),

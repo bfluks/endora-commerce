@@ -1,16 +1,37 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { z } from 'zod';
+import {
+  ERROR_CODES,
+  createImportProfileRequestSchema,
+  importChannelTargetListResponseSchema,
+  importProfileListQuerySchema,
+  productsImportQuerySchema,
+  updateImportProfileRequestSchema,
+} from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { ImportExportService } from './services/import-export-service.js';
+import type { ImportProfileService } from './services/import-profile.service.js';
 import type { RequireAdminAnyFactory, RequireAdminFactory } from '@endora-commerce/platform/kernel';
 
 export interface ImportExportRoutesDeps {
   service: ImportExportService;
+  profiles: ImportProfileService;
   requireAdmin: RequireAdminFactory;
   requireAdminAny: RequireAdminAnyFactory;
+  /**
+   * Spec 193 (FR-085) — whether the caller's admin product visibility is narrowed (restricted or
+   * no category), resolved per request; `false` while `product_visibility_rules` is absent.
+   */
+  productScopeNarrowed(request: FastifyRequest): Promise<boolean>;
 }
 
 const FILENAME_RE = /^[a-z][a-z0-9_]*$/;
+/** A plain string: an id that is not a UUID names no profile and gets the unknown id's `404` (issue #781). */
+const profileParams = z.object({ id: z.string() });
+/** The largest CSV an import accepts (`import-profiles-and-csv.md` §2: 10 MiB). */
+const IMPORT_BODY_LIMIT = 10 * 1024 * 1024;
+/** A profile body: at most 100 entries x 16 targets of short strings fit well under this. */
+const PROFILE_BODY_LIMIT = 256 * 1024;
 
 type EntityRequest = FastifyRequest<{ Params: { entity: string } }>;
 
@@ -18,7 +39,13 @@ export async function registerImportExportRoutes(
   app: FastifyInstance,
   deps: ImportExportRoutesDeps,
 ): Promise<void> {
-  const { service, requireAdmin, requireAdminAny } = deps;
+  const { service, profiles, requireAdmin, requireAdminAny } = deps;
+  /** Spec 193 (FR-085) — a whole-catalogue product-keyed file (products, stock) is not for a narrowed administrator. */
+  const refuseNarrowed = async (entity: string, request: FastifyRequest): Promise<void> => {
+    if (service.refusedToNarrowedProductScopes(entity) && (await deps.productScopeNarrowed(request))) {
+      throw new HttpError(403, ERROR_CODES.FORBIDDEN, 'Your role does not see every product, so it cannot export or import this data.');
+    }
+  };
 
   /**
    * Holding one of the codes an entity of the centre is gated by — the owning
@@ -69,9 +96,9 @@ export async function registerImportExportRoutes(
    * answers the 400 or 404 it always has.
    */
   const entityGate =
-    (permissionFor: (entity: string) => string | undefined) =>
+    (permissionFor: (entity: string) => string | undefined, entity?: string) =>
     async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-      const permission = permissionFor((request as EntityRequest).params.entity);
+      const permission = permissionFor(entity ?? (request as EntityRequest).params.entity);
       if (permission !== undefined) await requireAdmin(permission)(request, reply);
     };
 
@@ -108,6 +135,7 @@ export async function registerImportExportRoutes(
         reply.status(400);
         return { error: { code: 'VALIDATION_FAILED', message: 'invalid entity slug' } };
       }
+      await refuseNarrowed(entity, request);
       const body = await service.exportToCsv(entity);
       reply
         .header('Content-Type', 'text/csv; charset=utf-8')
@@ -119,6 +147,45 @@ export async function registerImportExportRoutes(
     },
   );
 
+  const importCsv = async (entity: string, request: FastifyRequest, reply: FastifyReply) => {
+    if (!FILENAME_RE.test(entity)) {
+      reply.status(400);
+      return { error: { code: 'VALIDATION_FAILED', message: 'invalid entity slug' } };
+    }
+    await refuseNarrowed(entity, request);
+    const body =
+      typeof request.body === 'string'
+        ? request.body
+        : (request.body as unknown as Buffer | undefined)?.toString('utf8') ?? '';
+    // Feature 174 (FR-048) — `profileId` / `dryRun` for products; other entities take none.
+    const query =
+      entity === 'products'
+        ? productsImportQuerySchema.parse(request.query ?? {})
+        : ({} as { profileId?: string; dryRun?: 'true' | 'false' });
+    const report = await service.importFromCsv(entity, body, {
+      profileId: query.profileId,
+      dryRun: query.dryRun === 'true',
+      loadProfile: (id) => profiles.snapshot(id),
+    });
+    return { data: report };
+  };
+
+  // Receive the raw CSV body — operators can `curl --data-binary @file.csv`
+  // and the admin SPA can read the file as text and POST it directly.
+  //
+  // Feature 174 — the products file's cap is explicit, 10 MiB
+  // (`import-profiles-and-csv.md` §2), with rows, columns and cell lengths bounded by the
+  // products adapter. It is that route's alone: a static route, which Fastify prefers to the
+  // parametric one, so every other entity keeps the server's default limit (C2/C3 code review).
+  app.post<{ Body: string }>(
+    '/api/v1/admin/import/products',
+    {
+      preHandler: [anyImportExportCode, entityGate((entity) => service.importPermissionFor(entity), 'products')],
+      bodyLimit: IMPORT_BODY_LIMIT,
+    },
+    async (request, reply) => importCsv('products', request, reply),
+  );
+
   app.post<{ Params: { entity: string }; Body: string }>(
     '/api/v1/admin/import/:entity',
     {
@@ -126,21 +193,56 @@ export async function registerImportExportRoutes(
         anyImportExportCode,
         entityGate((entity) => service.importPermissionFor(entity)),
       ],
-      // Receive the raw CSV body — operators can `curl --data-binary @file.csv`
-      // and the admin SPA can read the file as text and POST it directly.
     },
-    async (request, reply) => {
-      const { entity } = request.params;
-      if (!FILENAME_RE.test(entity)) {
-        reply.status(400);
-        return { error: { code: 'VALIDATION_FAILED', message: 'invalid entity slug' } };
-      }
-      const body =
-        typeof request.body === 'string'
-          ? request.body
-          : (request.body as unknown as Buffer | undefined)?.toString('utf8') ?? '';
-      const report = await service.importFromCsv(entity, body);
-      return { data: report };
-    },
+    async (request, reply) => importCsv(request.params.entity, request, reply),
   );
+
+  /**
+   * Feature 174 (`contracts/import-profiles-and-csv.md` §1; FR-048) — import profiles. Every
+   * route, reads included, is `catalog:write`: a profile decides where an import writes, so it is
+   * part of the write (no new permission code). The any-of gate first, like every route of the
+   * centre, then the literal code so the permission inventory reads it.
+   */
+  const profilesBase = '/api/v1/admin/import-export/profiles';
+
+  /**
+   * Owner decision 2026-11-03 — the targets the profile editor offers, served here so that the
+   * code that lets an operator edit a profile is also enough to pick its targets (no
+   * `sales_channels:read`). Id, code, name (issue #718) and languages only; the delivery-methods precedent
+   * (`GET /api/v1/admin/delivery-methods/sales-channels`).
+   */
+  app.get('/api/v1/admin/import-export/channel-targets', { preHandler: [anyImportExportCode, requireAdmin('catalog:write')] }, async () => {
+    const data = await profiles.listChannelTargets();
+    return importChannelTargetListResponseSchema.parse({ data });
+  });
+
+  app.get(profilesBase, { preHandler: [anyImportExportCode, requireAdmin('catalog:write')] }, async (request) => {
+    const query = importProfileListQuerySchema.parse(request.query ?? {});
+    return { data: await profiles.list(query) };
+  });
+
+  app.get(`${profilesBase}/:id`, { preHandler: [anyImportExportCode, requireAdmin('catalog:write')] }, async (request) => {
+    const { id } = profileParams.parse(request.params);
+    return { data: await profiles.get(id) };
+  });
+
+  app.post(profilesBase, { preHandler: [anyImportExportCode, requireAdmin('catalog:write')], bodyLimit: PROFILE_BODY_LIMIT }, async (request, reply) => {
+    const body = createImportProfileRequestSchema.parse(request.body ?? {});
+    const data = await profiles.create(body);
+    reply.status(201);
+    return { data };
+  });
+
+  app.patch(`${profilesBase}/:id`, { preHandler: [anyImportExportCode, requireAdmin('catalog:write')], bodyLimit: PROFILE_BODY_LIMIT }, async (request) => {
+    const { id } = profileParams.parse(request.params);
+    const body = updateImportProfileRequestSchema.parse(request.body ?? {});
+    return { data: await profiles.update(id, body) };
+  });
+
+  app.delete(`${profilesBase}/:id`, { preHandler: [anyImportExportCode, requireAdmin('catalog:write')] }, async (request, reply) => {
+    const { id } = profileParams.parse(request.params);
+    await profiles.delete(id);
+    reply.status(204);
+    return null;
+  });
 }

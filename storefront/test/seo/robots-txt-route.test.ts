@@ -4,6 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { composeCrawlerFile } from '@endora-commerce/contracts/seo';
 
 import type { CrawlerFiles, CrawlerFilesRead } from '../../lib/seo/crawler-policy';
+// The shared linear-time protocol (issue #953): a test-only module of
+// `@endora-commerce/contracts`, reached through its source path and never published.
+import { GROWTH, LINEAR_BOUND, growthRatio } from '../../../packages/contracts/src/linear-time.cases.js';
 import {
   CRAWLER_FILES_CAPABILITY_HEADER,
   ROBOTS_TXT_RETRY_AFTER_SECONDS,
@@ -180,6 +183,55 @@ describe('robots.txt — what is served', () => {
   });
 });
 
+/**
+ * A store closed to anonymous visitors (`specs/154-sales-channel-access/`):
+ * nothing on it is public, so there is nothing a crawler may fetch. The file
+ * is still served — a crawler that cannot read it assumes it may fetch
+ * everything — and it closes the whole site.
+ */
+describe('robots.txt — on a store closed to anonymous visitors', () => {
+  const CLOSED = 'User-Agent: *\nDisallow: /\n';
+
+  it('disallows everything, and names no sitemap', async () => {
+    const served = await serve({ kind: 'value', value: files({ anonymousAccess: false }) }).response;
+    expectServedHeaders(served);
+    const body = await served.text();
+    expect(body).toBe(CLOSED);
+    expect(body).not.toMatch(/^sitemap\s*:/im);
+    expect(body).not.toMatch(/^allow\s*:/im);
+  });
+
+  it('serves none of the operator’s custom instructions — the closed-store rule wins', async () => {
+    // A group written for one crawler would replace `Disallow: /` for that
+    // crawler and open the store to it.
+    const served = await serve({
+      kind: 'value',
+      value: files({ anonymousAccess: false, robotsTxtCustom: 'User-agent: GPTBot\nAllow: /\n' }),
+    }).response;
+    expect(await served.text()).toBe(CLOSED);
+  });
+
+  it('is the same whatever the default robots policy says, or whether it could be read', async () => {
+    for (const value of [
+      files({ anonymousAccess: false, index: false, follow: false }),
+      files({ anonymousAccess: false, index: false, follow: false, unreadable: ['policy'] }),
+      files({ anonymousAccess: false, unreadable: ['llmsTxtAdditional'] }),
+    ]) {
+      expect(await (await serve({ kind: 'value', value }).response).text()).toBe(CLOSED);
+    }
+  });
+
+  it('is unchanged on an open store, and when the backend does not say', async () => {
+    for (const anonymousAccess of [true, undefined]) {
+      const served = await serve({
+        kind: 'value',
+        value: files({ robotsTxtCustom: CUSTOM, ...(anonymousAccess === undefined ? {} : { anonymousAccess }) }),
+      }).response;
+      expect(await served.text()).toBe(`${BEFORE}\n${CUSTOM}`);
+    }
+  });
+});
+
 describe('robots.txt — when the instructions cannot be read (FR-022)', () => {
   it('answers a temporary failure when nothing was ever known — never a file that omits them', async () => {
     const { response } = serve({ kind: 'unknown' });
@@ -299,11 +351,14 @@ describe('robots.txt — the composed file is kept, and never the wrong one', ()
   it('answers a text made to be slow to trim as fast as any other', async () => {
     // 64 KiB of line breaks before one character: seconds, with a trailing
     // line-break pattern that backtracks. See `composeCrawlerFile`'s tests.
-    const value = files({ robotsTxtCustom: `${'\n'.repeat(65_535)}x` });
-    const start = performance.now();
-    const body = await serveValue(value);
-    expect(performance.now() - start).toBeLessThan(250);
-    expect(body.endsWith('\nx\n')).toBe(true);
+    // Compared across sizes, not against a clock (issue #612). Each call gets a
+    // value of its own: the composed file is kept per value.
+    const value = (length: number) => files({ robotsTxtCustom: `${'\n'.repeat(length - 1)}x` });
+    expect((await serveValue(value(65_536))).endsWith('\nx\n')).toBe(true);
+    const ratio = await growthRatio(serveValue, value, 65_536);
+    expect(ratio, `${GROWTH}× the text took ${ratio.toFixed(2)}× the time per character`).toBeLessThan(
+      LINEAR_BOUND,
+    );
   });
 });
 

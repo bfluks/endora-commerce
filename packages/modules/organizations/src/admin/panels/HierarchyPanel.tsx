@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
-import { OrganizationPicker } from '@endora-commerce/admin-kit/components';
-import { Alert, AlertDescription, Card, CardContent, CardHeader, CardTitle, Label } from '@endora-commerce/admin-kit/ui';
+import { OrganizationPicker, ImmediateBadge } from '@endora-commerce/admin-kit/components';
+import { Alert, AlertDescription, EditorSection, InlineStatus, Label, useInlineStatus } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 
 interface TreeNode {
@@ -31,7 +31,10 @@ export function HierarchyPanel(props: HierarchyPanelProps): ReactNode {
   const [ancestors, setAncestors] = useState<TreeNode[]>([]);
   const [subtree, setSubtree] = useState<TreeNode[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
+  // Issue #1499 (UX audit SALES-17, DEC-12 a) — "parent updated" is said beside
+  // the picker that changed it, in a region mounted before it has text, not as a
+  // success banner at the top of the card.
+  const { props: statusProps, show: showStatus, clear: clearStatus } = useInlineStatus();
 
   const load = useCallback(async (): Promise<void> => {
     try {
@@ -60,12 +63,12 @@ export function HierarchyPanel(props: HierarchyPanelProps): ReactNode {
     async (nextParentId: string | null): Promise<void> => {
       if (nextParentId === organizationId) return; // self-parent — server would 422
       setError(null);
-      setInfo(null);
+      clearStatus();
       try {
         await apiClient.post(`/api/v1/admin/organizations/${organizationId}/parent`, {
           parentId: nextParentId,
         });
-        setInfo(t('organizations.detail.hierarchySaved'));
+        showStatus(t('organizations.detail.hierarchySaved'));
         await load();
         await onChanged();
       } catch (err) {
@@ -76,26 +79,26 @@ export function HierarchyPanel(props: HierarchyPanelProps): ReactNode {
         );
       }
     },
-    [organizationId, load, onChanged, t],
+    [organizationId, load, onChanged, t, showStatus, clearStatus],
   );
 
   // The subtree includes this org at depth 0 — indent descendants relative to it.
   const rootDepth = subtree.find((n) => n.id === organizationId)?.depth ?? 0;
 
   return (
-    <Card className="mt-4">
-      <CardHeader>
-        <CardTitle>{t('organizations.detail.hierarchyCard')}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    // Issue #1515 — a section of the Overview tab's card, not a card of its own.
+    <EditorSection
+      title={
+        <>
+          {t('organizations.detail.hierarchyCard')}
+          <ImmediateBadge className="align-middle" />
+        </>
+      }
+      contentClassName="space-y-4"
+    >
         {error ? (
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        ) : null}
-        {info ? (
-          <Alert variant="success">
-            <AlertDescription>{info}</AlertDescription>
           </Alert>
         ) : null}
 
@@ -110,6 +113,7 @@ export function HierarchyPanel(props: HierarchyPanelProps): ReactNode {
             clearable
             ariaLabel={t('organizations.detail.hierarchyParentLabel')}
           />
+          <InlineStatus {...statusProps} />
           <p className="text-xs text-muted-foreground">
             {t('organizations.detail.hierarchyParentHint')}
           </p>
@@ -155,7 +159,6 @@ export function HierarchyPanel(props: HierarchyPanelProps): ReactNode {
             </ul>
           )}
         </div>
-      </CardContent>
-    </Card>
+    </EditorSection>
   );
 }

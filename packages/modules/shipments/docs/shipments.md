@@ -1,9 +1,9 @@
 ---
-title: shipments
+title: Shipments
 description: The retryable Shipment record and its lifecycle — the delivery-side twin of payments
 ---
 
-# `shipments`
+# Shipments (`shipments`)
 
 The `Shipment` record and its lifecycle. The
 delivery-side twin of `payments`: the shipping-method *catalog* and adapter
@@ -63,7 +63,12 @@ There used to be a second endpoint here, `POST .../shipments/retry`, and it
 has been deleted: it appended attempt n+1 and contacted no adapter in any state,
 so an operator who used it got a fresh `pending` row that nothing had been asked
 about. Retrying **is** generating again — the generate endpoint appends the next
-attempt, refuses only once one has succeeded, and asks the carrier for it.
+attempt, refuses only once one has succeeded (`409 SHIPMENT_ALREADY_GENERATED`,
+`details.code: "generate"`), and asks the carrier for it.
+
+`SHIPMENT_ALREADY_GENERATED` carries `shipmentId` and `orderId` in `details`, plus the
+shipment's `status` for `mark_failed`. Until issue #637 both refusals were
+`409 VALIDATION_FAILED`.
 
 ## Lifecycle
 
@@ -71,10 +76,12 @@ attempt, refuses only once one has succeeded, and asks the carrier for it.
 | --- | --- | --- |
 | `order_created` | Order created (storefront / admin / API) | The shipping adapter's `onOrderCreated` fires. Offline adapters are no-ops; **no** Shipment is opened here. |
 | `shipment_created` | Admin "Generate shipment" / API | A `pending` Shipment is opened (`attemptNo = max+1`); the adapter's `onShipmentCreated` runs; `shipment.created.v1` is emitted, carrying the state the row opened in. With the adapter's module absent the row opens `pending_manual` and no adapter is called — see above. |
+| `payment.received.v1` | A payment for the order settles | When the order's shipping adapter opts in (`shouldAutoCreateOnPaid()`) and the latest attempt is neither `pending` nor `success`, a shipment is generated as above. Best-effort: an adapter failure never blocks settlement and is left to the operator's **Generate shipment** button. |
 | `receive_shipment` | Carrier/adapter ingress | The Shipment is resolved; the Order moves to the method's `statusOnSuccess` / `statusOnFailure`; `shipment.received.v1` / `shipment.failed.v1` is emitted. |
 
 `receive_shipment` is **idempotent**: a success after a terminal `success` is a
-no-op; a failure after success is rejected (409, no downgrade); a missing /
+no-op; a failure after success is rejected (`409 SHIPMENT_ALREADY_GENERATED`,
+`details.code: "mark_failed"`, no downgrade); a missing /
 already-resolved reference is rejected without corrupting records. A failed
 generation is retried by generating again, which opens the next Shipment attempt
 and asks the carrier for it, leaving prior attempts intact.

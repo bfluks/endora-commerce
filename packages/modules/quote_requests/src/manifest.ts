@@ -1,6 +1,9 @@
 import {
+  QUOTE_REQUEST_HOOKABLE_ACTIONS,
   defineModuleManifest,
   defineModuleSettingsManifest,
+  toHookableActionDeclaration,
+  type CustomFieldWriteDeclaration,
 } from '@endora-commerce/contracts';
 
 /**
@@ -29,7 +32,7 @@ const settings = defineModuleSettingsManifest({
   groups: [
     {
       code: 'quote_requests',
-      name: 'Quote Requests',
+      name: 'Quote requests',
     },
   ],
   settings: [
@@ -90,9 +93,147 @@ const settings = defineModuleSettingsManifest({
 });
 
 /** Module-lifecycle manifest (feature 018). */
+/**
+ * Feature 175 (`specs/175-buyer-input-custom-fields/` research R-11) — the
+ * admin writes of this module's custom-field host, for
+ * `check:custom-field-writes`: the create on behalf and the update. Read as a
+ * literal by the check: keep every entry a literal object.
+ */
+export const customFieldWrites = [
+  {
+    entityType: 'quote_request',
+    kind: 'create',
+    method: 'POST',
+    path: '/api/v1/admin/quote-requests',
+    body: 'adminCreateQuoteRequestSchema',
+  },
+  {
+    entityType: 'quote_request',
+    kind: 'update',
+    method: 'PATCH',
+    path: '/api/v1/admin/quote-requests/:id',
+    body: 'adminPatchQuoteRequestSchema',
+  },
+] satisfies CustomFieldWriteDeclaration[];
+
+/**
+ * The variables every quote request notification e-mail is sent with
+ * (`specs/179-rfq-and-customer-notifications/contracts/notification-matrix.md` §3).
+ */
+const NOTIFICATION_EMAIL_VARIABLES = {
+  number: { key: 'quote.number', label: 'Quote request number', sampleValue: 'QR-000153' },
+  url: {
+    key: 'quote.url',
+    label: 'Link to the quote request',
+    sampleValue: 'https://shop.example.com/quote-requests/2f1c0d1e-0000-4000-8000-000000000153',
+    description: 'Empty when the sales channel has no storefront address; the button is then left out.',
+  },
+  adminUrl: {
+    key: 'quote.adminUrl',
+    label: 'Link to the quote request in the admin panel',
+    sampleValue: 'https://admin.example.com/quote-requests/2f1c0d1e-0000-4000-8000-000000000153',
+    description: 'Empty when ADMIN_BASE_URL is not set; the button is then left out.',
+  },
+  customer: { key: 'customer.name', label: 'Recipient name', sampleValue: 'Anna Example' },
+  organization: { key: 'organization.name', label: 'Organization name', sampleValue: 'Acme Sp. z o.o.' },
+  channel: { key: 'channel.name', label: 'Sales channel', sampleValue: 'B2B store' },
+  actor: { key: 'actor.name', label: 'Name of the buyer who acted', sampleValue: 'Jan Sample' },
+  previousNumber: { key: 'quote.previousNumber', label: 'Number of the re-submitted quote request', sampleValue: 'QR-000150' },
+  validUntil: { key: 'quote.validUntil', label: 'Valid until', sampleValue: 'December 1, 2026' },
+  revisionNumber: { key: 'quote.revisionNumber', label: 'Offer revision number', sampleValue: '2' },
+  lineCount: { key: 'quote.lineCount', label: 'Number of lines', sampleValue: '4' },
+  reason: { key: 'reason', label: 'Reason given', sampleValue: 'The delivery date does not work for us.' },
+} as const;
+
+const V = NOTIFICATION_EMAIL_VARIABLES;
+const CUSTOMER_COMMON = [V.number, V.url, V.customer, V.organization, V.channel];
+// The operator e-mails link into the admin panel when ADMIN_BASE_URL is set (spec 179 OQ-1, #1204).
+const OPERATOR_COMMON = [V.number, V.adminUrl, V.customer, V.organization, V.channel];
+
+/** The eleven notification e-mails — {@link manifest}'s `transactionalEmails`, after `quote_request_pdf`. */
+const QUOTE_NOTIFICATION_EMAILS = [
+  {
+    code: 'quote_request_customer_submitted',
+    name: 'Quote request received (customer)',
+    group: 'quote_requests',
+    description: 'Sent to the buyer and to the members who see every quote request of the Organization when a quote request is submitted.',
+    variables: [...CUSTOMER_COMMON, V.actor],
+  },
+  {
+    code: 'quote_request_customer_resubmitted',
+    name: 'Quote request re-submitted (customer)',
+    group: 'quote_requests',
+    description: 'Sent to the buyer and to the members who see every quote request of the Organization when a quote request is re-submitted as a new one.',
+    variables: [...CUSTOMER_COMMON, V.actor, V.previousNumber],
+  },
+  {
+    code: 'quote_request_customer_offer_accepted',
+    name: 'Offer accepted (customer)',
+    group: 'quote_requests',
+    description: 'Sent to the customer side when a buyer accepts the offer on a quote request.',
+    variables: [...CUSTOMER_COMMON, V.actor],
+  },
+  {
+    code: 'quote_request_customer_offer_rejected',
+    name: 'Offer rejected (customer)',
+    group: 'quote_requests',
+    description: 'Sent to the customer side when a buyer rejects the offer on a quote request, which cancels it.',
+    variables: [...CUSTOMER_COMMON, V.actor, V.reason],
+  },
+  {
+    code: 'quote_request_customer_expired',
+    name: 'Quote request expired (customer)',
+    group: 'quote_requests',
+    description: 'Sent to the customer side when a quote request expires after the configured period without activity.',
+    variables: [...CUSTOMER_COMMON],
+  },
+  {
+    code: 'quote_request_customer_prepared',
+    name: 'Quote prepared for the customer',
+    group: 'quote_requests',
+    description: 'Sent to the customer side when a sales representative creates a quote request on the buyer’s behalf.',
+    variables: [...CUSTOMER_COMMON, V.validUntil],
+  },
+  {
+    code: 'quote_request_customer_revised',
+    name: 'Offer ready (customer)',
+    group: 'quote_requests',
+    description: 'Sent to the customer side when a sales representative saves an offer revision awaiting the buyer’s answer.',
+    variables: [...CUSTOMER_COMMON, V.validUntil, V.revisionNumber],
+  },
+  {
+    code: 'quote_request_customer_approved',
+    name: 'Quote request approved (customer)',
+    group: 'quote_requests',
+    description: 'Sent to the customer side when a sales representative approves a quote request. It carries a link, never the quote PDF.',
+    variables: [...CUSTOMER_COMMON, V.validUntil],
+  },
+  {
+    code: 'quote_request_customer_canceled',
+    name: 'Quote request canceled (customer)',
+    group: 'quote_requests',
+    description: 'Sent to the customer side when a sales representative cancels a quote request.',
+    variables: [...CUSTOMER_COMMON, V.reason],
+  },
+  {
+    code: 'quote_request_operator_submitted',
+    name: 'New quote request (operator)',
+    group: 'quote_requests',
+    description: 'Sent to the operators who handle the Organization’s quote requests when a buyer submits a quote request.',
+    variables: [...OPERATOR_COMMON, V.actor, V.lineCount],
+  },
+  {
+    code: 'quote_request_operator_resubmitted',
+    name: 'Quote request re-submitted (operator)',
+    group: 'quote_requests',
+    description: 'Sent to the operators who handle the Organization’s quote requests when a buyer re-submits a quote request.',
+    variables: [...OPERATOR_COMMON, V.actor, V.lineCount, V.previousNumber],
+  },
+];
+
 export const manifest = defineModuleManifest({
   id: 'quote_requests',
-  name: 'Quote Requests',
+  name: 'Quote requests',
   description:
     'Customer-initiated RFQ workflow with admin pricing, approvals, and expiry.',
   version: '1.0.0',
@@ -226,6 +367,41 @@ export const manifest = defineModuleManifest({
         'Not `dependencies`: a PDF is optional for a quote, and binding would make the document ' +
         'templates switch dead while quote requests are on.',
     },
+    {
+      moduleId: 'admin_notifications',
+      name: 'adminNotificationRecordPort',
+      kind: 'degrades-without',
+      whenAbsent: 'Operators get no bell entry about quote requests; each delivery record closes as skipped (module off).',
+      reason:
+        'The one call into this owner is the notification delivery worker’s bell channel, which decides the ' +
+        'owner’s presence in front of the port and closes the record `skipped_module_off` when it is off ' +
+        '(`specs/179-rfq-and-customer-notifications/` FR-012). Nothing in this module fails closed on it, and no ' +
+        'table of that owner is referenced from this module’s schema.',
+    },
+    {
+      moduleId: 'customer_notifications',
+      name: 'customerNotificationRecordPort',
+      kind: 'degrades-without',
+      whenAbsent:
+        'Buyers get no entry about their quote requests in the storefront notification centre; each delivery record closes as skipped (module off).',
+      reason:
+        'The one call into this owner is the notification delivery worker’s centre channel, which decides the ' +
+        'owner’s presence in front of the port and closes the record `skipped_module_off` when it is off ' +
+        '(`specs/179-rfq-and-customer-notifications/` FR-012, FR-048). Nothing in this module fails closed on it, ' +
+        'and no table of that owner is referenced from this module’s schema.',
+    },
+    {
+      moduleId: 'pwa',
+      name: 'customerPushPort',
+      kind: 'degrades-without',
+      whenAbsent:
+        'Buyers get no push notification about their quote requests on their devices; each delivery record closes as skipped (module off).',
+      reason:
+        'The one call into this owner is the notification delivery worker’s push channel, which decides the ' +
+        'owner’s presence in front of the port and closes the record `skipped_module_off` when it is off ' +
+        '(`specs/179-rfq-and-customer-notifications/` FR-012, FR-060). Nothing in this module fails closed on it, ' +
+        'and no table of that owner is referenced from this module’s schema.',
+    },
   ],
   settings,
   // Feature 073 (Constitution XVII) — the operator's activation control.
@@ -306,7 +482,16 @@ export const manifest = defineModuleManifest({
    * `PRODUCT_NOT_FOUND`, which is `catalog`'s and is declared there. None is
    * declared here and every one of those sentences stays where it is.
    *
-   * **No `tokens`, and it is derived rather than assumed.** The envelope's
+   * **One code carries `tokens`, and it is raised by another module.**
+   * `QUOTE_VALIDITY_ENDED` is also `orders`' refusal at placement of a basket
+   * still priced at a quote that no longer binds (issue #167): it puts the
+   * reason in `details.code`, and the three members below are
+   * `quoteCommitmentRefusalSchema`'s in `packages/contracts/src/orders.ts`, in
+   * its order — the enum is the authority, as for `carts`' coupon reasons.
+   * The code stays this module's: the sentence is about this module's quote,
+   * and ownership follows the code, not the raise site.
+   *
+   * **No other `tokens`, and it is derived rather than assumed.** The envelope's
    * `refusalToken` (`packages/platform/src/http/error-envelope.ts`) reads
    * exactly one member of `details` — `code`, and only when `details` is an
    * object — as the tail of `errors.<CODE>.<token>`. Every raise of these
@@ -318,7 +503,7 @@ export const manifest = defineModuleManifest({
    */
   errorCodes: [
     { code: 'QUOTE_INCOMPLETE' },
-    { code: 'QUOTE_VALIDITY_ENDED' },
+    { code: 'QUOTE_VALIDITY_ENDED', tokens: ['lapsed', 'withdrawn', 'unavailable'] },
     { code: 'RFQ_ALREADY_CLAIMED' },
     { code: 'RFQ_EMPTY' },
     { code: 'RFQ_EXPIRED' },
@@ -328,11 +513,21 @@ export const manifest = defineModuleManifest({
     { code: 'RFQ_NOT_QUOTED' },
     { code: 'RFQ_PRICE_PROPOSAL_NOT_ALLOWED' },
     { code: 'RFQ_SAVED_VIEW_NAME_TAKEN' },
+    // Feature 163 (security review M1) — an operator's on-behalf request on a channel,
+    // named or resolved (owner decision 2026-10-29 "A"), that is not one of the
+    // Organization's active channels. Minted by this feature;
+    // owner and reason in `MINTED_ERROR_CODES`.
+    { code: 'RFQ_SALES_CHANNEL_NOT_ALLOWED' },
     // Feature 153 (owner answer Q4) — sending the quote PDF by e-mail. Minted
     // by this feature; owner and reason in `MINTED_ERROR_CODES`.
     { code: 'QUOTE_REQUEST_PDF_TOO_LARGE' },
     { code: 'QUOTE_REQUEST_PDF_EMAIL_UNAVAILABLE', tokens: ['deactivated', 'no_transport', 'no_definition'] },
     { code: 'QUOTE_REQUEST_PDF_SEND_FAILED' },
+    // Issue #1906 — an assignee who may not handle the request: named on the
+    // admin assign route or the port (the plain sentence), or by a command hook
+    // inside a buyer's submission (`submission`, worded for the buyer). Minted
+    // by this issue; owner and reason in `MINTED_ERROR_CODES`.
+    { code: 'RFQ_ASSIGNEE_NOT_ELIGIBLE', tokens: ['submission'] },
   ],
   /**
    * `rfqs:handle` is declared in the core `PERMISSION_CATALOGUE`, which carries
@@ -341,7 +536,8 @@ export const manifest = defineModuleManifest({
    * (D-175, feature 080 T057).
    *
    * `RfqCreatePage` prefills an agreed price from
-   * `GET /api/v1/admin/products/:id/resolved-price`, which `price_lists` gates
+   * `POST /api/v1/admin/price-books/resolve` (feature 160; it was the per-product
+   * resolved-price probe), which `price_lists` gates
    * with `price_lists:read`. D-173 made that gate deliberately: the route used
    * to enforce `rfqs:handle`, a code its own switchable owner could take off
    * `/admin-roles` while `price_lists` — `nonDeactivatable` — went on demanding
@@ -365,6 +561,28 @@ export const manifest = defineModuleManifest({
    */
   permissions: [
     { code: 'rfqs:handle', label: 'Handle quote requests', requires: ['price_lists:read'] },
+  ],
+  /**
+   * The buyer action this module gates for an Organization's members
+   * (`specs/170-organization-roles/`, FR-040; `contracts/organization-permissions-manifest.md`
+   * §3). Enforced on every route that creates a quote request here — from
+   * scratch and by resubmitting — and by the modules that create one on the
+   * buyer's behalf (a cart, a shopping list, a quick-order build).
+   * Translations: `organizationPermissions.<code>.*` in
+   * `i18n/{en,pl}.json`.
+   *
+   * Seeing every quote request of the Organization is **not** a code until P3
+   * declares `quote_requests.approve` (research R-30): it is reserved to the
+   * *Administrator* role kind, judged in `rfq-service.ts`.
+   */
+  organizationPermissions: [
+    {
+      code: 'quote_requests.create',
+      label: 'Create quote requests',
+      description:
+        'Ask for a quote from scratch or by resubmitting one, and turn a cart, a shopping list or a quick order into a quote request.',
+      memberDefault: true,
+    },
   ],
   /**
    * Feature 153 — the four quote blocks of the document-template editor
@@ -511,6 +729,33 @@ export const manifest = defineModuleManifest({
         { key: 'message', label: 'Personal message', sampleValue: 'As agreed on the phone, here is our offer.' },
       ],
     },
+    // `specs/179-rfq-and-customer-notifications/` FR-020 — one e-mail per change
+    // and side (`contracts/notification-matrix.md` §3), so an operator edits and
+    // switches each on its own. Defaults (en, pl) in
+    // `backend/email-templates/quote-notification-defaults.ts`.
+    ...QUOTE_NOTIFICATION_EMAILS,
+  ],
+  /**
+   * Command hooks (issue #1906, `specs/176-command-hooks-outbox/`): the buyer's
+   * create-and-submit, `quote_request.create`, and submit-again,
+   * `quote_request.resubmit`, for both phases — so a deployment's module may
+   * veto either, or set the new request's assignee inside the write through
+   * the hook data's `assign`, before the operators' notifications are fixed.
+   * `quote-request-create-hooks.test.ts` holds each Command to its ref.
+   */
+  hookableActions: Object.values(QUOTE_REQUEST_HOOKABLE_ACTIONS).map(toHookableActionDeclaration),
+  /**
+   * The two negotiation-policy side tables (feature 146), declared so the
+   * platform verifies their shape at `migrate` and at boot
+   * (`specs/187-side-table-extensions/` FR-032): each primary key is a
+   * cascading foreign key to its host's, and each entity follows its host's
+   * tenancy — `QuoteRequestOrgPolicy` is `@OrgScoped` keyed by the
+   * organization itself, `QuoteRequestAccountPolicy` is transitively scoped to
+   * its customer account, whose organization can move.
+   */
+  extends: [
+    { entity: 'organizations.Organization', table: 'quote_request_org_policies' },
+    { entity: 'customer_accounts.CustomerAccount', table: 'quote_request_account_policies' },
   ],
   i18n: { bundlesDir: 'i18n' },
   docs: { dir: 'docs' },
@@ -522,7 +767,8 @@ export const manifest = defineModuleManifest({
       icon: 'Inbox',
       targetRoute: '/quote-requests',
       requiredPermission: 'rfqs:handle',
-      keywords: ['rfq', 'quote', 'inbox', 'zapytanie', 'oferta'],
+      keywords: ['rfq', 'quote', 'inbox'],
+      keywordsKey: 'actions.openInbox.keywords',
       weight: 310,
     },
   ],

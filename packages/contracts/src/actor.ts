@@ -55,6 +55,14 @@ export interface ActorCustomer {
    * that requires an Organization asserts it (`customerContextResolver`).
    */
   organizationId: string | null;
+  /**
+   * The member's organization role (`specs/170-organization-roles/`, research
+   * R-15). The auth hook reads the account behind the session once per request
+   * and stamps the role id it holds, so a permission check on the cart path
+   * costs no read of its own. `null` (or absent) when the resolver answers none
+   * — the permission port then reads the account itself.
+   */
+  organizationRoleId?: string | null;
   /** Non-null when a Supplier employee is acting on behalf of this Customer. */
   impersonatorAdminUserId: string | null;
 }
@@ -62,6 +70,14 @@ export interface ActorCustomer {
 export interface ActorAdmin {
   kind: 'admin';
   adminUserId: string;
+  /**
+   * Issue #349, E-349-1 — the id of the session the actor was resolved from,
+   * when it was resolved from one. A write that ends other administrators'
+   * sessions spares this one; a write that reaches that consequence through an
+   * event names it there, because the cookie it came from is a credential and
+   * the id alone is not. Absent for an actor not resolved from a session.
+   */
+  sessionId?: string;
 }
 
 /**

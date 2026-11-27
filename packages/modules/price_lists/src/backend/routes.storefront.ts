@@ -3,14 +3,16 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import type { PriceListService } from './services/price-list-service.js';
 import type { PricingServiceContract } from './services/pricing-service.interface.js';
 import {
-  isProductVisibleTo,
+  requestScopeLanguage,
+  type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
+  type CatalogProductRecord,
   type OrganizationDetailsPort,
   type OrganizationRecord,
   type ProductAudience,
 } from '@endora-commerce/contracts';
 import { getResolvedChannel } from '@endora-commerce/platform/kernel';
-import { markPersonalisedPricing, productAudienceOf } from '@endora-commerce/platform/http';
+import { markPersonalisedPricing, pricedAudienceOf } from '@endora-commerce/platform/http';
 
 export interface StorefrontPricingRoutesDeps {
   priceListService: PriceListService;
@@ -30,6 +32,14 @@ export interface StorefrontPricingRoutesDeps {
    * carries its id.
    */
   organizationDetails: OrganizationDetailsPort;
+  /**
+   * Feature 163 — `catalog`'s availability answer at the request's (channel,
+   * language) for this viewer (`contracts/consumers.md` row 21). A price or a
+   * display mode is a disclosure about the product, so it is answered only for
+   * a product the caller could reach in the catalogue: not a draft, not one
+   * outside its window, not one another channel sells.
+   */
+  catalogAvailability: CatalogProductAvailabilityPort;
 }
 
 /**
@@ -55,13 +65,19 @@ interface PricingViewer {
   readonly audience: ProductAudience;
   readonly organization: OrganizationRecord | null;
   readonly customerKind: 'guest' | 'signed_in';
+  /**
+   * `specs/182-related-payers/` RP-14 — whose display mode applies: the viewer's own
+   * Organization, also when `organization` (the priced one) is a payer on its terms.
+   */
+  readonly displayOrganizationId: string | null;
 }
 
 async function pricingViewerOf(
   request: FastifyRequest,
   organizationDetails: OrganizationDetailsPort,
 ): Promise<PricingViewer> {
-  const audience = productAudienceOf(request);
+  // `specs/182-related-payers/` FR-115 — priced for the payer on its terms (research R-4).
+  const audience = await pricedAudienceOf(request);
   // `null` covers three callers whose answers happen to agree: the anonymous
   // visitor, the authenticated caller with no Organization (feature 026's
   // guest-style account, an unbound API key), and the buyer whose Organization
@@ -69,8 +85,40 @@ async function pricingViewerOf(
   const organization =
     audience.organizationId === null
       ? null
-      : await organizationDetails.findById(audience.organizationId);
-  return { audience, organization, customerKind: organization ? 'signed_in' : 'guest' };
+      : await organizationDetails.findById(audience.pricingOrganizationId ?? audience.organizationId);
+  return {
+    audience,
+    organization,
+    customerKind: organization ? 'signed_in' : 'guest',
+    displayOrganizationId: organization ? audience.organizationId : null,
+  };
+}
+
+/**
+ * The product a probe answers about, or `null` for every product this viewer
+ * may not have — absent, or not available at the request's (channel, language)
+ * to this audience now (feature 163, FR-004). One `null` for every reason, so
+ * the route's single 404 is the only answer a refusal has.
+ */
+async function availableProduct(
+  request: FastifyRequest,
+  productId: string,
+  audience: ProductAudience,
+  catalogProductRead: CatalogProductReadPort,
+  catalogAvailability: CatalogProductAvailabilityPort,
+): Promise<CatalogProductRecord | null> {
+  const product = await catalogProductRead.findById(productId);
+  if (!product) return null;
+  // Feature 053 / FR-002: the channel the canonical middleware resolved.
+  const channel = getResolvedChannel(request);
+  const available = await catalogAvailability.filterAvailable([product.id], {
+    channelId: channel.id,
+    // Issue #1011 — the channel language the whole `Accept-Language` asks for: q-weighted,
+    // matched exactly then by base language, else the channel's default (as #397's catalogue).
+    languageCode: requestScopeLanguage(channel, request.headers['accept-language']),
+    audience,
+  });
+  return available.has(product.id) ? product : null;
 }
 
 /**
@@ -98,7 +146,8 @@ export async function registerStorefrontPricingRoutes(
   app: FastifyInstance,
   deps: StorefrontPricingRoutesDeps,
 ): Promise<void> {
-  const { priceListService, pricingService, catalogProductRead, organizationDetails } = deps;
+  const { priceListService, pricingService, catalogProductRead, organizationDetails, catalogAvailability } =
+    deps;
 
   app.get<{ Params: { productId: string } }>(
     '/api/v1/storefront/pricing/display-mode/:productId',
@@ -111,12 +160,19 @@ export async function registerStorefrontPricingRoutes(
       // window and a crawler hold (Principle VII).
       markPersonalisedPricing(reply, viewer.audience);
 
-      const product = await catalogProductRead.findById(request.params.productId);
       // Issue #227 — this route took a bare product id and answered about it.
       // Whether a price is even displayed for a product an operator restricted
-      // to one distributor is that operator's answer, so the row has to pass the
-      // audience test before this route says anything about it at all.
-      if (!product || !isProductVisibleTo(product, viewer.audience)) {
+      // to one distributor is that operator's answer, so the product has to be
+      // available to this viewer before this route says anything about it at
+      // all — since feature 163, at the request's (channel, language), now.
+      const product = await availableProduct(
+        request,
+        request.params.productId,
+        viewer.audience,
+        catalogProductRead,
+        catalogAvailability,
+      );
+      if (!product) {
         reply.status(404);
         return { error: { code: 'NOT_FOUND', message: 'Product not found.' } };
       }
@@ -133,7 +189,7 @@ export async function registerStorefrontPricingRoutes(
       // already consults — and only the viewer handed to it moved.
       const mode = await priceListService.resolveDisplayMode({
         productId: product.id,
-        organizationId: viewer.organization?.id ?? null,
+        organizationId: viewer.displayOrganizationId,
         salesChannelId: channel.id,
         customerKind: viewer.customerKind,
       });
@@ -155,10 +211,16 @@ export async function registerStorefrontPricingRoutes(
       // the representation a crawler indexes.
       markPersonalisedPricing(reply, viewer.audience);
 
-      const product = await catalogProductRead.findById(request.params.id);
-      // Issue #227 — see the display-mode route above. A resolved price is the
-      // most direct disclosure this module has.
-      if (!product || !isProductVisibleTo(product, viewer.audience)) {
+      // Issue #227 / feature 163 — see the display-mode route above. A resolved
+      // price is the most direct disclosure this module has.
+      const product = await availableProduct(
+        request,
+        request.params.id,
+        viewer.audience,
+        catalogProductRead,
+        catalogAvailability,
+      );
+      if (!product) {
         reply.status(404);
         return { error: { code: 'NOT_FOUND', message: 'Product not found.' } };
       }
@@ -169,16 +231,20 @@ export async function registerStorefrontPricingRoutes(
       const currency = request.query.currency?.toUpperCase();
       const variantId = request.query.variantId ?? null;
 
-      // The engine reads `customerGroupId` off the record `pricingViewerOf`
-      // loaded, so the organisation's group travels with it; a customer's *own*
-      // group override (feature 040 R6) is not resolved here, exactly as it is
-      // not on the catalogue listing this page's cards come from.
+      // D-287 P0 — the customer's own group (feature 040 R6) overrides the
+      // organisation's here exactly as on the catalogue listing: the engine
+      // resolves it from the account, which belongs to `viewer.organization`.
       const out = await pricingService.resolveEngine({
         product,
         variantId,
         context: {
           quantity,
           organization: viewer.organization,
+          ...(viewer.audience.pricingOrganizationId && viewer.displayOrganizationId
+            ? { displayModeOrganization: { id: viewer.displayOrganizationId } }
+            : viewer.organization && viewer.audience.customerAccountId
+            ? { customerAccountId: viewer.audience.customerAccountId }
+            : {}),
           salesChannel: channel,
           ...(currency ? { currencyCode: currency } : {}),
         },
@@ -186,8 +252,10 @@ export async function registerStorefrontPricingRoutes(
 
       return {
         data: {
+          // `resolvedPriceEngineSchema`: a product no book prices (FR-018) is
+          // unpriced — no book, no price, no bracket — not an empty-string id.
           resolvedPrice: {
-            baseListId: out.base.listId,
+            baseListId: out.base.bracket ? out.base.listId : null,
             basePrice: out.base.bracket
               ? { amount: out.base.bracket.amount, currency: out.currencyCode }
               : null,
@@ -203,6 +271,12 @@ export async function registerStorefrontPricingRoutes(
                   maxQuantity: out.base.bracket.maxQuantity ?? null,
                 }
               : null,
+            // Feature 160 (FR-031) — the tier that priced the charged line for
+            // the selected variant, and the buyer price a charged sale undercut.
+            ...(out.source !== undefined ? { source: out.source } : {}),
+            ...(out.compareAt !== undefined ? { compareAt: out.compareAt } : {}),
+            // G9 — the catalogue price beside a lower buyer price, when the shop shows it.
+            ...(out.listPrice ? { listPrice: out.listPrice } : {}),
           },
         },
       };

@@ -194,9 +194,12 @@
  * `cms_pages` — is the admin application's and is judged as nobody's: right for
  * the directory, and it leaves the reach unrecorded.
  *
- * Nine files under `admin/src/components` reach a module's admin code that way,
- * and `admin/src/components/IdleLogout.tsx` — which takes `settings`' admin API
- * client — was in no ledger at all. That is the admin application asking a
+ * When this was written, nine files under `admin/src/components` reached a
+ * module's admin code that way, and `IdleLogout.tsx` — then a file of that
+ * directory, which took `settings`' admin API client — was in no ledger at all.
+ * (The component is `packages/admin-shell/src/components/IdleLogout.tsx` now and
+ * reads its timeout off the session, so it reaches no module; the directory is
+ * gone.) That is the admin application asking a
  * module for something, and it is the shape with the worse failure mode: a
  * *ledgered* reach rewritten as a package specifier goes stale loudly, while an
  * **unrecorded** one is rewritten and nothing goes red, because there was no
@@ -209,9 +212,9 @@
  *
  * **Source side only.** {@link ownerLocationOf} answers `host`; the target
  * position keeps asking {@link moduleLocationOf}, which answers `null` for a
- * host path. Asked at both ends this would turn every module→host reach in
- * `admin/src/modules` into a finding — roughly 1700 of them, into published kit
- * surface, which is `check:admin-surface`'s population and not a boundary
+ * host path. Asked at both ends this would have turned every module→host reach
+ * in `admin/src/modules` (which feature 091 has since emptied and removed) into a
+ * finding — roughly 1700 of them, into published kit surface, which is `check:admin-surface`'s population and not a boundary
  * question.
  *
  * **`_shared` stays out, deliberately**, and the reason is in
@@ -250,17 +253,24 @@
  *     Ordering is neither instrument's subject and never was — that is
  *     `src/db/migration-order.ts`'.
  *
- *     So the two subjects are: **DDL** there, **DML** here. The populations
- *     cannot overlap even in principle, because `STATEMENT_HEAD` admits only
- *     `select`, `insert into`, `update`, `delete from` and `with`, and never
- *     `create` or `alter`. What a migration is excluded from above is this
+ *     So the two subjects are: a **foreign key** there, a **migration's reach**
+ *     here. They do not overlap even where both read `alter table` (issue
+ *     #108): `fk-graph.ts` attributes an edge to the module owning the
+ *     *referencing table*, whatever migration wrote it, and this check
+ *     attributes a statement to the module whose *migration* holds it. So
+ *     `alter table "b_table"` in `a`'s migration is nothing there and a
+ *     finding here, and a migration's own `create table` is nothing here — it
+ *     is the declaration the owner map is built from, and DDL against a table
+ *     the same source creates is part of that declaration (`sql-tables.ts`
+ *     states the DDL heads it reads). What a migration is excluded from above is this
  *     predicate's rule — *every reach is debt*, into
  *     `scripts/ledgers/cross-module-imports/` — and {@link analyzeMigrationSql}
  *     judges the same statements under two rules of their own, with two ledgers
  *     of their own: **R1**, a cross-module table reference requires the owner in
  *     the declaring module's transitive manifest `dependencies` closure (which
  *     is AGENTS.md § *Migrations* item 4 with its predicate widened from
- *     `references` to DML), and **R2**, a migration may not *write* another
+ *     `references` to DML and to DDL against an existing table), and **R2**, a
+ *     migration may not *write* another
  *     module's table whether or not R1 holds. Kernel-owned tables are outside
  *     both, by derivation from the owner map.
  *   - **Comments, for both `sql` paths** — not by exclusion but by
@@ -395,6 +405,7 @@ import { dirname as posixDirname, join as posixJoin, normalize as posixNormalize
 import { join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ADMIN_HOST_OWNER, adminApplicationPresent } from './lib/admin-surfaces.js';
+import { DEPLOYMENT_REGISTRY_DIRECTORY } from './lib/admin-artefacts.js';
 import { moduleOf } from './check-container-imports.js';
 import { requireModuleLayout, type ModuleTreeLayout } from './lib/module-roots.js';
 import {
@@ -417,7 +428,16 @@ import {
   registeredMigrations,
 } from './lib/migration-registry.js';
 import { namedSpecifiers, type SpecifierKind } from './lib/specifiers.js';
+import { withSharedParses } from '@endora-commerce/cli/lib/parsed-source.js';
 import {
+  OVERLAY_BOUNDARY_CLAUSES,
+  overlayDependenciesOf,
+  overlayEdgeOf,
+  type OverlayBoundaryClause,
+} from '@endora-commerce/cli/lib/overlay-boundary.js';
+import { resolutionCandidates } from './lib/platform-surface.js';
+import {
+  declaredIndexes,
   declaredTableNames,
   sqlTableAccesses,
   type SqlAccessDirection,
@@ -515,6 +535,13 @@ export interface CrossModuleImport {
   readonly surface: CrossModuleSurface;
   /** True when either side lives under `src/apps/<deployment>/modules/`. */
   readonly overlay: boolean;
+  /**
+   * Present on an edge between **two overlay modules**: the clauses of
+   * `specs/190-overlay-full-modules/contracts/overlay-ports.md` §2 it failed, as the
+   * shared overlay analysis decided them. Such a finding is never ledgered — see
+   * {@link overlayEdgesUnledgerable}.
+   */
+  readonly overlayClauses?: readonly OverlayBoundaryClause[];
 }
 
 /**
@@ -567,7 +594,8 @@ export type MigrationSqlRule =
   | 'migration-writes-a-foreign-table';
 
 /**
- * A migration naming another module's table in DML (feature 097).
+ * A migration naming another module's table in DML (feature 097) or in DDL
+ * against an existing table (issue #108).
  *
  * Deliberately **not** a `ModuleBoundaryFinding`: it takes its own two ledgers,
  * because the host check's rule over an ordinary source is "every reach is debt"
@@ -938,6 +966,9 @@ export interface ModuleBoundaryInput {
 /** The tree with no module package installed — every fixture, and CI before !910. */
 const NO_MODULE_PACKAGES: ReadonlyMap<string, string> = new Map();
 
+/** No overlay manifest read: every overlay module declares nothing (fail closed). */
+const NO_OVERLAY_DEPENDENCIES: ReadonlyMap<string, readonly string[] | null> = new Map();
+
 export interface CheckResult extends LedgerVerdict<ModuleBoundaryFinding> {
   readonly total: number;
   /** What each pass of the table→owner map resolved, and what is left over. */
@@ -1012,8 +1043,9 @@ export interface AdminBoundarySurfaces {
    */
   readonly hostRoots: readonly string[];
   /**
-   * `admin/src/modules` — the directory holding the module surfaces — or `null`
-   * when the application has none left (feature 091, R16).
+   * The directory that held the module surfaces — `admin/src/modules` until
+   * feature 091 moved them into `packages/modules/<id>/src/admin/` — or `null`
+   * when the application has none left (feature 091, R16), as it now has none.
    *
    * The layout's own field, carried through unchanged. Every site below answers
    * the `null` the same trivial way: nothing is under a directory that does not
@@ -1054,7 +1086,7 @@ export interface AdminBoundarySurfaces {
    * two files; that check is deleted (feature 091, Phase 5 T5) and what now
    * holds them is an assertion in the admin's own suite —
    * `admin/test/modules/host-admin-registrations.test.tsx`, which counts both
-   * registries in **totals** and names the four routes and three nav entries
+   * registries in **totals** and names the five routes and four nav entries
    * that are the admin application's own (`contracts/admin-registry.md` R13a).
    */
   readonly registryFiles: ReadonlySet<string>;
@@ -1083,10 +1115,12 @@ const NO_ADMIN_SURFACES = null;
  *
  * `check:module-boundary`'s admin population judges a reach between two
  * *modules*, so a file the module root does not hold is judged as nobody's —
- * right for the file, and it leaves the reach unrecorded. Nine files under
- * `admin/src/components` import a module's admin API client or component;
- * `admin/src/components/IdleLogout.tsx` takes `settings`' client and is in no
- * ledger at all. That is a real coupling — the admin application asking a module
+ * right for the file, and it leaves the reach unrecorded. At feature 091, nine
+ * files under `admin/src/components` imported a module's admin API client or
+ * component, and `IdleLogout.tsx` there took `settings`' client and was in no
+ * ledger at all (it has since moved to
+ * `packages/admin-shell/src/components/IdleLogout.tsx` and reaches no module).
+ * That is a real coupling — the admin application asking a module
  * for something — and it is the coupling with the *worse* failure mode: a
  * ledgered reach rewritten as a package specifier goes stale loudly
  * (`specs/084-small-f4-package-layout/contracts/module-package-layout.md` §0),
@@ -1134,7 +1168,12 @@ function adminHostOwnerOf(
  */
 function isAdminRegistryFile(file: string, admin: AdminBoundarySurfaces | null): boolean {
   if (admin === null) return false;
-  return admin.registryFiles.has(file) || file === admin.generatedRegistryFile;
+  if (admin.registryFiles.has(file) || file === admin.generatedRegistryFile) return true;
+  // The deployment admin registries beside it (`specs/190-overlay-full-modules/`
+  // FR-080): generated composition roots naming each overlay module's fixed
+  // `admin/index.tsx`, so the artefact doing its job, as the core one is.
+  const deployments = `${posixDirname(admin.generatedRegistryFile)}/${DEPLOYMENT_REGISTRY_DIRECTORY}/`;
+  return file.startsWith(deployments) && file.endsWith('.generated.ts');
 }
 
 /**
@@ -1164,8 +1203,9 @@ function adminLocationOf(
  *
  * The admin branch is consulted **first** and cannot be reached by a backend
  * path, because it keys on the admin module root's own prefix. It has to come
- * first: `moduleOf`'s `/src/modules/<id>/` regex matches inside any
- * `admin/src/modules/<directory>/` path and answers the **directory name**,
+ * first: `moduleOf`'s `/src/modules/<id>/` regex would match inside any
+ * `admin/src/modules/<directory>/` path (a directory that no longer exists)
+ * and answer the **directory name**,
  * which is not a module id. `warehouses` was the standing example — a
  * directory the nav attributes to `inventory` — until feature 091's Phase 4
  * batch 13 moved it into that module's package; the ordering is what makes the
@@ -1214,7 +1254,7 @@ function moduleLocationOf(
  * `host` can never be the target of a finding.
  *
  * Were it asked at both ends, every module→host reach in `admin/src/modules`
- * would become a boundary finding — that is `check:admin-surface`'s population,
+ * (while it existed) would have become a boundary finding — that is `check:admin-surface`'s population,
  * roughly 1700 reaches into published kit surface, and duplicating it here would
  * report the admin design system as cross-module debt.
  */
@@ -1356,6 +1396,7 @@ export function analyzeSource(
   hostResident: HostResidentModules = NO_HOST_RESIDENT_MODULES,
   admin: AdminBoundarySurfaces | null = NO_ADMIN_SURFACES,
   tally?: SiteTally,
+  overlayDependencies: ReadonlyMap<string, readonly string[] | null> = NO_OVERLAY_DEPENDENCIES,
 ): CrossModuleImport[] {
   if (GENERATED_MODULE_FILES[file] !== undefined) return [];
   if (isAdminRegistryFile(file, admin)) return [];
@@ -1365,6 +1406,29 @@ export function analyzeSource(
   const found: CrossModuleImport[] = [];
   for (const specifier of namedSpecifiers(source, file)) {
     if (tally !== undefined) tally.count += 1;
+    // `specs/190-overlay-full-modules/` FR-071 — an edge between two overlay
+    // modules is decided by the overlay analysis `endora generate` runs in an
+    // instance, so the two readers cannot answer differently for one import. The
+    // sanctioned type-only `ports.ts` import is no reach; anything else is a finding
+    // carrying the clauses it failed.
+    const overlayEdge = overlayEdgeOf(source, file, specifier, overlayDependencies);
+    if (overlayEdge !== null) {
+      if (overlayEdge.failed.length === 0) continue;
+      found.push({
+        predicate: 'import',
+        file,
+        line: specifier.line,
+        moduleId: owner.id,
+        target: overlayEdge.target,
+        specifier: specifier.text,
+        targetPath: overlayEdge.targetPath,
+        kind: specifier.kind,
+        surface: surfaceOf(overlayEdge.targetPath),
+        overlay: true,
+        overlayClauses: overlayEdge.failed,
+      });
+      continue;
+    }
     const packaged = resolveModulePackage(specifier.text, modulePackages);
     if (packaged !== null) {
       // The importer's own package, named by its own npm name — the self-import
@@ -1446,8 +1510,11 @@ export function findCrossModuleImports(input: ModuleBoundaryInput): {
   const hostResident = input.hostResidentModules ?? NO_HOST_RESIDENT_MODULES;
   const admin = input.adminSurfaces ?? NO_ADMIN_SURFACES;
   const tally: SiteTally = { count: 0 };
+  // Read off the overlay manifests among the sources, by the reader the instance's
+  // `endora generate` uses — one answer to "what does this overlay declare".
+  const overlayDependencies = overlayDependenciesOf(input.sources);
   const found = [...input.sources].flatMap(([file, text]) =>
-    analyzeSource(text, file, packages, surfaces, hostResident, admin, tally),
+    analyzeSource(text, file, packages, surfaces, hostResident, admin, tally, overlayDependencies),
   );
   found.sort((a, b) => (a.file === b.file ? a.line - b.line : a.file.localeCompare(b.file)));
   return { found, sites: tally.count };
@@ -1757,6 +1824,12 @@ export function analyzeMigrationSql(
   closures: DependencyClosures,
   hostResident: HostResidentModules = NO_HOST_RESIDENT_MODULES,
   tally?: SiteTally,
+  /**
+   * Index name → table over every migration the caller read, so a `drop index`
+   * resolves to the table its `create index` named — usually in another file
+   * (issue #108). {@link findMigrationSql} builds it with {@link migrationIndexTables}.
+   */
+  indexTables?: ReadonlyMap<string, string>,
 ): MigrationSqlFinding[] {
   if (!isMigration(file)) return [];
   const owner = moduleLocationOf(file, hostResident);
@@ -1764,7 +1837,11 @@ export function analyzeMigrationSql(
 
   const declared = closures.get(owner.id) ?? new Set<string>();
   const found: MigrationSqlFinding[] = [];
-  for (const access of sqlTableAccesses(source, file)) {
+  // DDL is read here and nowhere else (issue #108): an index, an `alter table`,
+  // a comment, a trigger or a `drop` against another module's table changes
+  // that table's schema, which is the owner's decision exactly as its rows are.
+  // It is a write, so R2 reports it whether or not R1 holds.
+  for (const access of sqlTableAccesses(source, file, { ddl: true, indexTables })) {
     if (tally !== undefined) tally.count += 1;
     const target = owners.get(access.table);
     if (target === undefined || isCoreOwner(target)) continue;
@@ -1838,11 +1915,43 @@ export function findMigrationSql(
     prebuiltOwners ??
     buildTableOwners(input.schema, input.packageTables ?? [], hostResident).owners;
   const tally: SiteTally = { count: 0 };
+  const indexTables = migrationIndexTables([...input.schema, ...migrations]);
   const found = migrations.flatMap(([file, text]) =>
-    analyzeMigrationSql(text, file, owners, input.dependencyClosures!, hostResident, tally),
+    analyzeMigrationSql(
+      text,
+      file,
+      owners,
+      input.dependencyClosures!,
+      hostResident,
+      tally,
+      indexTables,
+    ),
   );
   found.sort((a, b) => (a.file === b.file ? a.line - b.line : a.file.localeCompare(b.file)));
   return { found, sites: tally.count, files: migrations.length, declaredClasses };
+}
+
+/**
+ * Every index a migration creates, mapped to its table — `drop index`'s only
+ * route to a table (issue #108).
+ *
+ * Read over the schema sources as well as the module walk's migrations, because
+ * the platform's own migrations are outside every module walk root and created
+ * indexes a module migration may later drop. A name created twice keeps its
+ * first table: Postgres index names are unique per schema, so a second `create`
+ * of one name can only follow a `drop` of the first.
+ */
+function migrationIndexTables(
+  sources: Iterable<readonly [string, string]>,
+): ReadonlyMap<string, string> {
+  const map = new Map<string, string>();
+  for (const [file, text] of sources) {
+    if (!isMigration(file) || !text.includes('index')) continue;
+    for (const { index, table } of declaredIndexes(text, file)) {
+      if (!map.has(index)) map.set(index, table);
+    }
+  }
+  return map;
 }
 
 /** The file half of a ledger key, or `null` when the key does not parse. */
@@ -1986,6 +2095,43 @@ const NO_MIGRATION_LEDGERS: MigrationLedgers = {
 };
 
 /**
+ * Every recogniser the analysis below will ask of a file, asked file by file
+ * (issue #910).
+ *
+ * The analysis is **rule-major**: the owner map reads every schema source, then
+ * the host SQL every module source, then the import predicate every module
+ * source again, then the migration rules every migration — five recognisers,
+ * each parsing what it is handed, which made 14662 parses over 3929 files. A
+ * `withSharedParses` scope keeps one tree, not one per file, because keeping a
+ * tree per file across those passes cost +490 MB, past the per-check divisor
+ * `check-read-size.test.ts` sizes its spawn pool with. So this visit runs
+ * **file-major** first: while a file's one tree is the scope's current tree, it
+ * asks every recogniser the passes will ask, and the scope remembers their
+ * answers — which are small — for the passes to find.
+ *
+ * It decides nothing and returns nothing; the passes stay the only author of
+ * every finding, so a recogniser this visit forgets to ask costs a second
+ * parse, never a different answer. `check-module-boundary-parse-once.test.ts`
+ * is what notices the second parse.
+ */
+function readEachSourceOnce(input: ModuleBoundaryInput): void {
+  const schema = input.schema;
+  for (const [file, text] of input.sources) {
+    namedSpecifiers(text, file);
+    // The non-DDL read warms what the DDL read is built from — the literals and
+    // the query builders. The DDL read itself needs the index map, which exists
+    // only once every migration has been read, so it is left to its pass.
+    sqlTableAccesses(text, file);
+    if (isMigration(file)) declaredMigrationClasses(text, file);
+    if (schema?.get(file) === text) declaredTableNames(text, file, entityTableName);
+  }
+  if (schema === undefined) return;
+  for (const [file, text] of schema) {
+    if (input.sources.get(file) !== text) declaredTableNames(text, file, entityTableName);
+  }
+}
+
+/**
  * The two-way comparison, in both directions and over all eight failure modes,
  * for each of the three ledgers this check now carries.
  */
@@ -1994,9 +2140,15 @@ export function checkModuleBoundary(
   shards: readonly LedgerShard[],
   migrationLedgers: MigrationLedgers = NO_MIGRATION_LEDGERS,
 ): CheckResult {
-  const sql = findCrossModuleSql(input);
-  const imports = findCrossModuleImports(input);
-  const migration = findMigrationSql(input, sql.owners);
+  // One parse per file for the whole analysis (issue #910): see
+  // {@link readEachSourceOnce} for why the scope alone is not enough.
+  const { sql, imports, migration } = withSharedParses(() => {
+    readEachSourceOnce(input);
+    const sql = findCrossModuleSql(input);
+    const imports = findCrossModuleImports(input);
+    const migration = findMigrationSql(input, sql.owners);
+    return { sql, imports, migration };
+  });
   const all: ModuleBoundaryFinding[] = [...imports.found, ...sql.found];
   all.sort((a, b) => (a.file === b.file ? a.line - b.line : a.file.localeCompare(b.file)));
 
@@ -2016,7 +2168,9 @@ export function checkModuleBoundary(
     return file === null ? null : (ownerLocationOf(file, hostResident, admin)?.id ?? null);
   };
 
-  const hostVerdict = compareLedger(all, shards, keyOf, shardOfKey, modules);
+  const hostVerdict = overlayEdgesUnledgerable(all, (findings) =>
+    compareLedger(findings, shards, keyOf, shardOfKey, modules),
+  );
   const byRule = (rule: MigrationSqlRule): readonly MigrationSqlFinding[] =>
     migration.found.filter((finding) => finding.rule === rule);
 
@@ -2038,12 +2192,64 @@ export function checkModuleBoundary(
       shardOfKey,
       modules,
     ),
-    foreignWrites: compareLedger(
+    foreignWrites: overlayWritesUnledgerable(
       byRule('migration-writes-a-foreign-table'),
-      migrationLedgers.foreignWrites,
-      migrationKeyOf,
-      shardOfKey,
-      modules,
+      (findings) =>
+        compareLedger(findings, migrationLedgers.foreignWrites, migrationKeyOf, shardOfKey, modules),
+    ),
+  };
+}
+
+/**
+ * The import ledger with every edge between two overlay modules taken out of its
+ * reach (`specs/190-overlay-full-modules/` FR-071, T032).
+ *
+ * The overlay analysis is the verdict on such an edge, and it is the verdict an
+ * instance gets from `endora generate`, where there is no ledger: an entry here would
+ * excuse in this repository exactly what a client's own run refuses. So a finding
+ * carrying {@link CrossModuleImport.overlayClauses} is always a violation, and an
+ * entry naming it is reported stale — it describes an exemption that does not exist.
+ * The ledger held no such entry when this landed.
+ */
+function overlayEdgesUnledgerable(
+  findings: readonly ModuleBoundaryFinding[],
+  compare: (findings: readonly ModuleBoundaryFinding[]) => LedgerVerdict<ModuleBoundaryFinding>,
+): LedgerVerdict<ModuleBoundaryFinding> {
+  const betweenOverlays = (finding: ModuleBoundaryFinding): boolean =>
+    finding.predicate === 'import' && finding.overlayClauses !== undefined;
+  const verdict = compare(findings.filter((finding) => !betweenOverlays(finding)));
+  const overlay = findings.filter(betweenOverlays);
+  if (overlay.length === 0) return verdict;
+  return {
+    ...verdict,
+    violations: [...verdict.violations, ...overlay].sort((a, b) =>
+      a.file === b.file ? a.line - b.line : a.file.localeCompare(b.file),
+    ),
+  };
+}
+
+/**
+ * R2 with an overlay module's writes taken out of the ledger's reach
+ * (`specs/190-overlay-full-modules/` FR-034, OR-4).
+ *
+ * The ledger renders `FIRST_PARTY_FOREIGN_WRITE_EXEMPTIONS`, and the platform's
+ * foreign-schema guard hands an overlay module none of them: its migrations run
+ * under the full guard, so a write the ledger excused here is still refused at
+ * `migrate`. Such a finding is therefore always a violation, and an entry naming
+ * it is reported stale — it describes an exemption that does not exist.
+ */
+function overlayWritesUnledgerable(
+  findings: readonly MigrationSqlFinding[],
+  compare: (findings: readonly MigrationSqlFinding[]) => LedgerVerdict<MigrationSqlFinding>,
+): LedgerVerdict<MigrationSqlFinding> {
+  const byOverlay = (finding: MigrationSqlFinding): boolean => finding.file.startsWith('apps/');
+  const verdict = compare(findings.filter((finding) => !byOverlay(finding)));
+  const overlay = findings.filter(byOverlay);
+  if (overlay.length === 0) return verdict;
+  return {
+    ...verdict,
+    violations: [...verdict.violations, ...overlay].sort((a, b) =>
+      a.file === b.file ? a.line - b.line : a.file.localeCompare(b.file),
     ),
   };
 }
@@ -2131,6 +2337,12 @@ export function vacuousReason(input: {
    * find (contract §6.2) — §5's reconciliation, as a refusal.
    */
   readonly migrationRegistryMissing?: readonly string[];
+  /**
+   * Admin-layer files the generated admin registry implies and the module walk
+   * did not open (issue #88) — {@link adminRegistryLayersWalked}' shortfall, as
+   * a refusal that names them. Omitted is a caller with no admin layout.
+   */
+  readonly adminRegistryMissing?: readonly string[];
   /**
    * Whether **no** manifest declared a dependency at all (contract §6.3).
    *
@@ -2261,6 +2473,17 @@ export function vacuousReason(input: {
       `were not found by the walk (${named}${rest > 0 ? `, and ${rest} more` : ''}) — the ` +
       'registry enumerates them by import and this walk finds them by path, so the two ' +
       'disagreeing is a walk that came back short; refusing to report a vacuous pass'
+    );
+  }
+  if (input.adminRegistryMissing !== undefined && input.adminRegistryMissing.length > 0) {
+    const named = input.adminRegistryMissing.slice(0, 8).join(', ');
+    const rest = input.adminRegistryMissing.length - 8;
+    return (
+      `${input.adminRegistryMissing.length} admin-layer files the generated admin registry ` +
+      `implies were not opened by the module walk (${named}${rest > 0 ? `, and ${rest} more` : ''}) ` +
+      '— the registry names every module package\'s `./admin` layer, so a walk that skipped ' +
+      'them (a changed extension list, a moved directory) would judge none of their reaches; ' +
+      'refusing to report a vacuous pass'
     );
   }
   if (input.declaresNoDependency === true) {
@@ -2394,6 +2617,88 @@ export async function loadLedgerShards(directory: string): Promise<LedgerShard[]
   return shards;
 }
 
+/** What {@link adminRegistryLayersWalked} reads, every input entering as text or a key. */
+export interface AdminRegistryFloorInput {
+  /** The generated admin registry's source text, or `null` when it is not on disk. */
+  readonly registry: string | null;
+  /** The registry's own repository-relative key, for the sentence a missing one gets. */
+  readonly registryKey: string;
+  /** A module package's npm name → its repository-relative directory, or `null`. */
+  readonly packageDirectoryOf: (packageName: string) => string | null;
+  /** A repository-relative file's text, or `null` when there is no such file. */
+  readonly readText: (repoRelativeKey: string) => string | null;
+  /** The repository-relative keys the module walk opened. */
+  readonly walked: ReadonlySet<string>;
+}
+
+/** The registry floor's reconciliation, plus what it found missing by name. */
+export interface AdminRegistryFloor {
+  readonly expected: number;
+  readonly covered: number;
+  readonly missing: readonly string[];
+}
+
+/** The npm name a bare specifier names, scope included, and the subpath after it. */
+function splitBareSpecifier(specifier: string): { readonly name: string; readonly subpath: string } {
+  const segments = specifier.split('/');
+  const width = specifier.startsWith('@') ? 2 : 1;
+  return { name: segments.slice(0, width).join('/'), subpath: segments.slice(width).join('/') };
+}
+
+/**
+ * The module packages' admin layers the generated registry names, against what
+ * the module walk opened of them (issue #88).
+ *
+ * The registry is written by `composer:generate`, not by this walk, so it can
+ * say "these layers exist" independently of the walk reading them. Each value
+ * import of a `<package>/admin` specifier expects that package's
+ * `src/admin/index.ts` **and** every file the index names by relative path —
+ * the screens it lazily imports are `.tsx`, which is the half the index alone
+ * could not stand for: drop `'.tsx'` from {@link collectModuleFiles} and every
+ * index is still opened. A layer this function cannot place — a package with
+ * no module directory, an index that is not there, a relative specifier naming
+ * no file — is **missing**, never skipped, and so is a registry that is not on
+ * disk while the admin layout resolved.
+ */
+export function adminRegistryLayersWalked(input: AdminRegistryFloorInput): AdminRegistryFloor {
+  if (input.registry === null) {
+    return { expected: 1, covered: 0, missing: [`${input.registryKey} (not on disk)`] };
+  }
+  const expected = new Set<string>();
+  const unplaced: string[] = [];
+  for (const named of namedSpecifiers(input.registry, input.registryKey)) {
+    if (named.kind !== 'value-import') continue;
+    const specifier = named.text;
+    if (specifier.startsWith('.')) continue;
+    const { name, subpath } = splitBareSpecifier(specifier);
+    if (subpath !== 'admin') continue;
+    const directory = input.packageDirectoryOf(name);
+    const index = directory === null ? null : `${directory}/src/admin/index.ts`;
+    const source = index === null ? null : input.readText(index);
+    if (index === null || source === null) {
+      unplaced.push(`${specifier} (no module package holds its src/admin/index.ts)`);
+      continue;
+    }
+    expected.add(index);
+    for (const { text: relativeSpecifier } of namedSpecifiers(source, index)) {
+      if (!relativeSpecifier.startsWith('.')) continue;
+      const joined = posixNormalize(posixJoin(posixDirname(index), relativeSpecifier));
+      const target = resolutionCandidates(joined).find((candidate) => input.readText(candidate) !== null);
+      if (target === undefined) {
+        unplaced.push(`${index} → ${relativeSpecifier} (resolves to no file)`);
+        continue;
+      }
+      expected.add(target);
+    }
+  }
+  const missing = [...expected].filter((key) => !input.walked.has(key)).sort();
+  return {
+    expected: expected.size + unplaced.length,
+    covered: expected.size - missing.length,
+    missing: [...unplaced, ...missing],
+  };
+}
+
 /**
  * Every file the rule applies to: the shared core module tree plus every
  * deployment overlay's module tree.
@@ -2408,8 +2713,8 @@ export async function loadLedgerShards(directory: string): Promise<LedgerShard[]
  *
  * **`.tsx` as well as `.ts`, and that is not symmetry for its own sake**
  * (feature 091, Phase 4). A module's admin screen is a `.tsx` file, and Story 3
- * moves it from `admin/src/modules/<id>/` — where {@link collectAdminFiles}
- * reads it — into `packages/modules/<id>/src/admin/`, which is a module walk
+ * moved it from `admin/src/modules/<id>/` — where {@link collectAdminFiles}
+ * read it — into `packages/modules/<id>/src/admin/`, which is a module walk
  * root. A `.ts`-only walk here would therefore make the move itself delete the
  * file from every boundary population in the repository: exactly the laundering
  * FR-017 exists to refuse, arriving one layer over, inside the instrument built
@@ -2724,7 +3029,7 @@ export async function scanModuleBoundaryTree(
   const adminHostFiles = collectAdminHostFiles(adminSurfaces, layout.repoRoot);
   // The two walks stay separable, because the backend floor is "one source per
   // registered module" and an admin directory produces a file for its module
-  // too: merging them first would let `admin/src/modules/blog/` satisfy the
+  // too: merging them first would let a module's admin directory satisfy the
   // floor for a `blog` whose backend sources had vanished, which is issue #215
   // re-opened by the repair for FR-017.
   const moduleFiles = collectModuleFiles(layout.moduleWalkRoots);
@@ -2784,6 +3089,7 @@ export function generatedExemptionIssues(
 /** What the module author should do instead, chosen by the surface reached. */
 function remedyFor(finding: ModuleBoundaryFinding): string {
   if (finding.predicate === 'sql') return sqlRemedyFor(finding);
+  if (finding.overlayClauses !== undefined) return overlayRemedyFor(finding);
   if (finding.moduleId === ADMIN_HOST_OWNER) return hostRemedyFor(finding);
   const consumer = finding.moduleId;
   const owner = finding.target;
@@ -2902,6 +3208,24 @@ function sqlRemedyFor(finding: CrossModuleSqlAccess): string {
     "      2. resolve it here with lazyPort<ContractType>(ctx, '<literalPortName>');",
     `      3. add '${finding.target}' to \`dependencies\` in`,
     `         src/modules/${finding.moduleId}/manifest.ts.`,
+  ].join('\n');
+}
+
+/**
+ * An edge between two overlay modules: the clauses it failed, and no ledger
+ * sentence — it cannot be ledgered (see {@link overlayEdgesUnledgerable}).
+ */
+function overlayRemedyFor(finding: CrossModuleImport): string {
+  return [
+    '    Both sides are overlay modules. The one import between them is `import type` of',
+    "    the sibling's ports.ts, in the same deployment, by a module that declares it in",
+    '    `dependencies` (specs/190-overlay-full-modules/contracts/overlay-ports.md §2).',
+    '    This one fails:',
+    ...(finding.overlayClauses ?? []).map(
+      (clause) => `      [${clause}] ${OVERLAY_BOUNDARY_CLAUSES[clause]}`,
+    ),
+    '    A ledger entry cannot excuse it: an instance\'s `endora generate` refuses the same',
+    '    edge, and has no ledger.',
   ].join('\n');
 }
 
@@ -3033,7 +3357,6 @@ async function main(): Promise<void> {
   const { moduleFiles: files, adminFiles, adminHostFiles, adminSurfaces: admin, packages } = scan;
   const { sources, schema } = scan.input;
   refuseUnreadablePackages('[module-boundary]', packages);
-  const owners = buildTableOwners(schema, packages.tables, layout.hostResidentModules).report;
   let registeredModules: readonly string[];
   try {
     registeredModules = await loadRegisteredModuleIds(layout.manifestIndexPath);
@@ -3106,15 +3429,50 @@ async function main(): Promise<void> {
     ...scan.input,
     dependencyClosures: dependencyClosures(declaredDependencies),
   };
-  let result: CheckResult;
-  try {
-    result = checkModuleBoundary(analysed, shards, migrationLedgers);
-  } catch (error) {
-    if (!(error instanceof UnreadableSubpathError)) throw error;
-    console.error(`[module-boundary] ${error.message}`);
+  // Issue #88: the module packages' admin layers, as the generated admin
+  // registry names them, against what the module walk opened. Asked only
+  // where the admin layout resolved — a workspace with no frontend has no
+  // registry to read, and `vacuousReason` already refuses a frontend whose
+  // layout did not resolve.
+  const moduleFileKeys = new Set(files.map((file) => layout.keyOf(file)));
+  const adminRegistryFloor = (): AdminRegistryFloor | null =>
+    admin === null
+      ? null
+      : adminRegistryLayersWalked({
+          registry: existsSync(join(layout.repoRoot, admin.generatedRegistryFile))
+            ? readFileSync(join(layout.repoRoot, admin.generatedRegistryFile), 'utf8')
+            : null,
+          registryKey: admin.generatedRegistryFile,
+          packageDirectoryOf: (name) => {
+            const moduleId = layout.modulePackageNames.get(name);
+            const directory = moduleId === undefined ? null : layout.moduleDirectoryOf(moduleId);
+            return directory === null ? null : layout.keyOf(directory);
+          },
+          readText: (key) => {
+            const absolute = join(layout.repoRoot, key);
+            return existsSync(absolute) ? readFileSync(absolute, 'utf8') : null;
+          },
+          walked: moduleFileKeys,
+        });
+  // One scope over the analysis and the admin-registry floor, because the floor
+  // reads the specifiers of the module packages' `src/admin/index.ts` again,
+  // and those are module sources the analysis has already read (issue #910).
+  const analysis = withSharedParses(() => {
+    let result: CheckResult;
+    try {
+      result = checkModuleBoundary(analysed, shards, migrationLedgers);
+    } catch (error) {
+      if (!(error instanceof UnreadableSubpathError)) throw error;
+      return { refusal: error.message } as const;
+    }
+    return { result, adminRegistry: adminRegistryFloor() } as const;
+  });
+  if ('refusal' in analysis) {
+    console.error(`[module-boundary] ${analysis.refusal}`);
     process.exit(2);
     return;
   }
+  const { result, adminRegistry } = analysis;
   const migrations = migrationRegistryCoverage(registered, result.migrationClasses);
 
   const vacuous = vacuousReason({
@@ -3122,8 +3480,11 @@ async function main(): Promise<void> {
     registeredModules,
     moduleIdOf: layout.moduleIdOfPath,
     ledgerDirectoryExists: existsSync(LEDGER_ROOT),
-    entityTables: owners.entityTables,
-    migrationTables: owners.migrationTables,
+    // The analysis's own owner-map report rather than a second
+    // `buildTableOwners` over the same schema with the same three arguments,
+    // which is what this read until issue #910.
+    entityTables: result.tableOwners.entityTables,
+    migrationTables: result.tableOwners.migrationTables,
     adminSurfaces: admin,
     adminApplicationPresent: adminApplicationPresent(
       workspaceMembers(layout.repoRoot, nodeWorkspaceFs()),
@@ -3131,10 +3492,11 @@ async function main(): Promise<void> {
     adminSurfacesRefusal: await layout.adminSurfacesRefusal(),
     ledgerKeys: shards.flatMap((shard) => Object.keys(shard.entries)),
     fileExists: (path) => existsSync(join(layout.repoRoot, path)),
-    moduleFileKeys: new Set(files.map((file) => layout.keyOf(file))),
+    moduleFileKeys,
     adminHostFiles,
     migrationFiles: result.migrationFiles,
     migrationRegistryMissing: migrations.missing,
+    ...(adminRegistry === null ? {} : { adminRegistryMissing: adminRegistry.missing }),
     declaresNoDependency: declaresNoDependency(declaredDependencies),
     migrationLedgerDirectoriesExist:
       existsSync(MIGRATION_REFERENCE_LEDGER_ROOT) && existsSync(MIGRATION_WRITE_LEDGER_ROOT),
@@ -3274,6 +3636,17 @@ async function main(): Promise<void> {
       coverages.push({ source: 'admin-host', expected: host.expected, covered: host.covered });
     }
   }
+  // Issue #88 — the module packages' admin layers, reconciled against the
+  // generated admin registry: an author `composer:generate` writes and this
+  // walk cannot influence. Unlike the two admin tokens above it does not drain,
+  // because the layers are where the admin surfaces now live.
+  if (adminRegistry !== null) {
+    coverages.push({
+      source: 'admin-registry',
+      expected: adminRegistry.expected,
+      covered: adminRegistry.covered,
+    });
+  }
   reportReadSize({
     prefix: '[module-boundary]',
     // The finer population, over both predicates (issue #244). Printed as one
@@ -3307,7 +3680,7 @@ async function main(): Promise<void> {
     shardsOf.reduce((sum, shard) => sum + Object.keys(shard.entries).length, 0) - permanent.length;
   console.log(
     `[module-boundary] migrations=${result.migrationFiles} ` +
-      `cross-module DML=${result.migrationFindings.length} ` +
+      `cross-module SQL=${result.migrationFindings.length} ` +
       `(undeclared=${result.undeclaredReferences.violations.length + result.undeclaredReferences.ledgered.length} ` +
       `foreign-writes=${result.foreignWrites.violations.length + result.foreignWrites.ledgered.length}) ` +
       `violations=${result.undeclaredReferences.violations.length + result.foreignWrites.violations.length} ` +
@@ -3354,6 +3727,7 @@ async function main(): Promise<void> {
     for (const finding of result.violations) {
       console.error(describeFinding(finding));
       console.error(remedyFor(finding));
+      if (finding.predicate === 'import' && finding.overlayClauses !== undefined) continue;
       console.error(
         '\n    Do not wrap the port call in a catch: it turns fail-closed into fail-open.\n' +
           '\n    If the edge must stand for now, add it to\n' +

@@ -1,4 +1,5 @@
-import { Entity, Index, OptionalProps, PrimaryKey, Property, Unique } from '@mikro-orm/core';
+import { OptionalProps } from '@mikro-orm/core';
+import { Entity, Index, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import { GlobalEntity } from '@endora-commerce/platform/tenancy';
 import { randomUUID } from 'crypto';
 
@@ -6,11 +7,17 @@ import { randomUUID } from 'crypto';
  * Concrete variant of a `type=variant` Product.
  * `variantAttributeValues` contains only keys where the parent's ProductAttribute
  * has isVariantAxis=true.
+ *
+ * Issue #693 — `deletedAt` is set by the parent's `product.delete` Command, in the same
+ * transaction, and never by anything else: a variant is soft-deleted with its product and hard-
+ * deleted on its own. `sku` is unique among rows whose `deletedAt` is null — a partial unique
+ * index (`product_variants_sku_live_unique`) in raw SQL in the migration, so no `@Unique()`
+ * here — which is what frees a deleted product's variant SKUs for reuse.
  */
 @GlobalEntity()
 @Entity({ tableName: 'product_variants' })
 export class ProductVariant {
-  [OptionalProps]?: 'id' | 'createdAt' | 'updatedAt' | 'priceOverride' | 'stockLevel';
+  [OptionalProps]?: 'id' | 'createdAt' | 'updatedAt' | 'stockLevel' | 'deletedAt';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -20,14 +27,11 @@ export class ProductVariant {
   parentProductId!: string;
 
   @Property({ type: 'string', length: 255 })
-  @Unique()
+  @Index()
   sku!: string;
 
   @Property({ type: 'json' })
   variantAttributeValues: Record<string, unknown> = {};
-
-  @Property({ type: 'decimal', precision: 12, scale: 2, nullable: true })
-  priceOverride?: string | null;
 
   @Property({ type: 'integer', nullable: true })
   stockLevel?: number | null;
@@ -37,4 +41,7 @@ export class ProductVariant {
 
   @Property({ type: 'datetime', onUpdate: () => new Date() })
   updatedAt: Date = new Date();
+
+  @Property({ type: 'datetime', nullable: true })
+  deletedAt?: Date | null;
 }

@@ -1,5 +1,5 @@
 ---
-title: Tenant Scoping (Multi-Tenant Isolation)
+title: Tenant scoping (multi-tenant isolation)
 ---
 
 # Tenant Scoping
@@ -18,7 +18,10 @@ service forgets an explicit filter.
   request body, query string, or headers.
   - Customer → `single-org` (their organization + customer account).
   - Platform admin → `all` (no restriction).
-  - Scoped sales-rep admin → `allowed-set` (their assigned organizations).
+  - Sales-representative admin → `excluded-set`: every organization **except**
+    those governed by another representative (see *The `excluded-set` mode*
+    below).
+  - Customer with a roll-up subtree → `allowed-set` (the named subtree).
   - Worker / migration / escape hatch → `system`.
   - API key bound to an organization → `single-org` (its organization + service
     account); an unbound key and anonymous traffic → `system`.
@@ -44,7 +47,8 @@ service forgets an explicit filter.
   `ComposeAppOptions.buildTenantContext`
   replaces the mapping for a deployment that needs to, and a replacement is
   refused — the request fails — when it answers a customer or a bound API key
-  with a `system` or `all` context, or an admin with a `system` one.
+  with a `system`, `all` or `excluded-set` context, or an admin with a `system`
+  one.
 
   **The route decides whose request it is, not which cookies are present.** One
   browser can hold an admin session and a customer session at once — an operator
@@ -73,6 +77,65 @@ service forgets an explicit filter.
   context raises `MissingTenantContextError`. A forgotten context is a loud error,
   never a silent cross-tenant read.
 
+
+## The `excluded-set` mode
+
+A sales representative reaches every organization that is not governed by
+another representative (issue #305): the ones assigned to them (with
+`organizations:rollup`, their subtrees, nearest assignment winning) and every
+organization nobody is assigned to — personal (B2C) organizations included,
+which can never be assigned. `organizations` answers that reach on
+`adminTenantScopePort` as `{ reach: 'excluding', excludedOrganizationsQuery,
+loadReach }`, and the guard filters by the query (owner ruling of 2026-11-10,
+which amends the 2026-08-24 exit (a′) ruling to allow it). The lists of
+excluded and assigned organizations are not computed while the scope is
+resolved: `loadReach` loads them on demand, at most once per request, for the
+single-organization helpers and the ranking. The reach is read from `organization_reach_governor` — each
+organization's nearest assigned ancestor-or-self — which statement-level
+triggers keep current inside the transaction of every write that can change it
+(issue #955). Nothing is cached.
+
+- **Why the complement.** The reachable set includes every unassigned, and so
+  every personal, organization: it grows with the customer base, and as an
+  `IN (…)` list it would be paid on every admin request. The excluded set holds
+  only organizations that carry an assignment, plus their subtrees under
+  roll-up, so it is bounded by the B2B book. The predicate is
+  `organization_id NOT IN (<excludedOrganizationsQuery>)` on the filtered row's
+  own column: an uncorrelated subquery owned by `organizations`, which the
+  platform renders without naming what it reads; no join. Shipping the list
+  itself cost every tenant-scoped statement a literal the size of the list; the
+  subquery is a hashed SubPlan over the governor table (architect ruling on
+  #955, 2026-11-09, which narrowly revises the former "no subquery" rule: an
+  uncorrelated subquery on the row's own column is allowed, a correlated one or
+  a join is not).
+- **A null organization never matches.** The predicate is also
+  `organization_id IS NOT NULL`, spelled out, because `NULL NOT IN (<an empty
+  set>)` is true: an empty excluded set does not become "every row", the ones
+  with no organization included.
+- **Fail closed.** The set is derived server-side from `organizations`' tables,
+  never from the request. If its statement fails, the request fails. A
+  governing organization whose stored tree position cannot be read under
+  roll-up does not refuse the reach: it is resolved by the one-id rule — it
+  governs itself, and its descendants are found by their own paths — and the
+  request logs one `warn` naming it (ruling Q1 on PR #954). An empty
+  excluded set is a real answer — nobody else holds an assignment — and is never
+  produced by an error.
+- **Writes take the same arm.** The write guard and `orgInScope` refuse a
+  write carrying an excluded organization, so a representative writes only
+  where they read.
+- **Modules never read the ids.** A module reads its scope through the
+  derived-scope helpers — `orgScopeWhere`, `orgScopeSql` (for raw SQL: the same
+  subquery, with its parameters bound beside the caller's), `reachesNoOrganization`
+  and the async `orgInScope`, `ruleInScope`, `orgScopeTest` (a synchronous
+  predicate taken once) and `assignedOrganizationIdsForRanking` (ranking and
+  "mine" filters only). The synchronous `isOrgInScope` and `ruleVisibleForScope`
+  were removed rather than made async, because a promise in an `if` is always
+  truthy; `no-floating-promises` and `no-misused-promises` hold every TypeScript
+  file in the repository (issues #955 and #1027).
+  `OrgConstraint` names the arms `all`, `single`, `allowed` and `excluded`; the
+  former `set` arm was removed rather than kept beside them, so that no
+  consumer could read a representative's scope as "no restriction".
+
 ## Classifying an entity
 
 Add **exactly one** classification decorator to every `*.entity.ts` (the CI check
@@ -83,7 +146,7 @@ Add **exactly one** classification decorator to every `*.entity.ts` (the CI chec
 | `@OrgScoped()` | has an `organizationId` column |
 | `@CustomerScoped()` | has a `customerAccountId` column and no org column |
 | `@TransitivelyScoped('Parent', 'fk')` | is scoped through a parent aggregate's org (e.g. `Invoice` → `Order`) |
-| `@RuleScoped()` | targets orgs via a rule/JSONB, not a column (e.g. `price_lists.applicationRule`) |
+| `@RuleScoped()` | targets orgs as a business coordinate, not as an owning column (e.g. the price books of `price_lists`, whose audience names organizations in `price_list_audience_members`; every pricing read filters that audience to the buyer's own organization chain and group) |
 | `@GlobalEntity()` | is platform-global / config (no tenant) |
 
 `@OrgScoped` / `@CustomerScoped` attach the filter; the others are metadata only —
@@ -156,7 +219,7 @@ impersonation. The row counts every occurrence:
 | `actor_admin_user_id`, `impersonated_customer_account_id` | the admin who caused the crossing, and the customer they acted for, when there is one |
 | `request_id`, `ip_address`, `user_agent` | set when every occurrence in the row came from one request |
 | `acted_at` | the first occurrence |
-| `state_after` | `scope`, `reason`, `organizationId`, `module`, `entryPoint`, `occurrences`, `firstAt`, `lastAt`, up to 20 `requestIds`, and `actor`: its kind and id plus `context`, the reason of the scope the caller was already in, such as `actor:anonymous` for an anonymous storefront request |
+| `state_after` | `scope`, `reason`, `organizationId`, `module`, `entryPoint`, `occurrences`, `firstAt`, `lastAt`, up to 20 `requestIds`, and `actor`: its kind and id plus `context`, the reason of the scope the caller was already in, such as `actor:anonymous` for an anonymous storefront request. The process-start row also carries `breakdown` (see below) |
 
 Aggregation matters because two crossings run on every authenticated storefront
 request: `auth: resolve customer org` and `tenant: resolve customer roll-up flag`.
@@ -253,8 +316,15 @@ to four rules. They are what keeps it from becoming a way around the audit:
    through the ORM and cannot share a statement, keep two and cover every
    branch with a test in which only that branch makes the tick do its work.
    Where the exact predicate needs something that belongs inside the scope — a
-   setting, another module's port — ask a wider question that can only err
-   towards `true`.
+   setting resolved per channel or per organization, another module's port —
+   ask a wider question that can only err towards `true`. A **platform-wide**
+   setting (read with channel `null`) does not belong inside the scope:
+   `Setting` and `SettingValue` are global entities, so that read touches no
+   organization's data. The tick reads it before the scope, and a read that
+   fails enters the scope, as rule 4 says. The `search` reindex poll works this
+   way: it reads `search.reindex_interval_minutes` first, and enters the scope
+   only when the sweep is due or its once-per-process index check is still
+   pending (`backend/test/unit/search/reindex-scheduler-gating.test.ts`).
 3. **Its answer is never handed to the pass.** The work re-reads everything
    inside the scope. The probe decides *whether* the scope is entered, never
    *what* is done in it.
@@ -276,8 +346,45 @@ feed generation, a taxonomy check. Do not put a probe in front of those. If no
 scope-free question can be asked honestly, leave the scope where it is and
 accept the row: an extra audit row is noise, a missing one is a hole.
 
-This rule covers scheduled ticks only. The scope entries a process makes while
-it starts (`boot: …`) are still written one row each.
+This rule covers scheduled ticks only. A process start is handled differently,
+as described next.
+
+### A process start is one row
+
+Every process that composes the application enters a system scope once for each
+boot step and once for each module boot hook: about fifty entries under some
+twenty-five reasons (`boot: load module presence`, `boot: inventory`, …). With
+one row per reason, every server start and every composing CLI command wrote
+more than twenty rows before it did any work.
+
+`composeApp` therefore brackets its boot. It opens the bracket when it attaches
+the writer and closes it after the module boot hooks have run. Every record
+inside the bracket whose reason starts with `boot: ` is folded into **one** row:
+
+| Field | Value |
+|---|---|
+| `state_after.scope` | `system` |
+| `state_after.entryPoint` | `boot` |
+| `state_after.reason` | `boot: process start` |
+| `state_after.module` | `platform` |
+| `state_after.occurrences` | the number of boot entries, which is the sum of the breakdown |
+| `state_after.breakdown` | one `{ module, reason, occurrences }` per boot step or hook, in boot order |
+
+Nothing is dropped: every entry is still counted in one row. The aggregate is
+held back until the bracket closes, so a flush during a long boot cannot write
+half of it. A composition disposed before its boot finished still writes the
+row.
+
+Everything else is written exactly as before:
+
+- the operator's own entry of a CLI command (`cli: …`), which comes after the
+  boot. A composing command therefore writes one boot row and one `cli:` row;
+- a record inside the bracket under any other reason, such as a worker tick that
+  starts during boot, or a widening a boot hook makes under a reason of its own;
+- a `boot: …` record outside the bracket.
+
+The `module:*` operator commands do not compose, so they have no boot to
+bracket.
 
 ## Tests
 

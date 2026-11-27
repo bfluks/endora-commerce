@@ -8,12 +8,14 @@ import {
   type CreateCategoryRequest,
   type CustomFieldValuePort,
   type UpdateCategoryInput,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { EventBase, EventBus } from '@endora-commerce/platform/events';
 import type { CommandBus, CommandEvent } from '@endora-commerce/platform/commands';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { Category } from '../entities/category.entity.js';
+import { requireLinkableAsset, requireLinkableContentAssets, type LinkableAssetReader } from './linkable-asset.js';
 
 /** Result of a category write closure: the entity + its audit snapshot. */
 interface CategoryWrite {
@@ -124,7 +126,19 @@ export class CategoryAdminService {
      * command's event itself, on commit.
      */
     private readonly events?: CategoryEventBus,
+    /**
+     * Feature 166 (FR-006) — `assets_library`'s read port, asked before a main
+     * image is linked. A write that names a new image without it fails closed.
+     */
+    private readonly assets?: LinkableAssetReader,
   ) {}
+
+  #requireAssets(): LinkableAssetReader {
+    if (!this.assets) {
+      throw new Error('CategoryAdminService: the asset read port is not wired — a main image cannot be linked.');
+    }
+    return this.assets;
+  }
 
   /** Validate + merge a custom-field patch, mapping validation errors to HTTP 422. */
   async #mergeCustomFields(
@@ -209,6 +223,11 @@ export class CategoryAdminService {
     const id = randomUUID();
     const cat = await this.#audited('category.create', id, async (em) => {
       if (input.parentCategoryId) await this.#assertParentExists(em, input.parentCategoryId);
+      // Feature 175 (FR-015, FR-016) — validated as a merge onto an empty bag,
+      // inside this Command: a refusal rolls the create back, a `required`
+      // definition is refused even when no value is sent, and the audit row
+      // below carries what was stored.
+      const customFieldValues = await this.#mergeCustomFields({}, input.customFieldValues ?? {});
       const created = em.create(Category, {
         id,
         ...(input.parentCategoryId !== undefined
@@ -219,16 +238,16 @@ export class CategoryAdminService {
         sortOrder: input.sortOrder ?? 0,
         // Feature 068 — omitted means active (the column default).
         ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
+        customFieldValues,
       });
       try {
         await em.flush();
       } catch (err) {
         if (err instanceof UniqueConstraintViolationException) {
-          throw new HttpError(
-            409,
-            ERROR_CODES.VALIDATION_FAILED,
-            `Slug "${input.slug}" already exists under this parent.`,
-          );
+          throw new HttpError(409, ERROR_CODES.CATEGORY_SLUG_TAKEN, `Slug "${input.slug}" already exists under this parent.`, {
+            slug: input.slug,
+            parentCategoryId: input.parentCategoryId ?? null,
+          });
         }
         throw err;
       }
@@ -241,6 +260,7 @@ export class CategoryAdminService {
           parentCategoryId: created.parentCategoryId ?? null,
           sortOrder: created.sortOrder,
           isActive: created.isActive,
+          customFieldValues: created.customFieldValues,
         },
       };
     });
@@ -254,6 +274,7 @@ export class CategoryAdminService {
 
   async update(id: string, input: UpdateCategoryInput): Promise<Category> {
     return this.#audited('category.update', id, async (em) => {
+      if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Category not found.');
       const cat = await em.findOne(Category, { id, deletedAt: null });
       if (!cat) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Category not found.');
       const before = {
@@ -274,7 +295,15 @@ export class CategoryAdminService {
       if (input.slug !== undefined) cat.slug = input.slug;
       if (input.sortOrder !== undefined) cat.sortOrder = input.sortOrder;
       if (input.isActive !== undefined) cat.isActive = input.isActive;
-      if (input.mainImageAssetId !== undefined) cat.mainImageAssetId = input.mainImageAssetId;
+      if (input.mainImageAssetId !== undefined) {
+        // Feature 166 (FR-006) — a new image the caller may not see answers as
+        // a missing one. The one already linked is this category's own
+        // unrestricted reference, so it is visible and needs no question.
+        if (input.mainImageAssetId !== null && input.mainImageAssetId !== (cat.mainImageAssetId ?? null)) {
+          await requireLinkableAsset(this.#requireAssets(), input.mainImageAssetId);
+        }
+        cat.mainImageAssetId = input.mainImageAssetId;
+      }
       if (input.customFieldValues !== undefined) {
         cat.customFieldValues = await this.#mergeCustomFields(cat.customFieldValues ?? {}, input.customFieldValues);
       }
@@ -282,11 +311,10 @@ export class CategoryAdminService {
         await em.flush();
       } catch (err) {
         if (err instanceof UniqueConstraintViolationException) {
-          throw new HttpError(
-            409,
-            ERROR_CODES.VALIDATION_FAILED,
-            'Another category already uses this slug under that parent.',
-          );
+          throw new HttpError(409, ERROR_CODES.CATEGORY_SLUG_TAKEN, 'Another category already uses this slug under that parent.', {
+            slug: cat.slug,
+            parentCategoryId: cat.parentCategoryId ?? null,
+          });
         }
         throw err;
       }
@@ -310,14 +338,16 @@ export class CategoryAdminService {
 
   async softDelete(id: string): Promise<void> {
     await this.#audited('category.delete', id, async (em) => {
+      if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Category not found.');
       const cat = await em.findOne(Category, { id, deletedAt: null });
       if (!cat) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Category not found.');
       const childCount = await em.count(Category, { parentCategoryId: id, deletedAt: null });
       if (childCount > 0) {
         throw new HttpError(
           409,
-          ERROR_CODES.VALIDATION_FAILED,
+          ERROR_CODES.CATEGORY_HAS_CHILDREN,
           `Cannot delete: ${childCount} child category(ies) still attached. Move or delete them first.`,
+          { categoryId: id, childCount },
         );
       }
       cat.deletedAt = new Date();
@@ -333,6 +363,7 @@ export class CategoryAdminService {
    * other read of this entity leaves the document in the database.
    */
   async getContent(id: string): Promise<CategoryContentEnvelope> {
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Category not found.');
     const cat = await this.emFactory().findOne(
       Category,
       { id, deletedAt: null },
@@ -363,6 +394,9 @@ export class CategoryAdminService {
         { populate: ['content'] },
       );
       if (!found) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Category not found.');
+      // Issue #544 — an asset id the content newly embeds must be one the
+      // caller may see, as for the main image.
+      await requireLinkableContentAssets(this.assets, content, found.content ?? null);
       const before = { contentLanguages: contentLanguagesOf(found.content ?? null) };
       found.content = content;
       await em.flush();
@@ -397,6 +431,7 @@ export class CategoryAdminService {
     // by the caller as one `low_stock_threshold.update` summary — see the doc
     // comment above and `ThresholdAdminService.patch`.
     const em = this.emFactory();
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, `Category ${id} not found`);
     const cat = await em.findOne(Category, { id, deletedAt: null });
     if (!cat) throw new HttpError(404, ERROR_CODES.NOT_FOUND, `Category ${id} not found`);
     if (patch.high !== undefined) cat.inventoryThresholdHigh = patch.high;
@@ -417,11 +452,10 @@ export class CategoryAdminService {
     const seen = new Set<string>();
     while (cursor) {
       if (cursor === movedId) {
-        throw new HttpError(
-          409,
-          ERROR_CODES.VALIDATION_FAILED,
-          'Cannot move category beneath one of its descendants.',
-        );
+        throw new HttpError(409, ERROR_CODES.CATEGORY_MOVE_CYCLE, 'Cannot move category beneath one of its descendants.', {
+          categoryId: movedId,
+          parentCategoryId: newParentId,
+        });
       }
       if (seen.has(cursor)) break; // defensive guard against pre-existing cycles
       seen.add(cursor);

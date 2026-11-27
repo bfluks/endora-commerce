@@ -16,6 +16,50 @@ export const uuidSchema = z.string().uuid();
 export type Uuid = z.infer<typeof uuidSchema>;
 
 /**
+ * The one spelling of a `uuid`'s shape as a regular-expression source,
+ * unanchored and matching either case without a flag, for a pattern that has
+ * to find a uuid *inside* a longer value — an asset address, a `kind:id` token
+ * (issue #781). A value that is a uuid on its own is checked with
+ * {@link isUuidShape}, not with this.
+ */
+export const UUID_SHAPE_PATTERN =
+  '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+
+/**
+ * A value with the shape of a PostgreSQL `uuid`: 8-4-4-4-12 hexadecimal digits,
+ * either case. Shape only — deliberately looser than `uuidSchema`, which checks
+ * RFC 9562's version and variant bits that PostgreSQL does not, and that
+ * hand-written seed ids do not always honour.
+ *
+ * A route keyed by a `uuid` column checks its path parameter against this
+ * before the database sees it (issue #753): PostgreSQL answers any other value
+ * with `invalid input syntax for type uuid`, a 500. A value of another shape
+ * names no record, so the route answers its own not-found, as it does for a
+ * well-formed id that names nothing.
+ */
+export const uuidShapeSchema = z.string().regex(new RegExp(`^${UUID_SHAPE_PATTERN}$`), 'Not a UUID');
+
+/** Whether `value` has the shape of a PostgreSQL `uuid` — see `uuidShapeSchema`. */
+export function isUuidShape(value: string): boolean {
+  return uuidShapeSchema.safeParse(value).success;
+}
+
+/** Whether `YYYY-MM-DD` names a day the calendar has: `2026-02-31` and `2026-13-01` do not. */
+export function isCalendarDate(value: string): boolean {
+  const [year = 0, month = 0, day = 0] = value.split('-').map(Number);
+  if (year < 1) return false;
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+/** A calendar date as `YYYY-MM-DD`, refusing a day the calendar does not have. */
+export const calendarDateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD')
+  .refine(isCalendarDate, 'Not a date of the calendar');
+
+/**
  * Monetary amount — decimal string or number in the minor-unit-plus-currency form.
  * We keep amount as a `number` on the wire; backend persists as numeric(14,2).
  * Currency is an ISO 4217 code.
@@ -86,10 +130,6 @@ export type OrderStatus = z.infer<typeof orderStatusSchema>;
 /** Payment lifecycle statuses (FR-014). `failed` added by feature 034 (payment-method adapter framework). */
 export const paymentStatusSchema = z.enum(['awaiting_payment', 'paid', 'failed', 'deferred', 'refunded']);
 export type PaymentStatus = z.infer<typeof paymentStatusSchema>;
-
-/** Roles within a Customer Organization (FR-042). */
-export const organizationRoleSchema = z.enum(['organization_admin', 'regular_user']);
-export type OrganizationRole = z.infer<typeof organizationRoleSchema>;
 
 /** Supported Sales Channel visibility modes (R-18 + FR-106). */
 export const productVisibilitySchema = z.enum(['public', 'logged_in_only', 'organization_restricted']);

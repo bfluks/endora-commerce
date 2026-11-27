@@ -1,9 +1,9 @@
 ---
-title: delivery_methods
+title: Delivery methods
 description: Configured delivery options
 ---
 
-# `delivery_methods`
+# Delivery methods (`delivery_methods`)
 
 The platform's **shipping-method framework** (_Metoda Dostawy_).
 The module hosts a pluggable adapter registry over the delivery-method catalog,
@@ -44,7 +44,7 @@ holding the `delivery_methods` codes grants nothing on the sales-channel screens
 | `GET /api/v1/admin/delivery-methods/adapters` | admin | `delivery_methods:read` | The adapters a method may be bound to: `{ key, ownerModule }` for every registered adapter whose module is switched on |
 | `GET /api/v1/admin/delivery-methods/sales-channels` | admin | `delivery_methods:read` | The sales channels a method may be assigned to — `{ id, code, name, active }` for every channel, inactive ones included |
 | `PUT /api/v1/admin/delivery-methods/:code` | admin | `delivery_methods:write` | Upsert by code (name, cost/`price`, `adapter`, status, `statusOnSuccess`/`statusOnFailure`, sales channels) |
-| `DELETE /api/v1/admin/delivery-methods/:id` | admin | `delivery_methods:write` | Hard delete (guarded: rejected with 409 when a `Shipment` references the method — set status `inactive` instead) |
+| `DELETE /api/v1/admin/delivery-methods/:id` | admin | `delivery_methods:write` | Hard delete (guarded: rejected with `409 DELIVERY_METHOD_IN_USE` when a `Shipment` references the method — set status `inactive` instead — and with `409 DELIVERY_METHOD_USAGE_UNKNOWN` while the `shipments` module is off) |
 
 The admin status selectors read their options from `GET /api/v1/admin/order-statuses`
 (owned by the payment-methods admin routes; shared `OrderStatusRegistry`). That
@@ -88,7 +88,7 @@ The assignment is enforced where a buyer meets it:
   earlier release needs the same change in `lib/api/methods.ts`, or it is
   answered with the default channel's methods.
 - Placing an order, and previewing its total, refuses a method that is not
-  offered in the order's sales channel with `400 VALIDATION_FAILED` and
+  offered in the order's sales channel with `400 ORDER_DELIVERY_METHOD_UNAVAILABLE` and
   `details.code = "delivery_method_not_in_sales_channel"`. That holds for a
   storefront checkout, for one-click buy, for an order an administrator creates
   on a customer's behalf (the channel chosen for the order) and for an API-key
@@ -187,9 +187,16 @@ Three rules apply to the API as well as the screen:
 - **A method that already has shipments keeps its adapter.** A `Shipment`
   records its delivery method, not the adapter that opened it, so the method's
   `adapter` is the only record of which carrier holds those parcels. Changing it
-  answers 409; set the method `inactive` and create a new one for the other
-  adapter. With the `shipments` module switched off the platform cannot count,
-  so the change is refused until it is back on.
+  answers `409 DELIVERY_METHOD_IN_USE`; set the method `inactive` and create a
+  new one for the other adapter. With the `shipments` module switched off the
+  platform cannot count, so the change is refused with
+  `409 DELIVERY_METHOD_USAGE_UNKNOWN` until it is back on.
+
+  Both codes carry a `details.code` token naming the refused write (`delete` or
+  `change_adapter`) and the method's `deliveryMethodId`. `DELIVERY_METHOD_IN_USE`
+  adds `deliveryMethodCode` and `shipmentCount`, plus the current `adapter` for
+  `change_adapter`. `DELIVERY_METHOD_USAGE_UNKNOWN` adds `module: "shipments"`.
+  Until issue #632 both were `409 VALIDATION_FAILED`.
 - **`adapter` may still be omitted from the body.** A creation that omits it
   takes the method's `code` as the adapter, as it did before adapters existed —
   which yields a working method only when the code happens to be a registered
@@ -296,7 +303,7 @@ request**:
 | Admin adapter picker | `GET /api/v1/admin/delivery-methods/adapters` → `list` | the adapter is not offered as a choice |
 | Admin upsert guard | `PUT /api/v1/admin/delivery-methods/:code` → `isRegistered` | an explicitly supplied key nobody contributed is rejected (400) unless the row already carries it; a contributed one whose owner is off is accepted, because the read is presence-blind on purpose |
 | Order placement | `orders` re-validates the chosen method, then fires `onOrderCreated` | a method whose owner is off answers 503 `MODULE_DISABLED`; an unregistered one skips the hook |
-| Shipment generation | `ShipmentService.create` → `onShipmentCreated` | the adapter hook is skipped and the `Shipment` opens **`pending_manual`** naming the absent module — never plain `pending`, which would read as a shipment the carrier had accepted |
+| Shipment generation | `ShipmentService.createShipment` → `onShipmentCreated` | the adapter hook is skipped and the `Shipment` opens **`pending_manual`** naming the absent module — never plain `pending`, which would read as a shipment the carrier had accepted |
 | Order-confirmation e-mail | the method's `renderers.email` key | the platform default renderer is used |
 
 Two things follow, and they are the reason this section exists rather than being

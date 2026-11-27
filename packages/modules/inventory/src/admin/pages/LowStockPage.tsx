@@ -3,6 +3,9 @@ import { Link } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { ApiError, apiClient, useSurfaceVisibility } from '@endora-commerce/admin-kit/lib';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { ListPage, ResponsiveTable, type ListPageLoad } from '@endora-commerce/admin-kit/components';
+import { Button, EmptyState } from '@endora-commerce/admin-kit/ui';
+import { productInventoryHref } from '../lib/labels.js';
 interface LowStockRow {
   productId: string;
   productSku: string;
@@ -57,83 +60,62 @@ export function LowStockPage(): ReactNode {
     return <div className="b2b-page">{t('inventory.noPermission')}</div>;
   }
 
+  const listLoad: ListPageLoad = error ? { kind: 'error', message: error } : loading ? { kind: 'loading' } : { kind: 'ready' };
+
   return (
     <div className="b2b-page b2b-page--wide">
-      <div className="b2b-page-head">
-        <div className="b2b-grow">
-          <div className="b2b-page-head__title">{t('inventory.lowStock.title')}</div>
-          <div className="b2b-page-head__sub">
-            {t('inventory.lowStock.description')}
-          </div>
-        </div>
-      </div>
-
-      {error ? (
-        <div
-          className="b2b-card"
-          style={{
-            background: 'var(--danger-soft)',
-            color: 'var(--danger-soft-fg)',
-            padding: 12,
-            marginBottom: 16,
-            border: '1px solid hsl(8 80% 85%)',
-          }}
-        >
-          {error}
-        </div>
-      ) : null}
-
-      <div className="b2b-card">
-        <div className="b2b-card__body b2b-card__body--flush">
-          {loading ? (
-            <div style={{ padding: 32, color: 'var(--fg-muted)', fontSize: 13 }}>{t('inventory.loading')}</div>
-          ) : rows.length === 0 ? (
-            <div className="b2b-empty">
-              <div className="b2b-empty__icon"><AlertTriangle size={20} /></div>
-              <div className="b2b-empty__title">{t('inventory.lowStock.empty')}</div>
-              <div className="b2b-empty__sub">
-                {t('inventory.lowStock.emptyHintPrefix')} <code className="b2b-mono">lowStockThreshold</code> {t('inventory.lowStock.emptyHintSuffix')}
-              </div>
-            </div>
-          ) : (
-            <table className="b2b-tbl">
-              <thead>
-                <tr>
-                  <th>{t('inventory.column.product')}</th>
-                  <th>{t('inventory.column.sku')}</th>
-                  <th className="num">{t('inventory.column.cumulativeOnHand')}</th>
-                  <th className="num">{t('inventory.column.threshold')}</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.productId}>
-                    <td>{r.productName}</td>
-                    <td>
-                      <span className="b2b-mono" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-                        {r.productSku}
-                      </span>
-                    </td>
-                    <td className="num b2b-tabular" style={{ fontWeight: 600 }}>
-                      {r.cumulativeOnHand.toLocaleString()}
-                    </td>
-                    <td className="num b2b-tabular">{r.lowStockThreshold.toLocaleString()}</td>
-                    <td className="actions">
-                      <Link
-                        to={`/catalog/products/${r.productId}`}
-                        className="b2b-btn b2b-btn--ghost b2b-btn--sm"
-                      >
-                        {t('inventory.action.editStock')}
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      <ListPage
+        title={t('inventory.lowStock.title')}
+        description={t('inventory.lowStock.description')}
+        count={t('inventory.lowStock.count', { count: rows.length })}
+        load={listLoad}
+        onRetry={(): void => void refresh()}
+      >
+        <ResponsiveTable
+          data={rows}
+          keyExtractor={(r) => r.productId}
+          emptyState={
+            <EmptyState
+              icon={<AlertTriangle size={20} />}
+              title={t('inventory.lowStock.empty')}
+              description={
+                <>
+                  {t('inventory.lowStock.emptyHintPrefix')} <code className="font-mono">lowStockThreshold</code>{' '}
+                  {t('inventory.lowStock.emptyHintSuffix')}
+                </>
+              }
+            />
+          }
+          columns={[
+            { id: 'product', header: t('inventory.column.product'), primary: true, render: (r) => r.productName, meta: (r) => r.productSku },
+            {
+              id: 'sku',
+              header: t('inventory.column.sku'),
+              hideOnMobile: true,
+              className: 'font-mono text-xs text-muted-foreground',
+              render: (r) => r.productSku,
+            },
+            {
+              id: 'onHand',
+              header: t('inventory.column.cumulativeOnHand'),
+              className: 'text-right font-semibold tabular-nums',
+              render: (r) => r.cumulativeOnHand.toLocaleString(),
+            },
+            {
+              id: 'threshold',
+              header: t('inventory.column.threshold'),
+              className: 'text-right tabular-nums',
+              render: (r) => r.lowStockThreshold.toLocaleString(),
+            },
+          ]}
+          renderActions={(r) => (
+            // Edit *stock*: the Inventory tab, as the inventory list's rows do.
+            <Button asChild variant="ghost" size="sm">
+              <Link to={productInventoryHref(r.productId)}>{t('inventory.action.editStock')}</Link>
+            </Button>
           )}
-        </div>
-      </div>
+        />
+      </ListPage>
     </div>
   );
 }

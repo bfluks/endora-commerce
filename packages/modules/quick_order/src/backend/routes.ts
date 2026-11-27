@@ -1,9 +1,13 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
+  CustomerSessionRequiredError,
   quickOrderBuildRequestSchema,
   quickOrderImportRequestSchema,
   quickOrderSearchQuerySchema,
+  requestScopeLanguage,
   type CatalogQuickSearchPort,
+  type OrganizationPermissionPort,
+  type OrganizationPermissionSubject,
 } from '@endora-commerce/contracts';
 import { getResolvedChannel } from '@endora-commerce/platform/kernel';
 import { productAudienceOf } from '@endora-commerce/platform/http';
@@ -20,7 +24,49 @@ import { parseImportRequest } from './services/import-from-request.js';
  *
  * Requires an authenticated customer session: SKU-to-product disclosure and
  * cart / RFQ mutation are gated to logged-in buyers.
+ *
+ * **By organization permission (`specs/170-organization-roles/`, FR-030,
+ * FR-030b, FR-040; `contracts/storefront-api.md` §5).** The import previews a
+ * file that may become either a basket or a quote request, so it admits
+ * `carts.create` **or** `quote_requests.create` (owner ruling OR-10, R-40) — a
+ * module-local guard after `requireCustomer`, answered before the file is
+ * parsed; a member holding neither is refused naming `carts.create`. The
+ * build's target is in its body, so the build judges `carts.create` or
+ * `quote_requests.create` itself, first thing (`QuickOrderBuildService.build`).
+ * The type-ahead is a read and stays open.
  */
+
+const CARTS_CREATE = 'carts.create';
+const QUOTE_REQUESTS_CREATE = 'quote_requests.create';
+
+/**
+ * The import's guard (OR-10, FR-030b, R-40): either target's create permission
+ * admits it, judged in that order. The subject is built from the actor exactly
+ * as `organizationPermissionPreHandler` builds it. When neither holds, the
+ * port's `assert` raises the standard `403 ORGANIZATION_PERMISSION_REQUIRED`
+ * naming `carts.create` — the import's primary target — so the refusal keeps
+ * its one shape. A code whose module is off grants nothing (FR-007), so with
+ * `quote_requests` off only `carts.create` admits. Writing the buyer's preview
+ * (`routes.preview.ts`, issue #809) is part of the same import and takes the
+ * same guard.
+ */
+export function importPermissionPreHandler(
+  getPort: () => OrganizationPermissionPort,
+): (request: FastifyRequest) => Promise<void> {
+  return async (request) => {
+    const actor = request.actor;
+    if (actor.kind !== 'customer') throw new CustomerSessionRequiredError();
+    const subject: OrganizationPermissionSubject = {
+      customerAccountId: actor.customerAccountId,
+      organizationId: actor.organizationId ?? '',
+      organizationRoleId: actor.organizationRoleId ?? null,
+    };
+    const port = getPort();
+    if (await port.can(subject, CARTS_CREATE)) return;
+    if (await port.can(subject, QUOTE_REQUESTS_CREATE)) return;
+    await port.assert(subject, CARTS_CREATE, { language: await request.responseLanguage() });
+  };
+}
 
 export interface QuickOrderRoutesDeps {
   pipeline: QuickOrderImportPipeline;
@@ -40,17 +86,22 @@ export interface QuickOrderRoutesDeps {
    * and the `matchedOn` labels belong to the module that owns the tables.
    */
   catalogQuickSearch: CatalogQuickSearchPort;
+  /** `organizations`' port, resolved per request (`module-composition.md` item 4a). */
+  organizationPermissions: () => OrganizationPermissionPort;
 }
 
 export async function registerQuickOrderRoutes(
   app: FastifyInstance,
   deps: QuickOrderRoutesDeps,
 ): Promise<void> {
-  const { pipeline, buildService, requireCustomer, resolveCustomerContext } = deps;
+  const { pipeline, buildService, requireCustomer, resolveCustomerContext, organizationPermissions } = deps;
 
   app.post(
     '/api/v1/quick-order/import',
-    { preHandler: requireCustomer, schema: { body: quickOrderImportRequestSchema } },
+    {
+      preHandler: [requireCustomer, importPermissionPreHandler(organizationPermissions)],
+      schema: { body: quickOrderImportRequestSchema },
+    },
     async (request) => {
       const body = quickOrderImportRequestSchema.parse(request.body);
       const maxRows = await deps.resolveImportMaxRows();
@@ -62,6 +113,9 @@ export async function registerQuickOrderRoutes(
       const result = await pipeline.run(parse, {
         maxRows,
         audience: productAudienceOf(request),
+        // Feature 163 — the channel this request resolved, named explicitly:
+        // a buyer paste is never answered by audience alone.
+        salesChannelId: getResolvedChannel(request).id,
       });
       return { data: result };
     },
@@ -73,8 +127,14 @@ export async function registerQuickOrderRoutes(
     async (request) => {
       const body = quickOrderBuildRequestSchema.parse(request.body);
       const ctx = resolveCustomerContext(request);
+      const actor = request.actor;
       const result = await buildService.build(
-        { customerAccountId: ctx.customerAccountId, organizationId: ctx.organizationId },
+        {
+          customerAccountId: ctx.customerAccountId,
+          organizationId: ctx.organizationId,
+          organizationRoleId: actor.kind === 'customer' ? (actor.organizationRoleId ?? null) : null,
+          salesChannelId: getResolvedChannel(request).id,
+        },
         {
           target: body.target,
           items: body.items.map((item) => ({
@@ -83,6 +143,11 @@ export async function registerQuickOrderRoutes(
             quantity: item.quantity,
           })),
         },
+        // Feature 155 — the buyer's build: no actor, so a quote request is
+        // judged by the buyer's rules (FR-012). Feature 163 — its quote lines'
+        // scope language is the request's channel language (issue #1011), not
+        // the message language.
+        { language: await request.responseLanguage(), languageTag: channelLanguageOf(request) },
       );
       return { data: result };
     },
@@ -119,17 +184,41 @@ export async function registerQuickOrderRoutes(
       limit: query.limit,
       salesChannelId: getResolvedChannel(request).id,
       organizationId: resolveCustomerContext(request).organizationId,
+      // Feature 163 — the request's language; a product off in it is not a
+      // hit. Issue #1011 — already one of the channel's languages, which
+      // `catalog`'s own resolution against the channel leaves as it is.
+      languageCode: channelLanguageOf(request),
     });
 
     return {
       data: hits.map((hit) => ({
         productId: hit.productId,
         sku: hit.sku,
-        name: hit.name['en-US'] ?? Object.values(hit.name)[0] ?? hit.sku,
+        // Feature 163 (FR-017 a) — the Name the storefront shows here.
+        // Feature 174 — `hit.name` is the effective string at the search's (C, L).
+        name: hit.name || hit.sku,
         slug: hit.slug,
         status: hit.status,
         matchedOn: hit.matchedOn,
       })),
     };
   });
+}
+
+/**
+ * The channel language the request's `Accept-Language` asks for, or `undefined` without the
+ * header (the channel's default language is then asked about, as before). Issue #1011 —
+ * `requestScopeLanguage` over the whole header, as the catalogue resolves it since #397: the
+ * tags in descending `q`, each matched against the resolved channel's languages (exactly, then
+ * by base language), the first one the channel offers winning, else the channel's default. This
+ * used to be the header's first tag alone, so `en;q=0.2, pl-PL;q=0.9` asked about English.
+ *
+ * A content language — which (channel, language) a product is available and named at — so not
+ * `request.responseLanguage()`, the language messages are worded in. Shared with the one-click
+ * route (`routes.one-click.ts`, issue #1308).
+ */
+export function channelLanguageOf(request: FastifyRequest): string | undefined {
+  const header = request.headers['accept-language'];
+  if (header === undefined || header.length === 0) return undefined;
+  return requestScopeLanguage(getResolvedChannel(request), header);
 }

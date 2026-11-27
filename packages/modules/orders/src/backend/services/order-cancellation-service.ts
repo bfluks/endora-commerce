@@ -2,8 +2,10 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   ERROR_CODES,
   ORDER_STATUS_CANCELLED,
-  type OrderTransitionPort,
+  type OrderStatusActor,
+  type OrderTransitionOutcome,
   type PaymentMethodReadPort,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { Order } from '../entities/order.entity.js';
@@ -36,22 +38,38 @@ export interface OrderTransitionHistoryReader {
       stateAfter?: Record<string, unknown> | null;
       actorAdminUserId?: string | null;
       impersonatedCustomerAccountId?: string | null;
+      actorCustomerAccountId?: string | null;
     }>
   >;
+}
+
+/**
+ * The lifecycle write the buyer's cancellation runs, answered as an outcome:
+ * `applyStatusAsOutcome` (`order-status-outcome.ts`) over this module's own
+ * transition engine — the `order.status_transition` Command every status
+ * change runs. Not `orderCommandPort`: a customer-session route never resolves
+ * the aggregate port (`specs/186-aggregate-ports/` R-7, R-17.5).
+ */
+export interface CustomerCancellationTransitions {
+  applyStatus(input: {
+    orderId: string;
+    to: string;
+    actor: OrderStatusActor;
+    reason: string | null;
+  }): Promise<OrderTransitionOutcome>;
 }
 
 export interface CustomerOrderCancellationDeps {
   emFactory: () => EntityManager;
   /**
-   * The lifecycle write, as this module publishes it. Cancelling through the
-   * seam is the whole point: the transition's side-effects hook releases the
-   * stock allocations and frees the credit-limit reservation, and the audit
-   * entry is written co-transactionally with the status. A cancellation that
-   * assigned `order.status` would do none of that — which is the defect
-   * feature 085 Phase D removed from the settlement path, and this is its first
-   * customer-facing caller.
+   * The lifecycle write. Cancelling through the transition engine is the whole
+   * point: the transition records the stock and credit releases it owes, and
+   * the audit entry is written co-transactionally with the status. A
+   * cancellation that assigned `order.status` would do none of that — which is
+   * the defect feature 085 Phase D removed from the settlement path, and this
+   * is its first customer-facing caller.
    */
-  transitions: OrderTransitionPort;
+  transitions: CustomerCancellationTransitions;
   /** The configured graph, for the initial status the predicate compares to. */
   graphService: OrderStatusGraphService;
   /**
@@ -106,6 +124,7 @@ export class CustomerOrderCancellationService {
    */
   async cancelByCustomer(orderId: string, customerAccountId: string): Promise<Order> {
     const em = this.deps.emFactory();
+    if (!isUuidShape(orderId)) throw new HttpError(404, ERROR_CODES.ORDER_NOT_FOUND, 'Order not found.');
     const order = await em.findOne(Order, { id: orderId, placedByCustomerAccountId: customerAccountId });
     if (!order) throw new HttpError(404, ERROR_CODES.ORDER_NOT_FOUND, 'Order not found.');
 
@@ -272,6 +291,8 @@ export class CustomerOrderCancellationService {
       statusAfter: readStatus(entry.stateAfter),
       actorAdminUserId: entry.actorAdminUserId ?? null,
       impersonatedCustomerAccountId: entry.impersonatedCustomerAccountId ?? null,
+      actorCustomerAccountId: entry.actorCustomerAccountId ?? null,
+      source: readSource(entry.stateAfter),
     }));
     return currentStatusAuthors(records, currentStatusByOrder);
   }
@@ -281,4 +302,10 @@ export class CustomerOrderCancellationService {
 function readStatus(state: Record<string, unknown> | null | undefined): string | null {
   const status = state?.['status'];
   return typeof status === 'string' ? status : null;
+}
+
+/** `stateAfter.source` when the entry carries a code, else `null`. */
+function readSource(state: Record<string, unknown> | null | undefined): string | null {
+  const source = state?.['source'];
+  return typeof source === 'string' ? source : null;
 }

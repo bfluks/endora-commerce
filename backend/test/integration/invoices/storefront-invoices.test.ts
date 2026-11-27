@@ -8,6 +8,8 @@ import {
 import { ADMIN_COOKIE, CUSTOMER_COOKIE, seedInvoiceableOrder, setSellerSettings } from './helpers.js';
 import { ensureSalesChannelId } from '../../helpers/sales-channel-fixtures.js';
 import { Order, OrderItem } from '../../helpers/package-entities.js';
+import { TEST_CUSTOMER_RFQ_ID } from '../../helpers/test-actors.js';
+import { seedOtherTestCustomer } from '../../helpers/seed-organizations.js';
 
 // Feature 078, D-95: `{channel}` is rendered from the `sales_channels`
 
@@ -45,6 +47,9 @@ describe('invoices — storefront customer download (US4)', () => {
       cookies: ADMIN_COOKIE,
       payload: { kind: 'invoice' },
     });
+    // A refused issue is the fixture's fault, not the assertion's: say so with
+    // the refusal's own reason rather than a TypeError on a missing `data`.
+    expect(res.statusCode, res.body).toBe(201);
     return (res.json() as { data: { id: string } }).data.id;
   }
 
@@ -72,7 +77,14 @@ describe('invoices — storefront customer download (US4)', () => {
 
   it('denies access to another party’s order (404)', async () => {
     // Order owned by a different customer + organization.
-    const order = h.em().create(Order, {
+    //
+    // One EntityManager for the whole fixture: `h.em()` forks a fresh one on
+    // every call, so an entity created on one fork and flushed on another is
+    // never written. This order used to be issued with no line at all — which
+    // since issue #435 (PR #865) is refused 422 `returned_in_full`, there being
+    // no sale to invoice.
+    const em = h.em();
+    const order = em.create(Order, {
       organizationId: randomUUID(),
       placedByCustomerAccountId: randomUUID(),
       salesChannelId: CH,
@@ -91,17 +103,18 @@ describe('invoices — storefront customer download (US4)', () => {
       currency: 'PLN',
       placedAt: new Date(),
     });
-    await h.em().persistAndFlush(order);
-    h.em().create(OrderItem, {
+    await em.persist(order).flush();
+    em.create(OrderItem, {
       orderId: order.id,
       productId: randomUUID(),
       productSnapshot: { sku: 'S', name: 'N', primaryAssetUrl: null },
       quantity: 1,
       unitPrice: '100.00',
       taxRate: '0.2300',
-      lineTotal: '100.00',
+      // Placement stores a line's gross here (issue #417).
+      lineTotal: '123.00',
     });
-    await h.em().flush();
+    await em.flush();
     await issueFor(order.id);
 
     const res = await h.app.inject({
@@ -110,6 +123,80 @@ describe('invoices — storefront customer download (US4)', () => {
       cookies: CUSTOMER_COOKIE,
     });
     expect(res.statusCode).toBe(404);
+  });
+
+  // Issue #669: the per-order invoice routes follow the order's own read scope.
+  // A regular member reaches only the orders they placed; an Organization admin
+  // reaches every order of the Organization; anyone else gets 404.
+  describe('order read scope inside one Organization (issue #669)', () => {
+    // Member A — holding Member in the test Organization, places the order.
+    const MEMBER_A = { b2b_session: 'stub-customer-session-rfq' };
+    // Member B — another Member of the same Organization.
+    const MEMBER_B = { b2b_session: 'stub-empty-draft-customer-session' };
+    // The Administrator of the same Organization.
+    const ORG_ADMIN = CUSTOMER_COOKIE;
+    // A buyer of a different Organization.
+    const OTHER_ORG = { b2b_session: 'stub-customer-session-other-org' };
+
+    let orderId: string;
+    let invoiceId: string;
+
+    beforeAll(async () => {
+      await seedOtherTestCustomer(h.em());
+      ({ orderId } = await seedInvoiceableOrder(h.em(), {
+        salesChannelId: CH,
+        placedByCustomerAccountId: TEST_CUSTOMER_RFQ_ID,
+      }));
+      invoiceId = await issueFor(orderId);
+    });
+
+    async function listAs(cookies: Record<string, string>) {
+      return h.app.inject({ method: 'GET', url: `/api/v1/orders/${orderId}/invoices`, cookies });
+    }
+    async function pdfAs(cookies: Record<string, string>) {
+      return h.app.inject({
+        method: 'GET',
+        url: `/api/v1/orders/${orderId}/invoices/${invoiceId}/pdf`,
+        cookies,
+      });
+    }
+
+    it('another regular member of the Organization gets 404 on the list and the PDF', async () => {
+      expect((await listAs(MEMBER_B)).statusCode).toBe(404);
+      expect((await pdfAs(MEMBER_B)).statusCode).toBe(404);
+    });
+
+    it('the member who placed the order gets 200 on the list and the PDF', async () => {
+      const list = await listAs(MEMBER_A);
+      expect(list.statusCode, list.body).toBe(200);
+      expect((list.json() as { data: Array<{ id: string }> }).data.map((i) => i.id)).toContain(invoiceId);
+      const pdf = await pdfAs(MEMBER_A);
+      expect(pdf.statusCode).toBe(200);
+      expect(pdf.headers['content-type']).toContain('application/pdf');
+    });
+
+    it('the Organization admin gets 200 on the list and the PDF of a colleague’s order', async () => {
+      const list = await listAs(ORG_ADMIN);
+      expect(list.statusCode, list.body).toBe(200);
+      expect((list.json() as { data: Array<{ id: string }> }).data.map((i) => i.id)).toContain(invoiceId);
+      expect((await pdfAs(ORG_ADMIN)).statusCode).toBe(200);
+    });
+
+    it('a buyer of another Organization gets 404 on the list and the PDF', async () => {
+      expect((await listAs(OTHER_ORG)).statusCode).toBe(404);
+      expect((await pdfAs(OTHER_ORG)).statusCode).toBe(404);
+    });
+
+    it('the PDF of an invoice issued for a different order answers 404, even to the admin', async () => {
+      const { orderId: otherOrderId } = await seedInvoiceableOrder(h.em(), { salesChannelId: CH });
+      const foreignInvoiceId = await issueFor(otherOrderId);
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/orders/${orderId}/invoices/${foreignInvoiceId}/pdf`,
+        cookies: ORG_ADMIN,
+      });
+      expect(res.statusCode).toBe(404);
+    });
   });
 
   it('requires a customer session', async () => {

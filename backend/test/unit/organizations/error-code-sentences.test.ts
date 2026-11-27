@@ -8,8 +8,13 @@ import {
   cycleRefusal,
   hasChildrenRefusal,
   maxDepthRefusal,
+  taxIdSharedAcrossTreesRefusal,
   unreadablePathRefusal,
 } from '../../../../packages/modules/organizations/src/backend/services/organization-tree-service.js';
+import { scopeDuplicatesRefusal } from '../../../../packages/modules/organizations/src/backend/commands/set-tax-id-scope.command.js';
+import { conversionRefusal } from '../../../../packages/modules/organizations/src/backend/commands/convert-to-company.command.js';
+import { taxIdChangeRefusal } from '../../../../packages/modules/organizations/src/backend/commands/change-tax-id.command.js';
+import { permissionRequiredRefusal } from '../../../../packages/modules/organizations/src/backend/services/organization-role-permission-port.js';
 
 /**
  * D-129's remaining sweep, MR 7 — the sentences `organizations` gained when its
@@ -62,7 +67,7 @@ function tokenOf(details: unknown): unknown {
   return (details as Record<string, unknown> | undefined)?.['code'];
 }
 
-describe('the two always-tokened organizations codes', () => {
+describe('the always-tokened organizations codes', () => {
   /**
    * Every raise of both codes passes a `details.code`, measured by balancing
    * each `HttpError` call's own parentheses and reading `details` as the
@@ -105,6 +110,45 @@ describe('the two always-tokened organizations codes', () => {
       status: 409,
       contains: '00000000-0000-4000-8000-0000000000aa',
     },
+    // `specs/177-tax-id-scope/` FR-020 — `taxIds` is an array, so the sentence names none.
+    {
+      code: 'ORGANIZATION_TREE_INVALID',
+      name: 'a move that would put a shared tax ID into a second tree',
+      refusal: taxIdSharedAcrossTreesRefusal(['PL5260250274']),
+      token: 'tax_id_shared_across_trees',
+      status: 409,
+      contains: null,
+    },
+    // `specs/177-tax-id-scope/` FR-015 — the count is the one scalar it fills.
+    {
+      code: 'ORGANIZATION_TAX_ID_SCOPE_DUPLICATES',
+      name: 'a switch to the global tax-ID scope over shared tax IDs',
+      refusal: scopeDuplicatesRefusal({
+        sharedTaxIdCount: 3,
+        examples: [{ taxId: 'PL5260250274', organizationIds: ['00000000-0000-4000-8000-0000000000ab'] }],
+      }),
+      token: 'shared_tax_ids',
+      status: 409,
+      contains: '3',
+    },
+    // `specs/177-tax-id-scope/` FR-033 — the three conversion refusals.
+    ...(['not_personal', 'deleted', 'owner_not_administrator'] as const).map((token) => ({
+      code: 'ORGANIZATION_CONVERSION_REFUSED' as const,
+      name: `a conversion refused as ${token}`,
+      refusal: conversionRefusal(token),
+      token,
+      status: 409,
+      contains: null,
+    })),
+    // Issue #1040 — the two tax-ID correction refusals.
+    ...(['not_company', 'deleted'] as const).map((token) => ({
+      code: 'ORGANIZATION_TAX_ID_CHANGE_REFUSED' as const,
+      name: `a tax-ID change refused as ${token}`,
+      refusal: taxIdChangeRefusal(token),
+      token,
+      status: 409,
+      contains: null,
+    })),
   ] as const;
 
   for (const { code, name, refusal, token, status, contains } of cases) {
@@ -138,7 +182,7 @@ describe('the two always-tokened organizations codes', () => {
     }
   }
 
-  for (const code of ['ORGANIZATION_HAS_CHILDREN', 'ORGANIZATION_TREE_INVALID'] as const) {
+  for (const code of ['ORGANIZATION_HAS_CHILDREN', 'ORGANIZATION_TREE_INVALID', 'ORGANIZATION_TAX_ID_SCOPE_DUPLICATES', 'ORGANIZATION_CONVERSION_REFUSED', 'ORGANIZATION_TAX_ID_CHANGE_REFUSED'] as const) {
     for (const language of LANGUAGES) {
       it(`keeps ${code}'s unreachable base sentence (${language})`, () => {
         // **This key renders for nobody, and it is load-bearing anyway** —
@@ -170,7 +214,11 @@ describe('the two always-tokened organizations codes', () => {
       'cycle',
       'max_depth_exceeded',
       'path_unreadable',
+      'tax_id_shared_across_trees',
     ]);
+    expect(produced.get('ORGANIZATION_TAX_ID_SCOPE_DUPLICATES')).toEqual(['shared_tax_ids']);
+    expect(produced.get('ORGANIZATION_CONVERSION_REFUSED')).toEqual(['not_personal', 'deleted', 'owner_not_administrator']);
+    expect(produced.get('ORGANIZATION_TAX_ID_CHANGE_REFUSED')).toEqual(['not_company', 'deleted']);
   });
 });
 
@@ -192,6 +240,8 @@ describe('the six untokened organizations codes', () => {
     'ORGANIZATION_SUSPENDED',
     'ORGANIZATION_TAX_ID_EXISTS',
     'ORG_OWNER_DEPLETION',
+    // `specs/177-tax-id-scope/` — raised without details.
+    'ORGANIZATION_WRITE_CONTENDED',
   ] as const;
 
   for (const code of codes) {
@@ -203,6 +253,59 @@ describe('the six untokened organizations codes', () => {
     });
 
     for (const language of LANGUAGES) {
+      it(`answers ${code} with a sentence that needs nothing filled (${language})`, () => {
+        const sentence = bundle(language)[`errors.${code}`];
+        expect(sentence, `errors.${code} missing from ${language}.json`).toBeTypeOf('string');
+        expect(sentence).not.toMatch(/\{\w+\}/);
+      });
+    }
+  }
+});
+
+/**
+ * `specs/170-organization-roles/` WP-02a, T035 — the seven role and permission
+ * codes, declared by this module's manifest and translated in its bundle.
+ *
+ * `ORGANIZATION_PERMISSION_REQUIRED` is the one with a placeholder: its raise
+ * carries `details: { permission, permissionLabel }`, and both sentences name
+ * `{permissionLabel}` — so the refusal is rendered here from the real raise, in
+ * both languages, and must leave nothing unfilled (FR-055,
+ * `contracts/organization-permission-port.md` §3). The other six carry no
+ * scalar `details` a sentence could read, so they must need nothing filled.
+ */
+describe('the organization role and permission codes (feature 170)', () => {
+  const codes = [
+    'ORGANIZATION_PERMISSION_REQUIRED',
+    'ORGANIZATION_ROLE_NAME_TAKEN',
+    'ORGANIZATION_ROLE_STALE',
+    'ORGANIZATION_ROLE_LIMIT_REACHED',
+    'ORGANIZATION_ROLE_PROTECTED',
+    'ORGANIZATION_ROLE_REPLACEMENT_REQUIRED',
+    'ORGANIZATION_PERMISSION_UNKNOWN',
+  ] as const;
+
+  for (const code of codes) {
+    it(`routes ${code} to this module's bundle`, () => {
+      expect(DECLARED_ERROR_TRANSLATION_TARGETS[code]).toEqual({
+        moduleId: 'organizations',
+        key: `errors.${code}`,
+      });
+    });
+  }
+
+  for (const language of LANGUAGES) {
+    it(`renders ORGANIZATION_PERMISSION_REQUIRED with the permission's label (${language})`, () => {
+      const refusal = permissionRequiredRefusal('carts.approve', 'Approve carts');
+      expect(refusal.statusCode).toBe(403);
+      expect(tokenOf(refusal.details)).toBeUndefined();
+      const sentence = bundle(language)['errors.ORGANIZATION_PERMISSION_REQUIRED'];
+      expect(sentence).toBeTypeOf('string');
+      const rendered = interpolate(sentence!, paramsOf(refusal.details));
+      expect(rendered).toContain('Approve carts');
+      expect(rendered).not.toMatch(/\{\w+\}/);
+    });
+
+    for (const code of codes.filter((c) => c !== 'ORGANIZATION_PERMISSION_REQUIRED')) {
       it(`answers ${code} with a sentence that needs nothing filled (${language})`, () => {
         const sentence = bundle(language)[`errors.${code}`];
         expect(sentence, `errors.${code} missing from ${language}.json`).toBeTypeOf('string');

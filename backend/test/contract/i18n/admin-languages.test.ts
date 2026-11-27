@@ -5,6 +5,12 @@ import {
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
 import { Language } from '../../helpers/package-entities.js';
+import { languageListResponseSchema, languageSchema } from '@endora-commerce/contracts';
+import { deepStrict, disagreements } from '../../helpers/strict-schema.js';
+
+/** Strict copies: a key a language reply carries that the contract does not declare fails (issue #599 §6). */
+const strictLanguage = deepStrict(languageSchema);
+const strictList = deepStrict(languageListResponseSchema);
 
 /**
  * T238 — admin language CRUD. The "at most one default" invariant is
@@ -33,7 +39,9 @@ describe('Admin language CRUD', () => {
     // before deletion so the partial unique index stays satisfied.
     if (ephemeralCodes.length > 0) {
       const conn = h.em().getConnection();
-      await conn.execute('update languages set is_default = false');
+      // Only this file's own codes can have been promoted, so only they are
+      // demoted (issue #607) before the original default is put back.
+      await conn.execute('update languages set is_default = false where code in (?)', [ephemeralCodes]);
       await conn.execute('update languages set is_default = true where code = ?', [
         originalDefaultCode,
       ]);
@@ -68,6 +76,8 @@ describe('Admin language CRUD', () => {
     const body = update.json() as { data: { label: string; sortOrder: number } };
     expect(body.data.label).toBe('Test language v2');
     expect(body.data.sortOrder).toBe(5);
+    expect(disagreements(strictLanguage, (create.json() as { data: unknown }).data)).toEqual([]);
+    expect(disagreements(strictLanguage, body.data)).toEqual([]);
   });
 
   it('setDefault demotes the prior default atomically', async () => {
@@ -85,6 +95,7 @@ describe('Admin language CRUD', () => {
       cookies: { b2b_session: 'stub-admin-session' },
     });
     expect(setRes.statusCode).toBe(200);
+    expect(disagreements(strictLanguage, (setRes.json() as { data: unknown }).data)).toEqual([]);
 
     const list = await h.app.inject({
       method: 'GET',
@@ -94,6 +105,8 @@ describe('Admin language CRUD', () => {
     const body = list.json() as {
       data: Array<{ code: string; isDefault: boolean }>;
     };
+    // Every row, the whole available catalogue included, is the published shape.
+    expect(disagreements(strictList, body)).toEqual([]);
     const defaults = body.data.filter((l) => l.isDefault);
     expect(defaults).toHaveLength(1);
     expect(defaults[0]?.code).toBe('xb-XB');

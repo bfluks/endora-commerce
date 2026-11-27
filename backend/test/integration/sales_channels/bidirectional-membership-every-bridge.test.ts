@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ERROR_CODES, type ChannelMemberEntityType } from '@endora-commerce/contracts';
 import { randomUUID } from 'crypto';
 import { setupTestDb, type TestDb } from '../../helpers/test-db.js';
+import { organizationTreePath } from '../../helpers/organization-tree.js';
 import { EventBus } from '@endora-commerce/platform/events';
 import { SalesChannelMembershipService } from '../../../src/kernel/sales-channels/sales-channel-membership.service.js';
 import { DefaultChannelReconciler } from '@endora-commerce/platform/composition';
@@ -61,12 +62,11 @@ describe('bidirectional membership: every bridge (T043)', () => {
       defaultCurrency: 'EUR',
       languages: ['en'],
       currencies: ['EUR'],
-      isPublic: false,
       active: true,
       systemDefault: false,
       version: 1,
     });
-    await em.persistAndFlush(channel);
+    await em.persist(channel).flush();
     return channel;
   }
 
@@ -85,6 +85,7 @@ describe('bidirectional membership: every bridge (T043)', () => {
     customer: async () => insertCustomerAccount(),
     promotion: async () => insertPromotion(),
     'cms-page': async () => insertCmsPage(),
+    'price-list': async () => insertPriceBook(),
   };
 
   async function rawExec(sql: string, params: unknown[] = []): Promise<void> {
@@ -100,7 +101,7 @@ describe('bidirectional membership: every bridge (T043)', () => {
     await rawExec(
       `insert into "products" ("id","sku","slug","type","status","name","description","visibility",` +
         `"attribute_values","allowed_organization_ids","created_at","updated_at") values ` +
-        `(?, ?, ?, 'simple', 'draft', ?::jsonb, ?::jsonb, 'public', '{}'::jsonb, '[]'::jsonb, now(), now())`,
+        `(?, ?, ?, 'simple', 'inactive', ?::jsonb, ?::jsonb, 'public', '{}'::jsonb, '[]'::jsonb, now(), now())`,
       [id, `T043-${id.slice(0, 8)}`, slug, '{"en":"P"}', '{"en":"P"}'],
     );
     return id;
@@ -140,9 +141,9 @@ describe('bidirectional membership: every bridge (T043)', () => {
   async function insertOrganization(): Promise<string> {
     const id = randomUUID();
     await rawExec(
-      `insert into "organizations" ("id","name","tax_id","status","vat_status","registered_address","created_at","updated_at") ` +
-        `values (?, ?, ?, 'active', 'vat_payer', '{}'::jsonb, now(), now())`,
-      [id, `T043 Org ${id.slice(0, 8)}`, `t043-tax-${id.slice(0, 8)}`],
+      `insert into "organizations" ("id","name","tax_id","status","vat_status","registered_address","path","created_at","updated_at") ` +
+        `values (?, ?, ?, 'active', 'vat_payer', '{}'::jsonb, ?, now(), now())`,
+      [id, `T043 Org ${id.slice(0, 8)}`, `T043TAX${id.slice(0, 8).toUpperCase()}`, organizationTreePath(id)],
     );
     return id;
   }
@@ -152,7 +153,7 @@ describe('bidirectional membership: every bridge (T043)', () => {
     await rawExec(
       `insert into "taxes" ("id","code","name","rate","applies_to_vat_statuses","created_at","updated_at") ` +
         `values (?, ?, 'T043 Tax', 0.23, '[]'::jsonb, now(), now())`,
-      [id, `t043-tax-${id.slice(0, 8)}`],
+      [id, `T043TAX${id.slice(0, 8).toUpperCase()}`],
     );
     return id;
   }
@@ -161,8 +162,8 @@ describe('bidirectional membership: every bridge (T043)', () => {
     const id = randomUUID();
     const orgId = await insertOrganization();
     await rawExec(
-      `insert into "customer_accounts" ("id","organization_id","email","password_hash","first_name","last_name","role","created_at","updated_at") ` +
-        `values (?, ?, ?, '$2b$10$x', 'T', '043', 'regular_user', now(), now())`,
+      `insert into "customer_accounts" ("id","organization_id","email","password_hash","first_name","last_name","created_at","updated_at") ` +
+        `values (?, ?, ?, '$2b$10$x', 'T', '043', now(), now())`,
       [id, orgId, `t043-${id.slice(0, 8)}@example.test`],
     );
     return id;
@@ -195,6 +196,18 @@ describe('bidirectional membership: every bridge (T043)', () => {
     return id;
   }
 
+  /** Feature 160 — a price book; its channel set is the `sales_channel_price_lists` bridge. */
+  async function insertPriceBook(): Promise<string> {
+    const id = randomUUID();
+    await rawExec(
+      `insert into "price_lists"
+         ("id","name","currency_code","priority","type","status","audience_kind","is_system","created_at","updated_at")
+       values (?, ?, 'EUR', 0, 'regular', 'draft', 'everyone', false, now(), now())`,
+      [id, `Book ${id.slice(0, 8)}`],
+    );
+    return id;
+  }
+
   const ENTITY_TYPES: ChannelMemberEntityType[] = [
     'product',
     'category',
@@ -205,6 +218,7 @@ describe('bidirectional membership: every bridge (T043)', () => {
     'customer',
     'promotion',
     'cms-page',
+    'price-list',
   ];
 
   it.each(ENTITY_TYPES)(

@@ -1,5 +1,8 @@
 import type { AssetsLibraryCradle } from '@endora-commerce/mod-assets-library/backend';
 import type { CartShoppingListBridge } from '@endora-commerce/mod-carts/backend';
+// Feature 155 — the pure skipped → droppedLines mapping of the shopping-list
+// bridge below, shared so both roots answer an append alike.
+import { toCartDroppedLines } from '@endora-commerce/contracts';
 // Feature 080 (T052) — the contract types for the seven ports that replaced
 // this root's five entity-class reads. Types only: what a root resolves is a
 // container name, and the shape it resolves it against is published in
@@ -62,6 +65,7 @@ import { MODULES } from './composition.generated.js';
 // import below) and the shape is `@endora-commerce/contracts`'; a root that reads
 // `request.actor` names neither `auth` nor any other module for it.
 import { effectiveState } from './kernel/lifecycle/effective-state.js';
+import { getResolvedChannel } from '@endora-commerce/platform/kernel';
 // Feature 072 (T138) — `organizations` owns its services, its routes and its
 // two event subscriptions. T143a — the sales-rep assignment scope too, and the
 // actor half of the orders/RFQ visibility question went with the
@@ -202,7 +206,7 @@ interface ContainerReads {
   readonly cartService: {
     mergeAnonymousIntoCustomer(
       anonymousToken: string,
-      customer: { customerAccountId: string; organizationId: string | null },
+      customer: { customerAccountId: string; organizationId: string | null; salesChannelId: string },
     ): Promise<CartMergeOutcome>;
   };
   /**
@@ -250,7 +254,14 @@ interface ShoppingListBridgeService {
     ctx: { customerAccountId: string; organizationId: string },
     listId: string,
     itemIds: string[] | undefined,
-  ): Promise<{ added: number; skipped: Array<{ productId: string }> }>;
+    salesChannelId: string,
+    /** Issue #1293 — the request's scope language the lines are judged in. */
+    options?: { languageTag?: string },
+  ): Promise<{
+    added: number;
+    /** Feature 155 — `reason` and, on `below_minimum`, the `minimum` the line missed. */
+    skipped: Array<{ productId: string; reason: string; minimum?: number }>;
+  }>;
 }
 
 /** Pick a display label from a possibly-multilingual (jsonb) name value. */
@@ -400,6 +411,10 @@ export async function composeApp(options: ComposeAppOptions): Promise<ComposeApp
     // for a registration more than one of its overlay modules decorates, from
     // `backend/src/apps/<deployment>/divergence.ts`. Checked, never applied.
     decorationOrder: divergenceDeclaration.decorationOrder,
+    // `specs/176-command-hooks-outbox/` FR-014 — and the command-hook tie-break
+    // from the same declaration, which the composer seals the hook registry against.
+    commandHookOrder: divergenceDeclaration.commandHookOrder,
+    commandMiddlewareOrder: divergenceDeclaration.commandMiddlewareOrder,
     // D-101 — and the omissions from the same declaration, which the presence
     // load reads. The platform may not locate the file (D115-3), so the value
     // is supplied rather than read.
@@ -718,27 +733,16 @@ async function contributeReferenceDeployment(ctx: ComposedAppContext): Promise<v
         return groups.map((g) => ({ id: g.id, code: g.code, name: g.name }));
       },
       organizations: async () => {
-        const res = (await em()
-          .getKnex()
-          .raw(
-            `select "id", "name", "tax_id" from "organizations" where "deleted_at" is null order by "name" asc limit 200`,
-          )) as { rows: Array<{ id: string; name: string; tax_id: string | null }> };
-        return res.rows.map((r) => ({ id: r.id, name: r.name, taxId: r.tax_id ?? null }));
+        const res = await em().execute<Array<{ id: string; name: string; tax_id: string | null }>>(
+          `select "id", "name", "tax_id" from "organizations" where "deleted_at" is null order by "name" asc limit 200`,
+        );
+        return res.map((r) => ({ id: r.id, name: r.name, taxId: r.tax_id ?? null }));
       },
       categories: async () => {
-        const res = (await em()
-          .getKnex()
-          .raw(
-            `select "id", "slug", "name", "parent_category_id" from "categories" where "deleted_at" is null order by "sort_order" asc`,
-          )) as {
-          rows: Array<{
-            id: string;
-            slug: string;
-            name: unknown;
-            parent_category_id: string | null;
-          }>;
-        };
-        return res.rows.map((r) => ({
+        const res = await em().execute<Array<{ id: string; slug: string; name: unknown; parent_category_id: string | null }>>(
+          `select "id", "slug", "name", "parent_category_id" from "categories" where "deleted_at" is null order by "sort_order" asc`,
+        );
+        return res.map((r) => ({
           id: r.id,
           slug: r.slug,
           name: anyLabel(r.name),
@@ -746,20 +750,16 @@ async function contributeReferenceDeployment(ctx: ComposedAppContext): Promise<v
         }));
       },
       paymentMethods: async () => {
-        const res = (await em()
-          .getKnex()
-          .raw(
-            `select "id", "code", "name" from "payment_methods" where "status" = 'active' order by "code" asc`,
-          )) as { rows: Array<{ id: string; code: string; name: unknown }> };
-        return res.rows.map((r) => ({ id: r.id, code: r.code, name: anyLabel(r.name) }));
+        const res = await em().execute<Array<{ id: string; code: string; name: unknown }>>(
+          `select "id", "code", "name" from "payment_methods" where "status" = 'active' order by "code" asc`,
+        );
+        return res.map((r) => ({ id: r.id, code: r.code, name: anyLabel(r.name) }));
       },
       deliveryMethods: async () => {
-        const res = (await em()
-          .getKnex()
-          .raw(
-            `select "id", "code", "name" from "delivery_methods" where "status" = 'active' order by "code" asc`,
-          )) as { rows: Array<{ id: string; code: string; name: unknown }> };
-        return res.rows.map((r) => ({ id: r.id, code: r.code, name: anyLabel(r.name) }));
+        const res = await em().execute<Array<{ id: string; code: string; name: unknown }>>(
+          `select "id", "code", "name" from "delivery_methods" where "status" = 'active' order by "code" asc`,
+        );
+        return res.map((r) => ({ id: r.id, code: r.code, name: anyLabel(r.name) }));
       },
     },
   });
@@ -812,7 +812,10 @@ async function contributeReferenceDeployment(ctx: ComposedAppContext): Promise<v
     resolveByEmail(
       email: string,
     ): Promise<{ id: string; organizationId: string | null; blocked: boolean } | null>;
-    autoCreate(email: string): Promise<{ id: string; organizationId: string | null } | null>;
+    autoCreate(
+      email: string,
+      context: { salesChannelId: string | null; preferredLanguage?: string | null },
+    ): Promise<{ id: string; organizationId: string | null } | null>;
   } =>
     (
       container.cradle as never as {
@@ -820,14 +823,18 @@ async function contributeReferenceDeployment(ctx: ComposedAppContext): Promise<v
           resolveByEmail(
             email: string,
           ): Promise<{ id: string; organizationId: string | null; blocked: boolean } | null>;
-          autoCreate(email: string): Promise<{ id: string; organizationId: string | null } | null>;
+          autoCreate(
+            email: string,
+            context: { salesChannelId: string | null; preferredLanguage?: string | null },
+          ): Promise<{ id: string; organizationId: string | null } | null>;
         };
       }
     ).customerSocialLoginPort;
 
   const mfaSocialResolvers = {
     resolveCustomerByEmail: (email: string) => customerSocialLogin().resolveByEmail(email),
-    autoCreateCustomer: (email: string) => customerSocialLogin().autoCreate(email),
+    autoCreateCustomer: (email: string, context: { salesChannelId: string; preferredLanguage?: string | null }) =>
+      customerSocialLogin().autoCreate(email, context),
     resolveAdminByEmail: async (email: string) => {
       // The claim's spelling is the identity provider's, and the row holds the
       // folded address, so the two are compared in the one form both modules
@@ -1061,7 +1068,9 @@ async function contributeReferenceDeployment(ctx: ComposedAppContext): Promise<v
     // no test at all; it composes the same closure now.
     transactionalEmailAssetUrl: async (assetId: string): Promise<string | null> => {
       try {
-        return (await assetsLibrary.handle.service.resolveUrl(assetId)).url;
+        // The embed form (specs/156-asset-stable-url/ R-8): an e-mail is a cached
+        // copy the platform never sees again, so the logo carries its marker.
+        return await assetsLibrary.handle.service.resolveEmbedUrl(assetId);
       } catch {
         return null;
       }
@@ -1131,17 +1140,16 @@ async function contributeReferenceDeployment(ctx: ComposedAppContext): Promise<v
           },
           input.shoppingListId,
           undefined,
+          input.salesChannelId,
+          input.languageTag !== undefined ? { languageTag: input.languageTag } : {},
         );
         // Map ShoppingListService.convertToCart's shape onto the carts
-        // module's uniform return shape across the three conversions.
+        // module's uniform return shape across the three conversions — the
+        // module's own mapping, which the harness calls too.
         return {
           cartId: '',
           appendedLineCount: res.added,
-          droppedLines: res.skipped.map((it) => ({
-            productId: it.productId,
-            productName: it.productId,
-            reason: 'not_purchasable',
-          })),
+          droppedLines: toCartDroppedLines(res.skipped),
         };
       },
     } satisfies CartShoppingListBridge,
@@ -1231,6 +1239,7 @@ async function contributeReferenceDeployment(ctx: ComposedAppContext): Promise<v
       organizationId: string | null;
       anonymousCartToken?: string;
       anonymousCompareToken?: string;
+      salesChannelId?: string;
     }) => {
       let cartMerge:
         | Awaited<ReturnType<ContainerReads['cartService']['mergeAnonymousIntoCustomer']>>
@@ -1241,6 +1250,15 @@ async function contributeReferenceDeployment(ctx: ComposedAppContext): Promise<v
           {
             customerAccountId: loginCtx.customerAccountId,
             organizationId: loginCtx.organizationId,
+            // The sign-in request's channel: the anonymous basket of that store
+            // merges into the customer's basket of that store, and a basket of
+            // another store is left alone (`specs/154-sales-channel-access/`,
+            // contracts/basket-attribution.md §3). The hook runs inside the
+            // login request, so its scope carries the resolved channel —
+            // except the federated callback's, which is the provider's
+            // redirect and names the channel its sign-in was started on
+            // instead (issue #1188).
+            salesChannelId: loginCtx.salesChannelId ?? getResolvedChannel().id,
           },
         );
       }

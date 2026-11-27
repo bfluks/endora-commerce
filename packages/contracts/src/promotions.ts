@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { isoDateTimeSchema, moneySchema, uuidSchema } from './common.js';
+import { addAmountPrecisionIssue, hasAtMostTwoDecimals, twoDecimalAmount } from './money-input.js';
+import { lineQuantitySchema } from './line-bounds.js';
 
 /**
  * Promotion contracts (T129, T132 / FR-052).
@@ -13,7 +15,9 @@ import { isoDateTimeSchema, moneySchema, uuidSchema } from './common.js';
  *   - `code` (optional) — when present, only carts that present the code apply;
  *                          when null, the promotion applies automatically to
  *                          every eligible cart.
- *   - `minCartSubtotal`  — cart subtotal threshold (in promotion currency).
+ *   - `minCartSubtotal`  — minimum spend (in promotion currency), compared with
+ *                          the goods gross the buyer pays, VAT included and
+ *                          before any discount (issue #1396).
  *   - `validFrom` / `validUntil` — clock-bound validity window.
  *   - `organizationId` / `customerGroupId` — restrict to a single Customer / group.
  *   - `categoryId` / `productId` — restrict effect to lines in the chosen scope.
@@ -178,7 +182,8 @@ export const promotionRuleSchema = promotionRuleNodeSchema.refine(
 
 const ACTION_CURRENCY = z.string().regex(/^[A-Z]{3}$/, 'ISO 4217');
 const ACTION_PERCENT = z.number().finite().min(0).max(100);
-const ACTION_AMOUNT = z.number().finite().positive();
+// A money amount an operator types: at most two decimal places (issue #417).
+const ACTION_AMOUNT = twoDecimalAmount(z.number().finite().positive());
 const ACTION_POSITIVE_INT = z.number().int().positive();
 export const promotionGiftTargetSchema = z.enum(['cheapest', 'most_expensive']);
 export type PromotionGiftTarget = z.infer<typeof promotionGiftTargetSchema>;
@@ -296,6 +301,33 @@ export const promotionSchema = z.object({
 });
 export type Promotion = z.infer<typeof promotionSchema>;
 
+/**
+ * `GET /api/v1/admin/promotions?page=&pageSize=` — the paging the admin list
+ * asks for (issue #1664). A caller that names no `pageSize` keeps the whole
+ * list on one page, as the endpoint answered before.
+ */
+export const adminPromotionListQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().positive().max(200).optional(),
+});
+export type AdminPromotionListQuery = z.infer<typeof adminPromotionListQuerySchema>;
+
+/**
+ * `GET /api/v1/admin/promotions` — one page of promotions, by name (issue #599).
+ * `meta` is the offset page and the total across every page (issue #1664), in
+ * the shape the Organizations list answers with; without a `pageSize` the page
+ * is the whole list and `meta.pageSize` its length (at least 1).
+ */
+export const promotionListResponseSchema = z.object({
+  data: z.array(promotionSchema),
+  meta: z.object({
+    page: z.number().int().positive(),
+    pageSize: z.number().int().positive(),
+    total: z.number().int().nonnegative(),
+  }),
+});
+export type PromotionListResponse = z.infer<typeof promotionListResponseSchema>;
+
 export const upsertPromotionRequestSchema = z
   .object({
     code: z.string().min(1).max(64).nullable().optional(),
@@ -304,7 +336,7 @@ export const upsertPromotionRequestSchema = z
     kind: promotionKindSchema.optional(),
     value: z.number().finite().nonnegative().optional(),
     currency: z.string().regex(/^[A-Z]{3}$/).nullable().optional(),
-    minCartSubtotal: z.number().finite().nonnegative().nullable().optional(),
+    minCartSubtotal: twoDecimalAmount(z.number().finite().nonnegative()).nullable().optional(),
     validFrom: isoDateTimeSchema.nullable().optional(),
     validUntil: isoDateTimeSchema.nullable().optional(),
     organizationId: uuidSchema.nullable().optional(),
@@ -327,6 +359,10 @@ export const upsertPromotionRequestSchema = z
     salesChannelIds: z.array(uuidSchema).optional(),
   })
   .superRefine((value, ctx) => {
+    // `value` is money only for `amount_off` (a percentage otherwise): two places at most (issue #417).
+    if (value.kind === 'amount_off' && value.value !== undefined && !hasAtMostTwoDecimals(value.value)) {
+      addAmountPrecisionIssue(ctx, ['value']);
+    }
     // A promotion is driven by EITHER a feature-045 `action` OR the legacy
     // `kind` + `value` pair — exactly one source must be present.
     if (!value.action && !value.kind) {
@@ -422,6 +458,23 @@ export const promotionRuleRecordSchema = z.object({
 });
 export type PromotionRuleRecord = z.infer<typeof promotionRuleRecordSchema>;
 
+/** `GET /api/v1/admin/promotion-rules` — every named rule (issue #599). */
+export const promotionRuleListResponseSchema = z.object({
+  data: z.array(promotionRuleRecordSchema),
+});
+export type PromotionRuleListResponse = z.infer<typeof promotionRuleListResponseSchema>;
+
+/**
+ * `GET /api/v1/admin/promotion-rules/:id` — the rule, and beside the envelope's
+ * `data` the promotions that reference it, which is what refuses its deletion
+ * (issue #599).
+ */
+export const promotionRuleDetailResponseSchema = z.object({
+  data: promotionRuleRecordSchema,
+  usedBy: z.array(z.object({ id: uuidSchema, name: z.string() })),
+});
+export type PromotionRuleDetailResponse = z.infer<typeof promotionRuleDetailResponseSchema>;
+
 export const upsertPromotionRuleRequestSchema = z.object({
   name: z.string().min(1).max(160),
   description: z.string().max(2000).nullable().optional(),
@@ -448,6 +501,12 @@ export const promotionCouponSchema = z.object({
 });
 export type PromotionCouponDto = z.infer<typeof promotionCouponSchema>;
 
+/** `GET /api/v1/admin/promotions/:id/coupons` — a promotion's coupons (issue #599). */
+export const promotionCouponListResponseSchema = z.object({
+  data: z.array(promotionCouponSchema),
+});
+export type PromotionCouponListResponse = z.infer<typeof promotionCouponListResponseSchema>;
+
 export const generateCouponsRequestSchema = z.object({
   count: z.number().int().positive().max(100_000),
   length: z.number().int().min(3).max(40),
@@ -473,8 +532,18 @@ export const cartLineSchema = z.object({
   productId: uuidSchema,
   variantId: uuidSchema.nullable(),
   categoryIds: z.array(uuidSchema),
-  quantity: z.number().int().positive(),
+  quantity: lineQuantitySchema,
+  /** The net unit price, as the cart and the order store it. */
   unitPrice: moneySchema,
+  /**
+   * The line's VAT rate as a fraction (`0.23`), as the cart and the order
+   * resolve it (issue #1350). Percent-off and free-unit actions compute on
+   * the gross the buyer pays — VAT per rate on the sum of the nets
+   * (`vatByRate`) — so a surface that prices the line must pass the rate the
+   * order charges, or its discount disagrees with the order's. Absent means
+   * no VAT: the line's gross is its net.
+   */
+  taxRate: z.number().finite().nonnegative().max(1).optional(),
   /**
    * Feature 012 / US8 — optional attribute snapshot for line-level
    * criterion evaluation. Callers MAY omit this field; when omitted, the

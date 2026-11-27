@@ -6,12 +6,42 @@ import { FieldLabel } from '@puckeditor/core';
 import { X } from 'lucide-react';
 import { Button } from '@endora-commerce/admin-kit/ui';
 import type { AssetDetail, AssetSummary } from '@endora-commerce/contracts';
-import { AssetPicker, fetchAssetDetail } from '@endora-commerce/admin-kit/components';
+import { AssetPicker, fetchAssetDetail, ModalDialog } from '@endora-commerce/admin-kit/components';
 import { toAbsoluteAssetUrl } from '@endora-commerce/admin-kit/lib';
+import { PB_FIELD_INPUT_CLASS, useFieldText, type PageBuilderImagePickerProps, type PickedImage } from '@endora-commerce/page-builder-core';
+import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 
-const inputClassName = '_Input-input_bsxfo_26';
+/**
+ * R17 (T201, T214): the image source's two choices, the library first — the
+ * order of every image and video source in the page builder — in the admin's
+ * language.
+ */
+export function ImageSourceOptions(): ReactElement {
+  const t = useTranslation('core');
+  return (
+    <>
+      <option value="library">{t('pageBuilder.imageField.source.library')}</option>
+      <option value="url">{t('pageBuilder.imageField.source.url')}</option>
+    </>
+  );
+}
+
+/** The asset dialog's title by the kind of asset picked (R17, T201). */
+const MODAL_TITLE_KEYS = {
+  'image/': 'pageBuilder.assetPicker.selectImage',
+  'video/': 'pageBuilder.assetPicker.selectVideo',
+  file: 'pageBuilder.assetPicker.selectFile',
+} as const;
+
+/** The page builder's field input class (feature 163, T116: Puck's own class name went stale in 0.23). */
+const inputClassName = PB_FIELD_INPUT_CLASS;
 export const pickerButtonClass = 'h-9 shrink-0';
 
+/**
+ * The asset library in the kit's `ModalDialog`, on the `overlay` layer above the
+ * fullscreen builder: focus trapped, Escape closes it, focus returns to the
+ * field's button (issue #1493, UX audit CONTENT-03).
+ */
 function AssetModalShell({
   title,
   onClose,
@@ -21,39 +51,25 @@ function AssetModalShell({
   onClose: () => void;
   children: React.ReactNode;
 }): ReactElement {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return (): void => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
+  const t = useTranslation('core');
   return (
-    <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-      onClick={onClose}
+    <ModalDialog
+      layer="overlay"
+      title={title}
+      onClose={onClose}
+      widthClassName="max-w-3xl"
+      footer={
+        <Button type="button" variant="outline" onClick={onClose}>
+          {t('common.action.close')}
+        </Button>
+      }
     >
-      <div
-        className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border bg-background shadow-lg"
-        onClick={(e): void => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
-          <h2 className="text-base font-semibold">{title}</h2>
-          <Button type="button" variant="ghost" size="sm" onClick={onClose}>
-            Close
-          </Button>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">{children}</div>
-      </div>
-    </div>
+      {children}
+    </ModalDialog>
   );
 }
 
-function AssetModalFieldControl({
+export function AssetModalFieldControl({
   value,
   onChange,
   readOnly,
@@ -66,8 +82,11 @@ function AssetModalFieldControl({
   readOnly?: boolean;
   label: string;
   acceptMimePrefix?: 'image/' | 'video/';
-  modalTitle: string;
+  /** The dialog's title; by default "Select image", "Select video" or "Select file", translated. */
+  modalTitle?: string;
 }): ReactElement {
+  const t = useTranslation('core');
+  const title = modalTitle ?? t(MODAL_TITLE_KEYS[acceptMimePrefix ?? 'file']);
   const selected = typeof value === 'string' ? value : '';
   const [modalOpen, setModalOpen] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -118,7 +137,7 @@ function AssetModalFieldControl({
           <div className="overflow-hidden rounded-md border bg-muted/30">
             <img
               src={previewUrl}
-              alt={previewLabel ?? 'Selected asset'}
+              alt={previewLabel ?? t('pageBuilder.assetPicker.selected')}
               className="max-h-40 w-full object-contain"
             />
           </div>
@@ -138,14 +157,14 @@ function AssetModalFieldControl({
             disabled={readOnly === true}
             onClick={(): void => setModalOpen(true)}
           >
-            {selected ? 'Change' : 'Select'}
+            {selected ? t('pageBuilder.assetPicker.change') : t('pageBuilder.assetPicker.select')}
           </Button>
           {selected && !readOnly ? (
             <Button
               type="button"
               variant="ghost"
               className={pickerButtonClass}
-              aria-label="Clear selection"
+              aria-label={t('pageBuilder.assetPicker.clear')}
               onClick={(): void => {
                 onChange('');
                 setPreviewUrl(null);
@@ -158,7 +177,7 @@ function AssetModalFieldControl({
         </div>
       </div>
       {modalOpen ? (
-        <AssetModalShell title={modalTitle} onClose={(): void => setModalOpen(false)}>
+        <AssetModalShell title={title} onClose={(): void => setModalOpen(false)}>
           <AssetPicker
             {...(acceptMimePrefix ? { acceptMimePrefix } : {})}
             allowUpload
@@ -180,11 +199,10 @@ export function createImageSourceField(): CustomField<'url' | 'library'> {
         <select
           className={inputClassName}
           disabled={readOnly === true}
-          value={value ?? 'url'}
+          value={value ?? 'library'}
           onChange={(e): void => onChange(e.target.value as 'url' | 'library')}
         >
-          <option value="url">URL</option>
-          <option value="library">Asset library</option>
+          <ImageSourceOptions />
         </select>
       </FieldLabel>
     ),
@@ -220,7 +238,6 @@ export function createImageAssetField(label: string): CustomField<string> {
         {...(readOnly === true ? { readOnly: true } : {})}
         label={field.label ?? label}
         acceptMimePrefix="image/"
-        modalTitle="Select image"
       />
     ),
   };
@@ -238,7 +255,8 @@ export function createSlideImageField(): CustomField<SlideImageValue> {
     type: 'custom',
     label: 'Image',
     render: ({ value, onChange, readOnly, field }): ReactElement => {
-      const imageSource = value?.imageSource ?? 'url';
+      // R17 (T214): unset reads as the URL when there is one (as the logo strip renders it), else the library.
+      const imageSource = value?.imageSource ?? (value?.src ? 'url' : 'library');
       const src = value?.src ?? '';
       const assetId = value?.assetId ?? '';
       return (
@@ -256,8 +274,7 @@ export function createSlideImageField(): CustomField<SlideImageValue> {
                 })
               }
             >
-              <option value="url">URL</option>
-              <option value="library">Asset library</option>
+              <ImageSourceOptions />
             </select>
             {imageSource === 'library' ? (
               <AssetModalFieldControl
@@ -266,9 +283,8 @@ export function createSlideImageField(): CustomField<SlideImageValue> {
                   onChange({ imageSource: 'library', src: '', assetId: nextId })
                 }
                 {...(readOnly === true ? { readOnly: true } : {})}
-                label="Image"
+                label={field.label ?? 'Image'}
                 acceptMimePrefix="image/"
-                modalTitle="Select image"
               />
             ) : (
               <input
@@ -299,10 +315,78 @@ export function createVideoAssetField(label: string): CustomField<string> {
         {...(readOnly === true ? { readOnly: true } : {})}
         label={field.label ?? label}
         acceptMimePrefix="video/"
-        modalTitle="Select video"
+      />
+    ),
+  };
+}
+
+/**
+ * Any file from the asset library, by id — `cms.DownloadTile`'s `fileAssetId`
+ * (feature 163, FR-021): no MIME filter, since a download may be a PDF, an
+ * archive or an image.
+ */
+export function createFileAssetField(label: string): CustomField<string> {
+  return {
+    type: 'custom',
+    label,
+    render: ({ value, onChange, readOnly, field }): ReactElement => (
+      <AssetModalFieldControl
+        value={value}
+        onChange={onChange}
+        {...(readOnly === true ? { readOnly: true } : {})}
+        label={field.label ?? label}
       />
     ),
   };
 }
 
 export { inputClassName };
+
+/**
+ * Feature 163, T195 — the image the rich text's dialog inserts for a library
+ * asset: its stable file address (the same across a replace), absolute as the
+ * stored content uses it, and its alternative text in the admin's language
+ * first, else the first one written; none when it has none.
+ */
+export function pickedImageFromAsset(
+  asset: { url: string; fileUrl?: string | null; altText?: Record<string, string> | null },
+  language: string,
+): PickedImage {
+  const url = toAbsoluteAssetUrl(asset.fileUrl?.trim() ? asset.fileUrl : asset.url);
+  const entries = Object.entries(asset.altText ?? {}).filter(([, text]) => typeof text === 'string' && text.trim() !== '');
+  const own = entries.find(([code]) => code === language || code.startsWith(`${language}-`));
+  const alt = (own ?? entries[0])?.[1]?.trim();
+  return alt ? { url, alt } : { url };
+}
+
+/**
+ * Feature 163, T195 — the asset library as the page builder's image picker
+ * (`PageBuilderImagePickerProvider`): the rich text's image dialog shows it
+ * and inserts the chosen image. A picked summary carries no alternative text,
+ * so its detail is read for it; a failed read inserts the image without one.
+ */
+export function AdminImagePicker({ onPick, onClose }: PageBuilderImagePickerProps): ReactElement {
+  const { language } = useTranslationContext();
+  const text = useFieldText();
+  const pick = useCallback(
+    (asset: AssetSummary | AssetDetail): void => {
+      void (async (): Promise<void> => {
+        let detail: AssetSummary | AssetDetail = asset;
+        if (!('altText' in asset)) {
+          try {
+            detail = await fetchAssetDetail(asset.id);
+          } catch {
+            detail = asset;
+          }
+        }
+        onPick(pickedImageFromAsset({ ...detail, altText: 'altText' in detail ? detail.altText : null }, language));
+      })();
+    },
+    [language, onPick],
+  );
+  return (
+    <AssetModalShell title={text('richImage.choose')} onClose={onClose}>
+      <AssetPicker acceptMimePrefix="image/" allowUpload onSelect={pick} onClose={onClose} />
+    </AssetModalShell>
+  );
+}

@@ -16,7 +16,7 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 | | |
 | --- | --- |
 | Identyfikator modułu | `price_lists` |
-| Nazwa | Price Lists |
+| Nazwa | Price lists |
 | Wersja | `1.0.0` |
 | Pakiet | `@endora-commerce/mod-price-lists` |
 | Licencja | `MIT` |
@@ -29,31 +29,37 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 
 | Moduł | Wiążąca | Co to oznacza |
 | --- | --- | --- |
+| `admin_users` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `audit_logs` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `catalog` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `currencies` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `customer_accounts` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `organizations` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `settings` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
+| `product_visibility_rules` | nie | degrades-without `adminProductVisibilityPort` — siatka cennika nie jest zawężana według roli: każdy administrator widzi każdą linię produktu i wariantu, dokładnie jak przed wprowadzeniem tej funkcji |
 
 ## Uprawnienia
 
 | Kod | Etykieta | Wymaga też |
 | --- | --- | --- |
-| `price_lists:read` | View price lists and pricing rules | — |
-| `price_lists:write` | Edit price lists, brackets and display modes | — |
+| `price_lists:read` | View price books and display modes | — |
+| `price_lists:write` | Edit price books, base prices and display modes | `catalog:read` |
 
 ## Paleta poleceń
 
 | Akcja | Otwiera | Uprawnienie |
 | --- | --- | --- |
+| `new-price-book` | `/price-lists/new` | `price_lists:write` |
+| `open-price-explainer` | `/price-lists/explain` | `price_lists:read` |
 | `open-price-lists` | `/price-lists` | `price_lists:read` |
+| `open-pricing-settings` | `/price-lists/display-modes` | `price_lists:read` |
 
 ## Ustawienia
 
 | Kod | Nazwa | Typ |
 | --- | --- | --- |
 | `pricing.default_display_mode` | Default price display mode | `string` |
+| `pricing.show_list_price` | Show list price beside the buyer price | `boolean` |
 | `pricing.unauthenticated_display_mode` | Unauthenticated price display mode | `string` |
 
 ## Tłumaczenia

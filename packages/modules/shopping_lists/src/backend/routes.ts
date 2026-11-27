@@ -3,10 +3,19 @@ import {
   addShoppingListItemRequestSchema,
   convertShoppingListRequestSchema,
   createShoppingListRequestSchema,
-  renameShoppingListRequestSchema,
   updateShoppingListItemRequestSchema,
+  updateShoppingListRequestSchema,
+  organizationPermissionPreHandler,
+  requestScopeLanguage,
+  type ConvertToCartResponse,
+  type ConvertToRfqResponse,
+  type DefaultShoppingListSummary,
+  type OrganizationPermissionPort,
+  type ShoppingList as ShoppingListView,
+  type ShoppingListListResponse,
 } from '@endora-commerce/contracts';
 import type { EntityManager } from '@mikro-orm/postgresql';
+import { getResolvedChannel } from '@endora-commerce/platform/kernel';
 import type { ShoppingListService } from './services/shopping-list-service.js';
 import type { ShoppingList } from './entities/shopping-list.entity.js';
 import { ShoppingListItem } from './entities/shopping-list-item.entity.js';
@@ -15,6 +24,15 @@ import { ShoppingListItem } from './entities/shopping-list-item.entity.js';
  * Shopping list routes (T204). All endpoints require an authenticated
  * customer session; ownership is enforced by the service via
  * (organization_id, customer_account_id).
+ *
+ * **By organization permission (`specs/170-organization-roles/`, FR-047,
+ * FR-048; `contracts/storefront-api.md` §5).** Every write — a list, its lines,
+ * the default — needs `shopping_lists.create`; converting needs
+ * `shopping_lists.convert` and then the target's create permission, as two
+ * guards in that order, so the refusal names the first one missing. Reads stay
+ * open, the lazily provisioned default list included: it is the platform's
+ * anchor, not the member's write. Each guard follows `requireCustomer`, so a
+ * refused member is answered before the body or the list is looked at.
  */
 
 export interface ShoppingListsRoutesDeps {
@@ -25,31 +43,50 @@ export interface ShoppingListsRoutesDeps {
     customerAccountId: string;
     organizationId: string;
   };
+  /** `organizations`' port, resolved per request (`module-composition.md` item 4a). */
+  organizationPermissions: () => OrganizationPermissionPort;
 }
 
 export async function registerShoppingListRoutes(
   app: FastifyInstance,
   deps: ShoppingListsRoutesDeps,
 ): Promise<void> {
-  const { service, emFactory, requireCustomer, resolveCustomerContext } = deps;
+  const { service, emFactory, requireCustomer, resolveCustomerContext, organizationPermissions } = deps;
+  // Shared guard lists: the platform's `onRoute` hook moves them to
+  // `preValidation` by assigning new arrays, never by mutating these.
+  const canEdit = [requireCustomer, organizationPermissionPreHandler(organizationPermissions, 'shopping_lists.create')];
+  const canConvertToCart = [
+    requireCustomer,
+    organizationPermissionPreHandler(organizationPermissions, 'shopping_lists.convert'),
+    organizationPermissionPreHandler(organizationPermissions, 'carts.create'),
+  ];
+  const canConvertToQuoteRequest = [
+    requireCustomer,
+    organizationPermissionPreHandler(organizationPermissions, 'shopping_lists.convert'),
+    organizationPermissionPreHandler(organizationPermissions, 'quote_requests.create'),
+  ];
 
-  app.get('/api/v1/shopping-lists', { preHandler: requireCustomer }, async (request) => {
-    const ctx = resolveCustomerContext(request);
-    const lists = await service.list(ctx);
-    const em = emFactory();
-    const data = await Promise.all(
-      lists.map(async (l) => {
-        const items = await em.find(ShoppingListItem, { shoppingListId: l.id });
-        return serializeWithItems(l, items);
-      }),
-    );
-    return { data };
-  });
+  app.get(
+    '/api/v1/shopping-lists',
+    { preHandler: requireCustomer },
+    async (request): Promise<ShoppingListListResponse> => {
+      const ctx = resolveCustomerContext(request);
+      const lists = await service.list(ctx);
+      const em = emFactory();
+      const data = await Promise.all(
+        lists.map(async (l) => {
+          const items = await em.find(ShoppingListItem, { shoppingListId: l.id });
+          return serializeWithItems(l, items);
+        }),
+      );
+      return { data };
+    },
+  );
 
   app.post(
     '/api/v1/shopping-lists',
-    { preHandler: requireCustomer, schema: { body: createShoppingListRequestSchema } },
-    async (request, reply) => {
+    { preHandler: canEdit, schema: { body: createShoppingListRequestSchema } },
+    async (request, reply): Promise<{ data: ShoppingListView }> => {
       const ctx = resolveCustomerContext(request);
       const body = createShoppingListRequestSchema.parse(request.body);
       const list = await service.create(ctx, body);
@@ -61,18 +98,22 @@ export async function registerShoppingListRoutes(
   // Default-list endpoints. Fastify's radix router prioritises the static
   // `default` segment over the parametric `:id`, so ordering vs `/:id` is
   // irrelevant.
-  app.get('/api/v1/shopping-lists/default', { preHandler: requireCustomer }, async (request) => {
-    const ctx = resolveCustomerContext(request);
-    const list = await service.ensureDefault(ctx);
-    const em = emFactory();
-    const itemCount = await em.count(ShoppingListItem, { shoppingListId: list.id });
-    return { data: { id: list.id, name: list.name, itemCount } };
-  });
+  app.get(
+    '/api/v1/shopping-lists/default',
+    { preHandler: requireCustomer },
+    async (request): Promise<{ data: DefaultShoppingListSummary }> => {
+      const ctx = resolveCustomerContext(request);
+      const list = await service.ensureDefault(ctx);
+      const em = emFactory();
+      const itemCount = await em.count(ShoppingListItem, { shoppingListId: list.id });
+      return { data: { id: list.id, name: list.name, itemCount } };
+    },
+  );
 
   app.post(
     '/api/v1/shopping-lists/default/items',
-    { preHandler: requireCustomer, schema: { body: addShoppingListItemRequestSchema } },
-    async (request, reply) => {
+    { preHandler: canEdit, schema: { body: addShoppingListItemRequestSchema } },
+    async (request, reply): Promise<{ data: DefaultShoppingListSummary }> => {
       const ctx = resolveCustomerContext(request);
       const body = addShoppingListItemRequestSchema.parse(request.body);
       const { list, itemCount } = await service.addItemToDefault(ctx, {
@@ -89,7 +130,7 @@ export async function registerShoppingListRoutes(
   app.get<{ Params: { id: string } }>(
     '/api/v1/shopping-lists/:id',
     { preHandler: requireCustomer },
-    async (request) => {
+    async (request): Promise<{ data: ShoppingListView }> => {
       const ctx = resolveCustomerContext(request);
       const { list, items } = await service.getByIdWithItems(ctx, request.params.id);
       return { data: serializeWithItems(list, items) };
@@ -98,8 +139,8 @@ export async function registerShoppingListRoutes(
 
   app.post<{ Params: { id: string } }>(
     '/api/v1/shopping-lists/:id/set-default',
-    { preHandler: requireCustomer },
-    async (request) => {
+    { preHandler: canEdit },
+    async (request): Promise<{ data: ShoppingListView }> => {
       const ctx = resolveCustomerContext(request);
       const list = await service.setDefault(ctx, request.params.id);
       const em = emFactory();
@@ -108,22 +149,25 @@ export async function registerShoppingListRoutes(
     },
   );
 
+  // Issue #1251 — the name, line quantities, or both, written together or not at all.
   app.patch<{ Params: { id: string } }>(
     '/api/v1/shopping-lists/:id',
-    { preHandler: requireCustomer, schema: { body: renameShoppingListRequestSchema } },
-    async (request) => {
+    { preHandler: canEdit, schema: { body: updateShoppingListRequestSchema } },
+    async (request): Promise<{ data: ShoppingListView }> => {
       const ctx = resolveCustomerContext(request);
-      const body = renameShoppingListRequestSchema.parse(request.body);
-      const list = await service.rename(ctx, request.params.id, body.name);
-      const em = emFactory();
-      const items = await em.find(ShoppingListItem, { shoppingListId: list.id });
+      const body = updateShoppingListRequestSchema.parse(request.body);
+      await service.update(ctx, request.params.id, {
+        ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.items !== undefined ? { items: body.items } : {}),
+      });
+      const { list, items } = await service.getByIdWithItems(ctx, request.params.id);
       return { data: serializeWithItems(list, items) };
     },
   );
 
   app.delete<{ Params: { id: string } }>(
     '/api/v1/shopping-lists/:id',
-    { preHandler: requireCustomer },
+    { preHandler: canEdit },
     async (request, reply) => {
       const ctx = resolveCustomerContext(request);
       await service.remove(ctx, request.params.id);
@@ -133,8 +177,8 @@ export async function registerShoppingListRoutes(
 
   app.post<{ Params: { id: string } }>(
     '/api/v1/shopping-lists/:id/items',
-    { preHandler: requireCustomer, schema: { body: addShoppingListItemRequestSchema } },
-    async (request, reply) => {
+    { preHandler: canEdit, schema: { body: addShoppingListItemRequestSchema } },
+    async (request, reply): Promise<{ data: ShoppingListView }> => {
       const ctx = resolveCustomerContext(request);
       const body = addShoppingListItemRequestSchema.parse(request.body);
       await service.addItem(ctx, request.params.id, {
@@ -142,6 +186,7 @@ export async function registerShoppingListRoutes(
         ...(body.variantId ? { variantId: body.variantId } : {}),
         quantity: body.quantity,
         ...(body.note ? { note: body.note } : {}),
+        ...languageTagOf(request),
       });
       const { list, items } = await service.getByIdWithItems(ctx, request.params.id);
       reply.status(201);
@@ -151,8 +196,8 @@ export async function registerShoppingListRoutes(
 
   app.patch<{ Params: { id: string; itemId: string } }>(
     '/api/v1/shopping-lists/:id/items/:itemId',
-    { preHandler: requireCustomer, schema: { body: updateShoppingListItemRequestSchema } },
-    async (request) => {
+    { preHandler: canEdit, schema: { body: updateShoppingListItemRequestSchema } },
+    async (request): Promise<{ data: ShoppingListView }> => {
       const ctx = resolveCustomerContext(request);
       const body = updateShoppingListItemRequestSchema.parse(request.body);
       await service.updateItem(ctx, request.params.id, request.params.itemId, {
@@ -166,7 +211,7 @@ export async function registerShoppingListRoutes(
 
   app.delete<{ Params: { id: string } }>(
     '/api/v1/shopping-lists/:id/items',
-    { preHandler: requireCustomer },
+    { preHandler: canEdit },
     async (request, reply) => {
       const ctx = resolveCustomerContext(request);
       await service.clearItems(ctx, request.params.id);
@@ -176,7 +221,7 @@ export async function registerShoppingListRoutes(
 
   app.delete<{ Params: { id: string; itemId: string } }>(
     '/api/v1/shopping-lists/:id/items/:itemId',
-    { preHandler: requireCustomer },
+    { preHandler: canEdit },
     async (request, reply) => {
       const ctx = resolveCustomerContext(request);
       await service.removeItem(ctx, request.params.id, request.params.itemId);
@@ -186,28 +231,43 @@ export async function registerShoppingListRoutes(
 
   app.post<{ Params: { id: string } }>(
     '/api/v1/shopping-lists/:id/convert-to-cart',
-    { preHandler: requireCustomer, schema: { body: convertShoppingListRequestSchema.optional() } },
-    async (request) => {
+    { preHandler: canConvertToCart, schema: { body: convertShoppingListRequestSchema.optional() } },
+    async (request): Promise<{ data: ConvertToCartResponse }> => {
       const ctx = resolveCustomerContext(request);
       const body = convertShoppingListRequestSchema.parse(request.body ?? {});
-      const result = await service.convertToCart(ctx, request.params.id, body.itemIds);
+      // Into the basket of the storefront the buyer is on (`specs/154-sales-channel-access/`).
+      // Issue #1293 — its lines judged in the request's scope language.
+      const result = await service.convertToCart(
+        ctx,
+        request.params.id,
+        body.itemIds,
+        getResolvedChannel(request).id,
+        languageTagOf(request),
+      );
       return { data: result };
     },
   );
 
   app.post<{ Params: { id: string } }>(
     '/api/v1/shopping-lists/:id/convert-to-rfq',
-    { preHandler: requireCustomer, schema: { body: convertShoppingListRequestSchema.optional() } },
-    async (request) => {
+    { preHandler: canConvertToQuoteRequest, schema: { body: convertShoppingListRequestSchema.optional() } },
+    // `rfqId` is `null` when every item is skipped; the contract declares it (issue #1159).
+    async (request): Promise<{ data: ConvertToRfqResponse }> => {
       const ctx = resolveCustomerContext(request);
       const body = convertShoppingListRequestSchema.parse(request.body ?? {});
-      const result = await service.convertToRfq(ctx, request.params.id, body.itemIds);
+      // Feature 163 — the lines are judged at the request's channel and scope language.
+      const result = await service.convertToRfq(ctx, request.params.id, body.itemIds, {
+        language: await request.responseLanguage(),
+        ...languageTagOf(request),
+        salesChannelId: getResolvedChannel(request).id,
+      });
       return { data: result };
     },
   );
 }
 
-function serializeWithItems(list: ShoppingList, items: ShoppingListItem[]): Record<string, unknown> {
+/** The published `shoppingListSchema` (issue #599). */
+function serializeWithItems(list: ShoppingList, items: ShoppingListItem[]): ShoppingListView {
   return {
     id: list.id,
     organizationId: list.organizationId,
@@ -227,4 +287,21 @@ function serializeWithItems(list: ShoppingList, items: ShoppingListItem[]): Reco
     createdAt: list.createdAt.toISOString(),
     updatedAt: list.updatedAt.toISOString(),
   };
+}
+
+/**
+ * Feature 163 — the channel language the request's `Accept-Language` asks for, as
+ * `{ languageTag }` when the header is present; absent, the channel's default language.
+ *
+ * Issue #1011 — `requestScopeLanguage` over the whole header, as the catalogue resolves it
+ * since #397: the tags in descending `q`, each matched against the resolved channel's languages
+ * (exactly, then by base language), the first one the channel offers winning, else the
+ * channel's default. This used to be the header's first tag alone, so `en;q=0.2, pl-PL;q=0.9`
+ * asked about English. A content language — which (channel, language) a product is available
+ * at — so not `request.responseLanguage()`, the language messages are worded in.
+ */
+function languageTagOf(request: FastifyRequest): { languageTag?: string } {
+  const header = request.headers['accept-language'];
+  if (header === undefined || header.length === 0) return {};
+  return { languageTag: requestScopeLanguage(getResolvedChannel(request), header) };
 }

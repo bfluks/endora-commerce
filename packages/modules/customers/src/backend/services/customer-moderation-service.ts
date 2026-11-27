@@ -1,6 +1,6 @@
 import {
   ERROR_CODES,
-  type CustomerAccountLifecycleWritePort,
+  type CustomerAccountCommandPort,
   type CustomerAccountReadPort,
   type CustomerAccountRecord,
 } from '@endora-commerce/contracts';
@@ -10,52 +10,40 @@ import type { CustomerAuthorityService } from './customer-authority-service.js';
 /**
  * CustomerModerationService — block / unblock a Customer account (feature 040,
  * US3). Enforces the staff-authority rules (FR-013/FR-015 via
- * CustomerAuthorityService), revokes sessions on block, and guards against
- * stranding an Organization with zero usable admins.
+ * CustomerAuthorityService), then runs `customer_accounts`' Command.
  *
- * **Feature 075, Phase C — the row is `customer_accounts`'.** This service used
- * to load and mutate that module's entity and write the audit row for it; both
- * moved behind `customerAccountLifecycleWritePort`, which records exactly the
- * same `customer_account.blocked` / `.unblocked` entry (FR-017). What stays is
- * everything that is a *decision*: whether this staff member may act on this
- * customer, and whether the block would leave an Organization without an
- * administrator. The session revocation stays too — it is `auth`'s, and it must
- * happen after the block is durable rather than inside it.
+ * **Feature 075, Phase C — the row is `customer_accounts`'.** Since
+ * `specs/186-aggregate-ports/` (issue #1822) the write is
+ * `customerAccountCommandPort.block` / `.unblock`: the Command records the
+ * `customer_account.blocked` / `.unblocked` entry in the write's transaction,
+ * refuses to strand a company Organization without an administrator
+ * (`409 ORG_OWNER_DEPLETION`, counted under a lock), and ends the account's
+ * sessions after its commit — all three used to be done here, around a port
+ * call, which a server-side caller of the port did not get. What stays is the
+ * *decision* this module owns: whether this staff member may act on this
+ * customer.
  */
-export interface SessionRevoker {
-  destroyAllForCustomer(customerAccountId: string): Promise<void>;
-}
-
 export interface ModerationActor {
   adminUserId: string;
   isPlatformAdmin: boolean;
-}
-
-export interface ModerationAuditMeta {
-  ipAddress?: string | null;
-  userAgent?: string | null;
-  requestId?: string | null;
 }
 
 export interface BlockCustomerInput {
   targetCustomerAccountId: string;
   actor: ModerationActor;
   reason?: string | null;
-  audit?: ModerationAuditMeta;
 }
 
 export interface UnblockCustomerInput {
   targetCustomerAccountId: string;
   actor: ModerationActor;
-  audit?: ModerationAuditMeta;
 }
 
 export class CustomerModerationService {
   constructor(
     private readonly accounts: CustomerAccountReadPort,
-    private readonly accountWrites: CustomerAccountLifecycleWritePort,
+    private readonly commands: Pick<CustomerAccountCommandPort, 'block' | 'unblock'>,
     private readonly authority: CustomerAuthorityService,
-    private readonly sessions: SessionRevoker,
   ) {}
 
   async block(input: BlockCustomerInput): Promise<CustomerAccountRecord> {
@@ -64,17 +52,9 @@ export class CustomerModerationService {
 
     if (customer.blockedAt) return customer; // idempotent
 
-    await this.assertWouldNotStrandOrg(customer);
-
-    const blocked = await this.accountWrites.block(customer.id, {
-      actorAdminUserId: input.actor.adminUserId,
-      reason: input.reason ?? null,
-      ...(input.audit ? { audit: input.audit } : {}),
-    });
-
-    // Revoke active sessions so the block takes effect promptly (SC-002).
-    await this.sessions.destroyAllForCustomer(customer.id);
-    return blocked;
+    // The Command refuses the last company administrator and ends the
+    // account's sessions once the block has committed (SC-002).
+    return this.commands.block(customer.id, { reason: input.reason ?? null });
   }
 
   async unblock(input: UnblockCustomerInput): Promise<CustomerAccountRecord> {
@@ -83,10 +63,7 @@ export class CustomerModerationService {
 
     if (!customer.blockedAt) return customer; // idempotent
 
-    return this.accountWrites.unblock(customer.id, {
-      actorAdminUserId: input.actor.adminUserId,
-      ...(input.audit ? { audit: input.audit } : {}),
-    });
+    return this.commands.unblock(customer.id);
   }
 
   private async loadActive(id: string): Promise<CustomerAccountRecord> {
@@ -111,27 +88,6 @@ export class CustomerModerationService {
         403,
         ERROR_CODES.FORBIDDEN,
         'You are not allowed to manage this customer.',
-      );
-    }
-  }
-
-  /**
-   * Refuses to block the last usable (active, non-blocked) organization admin
-   * of an Organization — that would strand the org with nobody able to manage
-   * it (spec edge case "org-owner depletion").
-   */
-  private async assertWouldNotStrandOrg(customer: CustomerAccountRecord): Promise<void> {
-    if (!customer.organizationId || customer.role !== 'organization_admin') return;
-    const remaining = await this.accounts.countByOrganizationRole(
-      customer.organizationId,
-      'organization_admin',
-      { excludeCustomerAccountId: customer.id, activeOnly: true, notBlocked: true },
-    );
-    if (remaining === 0) {
-      throw new HttpError(
-        409,
-        ERROR_CODES.ORG_OWNER_DEPLETION,
-        'Cannot block the last organization administrator; the organization would be left without an admin.',
       );
     }
   }

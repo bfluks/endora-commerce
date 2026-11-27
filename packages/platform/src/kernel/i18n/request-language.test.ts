@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { FastifyRequest } from 'fastify';
-import {
-  createRequestLanguageResolver,
-  normalise,
-  parseAcceptLanguage,
-} from './request-language.js';
+import { createRequestLanguageResolver, normalise } from './request-language.js';
 
 /**
  * The two pure halves of the request-language ladder (feature 083, R8 and R9).
+ *
+ * `parseAcceptLanguage`, the q-weighted parse the ladder reads, is
+ * `@endora-commerce/contracts`' since issue #397 and is tested beside it.
  *
  * They are unit-tested rather than only driven over HTTP because the header is
  * attacker-controlled on every request: the bounds (512 characters, 10 tags)
@@ -48,68 +47,6 @@ describe('normalise — a tag becomes a shipped language, or it becomes nothing 
   });
 });
 
-describe('parseAcceptLanguage — a q-weighted list, bounded (R9)', () => {
-  it('sorts by descending q rather than taking the first tag', () => {
-    // `split(',')[0]` — what `catalog`, `search` and `cms` do today (T024) —
-    // answers `en` here, which is the wrong language by the client's own
-    // statement.
-    expect(parseAcceptLanguage('en;q=0.2,pl;q=0.9')).toEqual(['pl', 'en']);
-  });
-
-  it('treats a tag with no q as weight 1 and keeps the written order among equals', () => {
-    expect(parseAcceptLanguage('en-US,pl;q=0.9')).toEqual(['en-US', 'pl']);
-    expect(parseAcceptLanguage('pl,en')).toEqual(['pl', 'en']);
-  });
-
-  it('drops a tag whose q is malformed rather than guessing a weight', () => {
-    expect(parseAcceptLanguage('de;q=abc,pl')).toEqual(['pl']);
-    expect(parseAcceptLanguage('de;q=,pl')).toEqual(['pl']);
-  });
-
-  it('keeps * as a tag, which then never normalises', () => {
-    expect(parseAcceptLanguage('*')).toEqual(['*']);
-    expect(normalise(parseAcceptLanguage('*')[0] ?? null)).toBeNull();
-  });
-
-  it('reads the first element of a duplicated header', () => {
-    // Fastify hands duplicate headers over as an array.
-    expect(parseAcceptLanguage(['pl', 'en'])).toEqual(['pl']);
-  });
-
-  it('answers an absent header with no tags at all', () => {
-    expect(parseAcceptLanguage(undefined)).toEqual([]);
-    expect(parseAcceptLanguage('')).toEqual([]);
-    expect(parseAcceptLanguage('   ')).toEqual([]);
-  });
-
-  it('truncates the header at 512 characters and ignores the remainder', () => {
-    // A tag beyond the bound is not an error — the parse simply does not reach
-    // it. `pl` sits past character 512 and must not appear.
-    const header = `en,${'q'.repeat(520)},pl`;
-    const tags = parseAcceptLanguage(header);
-    expect(tags).toHaveLength(2);
-    expect(tags[0]).toBe('en');
-    expect(tags).not.toContain('pl');
-    expect((tags[1] as string).length).toBe(512 - 'en,'.length);
-  });
-
-  it('keeps the ten heaviest tags and no more', () => {
-    const header = Array.from(
-      { length: 20 },
-      (_unused, i) => `t${i};q=${(1 - i * 0.05).toFixed(2)}`,
-    ).join(',');
-    expect(header.length).toBeLessThan(512);
-    const tags = parseAcceptLanguage(header);
-    expect(tags).toHaveLength(10);
-    expect(tags).toEqual(['t0', 't1', 't2', 't3', 't4', 't5', 't6', 't7', 't8', 't9']);
-  });
-
-  it('caps after weighting, so a heavy tag written last survives the cap', () => {
-    const filler = Array.from({ length: 15 }, (_unused, i) => `t${i};q=0.1`).join(',');
-    expect(parseAcceptLanguage(`${filler},pl;q=0.9`)[0]).toBe('pl');
-  });
-});
-
 describe('createRequestLanguageResolver — the ladder always answers (B1, B3)', () => {
   /** Only the two properties the resolver reads. */
   function requestWith(shape: Record<string, unknown>): FastifyRequest {
@@ -146,6 +83,15 @@ describe('createRequestLanguageResolver — the ladder always answers (B1, B3)',
     expect(await resolve(request)).toBe('pl');
   });
 
+  it('never answers in a language the header refuses with q=0 (issue #1315)', async () => {
+    const resolve = createRequestLanguageResolver({ adminPreferredLanguage: neverAsked });
+    const refusedPolish = requestWith({
+      actor: { kind: 'anonymous' },
+      headers: { 'accept-language': 'pl;q=0, de' },
+    });
+    expect(await resolve(refusedPolish)).toBe('en');
+  });
+
   it('reads only the stored preference for an admin (B2)', async () => {
     const resolve = createRequestLanguageResolver({
       adminPreferredLanguage: async (id) => (id === 'admin-1' ? 'pl' : null),
@@ -160,6 +106,18 @@ describe('createRequestLanguageResolver — the ladder always answers (B1, B3)',
       headers: { 'accept-language': 'pl' },
     });
     expect(await resolve(unsetAdmin)).toBe('en');
+  });
+
+  it('answers a signed-in buyer in the header language, whatever the account stores (#652, D-292)', async () => {
+    // The account's `preferredLanguage` governs messages composed outside a
+    // request; the resolver has no dependency through which to read it, and a
+    // buyer is never asked about.
+    const resolve = createRequestLanguageResolver({ adminPreferredLanguage: neverAsked });
+    const request = requestWith({
+      actor: { kind: 'customer', customerAccountId: 'c-pl', preferredLanguage: 'pl-PL' },
+      headers: { 'accept-language': 'en-GB' },
+    });
+    expect(await resolve(request)).toBe('en');
   });
 
   it('takes the buyer arm for an impersonating admin (B6)', async () => {

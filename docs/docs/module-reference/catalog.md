@@ -30,13 +30,16 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | Module | Binding | What it means |
 | --- | --- | --- |
 | `_i18n` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
+| `admin_roles` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `admin_users` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `assets_library` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `audit_logs` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `custom_fields` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `email` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `sales_channels` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
+| `taxes` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `organizations` | gating only | resolves `organizationDetailsPort`; withheld from `dependencies` because the install order cannot carry the edge |
+| `organizations` | gating only | resolves `organizationTaxProfilePort`; withheld from `dependencies` because the install order cannot carry the edge |
 | `price_lists` | gating only | resolves `pricingService`; withheld from `dependencies` because the install order cannot carry the edge |
 | `admin_notifications` | no | degrades-without `adminNotificationRecordPort` — bulk edits and search reindexes still run and still report on the Bulk actions page; only the bell entry is missing — the completion e-mail to the admin still goes out |
 | `admin_search` | no | contributes-to `adminSearchProviderRegistry` |
@@ -44,10 +47,15 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | `api_keys` | no | degrades-without `requireBoundApiKey` — the external catalog namespace stops accepting machine-to-machine callers |
 | `inventory` | no | degrades-without `inventoryAvailabilityPort` — product listings and the external catalog namespace stop carrying an availability band |
 | `inventory` | no | degrades-without `inventoryProductThresholdWritePort` — a duplicated product does not inherit the source’s per-warehouse low-stock thresholds |
+| `inventory` | no | refuses-without `inventoryStockReadPort` — the products list offers no stock filter, and a list or select-all that names one is refused |
+| `product_visibility_rules` | no | degrades-without `adminProductVisibilityPort` — admin product reads and writes are not narrowed by role: every administrator sees and edits every product, exactly as before the feature |
+| `product_visibility_rules` | no | degrades-without `productRuleGovernancePort` — no sales channel is governed by a website rule: a scoped value for a channel the product is not a member of is refused (`SCOPE_INVALID`), exactly as before the feature |
 | `prompt_actions` | no | contributes-to `promptActionBulkProgressRegistry` |
 | `prompt_actions` | no | contributes-to `promptActionToolRegistry` |
 | `search` | no | degrades-without `searchQueryPort` — the storefront product listing is served from PostgreSQL instead of the search index |
 | `search` | no | degrades-without `searchReindexPort` — an attribute’s `searchable` flip rebuilds no search index |
+| `seo` | no | degrades-without `seoProductMetaPort` — product pages show metadata derived from the name and description, and old URL keys answer not-found |
+| `seo` | no | refuses-without `seoProductMetaWritePort` — a product save that changes SEO fields is refused while SEO is off; saves without SEO changes, and duplicates, are unaffected |
 | `webhooks` | no | contributes-to `webhookEventRegistry` |
 
 ## Permissions
@@ -61,13 +69,19 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | Action | Opens | Permission |
 | --- | --- | --- |
 | `new-product` | `/catalog/products/new` | `catalog:write` |
+| `open-archived-products` | `/catalog/products/archived` | `catalog:read` |
+| `open-attachment-types` | `/catalog/attachment-types` | `catalog:read` |
+| `open-attribute-sets` | `/catalog/attribute-sets` | `catalog:read` |
 | `open-attributes` | `/catalog/attributes` | `catalog:read` |
+| `open-bulk-operations` | `/catalog/bulk-operations` | `catalog:read` |
 | `open-categories` | `/catalog/categories` | `catalog:read` |
 | `open-products` | `/catalog/products` | `catalog:read` |
 
 ## Settings
 
-_None._
+| Code | Name | Type |
+| --- | --- | --- |
+| `catalog.scope_completeness_gate` | Completeness check when switching a product on | `string` |
 
 ## Translations
 

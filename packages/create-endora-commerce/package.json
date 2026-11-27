@@ -1,6 +1,6 @@
 {
   "name": "create-endora-commerce",
-  "version": "0.106.0",
+  "version": "0.112.0",
   "type": "module",
   "description": "npx create-endora-commerce <dir> — the front door to `endora install`, and nothing else.",
   "license": "MIT",
@@ -16,13 +16,14 @@
     "create-endora-commerce": "./dist/bin/create-endora-commerce.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.map"
   ],
   "engines": {
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node ../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint src test",
     "test": "vitest run"
@@ -32,6 +33,6 @@
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

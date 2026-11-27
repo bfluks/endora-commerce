@@ -35,6 +35,19 @@ import {
   STATUS_SWEEP_SCOPE_REASON,
   statusSweepTick,
 } from '../../../../packages/modules/price_lists/src/backend/plugin.js';
+import type { StageAlertService } from '../../../../packages/modules/projects/src/backend/services/stage-alert-service.js';
+import {
+  STAGE_ALERT_SCOPE_REASON,
+  runStageAlertJob,
+  stageAlertTick,
+} from '../../../../packages/modules/projects/src/backend/workers/stage-alert-worker.js';
+import {
+  PUBLICATION_WINDOW_SWEEP_SCOPE_REASON,
+  PUBLICATION_WINDOW_WATERMARK_KEY,
+  PublicationWindowSweep,
+  runPublicationWindowSweepTick,
+} from '../../../../packages/modules/catalog/src/backend/services/publication-window-sweep.js';
+import { PROJECTS_ADMIN, createProject, deleteProjects, patchStage, stageNamed } from '../projects/helpers.js';
 
 /**
  * Issue #120 — a tick of a scheduled worker that finds nothing to do writes no
@@ -160,7 +173,7 @@ describe('idle worker ticks write no escape-hatch audit row (issue #120)', () =>
         currency: 'PLN',
         placedAt: new Date(),
       });
-      await em.persistAndFlush(order);
+      await em.persist(order).flush();
       return order.id;
     }
 
@@ -570,14 +583,13 @@ describe('idle worker ticks write no escape-hatch audit row (issue #120)', () =>
       const em = h.em();
       const suffix = randomUUID().slice(0, 8);
       const scheduled = em.create(PriceList, {
-        code: `idle-ticks-${suffix}`,
         name: `Idle ticks ${suffix}`,
         currency: 'PLN',
         type: 'sale',
         status: 'scheduled',
         startsAt: new Date(Date.now() - 86_400_000),
       });
-      await em.persistAndFlush(scheduled);
+      await em.persist(scheduled).flush();
       const before = await recorded(STATUS_SWEEP_SCOPE_REASON);
 
       expect(await tick()).toEqual({ scheduledToActive: 1, activeToExpired: 0 });
@@ -593,7 +605,6 @@ describe('idle worker ticks write no escape-hatch audit row (issue #120)', () =>
       const em = h.em();
       const suffix = randomUUID().slice(0, 8);
       const active = em.create(PriceList, {
-        code: `idle-ticks-ended-${suffix}`,
         name: `Idle ticks ended ${suffix}`,
         currency: 'PLN',
         type: 'sale',
@@ -601,7 +612,7 @@ describe('idle worker ticks write no escape-hatch audit row (issue #120)', () =>
         startsAt: new Date(Date.now() - 3 * 86_400_000),
         endsAt: new Date(Date.now() - 86_400_000),
       });
-      await em.persistAndFlush(active);
+      await em.persist(active).flush();
       const before = await recorded(STATUS_SWEEP_SCOPE_REASON);
 
       expect(await tick()).toEqual({ scheduledToActive: 0, activeToExpired: 1 });
@@ -615,14 +626,13 @@ describe('idle worker ticks write no escape-hatch audit row (issue #120)', () =>
       const em = h.em();
       const suffix = randomUUID().slice(0, 8);
       const scheduled = em.create(PriceList, {
-        code: `idle-ticks-unanswered-${suffix}`,
         name: `Idle ticks unanswered ${suffix}`,
         currency: 'PLN',
         type: 'sale',
         status: 'scheduled',
         startsAt: new Date(Date.now() - 86_400_000),
       });
-      await em.persistAndFlush(scheduled);
+      await em.persist(scheduled).flush();
       const worker = new PriceListStatusWorker(emFactory);
       const before = await recorded(STATUS_SWEEP_SCOPE_REASON);
 
@@ -639,6 +649,205 @@ describe('idle worker ticks write no escape-hatch audit row (issue #120)', () =>
       const row = await h.em().findOneOrFail(PriceList, { id: scheduled.id }, { refresh: true });
       expect(row.status).toBe('active');
       expect(await recorded(STATUS_SWEEP_SCOPE_REASON)).toBe(before + 1);
+    });
+  });
+
+  // --- projects: Stage deadline alerts, every 15 min ---------------------------
+
+  describe('projects — the Stage deadline alert sweep', () => {
+    const quiet = { info: () => undefined, warn: () => undefined, error: () => undefined };
+    const alerts = () => h.container.resolve('projectsStageAlertService') as StageAlertService;
+    /**
+     * The job BullMQ runs, around the tick the module composes — with the
+     * clock handed in, because an alert is due only on its day, from 08:00 in
+     * the alert zone. 2033 is a year no other file gives a Stage deadline in.
+     */
+    const tick = (now: Date) =>
+      asWorker(() =>
+        runStageAlertJob({
+          isPresent: () => true,
+          hasWork: () => alerts().hasWork(now),
+          tick: stageAlertTick({
+            alerts: { sweep: () => alerts().sweep(now) },
+            isPresent: () => true,
+            log: quiet,
+          }),
+        }),
+      );
+    // 09:00 in Europe/Warsaw (UTC+1 in March).
+    const DUE_DAY = new Date('2033-03-10T08:00:00.000Z');
+    const DAY_BEFORE = new Date('2033-03-09T08:00:00.000Z');
+    const EARLY_ON_DUE_DAY = new Date('2033-03-10T05:00:00.000Z');
+    const created: string[] = [];
+
+    beforeAll(async () => {
+      // The default zone — set, not assumed: another file may have written it.
+      const zone = await h.app.inject({
+        method: 'PUT',
+        url: '/api/v1/admin/settings/projects.alerts_time_zone/value',
+        cookies: PROJECTS_ADMIN,
+        payload: { scope: 'all', value: 'Europe/Warsaw' },
+      });
+      expect(zone.statusCode, zone.body).toBeLessThan(400);
+    });
+
+    afterAll(async () => {
+      await deleteProjects(h, created);
+    });
+
+    it('several ticks with no alert due write no row', async () => {
+      const before = await recorded(STAGE_ALERT_SCOPE_REASON);
+      for (let i = 0; i < IDLE_TICKS; i += 1) await tick(DAY_BEFORE);
+
+      expect(await recorded(STAGE_ALERT_SCOPE_REASON)).toBe(before);
+    });
+
+    it('a tick with an alert due delivers it and writes its row; one before 08:00, and the next one, are idle', async () => {
+      const project = await createProject(h, {
+        title: 'Idle ticks alert',
+        visibility: 'everyone',
+        stages: [{ name: 'Design', color: '#3b82f6', plannedDurationDays: 5, alertOffsetsDays: [2] }],
+      });
+      created.push(project.id);
+      const stageId = stageNamed(project, 'Design');
+      await patchStage(h, project.id, stageId, { deadlineOn: '2033-03-12' });
+      const deliveries = async () =>
+        (await h
+          .em()
+          .getConnection()
+          .execute(`select "outcome" from "project_stage_alert_deliveries" where "stage_id" = ?`, [stageId])) as Array<{
+          outcome: string | null;
+        }>;
+      const before = await recorded(STAGE_ALERT_SCOPE_REASON);
+
+      // Due today, but not before 08:00: no question, no row.
+      for (let i = 0; i < IDLE_TICKS; i += 1) await tick(EARLY_ON_DUE_DAY);
+      expect(await deliveries()).toEqual([]);
+      expect(await recorded(STAGE_ALERT_SCOPE_REASON)).toBe(before);
+
+      await tick(DUE_DAY);
+
+      const rows = await deliveries();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.outcome).not.toBeNull();
+      expect(await recorded(STAGE_ALERT_SCOPE_REASON)).toBe(before + 1);
+      // Claimed once: the tick after it is idle again.
+      await tick(DUE_DAY);
+      expect(await recorded(STAGE_ALERT_SCOPE_REASON)).toBe(before + 1);
+    });
+
+    it('a question that cannot be answered counts as yes: the sweep runs, and is recorded', async () => {
+      const before = await recorded(STAGE_ALERT_SCOPE_REASON);
+
+      await asWorker(() =>
+        runStageAlertJob({
+          isPresent: () => true,
+          hasWork: async () => {
+            throw new Error('connection refused');
+          },
+          tick: stageAlertTick({
+            alerts: { sweep: () => alerts().sweep(DAY_BEFORE) },
+            isPresent: () => true,
+            log: quiet,
+          }),
+        }),
+      );
+
+      expect(await recorded(STAGE_ALERT_SCOPE_REASON)).toBe(before + 1);
+    });
+  });
+
+  // --- catalog: publication-window crossings, every 5 min (issue #894) --------
+
+  describe('catalog — the publication-window sweep', () => {
+    const quiet = { info: () => undefined, warn: () => undefined, error: () => undefined, debug: () => undefined };
+    // 2035 is a year no other file gives a publication window in, and the
+    // watermark is this case's own, so what is crossed is what it wrote.
+    const AT = new Date('2035-04-02T10:00:00.000Z');
+    const minutes = (n: number) => new Date(AT.getTime() + n * 60_000);
+    const store = new Map<string, string>();
+    const watermark = {
+      get: async (key: string) => store.get(key) ?? null,
+      set: async (key: string, value: string) => {
+        store.set(key, value);
+        return 'OK' as const;
+      },
+    };
+    const emitted: string[] = [];
+    const created: string[] = [];
+    const sweeper = () =>
+      new PublicationWindowSweep(emFactory, watermark as never, (event) => {
+        emitted.push(event.productId);
+      });
+    /** The job BullMQ runs, with the clock handed in. */
+    const tick = (now: Date) =>
+      asWorker(() => {
+        const sweep = sweeper();
+        return runPublicationWindowSweepTick({
+          sweep: { hasDueTransitions: () => sweep.hasDueTransitions(now), sweep: () => sweep.sweep(now) },
+          log: quiet as never,
+        });
+      });
+
+    afterAll(async () => {
+      if (created.length > 0) {
+        await h.em().getConnection().execute(`delete from products where id in (${created.map(() => '?').join(', ')})`, created);
+      }
+    });
+
+    it('several ticks with no window crossed write no row, and leave the watermark alone', async () => {
+      store.set(PUBLICATION_WINDOW_WATERMARK_KEY, String(minutes(-5).getTime()));
+      const before = await recorded(PUBLICATION_WINDOW_SWEEP_SCOPE_REASON);
+      for (let i = 0; i < IDLE_TICKS; i += 1) await tick(AT);
+
+      expect(await recorded(PUBLICATION_WINDOW_SWEEP_SCOPE_REASON)).toBe(before);
+      expect(emitted).toEqual([]);
+      expect(store.get(PUBLICATION_WINDOW_WATERMARK_KEY)).toBe(String(minutes(-5).getTime()));
+    });
+
+    it('a tick with a window crossed announces it and writes its row, as before; the next one is idle', async () => {
+      const id = randomUUID();
+      created.push(id);
+      await h
+        .em()
+        .getConnection()
+        .execute(
+          `insert into products (id, sku, slug, type, status, name, description, publish_from, created_at, updated_at)
+           values (?, ?, ?, 'simple', 'active', 'Idle ticks', '', ?, now(), now())`,
+          [id, `IDLE-PW-${id.slice(0, 8)}`, `idle-pw-${id.slice(0, 8)}`, minutes(-2)],
+        );
+      store.set(PUBLICATION_WINDOW_WATERMARK_KEY, String(minutes(-5).getTime()));
+      const before = await recorded(PUBLICATION_WINDOW_SWEEP_SCOPE_REASON);
+
+      await tick(AT);
+
+      expect(emitted).toEqual([id]);
+      expect(await recorded(PUBLICATION_WINDOW_SWEEP_SCOPE_REASON)).toBe(before + 1);
+      expect(store.get(PUBLICATION_WINDOW_WATERMARK_KEY)).toBe(String(AT.getTime()));
+      await tick(minutes(+5));
+      expect(emitted).toEqual([id]);
+      expect(await recorded(PUBLICATION_WINDOW_SWEEP_SCOPE_REASON)).toBe(before + 1);
+    });
+
+    it('a question that cannot be answered counts as yes: the sweep runs, and is recorded', async () => {
+      store.set(PUBLICATION_WINDOW_WATERMARK_KEY, String(minutes(+10).getTime()));
+      const sweep = sweeper();
+      const before = await recorded(PUBLICATION_WINDOW_SWEEP_SCOPE_REASON);
+
+      await asWorker(() =>
+        runPublicationWindowSweepTick({
+          sweep: {
+            hasDueTransitions: async () => {
+              throw new Error('connection refused');
+            },
+            sweep: () => sweep.sweep(minutes(+15)),
+          },
+          log: quiet as never,
+        }),
+      );
+
+      expect(await recorded(PUBLICATION_WINDOW_SWEEP_SCOPE_REASON)).toBe(before + 1);
+      expect(store.get(PUBLICATION_WINDOW_WATERMARK_KEY)).toBe(String(minutes(+15).getTime()));
     });
   });
 });

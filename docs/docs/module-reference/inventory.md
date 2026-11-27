@@ -40,6 +40,7 @@ An operator switches this module on and off on **/platform/modules**. The choice
 | `sales_channels` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `settings` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `transactional_emails` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
+| `product_visibility_rules` | no | degrades-without `adminProductVisibilityPort` — the inventory admin lists and the set-stock assistant tool are not narrowed by role: every administrator sees and addresses every product, exactly as before the feature |
 | `prompt_actions` | no | contributes-to `promptActionToolRegistry` |
 
 ## Permissions
@@ -53,7 +54,11 @@ An operator switches this module on and off on **/platform/modules**. The choice
 
 | Action | Opens | Permission |
 | --- | --- | --- |
+| `import-stock` | `/inventory/import` | `inventory:write` |
 | `open-inventory` | `/inventory` | `inventory:read` |
+| `open-low-stock` | `/inventory/low-stock` | `inventory:read` |
+| `open-stock-notifications` | `/inventory/notifications` | `inventory:read` |
+| `open-warehouses` | `/warehouses` | `inventory:read` |
 
 ## Settings
 

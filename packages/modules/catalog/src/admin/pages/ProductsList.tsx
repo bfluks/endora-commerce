@@ -2,51 +2,79 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
-  type CSSProperties,
   type ReactNode,
 } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
-  CircleDollarSign,
-  Download,
-  MoreHorizontal,
+  ArchiveRestore,
   Package,
   PenSquare,
   Plus,
-  Search,
-  Store,
-  Tag,
   Trash2,
-  Upload,
-  Warehouse,
   X,
 } from 'lucide-react';
 import { ProductsBulkEditDialog } from '../components/ProductsBulkEditDialog.js';
+import type { ProductLabel } from '../lib/product-labels.js';
+import { ArchivedPill, ProductStatusPill } from '../components/ProductStatusPills.js';
+import { ProductVisibilityBanner } from '../components/ProductVisibilityBanner.js';
+import type { AdminProductListVisibility } from '@endora-commerce/contracts';
 import {
   BULK_EDIT_HARD_MAX,
+  productListNarrowing,
+  productListTabFromUrl,
+  productListTabQuery,
   resolveProductSelection,
   type ListFilterSnapshot,
+  type ProductListStockFilter,
+  type ProductListTab,
 } from '../lib/resolve-product-selection.js';
-import { ApiError, apiClient, cn, useAuth, usePageSizePreference } from '@endora-commerce/admin-kit/lib';
-import { PaginationFooter, SavedViewsControl } from '@endora-commerce/admin-kit/components';
-import type { SavedViewState } from '@endora-commerce/admin-kit/components';
-import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { pickLocalized } from '../lib/scope-overview.js';
+import { ApiError, apiClient, formatDate, useAuth } from '@endora-commerce/admin-kit/lib';
+import { AdminZone } from '@endora-commerce/admin-kit/zones';
+import {
+  ListPage,
+  ListToolbar,
+  ListToolbarSearch,
+  ResponsiveTable,
+  SavedViewsControl,
+  useConfirmDialog,
+  useListPagination,
+} from '@endora-commerce/admin-kit/components';
+import {
+  Alert,
+  AlertDescription,
+  Button,
+  Checkbox,
+  EmptyState,
+  Select,
+  TabPanel,
+  Tabs,
+  type TabItem,
+} from '@endora-commerce/admin-kit/ui';
+import type { ListPageLoad, ResponsiveColumn, SavedViewState } from '@endora-commerce/admin-kit/components';
+import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 
 interface AdminProduct {
   id: string;
   sku: string;
   slug: string;
   type: string;
-  status: 'draft' | 'active' | 'inactive';
-  name: Record<string, string>;
+  status: 'active' | 'inactive';
+  /** Archived is its own fact, independent of `status`. */
+  archivedAt?: string | null;
+  /** The Global name (feature 174: one text per product, no per-language map). */
+  name: string;
   visibility: string;
   attributeValues: Record<string, unknown>;
   updatedAt: string;
 }
 
-type StatusFilter = 'all' | 'active' | 'draft' | 'inactive';
-type StockFilter = 'all' | 'low' | 'out';
+type StatusFilter = ProductListTab;
+
+/** The status strip's tabs, in reading order. */
+const STATUS_TABS: readonly StatusFilter[] = ['all', 'active', 'inactive', 'archived'];
 type TypeFilter = 'all' | 'simple' | 'configurable' | 'grouped' | 'bundle' | 'virtual';
 type SelectionMode = 'none' | 'page' | 'collection';
 
@@ -61,36 +89,152 @@ function emptySelection(): ProductListSelection {
   return { mode: 'none', pageIds: new Set(), collectionSnapshot: null, collectionTotal: 0 };
 }
 
-const TYPE_CYCLE: TypeFilter[] = ['all', 'simple', 'configurable', 'grouped', 'bundle', 'virtual'];
-const STOCK_CYCLE: StockFilter[] = ['all', 'low', 'out'];
+const TYPE_OPTIONS: TypeFilter[] = ['all', 'simple', 'configurable', 'grouped', 'bundle', 'virtual'];
+const STOCK_OPTIONS: readonly ProductListStockFilter[] = ['low', 'out'];
+
+/** A category as `GET /admin/catalog/categories` lists it — the fields the filter reads. */
+interface CategoryOptionSource {
+  id: string;
+  parentCategoryId: string | null;
+  name: Record<string, string>;
+  sortOrder: number;
+}
+
+/** A sales channel as `GET /admin/sales-channels` lists it. */
+interface ChannelOptionSource {
+  id: string;
+  code: string;
+  name: Record<string, string> | string;
+}
+
+/**
+ * The category tree as one flat option list, each child under its parent and
+ * indented by its depth (issue #1624), whatever order the API answers in. A
+ * category whose parent is not in the list is shown as a root.
+ */
+export function categoryFilterOptions(
+  categories: readonly CategoryOptionSource[],
+  language: string,
+): Array<{ id: string; label: string }> {
+  const known = new Set(categories.map((c) => c.id));
+  const childrenOf = new Map<string | null, CategoryOptionSource[]>();
+  for (const c of categories) {
+    const parent = c.parentCategoryId !== null && known.has(c.parentCategoryId) ? c.parentCategoryId : null;
+    childrenOf.set(parent, [...(childrenOf.get(parent) ?? []), c]);
+  }
+  const out: Array<{ id: string; label: string }> = [];
+  const walk = (parent: string | null, depth: number): void => {
+    const level = [...(childrenOf.get(parent) ?? [])].sort(
+      (a, b) =>
+        a.sortOrder - b.sortOrder ||
+        pickLocalized(a.name, language).localeCompare(pickLocalized(b.name, language), language),
+    );
+    for (const c of level) {
+      out.push({ id: c.id, label: `${'\u2014 '.repeat(depth)}${pickLocalized(c.name, language)}` });
+      walk(c.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  return out;
+}
+
+/** An answer that is not a category list is no category list (the select is left out). */
+function categorySources(value: unknown): CategoryOptionSource[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (c): c is CategoryOptionSource =>
+      typeof c === 'object' &&
+      c !== null &&
+      typeof (c as CategoryOptionSource).id === 'string' &&
+      'parentCategoryId' in c &&
+      typeof (c as CategoryOptionSource).name === 'object',
+  );
+}
+
+function channelSources(value: unknown): ChannelOptionSource[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (c): c is ChannelOptionSource =>
+      typeof c === 'object' &&
+      c !== null &&
+      typeof (c as ChannelOptionSource).id === 'string' &&
+      typeof (c as ChannelOptionSource).code === 'string',
+  );
+}
+
+function channelOptionLabel(channel: ChannelOptionSource, language: string): string {
+  const name = typeof channel.name === 'string' ? channel.name : pickLocalized(channel.name, language);
+  return name || channel.code;
+}
+
+function isStockFilter(value: unknown): value is ProductListStockFilter {
+  return value === 'all' || (typeof value === 'string' && (STOCK_OPTIONS as readonly string[]).includes(value));
+}
 
 /**
  * Products list (feature 008).
  *
  * Status-segmented tabs at the top mirror Shopify's catalog list. The
- * filter bar carries a search box, two cycle-style filter chips (Type,
- * Stock), and placeholders for Category / Channel. A bulk-action bar
+ * filter bar is the kit's `ListToolbar` (issue #1440, DS-06): a labelled
+ * search box, a labelled Type select and the saved views. A bulk-action bar
  * appears when rows are selected. Table view only — the grid variant
  * was explicitly out of scope for this redesign.
+ *
+ * Issue #1455 (CAT-02) removed every control that looked live and was not,
+ * among them the Category, Channel and Stock chips. Issue #1624 brings the three
+ * back as real filters: labelled selects whose values the list endpoint applies
+ * and "select all matching" resolves under, so a bulk action never reaches a
+ * product the filtered list did not show. The Channel select appears only when
+ * there is a choice to make; the Stock select only while the list says the
+ * filter can be applied (`stockFilterAvailable` — false while the inventory
+ * module is off).
  */
 interface ProductsResponse {
   data: AdminProduct[];
   pagination: { page: number; pageSize: number; total: number };
-  counts: { all: number; active: number; draft: number; inactive: number };
+  counts: ProductListCounts;
+  /** Issue #1624 — whether a `stock` filter would be applied (false while inventory is off). */
+  stockFilterAvailable?: boolean;
+  /** Spec 193 — present only when the caller's role narrows the list (FR-023). */
+  visibility?: AdminProductListVisibility;
 }
 
-const STATUS_FILTERS: readonly StatusFilter[] = ['all', 'active', 'draft', 'inactive'];
+/** `all` / `active` / `inactive` count non-archived products. */
+interface ProductListCounts {
+  all: number;
+  active: number;
+  inactive: number;
+  archived: number;
+}
 
-function isStatusFilter(value: unknown): value is StatusFilter {
-  return typeof value === 'string' && (STATUS_FILTERS as readonly string[]).includes(value);
+/**
+ * A saved view's filters → the tab it opens on (FR-012). The Archived tab is saved
+ * as its own key, `archived: 'only'`, never as a status (R30.4 rejects an
+ * "archived" pseudo-status). A `status` the page no longer offers — `draft` among
+ * them — opens as *All* (owner decision P-2 → A, 2026-10-26: not mapped onto
+ * `inactive`); the list says so once, when such a view is applied.
+ */
+export function savedViewTab(filters: Record<string, unknown>): StatusFilter {
+  if (filters['archived'] === 'only') return 'archived';
+  const status = filters['status'];
+  return status === 'active' || status === 'inactive' ? status : 'all';
+}
+
+/** The tab → the saved view's filter keys; the inverse of {@link savedViewTab}. */
+export function savedViewTabFilters(tab: StatusFilter): Record<string, unknown> {
+  if (tab === 'archived') return { archived: 'only' };
+  if (tab === 'active' || tab === 'inactive') return { status: tab };
+  return {};
 }
 
 function isTypeFilter(value: unknown): value is TypeFilter {
-  return typeof value === 'string' && (TYPE_CYCLE as readonly string[]).includes(value);
+  return typeof value === 'string' && (TYPE_OPTIONS as readonly string[]).includes(value);
 }
 
 export function ProductsList(): ReactNode {
   const t = useTranslation('catalog');
+  const { language } = useTranslationContext();
+  const { confirm, confirmDialog } = useConfirmDialog();
   const navigate = useNavigate();
   // The create route this screen links to takes the **write** code (D-221), so
   // both buttons that navigate there are gated on the same one. A link whose
@@ -101,29 +245,68 @@ export function ProductsList(): ReactNode {
   // `New post` are the same shape.
   const { hasPermission } = useAuth();
   const canWrite = hasPermission('catalog:write');
-  const [searchParams] = useSearchParams();
+  const location = useLocation();
   const [rows, setRows] = useState<AdminProduct[]>([]);
   const [total, setTotal] = useState(0);
-  const [counts, setCounts] = useState<{ all: number; active: number; draft: number; inactive: number }>(
-    { all: 0, active: 0, draft: 0, inactive: 0 },
-  );
+  const [counts, setCounts] = useState<ProductListCounts>({ all: 0, active: 0, inactive: 0, archived: 0 });
+  const [listVisibility, setListVisibility] = useState<AdminProductListVisibility | undefined>(undefined);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Issue #1749 — a failed load is the list's state (the kit error with Retry);
+  // a failed action on it (a bulk delete, a saved view) is a notice above the
+  // rows, which stay.
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  // The skeleton is for the first load only; a refresh over rows on screen is
+  // `busy`, so the rows, the pager and the focus stay (ux-laws §6.1).
+  const [loadedOnce, setLoadedOnce] = useState(false);
+  const requestSeq = useRef(0);
   const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
-    const fromUrl = searchParams.get('status');
-    return isStatusFilter(fromUrl) ? fromUrl : 'all';
-  });
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() =>
+    productListTabFromUrl(location.pathname, location.search),
+  );
+  // The list follows the URL after its first load too: every navigation — the palette's
+  // "Archived products" while the list is already open, a link to `?status=…`, Back —
+  // has a new location key and re-reads the tab. A tab click does not navigate.
+  useEffect(() => {
+    setStatusFilter(productListTabFromUrl(location.pathname, location.search));
+    setLegacyDraftView(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the navigation itself
+  }, [location.key]);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
-  const [stockFilter, setStockFilter] = useState<StockFilter>('all');
+  // Issue #1624 — `''` / `all` is no filter.
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [channelFilter, setChannelFilter] = useState('');
+  const [stockFilter, setStockFilter] = useState<ProductListStockFilter>('all');
+  const [stockFilterAvailable, setStockFilterAvailable] = useState(false);
+  const [categories, setCategories] = useState<CategoryOptionSource[]>([]);
+  const [channels, setChannels] = useState<ChannelOptionSource[]>([]);
+  // A saved view that held the removed `draft` status opens on All (owner P-2 → A);
+  // said once, when it is applied, until the operator picks a tab or dismisses it.
+  const [legacyDraftView, setLegacyDraftView] = useState(false);
+  const chooseTab = (tab: StatusFilter): void => {
+    setStatusFilter(tab);
+    setLegacyDraftView(false);
+  };
   const [selection, setSelection] = useState<ProductListSelection>(emptySelection);
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  // The Archived tab's bar Restore opens the dialog on its confirmation (owner P-4 → B).
+  const [bulkInitialStep, setBulkInitialStep] = useState<'form' | 'confirmArchive'>('form');
   const [deleting, setDeleting] = useState(false);
   const [bulkEditProductIds, setBulkEditProductIds] = useState<string[]>([]);
+  // D3 — the names and SKUs of the selected rows on this page, so the dialog's result
+  // names them without a lookup; a "select all N" selection's other rows are looked up there.
+  const bulkEditLabels = useMemo(() => {
+    const wanted = new Set(bulkEditProductIds);
+    const labels: Record<string, ProductLabel> = {};
+    for (const r of rows) if (wanted.has(r.id)) labels[r.id] = { name: r.name, sku: r.sku };
+    return labels;
+  }, [bulkEditProductIds, rows]);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [resolvingSelection, setResolvingSelection] = useState(false);
-  const { pageSize, setPageSize } = usePageSizePreference('catalog-products');
-  const [page, setPage] = useState(0);
+  // The endpoint pages from zero and serves up to 500 rows (`listProducts`), so
+  // the request takes the pager's zero-based `page`, not its one-based `query`.
+  const pager = useListPagination({ scope: 'catalog-products', maxPageSize: 500 });
+  const { page, pageSize, resetPage, syncTotal } = pager;
 
   // Debounce the text query so each keystroke doesn't fire a fetch. 250 ms
   // is fast enough to feel live and slow enough to coalesce typing bursts.
@@ -134,40 +317,87 @@ export function ProductsList(): ReactNode {
   }, [query]);
 
   const refresh = useCallback(async (): Promise<void> => {
+    const seq = ++requestSeq.current;
     setLoading(true);
-    setError(null);
+    setLoadError(null);
     try {
       const params = new URLSearchParams();
-      params.set('includeArchived', '1');
-      if (statusFilter !== 'all') params.set('status', statusFilter);
+      // Archived products are hidden by the list's default
+      // (`archived=exclude`); only the Archived tab asks for them.
+      const tabQuery = productListTabQuery(statusFilter);
+      if (tabQuery.archived === 'only') params.set('archived', 'only');
+      if (tabQuery.status) params.set('status', tabQuery.status);
       if (typeFilter !== 'all') params.set('type', typeFilter);
       const trimmed = debouncedQuery.trim();
       if (trimmed) params.set('q', trimmed);
+      for (const [key, value] of Object.entries(
+        productListNarrowing({ categoryId: categoryFilter, salesChannelId: channelFilter, stock: stockFilter }),
+      )) {
+        params.set(key, value);
+      }
       params.set('page', String(page));
       params.set('pageSize', String(pageSize));
       const res = await apiClient.get<ProductsResponse>(
         `/api/v1/admin/catalog/products?${params.toString()}`,
       );
+      // A slower answer to an older request does not overwrite a newer one.
+      if (seq !== requestSeq.current) return;
       setRows(res.data);
       setTotal(res.pagination.total);
       setCounts(res.counts);
+      setStockFilterAvailable(res.stockFilterAvailable === true);
+      setListVisibility(res.visibility);
+      syncTotal(res.pagination.total);
+      setLoadedOnce(true);
     } catch (err) {
-      setError(err instanceof ApiError ? err.envelope.error.message : t('productsList.error.load'));
+      if (seq !== requestSeq.current) return;
+      setLoadError(err instanceof ApiError ? err.envelope.error.message : t('productsList.error.load'));
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
-  }, [statusFilter, typeFilter, debouncedQuery, page, pageSize, t]);
+  }, [statusFilter, typeFilter, categoryFilter, channelFilter, stockFilter, debouncedQuery, page, pageSize, syncTotal, t]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
+  // Issue #1624 — the options of the Category and Channel filters, read once.
+  // A list that cannot be read leaves its select out rather than empty.
+  useEffect(() => {
+    let cancelled = false;
+    void (async (): Promise<void> => {
+      const [categoryRes, channelRes] = await Promise.all([
+        apiClient
+          .get<{ data?: unknown }>('/api/v1/admin/catalog/categories')
+          .catch((): { data?: unknown } => ({})),
+        // The sales-channels list answers `{ items }`, not `{ data }`.
+        apiClient
+          .get<{ items?: unknown }>('/api/v1/admin/sales-channels')
+          .catch((): { items?: unknown } => ({})),
+      ]);
+      if (cancelled) return;
+      setCategories(categorySources(categoryRes?.data));
+      setChannels(channelSources(channelRes?.items));
+    })();
+    return (): void => {
+      cancelled = true;
+    };
+  }, []);
+
+  // A stock filter the list can no longer apply is dropped, not kept invisible.
+  useEffect(() => {
+    if (!loading && !stockFilterAvailable && stockFilter !== 'all') setStockFilter('all');
+  }, [loading, stockFilterAvailable, stockFilter]);
+
+  const categoryOptions = useMemo(() => categoryFilterOptions(categories, language), [categories, language]);
+
   // Reset to the first page whenever the result-shaping inputs change so
   // the user never lands on an out-of-range page. Page-size, status, type,
   // and the (debounced) text query all reshape the result set.
+  // (A page-size change goes back to the first page inside the pager.)
   useEffect(() => {
-    setPage(0);
-  }, [statusFilter, typeFilter, debouncedQuery, pageSize]);
+    resetPage();
+  }, [statusFilter, typeFilter, categoryFilter, channelFilter, stockFilter, debouncedQuery, resetPage]);
 
   // Feature 033 — changing filters invalidates collection-wide selection (FR-006).
   useEffect(() => {
@@ -175,18 +405,18 @@ export function ProductsList(): ReactNode {
     setBulkEditOpen(false);
     setBulkEditProductIds([]);
     setSelectionError(null);
-  }, [statusFilter, typeFilter, debouncedQuery]);
+  }, [statusFilter, typeFilter, categoryFilter, channelFilter, stockFilter, debouncedQuery]);
 
-  // Feature 147 (#289): a saved view stores status, type and search only — the
-  // Stock chip is a client-side placeholder and Category / Channel do nothing
-  // yet, so none of them is saved (FR-010).
+  // Feature 147 (#289): a saved view stores the list's filters (FR-010) —
+  // status, type and search, and since issue #1624 category, channel and stock.
   const toSavedViewState = (): SavedViewState => {
     const trimmed = query.trim();
     return {
       filters: {
-        ...(statusFilter !== 'all' ? { status: statusFilter } : {}),
+        ...savedViewTabFilters(statusFilter),
         ...(typeFilter !== 'all' ? { type: typeFilter } : {}),
         ...(trimmed ? { q: trimmed } : {}),
+        ...productListNarrowing({ categoryId: categoryFilter, salesChannelId: channelFilter, stock: stockFilter }),
       },
     };
   };
@@ -199,12 +429,15 @@ export function ProductsList(): ReactNode {
   const applySavedView = (state: SavedViewState): void => {
     const f = state.filters;
     const q = typeof f['q'] === 'string' ? f['q'] : '';
-    setStatusFilter(isStatusFilter(f['status']) ? f['status'] : 'all');
+    setStatusFilter(savedViewTab(f));
+    setLegacyDraftView(f['status'] === 'draft');
     setTypeFilter(isTypeFilter(f['type']) ? f['type'] : 'all');
+    setCategoryFilter(typeof f['categoryId'] === 'string' ? f['categoryId'] : '');
+    setChannelFilter(typeof f['salesChannelId'] === 'string' ? f['salesChannelId'] : '');
+    setStockFilter(isStockFilter(f['stock']) ? f['stock'] : 'all');
     setQuery(q);
     setDebouncedQuery(q);
-    setStockFilter('all');
-    setPage(0);
+    resetPage();
     setSelection(emptySelection());
     setSelectionError(null);
   };
@@ -214,17 +447,42 @@ export function ProductsList(): ReactNode {
       status: statusFilter,
       type: typeFilter,
       q: debouncedQuery,
+      categoryId: categoryFilter,
+      salesChannelId: channelFilter,
+      stock: stockFilter,
     }),
-    [statusFilter, typeFilter, debouncedQuery],
+    [statusFilter, typeFilter, debouncedQuery, categoryFilter, channelFilter, stockFilter],
   );
 
-  // The stock chip remains a placeholder until the list payload carries
-  // stock numbers — apply it client-side as a kill-switch so the UI stays
-  // honest (returns 0 rows when "Out"/"Low" is picked).
-  const filtered = useMemo(() => {
-    if (stockFilter !== 'all') return [];
-    return rows;
-  }, [rows, stockFilter]);
+  const filtered = rows;
+
+  // Issue #1448 (DS-15): an empty list is either "nothing here yet" or "these
+  // filters match nothing", and the two send the operator different ways. The
+  // status strip is a set of tabs, not a filter: an empty tab says which status
+  // it holds, and *Clear filters* resets the search and the type, never the tab.
+  const filtersActive =
+    debouncedQuery.trim() !== '' ||
+    typeFilter !== 'all' ||
+    categoryFilter !== '' ||
+    channelFilter !== '' ||
+    stockFilter !== 'all';
+  const clearFilters = (): void => {
+    setQuery('');
+    setDebouncedQuery('');
+    setTypeFilter('all');
+    setCategoryFilter('');
+    setChannelFilter('');
+    setStockFilter('all');
+  };
+  const searchRef = useRef<HTMLInputElement>(null);
+  const restoreFromBar = canWrite && statusFilter === 'archived';
+  // No product at all: the empty state's *New product* is the view's one primary
+  // action, and the header does not repeat it (Von Restorff).
+  const catalogEmpty = !loading && !loadError && rows.length === 0 && !filtersActive && statusFilter === 'all';
+  // A search that finds nothing among live products may be looking for an archived
+  // one, which every other tab hides; one step takes the query there.
+  const searchArchivedHint =
+    statusFilter !== 'archived' && debouncedQuery.trim() !== '' && rows.length === 0;
 
   const selectedCount =
     selection.mode === 'collection' ? selection.collectionTotal : selection.pageIds.size;
@@ -305,7 +563,7 @@ export function ProductsList(): ReactNode {
     return Array.from(selection.pageIds);
   };
 
-  const openBulkEdit = async (): Promise<void> => {
+  const openBulkEdit = async (step: 'form' | 'confirmArchive' = 'form'): Promise<void> => {
     setSelectionError(null);
     setResolvingSelection(true);
     try {
@@ -324,6 +582,7 @@ export function ProductsList(): ReactNode {
         return;
       }
       setBulkEditProductIds(ids);
+      setBulkInitialStep(step);
       setBulkEditOpen(true);
     } catch {
       setSelectionError(t('productsList.selection.resolveFailed'));
@@ -347,12 +606,17 @@ export function ProductsList(): ReactNode {
     }
   };
 
-  const handleBulkDelete = (): void => {
+  const handleBulkDelete = async (): Promise<void> => {
     if (deleting || selectedCount === 0) return;
-    if (!confirm(t('productsList.bulk.deleteConfirm', { count: selectedCount }))) return;
+    const ok = await confirm({
+      message: t('productsList.bulk.deleteConfirm', { count: selectedCount }),
+      confirmLabel: t('productsList.bulk.delete'),
+      destructive: true,
+    });
+    if (!ok) return;
 
     setDeleting(true);
-    setError(null);
+    setActionError(null);
     // Resolve the full selection (page or "all matching" collection scope —
     // feature 033) before deleting; collect per-item failures (feature 032).
     void runWithResolvedIds(async (ids) => {
@@ -369,7 +633,7 @@ export function ProductsList(): ReactNode {
         }
       }
       if (failed.length > 0) {
-        setError(failed.map((f) => f.message).join(' · '));
+        setActionError(failed.map((f) => f.message).join(' · '));
       } else {
         clearSelection();
       }
@@ -379,495 +643,449 @@ export function ProductsList(): ReactNode {
     });
   };
 
+  const newProductButton = (
+    <Button type="button" onClick={(): void => { navigate('/catalog/products/new'); }}>
+      <Plus aria-hidden="true" /> {t('productsList.action.newProduct')}
+    </Button>
+  );
+
+  const emptyList = listVisibility?.reason === 'no_category' ? (
+    // Spec 193 FR-023 — the role sees no products; inviting a first product would mislead.
+    <EmptyState icon={<Package size={20} />} title={t('productsList.visibility.noCategoryEmpty')} />
+  ) : filtersActive ? (
+    <EmptyState
+      variant="no-results"
+      title={t('productsList.empty.title')}
+      description={
+        // A search that finds nothing among live products may be looking for an
+        // archived one; one step takes the query there.
+        searchArchivedHint ? (
+          <Button type="button" variant="link" className="h-auto p-0" onClick={(): void => chooseTab('archived')}>
+            {t('productsList.empty.searchArchived')}
+          </Button>
+        ) : undefined
+      }
+      onClearFilters={clearFilters}
+      focusAfterClear={searchRef}
+    />
+  ) : statusFilter === 'archived' ? (
+    <EmptyState
+      icon={<ArchiveRestore size={20} />}
+      title={t('productsList.empty.archivedTitle')}
+      description={t('productsList.empty.archivedSub')}
+    />
+  ) : statusFilter === 'active' || statusFilter === 'inactive' ? (
+    <EmptyState
+      icon={<Package size={20} />}
+      title={statusFilter === 'active' ? t('productsList.empty.activeTitle') : t('productsList.empty.inactiveTitle')}
+    />
+  ) : listVisibility ? (
+    // Spec 193 — the role's category shows nothing: the catalogue is not empty, so no first-product invite.
+    <EmptyState icon={<Package size={20} />} title={t('productsList.visibility.noneVisibleEmpty')} />
+  ) : (
+    <EmptyState
+      icon={<Package size={20} />}
+      title={t('productsList.empty.noData.title')}
+      description={canWrite ? t('productsList.empty.noData.body') : t('productsList.empty.noData.readOnly')}
+      action={canWrite ? newProductButton : null}
+    />
+  );
+
+  const pageCheckbox = (
+    <Checkbox
+      aria-label={t('productsList.selection.selectPage')}
+      checked={allVisibleSelected}
+      ref={(el): void => {
+        if (el) el.indeterminate = someVisibleSelected;
+      }}
+      onChange={toggleAll}
+    />
+  );
+
+  // The product's name is the way in (ListPage, issue #1749): a link, so the
+  // keyboard reaches it too, where the clickable row before reached only a mouse.
+  const columns: ResponsiveColumn<AdminProduct>[] = [
+    {
+      id: 'select',
+      header: pageCheckbox,
+      // Primary, so a phone's card keeps the row's checkbox beside the name.
+      primary: true,
+      className: 'w-8 pl-3.5',
+      render: (r) => (
+        <Checkbox
+          aria-label={t('productsList.selection.selectRow', { name: r.name })}
+          checked={isRowSelected(r.id)}
+          onChange={(): void => toggleOne(r.id)}
+        />
+      ),
+    },
+    {
+      id: 'product',
+      header: t('productsList.column.product'),
+      primary: true,
+      render: (r) => (
+        <div className="flex items-center gap-3">
+          {/* A placeholder until the gallery's base image is listed: decorative, so
+              one neutral tile rather than a colour per id that means nothing. */}
+          <div
+            aria-hidden="true"
+            className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground"
+          >
+            <Package size={16} />
+          </div>
+          <Link
+            to={`/catalog/products/${r.id}`}
+            className="min-w-0 max-w-90 truncate font-medium hover:underline focus-visible:underline"
+          >
+            {r.name}
+          </Link>
+        </div>
+      ),
+      meta: (r) => <span className="font-mono">{r.sku}</span>,
+    },
+    {
+      id: 'sku',
+      header: t('productsList.column.sku'),
+      hideOnMobile: true,
+      className: 'font-mono text-xs text-muted-foreground',
+      render: (r) => r.sku,
+    },
+    {
+      id: 'status',
+      header: t('productsList.column.status'),
+      render: (r) => (
+        <span className="inline-flex flex-wrap gap-1">
+          <ProductStatusPill status={r.status} archived={Boolean(r.archivedAt)} />
+          {/* On the Archived tab every row is archived; the tab already says so. */}
+          {r.archivedAt && statusFilter !== 'archived' ? <ArchivedPill /> : null}
+        </span>
+      ),
+    },
+    {
+      id: 'type',
+      header: t('productsList.column.type'),
+      className: 'text-xs',
+      render: (r) => t(`productEditor.type.${r.type}`),
+    },
+    {
+      id: 'visibility',
+      header: t('productsList.column.visibility'),
+      hideOnMobile: true,
+      className: 'text-xs text-muted-foreground',
+      render: (r) => t(`productEditor.visibility.${r.visibility}`),
+    },
+    {
+      id: 'updated',
+      header: t('productsList.column.updated'),
+      className: 'text-xs text-muted-foreground',
+      render: (r) => relTime(r.updatedAt, t, language),
+    },
+  ];
+
+  const load: ListPageLoad =
+    loading && !loadedOnce
+      ? { kind: 'loading' }
+      : loadError !== null && !loading
+        ? { kind: 'error', message: loadError }
+        : { kind: 'ready' };
+
+  // The kit list page (issue #1749, DS-05): the header with the one *New
+  // product*, the status tabs, the toolbar as a plain row with the count at its
+  // end, and one results card holding the bars, the table and the pager.
   return (
     <div className="b2b-page b2b-page--wide">
-      <div className="b2b-page-head">
-        <div className="b2b-grow">
-          <div className="b2b-page-head__title">{t('productsList.title')}</div>
-          <div className="b2b-page-head__sub">
-            {t('productsList.subtitle', { count: counts.all })}
-          </div>
-        </div>
-        <div className="b2b-page-head__actions">
-          <button type="button" className="b2b-btn b2b-btn--default b2b-btn--sm">
-            <Upload size={13} /> {t('productsList.action.import')}
-          </button>
-          <button type="button" className="b2b-btn b2b-btn--default b2b-btn--sm">
-            <Download size={13} /> {t('productsList.action.export')}
-          </button>
-          {canWrite ? (
-            <button
-              type="button"
-              className="b2b-btn b2b-btn--primary"
-              onClick={(): void => { navigate('/catalog/products/new'); }}
-            >
-              <Plus size={14} /> {t('productsList.action.newProduct')}
-            </button>
-          ) : null}
-        </div>
-      </div>
-
-      {error ? (
-        <div
-          className="b2b-card"
-          style={{
-            background: 'var(--danger-soft)',
-            color: 'var(--danger-soft-fg)',
-            padding: 12,
-            marginBottom: 16,
-            border: '1px solid hsl(8 80% 85%)',
-          }}
-        >
-          {error}
-        </div>
-      ) : null}
-
-      <div className="b2b-card">
-        <div style={{ padding: '4px 12px 0', overflow: 'hidden' }}>
-          <div className="b2b-tabs-scroll">
-          <div className="b2b-tabs" role="tablist">
-            <Tab id="all" label={t('productsList.tab.all')} count={counts.all} active={statusFilter} onChange={setStatusFilter} />
-            <Tab id="active" label={t('productsList.tab.active')} count={counts.active} active={statusFilter} onChange={setStatusFilter} />
-            <Tab id="draft" label={t('productsList.tab.draft')} count={counts.draft} active={statusFilter} onChange={setStatusFilter} />
-            <Tab id="inactive" label={t('productsList.tab.inactive')} count={counts.inactive} active={statusFilter} onChange={setStatusFilter} />
-          </div>
-          </div>
-        </div>
-
-        <div className="b2b-filterbar">
-          <div className="b2b-filterbar__search">
-            <div className="b2b-input-wrap">
-              <Search size={16} className="lead" />
-              <input
-                className="b2b-field b2b-field--addon"
+      <ListPage
+        title={t('productsList.title')}
+        actions={
+          <>
+            {/* CAT-02 — the dead Import / Export buttons became this place: the
+                module that imports and exports contributes its own link, gated by
+                its own presence and permission, so the list names no other module. */}
+            <AdminZone name="product.list.actions" props={{}} />
+            {canWrite && !catalogEmpty ? newProductButton : null}
+          </>
+        }
+        tabs={
+          <Tabs
+            className="mb-4"
+            items={STATUS_TABS.map((id): TabItem<StatusFilter> => ({
+              value: id,
+              label: t(`productsList.tab.${id}`),
+              count: counts[id],
+            }))}
+            value={statusFilter}
+            onValueChange={chooseTab}
+            idBase="products-list"
+            aria-label={t('productsList.tabs.label')}
+          />
+        }
+        toolbar={
+          <ListToolbar
+            label={t('productsList.toolbar.label')}
+            className="min-w-0 flex-1"
+            search={
+              <ListToolbarSearch
+                ref={searchRef}
+                label={t('productsList.search.label')}
                 placeholder={t('productsList.search.placeholder')}
                 value={query}
-                onChange={(e): void => setQuery(e.target.value)}
+                onValueChange={setQuery}
               />
-            </div>
-          </div>
-          <Chip
-            icon={<Package size={12} />}
-            active={typeFilter !== 'all'}
-            label={typeFilter === 'all' ? t('productsList.chip.type') : t('productsList.chip.typeWithValue', { value: typeFilter })}
-            onClick={(): void => {
-              const idx = TYPE_CYCLE.indexOf(typeFilter);
-              setTypeFilter(TYPE_CYCLE[(idx + 1) % TYPE_CYCLE.length]!);
-            }}
-            {...(typeFilter !== 'all'
-              ? { onRemove: (): void => setTypeFilter('all') }
-              : {})}
-          />
-          <Chip
-            icon={<Warehouse size={12} />}
-            active={stockFilter !== 'all'}
-            label={
-              stockFilter === 'all'
-                ? t('productsList.chip.stock')
-                : stockFilter === 'out'
-                  ? t('productsList.chip.outOfStock')
-                  : t('productsList.chip.lowStock')
             }
-            onClick={(): void => {
-              const idx = STOCK_CYCLE.indexOf(stockFilter);
-              setStockFilter(STOCK_CYCLE[(idx + 1) % STOCK_CYCLE.length]!);
-            }}
-            {...(stockFilter !== 'all'
-              ? { onRemove: (): void => setStockFilter('all') }
-              : {})}
-          />
-          <Chip icon={<Tag size={12} />} active={false} label={t('productsList.chip.category')} onClick={(): void => {}} />
-          <Chip icon={<Store size={12} />} active={false} label={t('productsList.chip.channel')} onClick={(): void => {}} />
-          <div style={{ marginLeft: 'auto', minWidth: 0, maxWidth: '100%' }}>
-            <SavedViewsControl
-              endpoint="/api/v1/admin/catalog/products/list-views"
-              current={toSavedViewState()}
-              onApply={applySavedView}
-              onError={setError}
-            />
-          </div>
-        </div>
-
-        {showSelectAllBanner ? (
-          <div
-            style={{
-              padding: '8px 12px',
-              fontSize: 13,
-              background: 'var(--bg-subtle, #f6f6f7)',
-              borderBottom: '1px solid var(--border, #e5e7eb)',
-            }}
-          >
-            {t('productsList.selection.allPageSelected', { pageCount: filtered.length })}{' '}
-            <button
-              type="button"
-              data-testid="select-all-matching"
-              className="b2b-btn b2b-btn--ghost"
-              style={{ display: 'inline', height: 'auto', padding: 0, color: 'var(--primary-color)' }}
-              onClick={selectCollectionMode}
-            >
-              {t('productsList.selection.selectAllMatching', { total })}
-            </button>
-          </div>
-        ) : null}
-
-        {selectionError ? (
-          <div
-            style={{
-              padding: '8px 12px',
-              fontSize: 13,
-              color: 'var(--danger-soft-fg)',
-              background: 'var(--danger-soft)',
-              borderBottom: '1px solid hsl(8 80% 85%)',
-            }}
-          >
-            {selectionError}
-          </div>
-        ) : null}
-
-        {selectedCount > 0 ? (
-          <div className="b2b-bulkbar">
-            <input
-              type="checkbox"
-              className="b2b-cbx"
-              checked={allVisibleSelected}
-              ref={(el): void => {
-                if (el) el.indeterminate = someVisibleSelected;
-              }}
-              onChange={toggleAll}
-            />
-            <span className="count" data-testid="selection-summary">
-              {t('productsList.selection.selected', { count: selectedCount })}{' '}
-              {selection.mode === 'collection'
-                ? t('productsList.selection.scopeCollection')
-                : t('productsList.selection.scopePage')}
-            </span>
-            <div className="actions">
-              <button
-                type="button"
-                className="b2b-btn b2b-btn--primary"
-                disabled={resolvingSelection}
-                onClick={(): void => {
-                  void openBulkEdit();
-                }}
-              >
-                <PenSquare size={13} />{' '}
-                {resolvingSelection
-                  ? t('productsList.selection.resolving')
-                  : t('productsList.bulk.edit')}
-              </button>
-              <button
-                type="button"
-                className="b2b-btn"
-                disabled={resolvingSelection}
-                onClick={(): void => {
-                  void runWithResolvedIds(async () => {
-                    /* Edit price — placeholder until dedicated flow ships */
-                  });
-                }}
-              >
-                <CircleDollarSign size={13} /> {t('productsList.bulk.editPrice')}
-              </button>
-              <button
-                type="button"
-                className="b2b-btn b2b-btn--danger"
-                disabled={deleting || resolvingSelection}
-                onClick={handleBulkDelete}
-              >
-                <Trash2 size={13} /> {deleting ? '…' : t('productsList.bulk.delete')}
-              </button>
-            </div>
-            <button
-              type="button"
-              className="b2b-btn b2b-btn--ghost b2b-btn--icon b2b-btn--sm"
-              style={{ color: '#fff' }}
-              onClick={clearSelection}
-            >
-              <X size={14} />
-            </button>
-          </div>
-        ) : null}
-
-        {bulkEditOpen && bulkEditProductIds.length > 0 ? (
-          <ProductsBulkEditDialog
-            productIds={bulkEditProductIds}
-            selectionScope={selection.mode === 'collection' ? 'collection' : 'page'}
-            onClose={(): void => {
-              setBulkEditOpen(false);
-              setBulkEditProductIds([]);
-            }}
-            onApplied={(): void => {
-              // Refresh the list and drop the selection in the background, but
-              // keep the dialog open: it now shows the queued-acknowledgement
-              // ("sent to the queue, you'll be notified when it finishes") or
-              // the synchronous summary. The user dismisses it via the dialog's
-              // own Close / "View bulk actions" buttons.
-              void refresh();
-              clearSelection();
-            }}
-          />
-        ) : null}
-
-        <div className="b2b-card__body b2b-card__body--flush">
-          {loading ? (
-            <div style={{ padding: 32, color: 'var(--fg-muted)', fontSize: 13 }}>{t('productsList.loading')}</div>
-          ) : filtered.length === 0 ? (
-            <div className="b2b-empty">
-              <div className="b2b-empty__icon">
-                <Package size={20} />
-              </div>
-              <div className="b2b-empty__title">{t('productsList.empty.title')}</div>
-              {/*
-                The empty state's sentence is *"Try clearing filters, or use
-                + New product to create one."* — half advice, half affordance.
-                A read-only operator gets the advice and not the affordance:
-                the sentence degrades to its own key rather than losing the
-                button out of the middle of it, which would read as
-                *"Try clearing filters, or use  to create one."*
-              */}
-              <div className="b2b-empty__sub">
-                {canWrite ? (
-                  <>
-                    {t('productsList.empty.prefix')}{' '}
-                    <button
-                      type="button"
-                      className="b2b-btn b2b-btn--ghost"
-                      onClick={(): void => { navigate('/catalog/products/new'); }}
-                      style={{ display: 'inline-flex', height: 'auto', padding: 0, color: 'var(--primary-color)' }}
-                    >
-                      {t('productsList.empty.button')}
-                    </button>{' '}
-                    {t('productsList.empty.suffix')}
-                  </>
-                ) : (
-                  t('productsList.empty.readOnly')
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="b2b-table-scroll">
-            <table className="b2b-tbl">
-              <thead>
-                <tr>
-                  <th className="col-cb">
-                    <input
-                      type="checkbox"
-                      className="b2b-cbx"
-                      checked={allVisibleSelected}
-                      ref={(el): void => {
-                        if (el) el.indeterminate = someVisibleSelected;
-                      }}
-                      onChange={toggleAll}
-                    />
-                  </th>
-                  <th>{t('productsList.column.product')}</th>
-                  <th>{t('productsList.column.sku')}</th>
-                  <th>{t('productsList.column.status')}</th>
-                  <th>{t('productsList.column.type')}</th>
-                  <th>{t('productsList.column.visibility')}</th>
-                  <th>{t('productsList.column.updated')}</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((r) => (
-                  <tr
-                    key={r.id}
-                    className={cn('is-clickable', isRowSelected(r.id) && 'is-selected')}
-                    onClick={(): void => { navigate(`/catalog/products/${r.id}`); }}
+            filters={
+              <>
+                {/* Labelled selects, not chips that cycle through values on each
+                    press: the operator sees every option and picks one (Jakob's Law). */}
+                <Select
+                  aria-label={t('productsList.filter.type')}
+                  value={typeFilter === 'all' ? '' : typeFilter}
+                  onChange={(e): void => setTypeFilter(isTypeFilter(e.target.value) ? e.target.value : 'all')}
+                  className="w-auto"
+                >
+                  <option value="">{t('productsList.filter.typeAll')}</option>
+                  {TYPE_OPTIONS.filter((type) => type !== 'all').map((type) => (
+                    <option key={type} value={type}>
+                      {t(`productEditor.type.${type}`)}
+                    </option>
+                  ))}
+                </Select>
+                {categoryOptions.length > 0 ? (
+                  <Select
+                    aria-label={t('productsList.filter.category')}
+                    value={categoryFilter}
+                    onChange={(e): void => setCategoryFilter(e.target.value)}
+                    className="w-auto max-w-[16rem]"
                   >
-                    <td className="col-cb" onClick={(e): void => e.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        className="b2b-cbx"
-                        checked={isRowSelected(r.id)}
-                        onChange={(): void => toggleOne(r.id)}
-                      />
-                    </td>
-                    <td>
-                      <div className="b2b-row" style={{ gap: 12 }}>
-                        <div
-                          className="b2b-thumb"
-                          style={{
-                            width: 36,
-                            height: 36,
-                            background: hashColor(r.id),
-                          }}
-                        />
-                        <div style={{ minWidth: 0 }}>
-                          <div
-                            style={{
-                              fontWeight: 500,
-                              color: 'var(--fg)',
-                              whiteSpace: 'nowrap',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              maxWidth: 360,
-                            }}
-                          >
-                            {pickName(r.name)}
-                          </div>
-                          {r.name['pl-PL'] && r.name['pl-PL'] !== r.name['en-US'] ? (
-                            <div
-                              className="b2b-muted"
-                              style={{
-                                fontSize: 12,
-                                whiteSpace: 'nowrap',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                maxWidth: 360,
-                              }}
-                            >
-                              🇵🇱 {r.name['pl-PL']}
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-                    </td>
-                    <td>
-                      <span className="b2b-mono" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-                        {r.sku}
-                      </span>
-                    </td>
-                    <td>
-                      <StatusPill status={r.status} />
-                    </td>
-                    <td>
-                      <span style={{ fontSize: 12, textTransform: 'capitalize' }}>{r.type}</span>
-                    </td>
-                    <td>
-                      <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-                        {humanizeVisibility(r.visibility)}
-                      </span>
-                    </td>
-                    <td>
-                      <span className="b2b-muted" style={{ fontSize: 12 }}>{relTime(r.updatedAt)}</span>
-                    </td>
-                    <td className="actions" onClick={(e): void => e.stopPropagation()}>
-                      <button type="button" className="b2b-btn b2b-btn--ghost b2b-btn--icon b2b-btn--sm">
-                        <MoreHorizontal size={14} />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </div>
-          )}
-        </div>
+                    <option value="">{t('productsList.filter.categoryAll')}</option>
+                    {categoryOptions.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </Select>
+                ) : null}
+                {/* One channel is no choice (Hick's Law); a saved view's channel still shows. */}
+                {channels.length > 1 || channelFilter !== '' ? (
+                  <Select
+                    aria-label={t('productsList.filter.channel')}
+                    value={channelFilter}
+                    onChange={(e): void => setChannelFilter(e.target.value)}
+                    className="w-auto"
+                  >
+                    <option value="">{t('productsList.filter.channelAll')}</option>
+                    {channels.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {channelOptionLabel(c, language)}
+                      </option>
+                    ))}
+                  </Select>
+                ) : null}
+                {stockFilterAvailable ? (
+                  <Select
+                    aria-label={t('productsList.filter.stock')}
+                    value={stockFilter === 'all' ? '' : stockFilter}
+                    onChange={(e): void => setStockFilter(isStockFilter(e.target.value) ? e.target.value : 'all')}
+                    className="w-auto"
+                  >
+                    <option value="">{t('productsList.filter.stockAll')}</option>
+                    <option value="low">{t('productsList.filter.stockLow')}</option>
+                    <option value="out">{t('productsList.filter.stockOut')}</option>
+                  </Select>
+                ) : null}
+              </>
+            }
+            actions={
+              <SavedViewsControl
+                endpoint="/api/v1/admin/catalog/products/list-views"
+                current={toSavedViewState()}
+                onApply={applySavedView}
+                onError={setActionError}
+              />
+            }
+          />
+        }
+        count={t('productsList.count', { count: total })}
+        load={load}
+        busy={loading}
+        onRetry={(): void => void refresh()}
+        notice={
+          <>
+            <ProductVisibilityBanner visibility={listVisibility} />
+            {actionError ? (
+              <Alert variant="destructive">
+                <AlertDescription>{actionError}</AlertDescription>
+              </Alert>
+            ) : null}
 
-        <PaginationFooter
-          page={page}
-          pageSize={pageSize}
-          total={total}
-          onPageSizeChange={setPageSize}
-          onPrev={(): void => setPage((p) => Math.max(0, p - 1))}
-          onNext={(): void => setPage((p) => p + 1)}
+            {/* Mounted before it has text, so the note is announced when a view brings it. */}
+            <div role="status">
+              {legacyDraftView ? (
+                <div
+                  data-testid="saved-view-draft-note"
+                  className="flex items-center gap-2 border-b border-border pb-2 text-xs text-muted-foreground"
+                >
+                  <span className="flex-1">{t('productsList.savedView.draftRemoved')}</span>
+                  <Button type="button" variant="ghost" size="sm" onClick={(): void => setLegacyDraftView(false)}>
+                    {t('productsList.savedView.dismiss')}
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+
+            {showSelectAllBanner ? (
+              <div className="rounded-md bg-muted px-3 py-2 text-sm">
+                {t('productsList.selection.allPageSelected', { pageCount: filtered.length })}{' '}
+                <Button
+                  type="button"
+                  variant="link"
+                  data-testid="select-all-matching"
+                  className="h-auto p-0"
+                  onClick={selectCollectionMode}
+                >
+                  {t('productsList.selection.selectAllMatching', { total })}
+                </Button>
+              </div>
+            ) : null}
+
+            {selectionError ? (
+              <Alert variant="destructive">
+                <AlertDescription>{selectionError}</AlertDescription>
+              </Alert>
+            ) : null}
+
+            {/* The bulk bar is the results card's header row (the sales lists' pattern). */}
+            {selectedCount > 0 ? (
+              <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-muted px-3 py-2 text-sm">
+                {pageCheckbox}
+                <span className="font-medium" data-testid="selection-summary">
+                  {t('productsList.selection.selected', { count: selectedCount })}{' '}
+                  {selection.mode === 'collection'
+                    ? t('productsList.selection.scopeCollection')
+                    : t('productsList.selection.scopePage')}
+                </span>
+                <div className="ml-auto flex flex-wrap gap-1.5">
+                  {/* On the Archived tab the one thing a selection is for is bringing it
+                      back, so Restore leads as the primary and Bulk edit steps down (Von
+                      Restorff), and Delete stays last (owner P-4 → B). */}
+                  {restoreFromBar ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={resolvingSelection}
+                      onClick={(): void => {
+                        void openBulkEdit('confirmArchive');
+                      }}
+                    >
+                      <ArchiveRestore aria-hidden="true" /> {t('productsList.bulk.restore')}
+                    </Button>
+                  ) : null}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={restoreFromBar ? 'outline' : 'default'}
+                    disabled={resolvingSelection}
+                    aria-busy={resolvingSelection || undefined}
+                    onClick={(): void => {
+                      void openBulkEdit();
+                    }}
+                  >
+                    <PenSquare aria-hidden="true" />{' '}
+                    {resolvingSelection ? t('productsList.selection.resolving') : t('productsList.bulk.edit')}
+                  </Button>
+                  {/* Outline, in the destructive colour: it asks first, and a filled red button
+                      would compete with the primary (Von Restorff). */}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="text-destructive hover:text-destructive"
+                    disabled={deleting || resolvingSelection}
+                    aria-busy={deleting || undefined}
+                    onClick={(): void => void handleBulkDelete()}
+                  >
+                    <Trash2 aria-hidden="true" /> {deleting ? '…' : t('productsList.bulk.delete')}
+                  </Button>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 max-lg:size-11"
+                  aria-label={t('productsList.selection.clear')}
+                  onClick={clearSelection}
+                >
+                  <X aria-hidden="true" />
+                </Button>
+              </div>
+            ) : null}
+          </>
+        }
+        pagination={pager.footer(total)}
+      >
+        {/* Everything the strip selects is this panel's list (issue #1491). */}
+        <TabPanel idBase="products-list" value={statusFilter}>
+          <ResponsiveTable
+            columns={columns}
+            data={filtered}
+            keyExtractor={(r) => r.id}
+            isRowSelected={(r) => isRowSelected(r.id)}
+            emptyState={emptyList}
+          />
+        </TabPanel>
+      </ListPage>
+
+      {bulkEditOpen && bulkEditProductIds.length > 0 ? (
+        <ProductsBulkEditDialog
+          productIds={bulkEditProductIds}
+          productLabels={bulkEditLabels}
+          selectionScope={selection.mode === 'collection' ? 'collection' : 'page'}
+          // One archive action, the one that changes something: the Archived tab
+          // holds only archived products, every other tab only products that are
+          // not. On the Archived tab Restore lives on the bar (P-4 → B), so the
+          // form opened by Bulk edit offers none.
+          archiveAction={
+            !canWrite
+              ? null
+              : statusFilter !== 'archived'
+                ? 'archive'
+                : bulkInitialStep === 'confirmArchive'
+                  ? 'restore'
+                  : null
+          }
+          initialStep={bulkInitialStep}
+          onClose={(): void => {
+            setBulkEditOpen(false);
+            setBulkEditProductIds([]);
+          }}
+          onApplied={(): void => {
+            // Refresh the list and drop the selection in the background, but
+            // keep the dialog open: it now shows the queued-acknowledgement
+            // ("sent to the queue, you'll be notified when it finishes") or
+            // the synchronous summary. The user dismisses it via the dialog's
+            // own Close / "View bulk actions" buttons.
+            void refresh();
+            clearSelection();
+          }}
         />
-      </div>
+      ) : null}
+      {confirmDialog}
     </div>
   );
 }
 
-function Tab(props: {
-  id: StatusFilter;
-  label: string;
-  count: number;
-  active: StatusFilter;
-  onChange: (next: StatusFilter) => void;
-}): ReactNode {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={props.active === props.id}
-      className={cn('b2b-tab', props.active === props.id && 'is-active')}
-      onClick={(): void => props.onChange(props.id)}
-    >
-      <span>{props.label}</span>
-      <span className="b2b-badge b2b-badge--outline">{props.count}</span>
-    </button>
-  );
-}
-
-function Chip(props: {
-  icon: ReactNode;
-  label: string;
-  active: boolean;
-  onClick: () => void;
-  onRemove?: () => void;
-}): ReactNode {
-  return (
-    <button
-      type="button"
-      className={cn('b2b-filterchip', props.active && 'is-on')}
-      onClick={props.onClick}
-    >
-      {props.icon}
-      <span>{props.label}</span>
-      {props.active && props.onRemove ? (
-        <X
-          size={12}
-          onClick={(e): void => {
-            e.stopPropagation();
-            props.onRemove?.();
-          }}
-        />
-      ) : null}
-    </button>
-  );
-}
-
-function StatusPill({ status }: { status: AdminProduct['status'] }): ReactNode {
-  const map: Record<AdminProduct['status'], { cls: string; label: string }> = {
-    active: { cls: 'b2b-badge--success', label: 'Active' },
-    draft: { cls: 'b2b-badge--warn', label: 'Draft' },
-    inactive: { cls: '', label: 'Inactive' },
-  } as const;
-  const v = map[status];
-  return <span className={cn('b2b-badge', 'b2b-badge--dot', v.cls)}>{v.label}</span>;
-}
-
-function pickName(name: Record<string, string>): string {
-  return name['en-US'] ?? Object.values(name)[0] ?? '';
-}
-
-function humanizeVisibility(v: string): string {
-  if (v === 'logged_in_only') return 'Logged-in';
-  if (v === 'organization_restricted') return 'Org-restricted';
-  return v.charAt(0).toUpperCase() + v.slice(1);
-}
-
-/* Light fingerprint of an id → a stable Shopify-ish swatch for the
- * thumbnail placeholder. The real product page will swap this for the
- * gallery's base image. */
-function hashColor(id: string): string {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) hash = (hash << 5) - hash + id.charCodeAt(i);
-  const palette = [
-    'linear-gradient(135deg, #94a3b8cc, #475569cc)',
-    'linear-gradient(135deg, #a3a8b1cc, #5b6a78cc)',
-    'linear-gradient(135deg, #b39ddbcc, #6750a4cc)',
-    'linear-gradient(135deg, #fcd34dcc, #b54708cc)',
-    'linear-gradient(135deg, #6ee7b7cc, #008060cc)',
-    'linear-gradient(135deg, #ffafa3cc, #d72c0dcc)',
-  ];
-  const idx = Math.abs(hash) % palette.length;
-  return palette[idx]!;
-}
-
-function relTime(iso: string): string {
+/** The Updated cell, in the admin's language (issue #501: it was English in every language). */
+function relTime(iso: string, t: ReturnType<typeof useTranslation>, language: string): string {
   const d = new Date(iso);
   const diff = (Date.now() - d.getTime()) / 1000;
-  if (diff < 60) return 'just now';
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  if (diff < 86400 * 7) return `${Math.floor(diff / 86400)}d ago`;
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  if (diff < 60) return t('productsList.updated.justNow');
+  if (diff < 3600) return t('productsList.updated.minutesAgo', { count: Math.floor(diff / 60) });
+  if (diff < 86400) return t('productsList.updated.hoursAgo', { count: Math.floor(diff / 3600) });
+  // No plural rules in the catalogue: one day is its own word, and two to six
+  // days take the same Polish form ("dni"), as on the dashboard's activity feed.
+  if (diff < 86400 * 2) return t('productsList.updated.yesterday');
+  if (diff < 86400 * 7) return t('productsList.updated.daysAgo', { count: Math.floor(diff / 86400) });
+  return formatDate(iso, language);
 }
-
-// Suppress unused: passed through cn() calls, kept for future use.
-const _styleAvoidsUnusedImport: CSSProperties = {};
-void _styleAvoidsUnusedImport;
 
 /**
  * The default export a route declaration's dynamic-import factory resolves

@@ -1,7 +1,8 @@
+import type { HiddenProducts } from './admin-product-visibility.js';
 import { randomUUID } from 'node:crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
 
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { ERROR_CODES, isUuidShape } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import { Product } from '../entities/product.entity.js';
@@ -49,7 +50,8 @@ export class GroupedService {
     return w.result;
   }
 
-  async list(parentProductId: string): Promise<GroupedItemRow[]> {
+  /** Spec 193 (FR-080) — a child hidden from the caller (`hidden`) is left out. */
+  async list(parentProductId: string, hidden: HiddenProducts): Promise<GroupedItemRow[]> {
     const em = this.emFactory();
     await this.assertGroupedParent(em, parentProductId);
     const rows = await em.find(
@@ -57,24 +59,35 @@ export class GroupedService {
       { parentProductId },
       { orderBy: { position: 'asc', id: 'asc' } },
     );
-    return rows.map((r) => this.toRow(r));
+    const hiddenChildren = await hidden([...new Set(rows.map((r) => r.childProductId))]);
+    return rows.filter((r) => !hiddenChildren.has(r.childProductId)).map((r) => this.toRow(r));
   }
 
+  /** Spec 193 (FR-080) — a child hidden from the caller (`hidden`) is a child not found. */
   async addItem(
     parentProductId: string,
     input: { childProductId: string; quantity: number; position?: number | undefined },
+    hidden: HiddenProducts,
   ): Promise<GroupedItemRow> {
     const em = this.emFactory();
     await this.assertGroupedParent(em, parentProductId);
     if (input.childProductId === parentProductId) {
+      // Issue #624 (#86) — the product links' self-reference code, the token
+      // choosing the grouped product's sentence.
+      throw new HttpError(400, ERROR_CODES.SELF_LINK_NOT_ALLOWED, 'A grouped product cannot include itself as a child.', {
+        code: 'grouped',
+        productId: parentProductId,
+      });
+    }
+    if (!isUuidShape(input.childProductId)) {
       throw new HttpError(
-        400,
-        ERROR_CODES.VALIDATION_FAILED,
-        'A grouped product cannot include itself as a child.',
+        404,
+        ERROR_CODES.PRODUCT_NOT_FOUND,
+        `Child product "${input.childProductId}" not found.`,
       );
     }
     const child = await em.findOne(Product, { id: input.childProductId });
-    if (!child || child.deletedAt) {
+    if (!child || child.deletedAt || (await hidden([child.id])).has(child.id)) {
       throw new HttpError(
         404,
         ERROR_CODES.PRODUCT_NOT_FOUND,
@@ -116,8 +129,9 @@ export class GroupedService {
         if (err instanceof Error && /uniq_grouped_items_parent_child/.test(err.message)) {
           throw new HttpError(
             409,
-            ERROR_CODES.VALIDATION_FAILED,
+            ERROR_CODES.GROUPED_ITEM_ALREADY_EXISTS,
             `Child product "${input.childProductId}" is already in this group.`,
+            { parentProductId, childProductId: input.childProductId, childSku: child.sku },
           );
         }
         throw err;
@@ -140,11 +154,20 @@ export class GroupedService {
     parentProductId: string,
     itemId: string,
     input: { quantity?: number | undefined; position?: number | undefined },
+    /** Spec 193 (FR-080) — an item whose child is hidden from the caller is an item not found. */
+    hidden: HiddenProducts,
   ): Promise<GroupedItemRow> {
     const row = await this.#audited('grouped_item.update', itemId, async (em) => {
       await this.assertGroupedParent(em, parentProductId);
+      if (!isUuidShape(itemId) || !isUuidShape(parentProductId)) {
+        throw new HttpError(
+          404,
+          ERROR_CODES.GROUPED_ITEM_NOT_FOUND,
+          `Grouped item "${itemId}" not found on parent ${parentProductId}.`,
+        );
+      }
       const r = await em.findOne(GroupedItem, { id: itemId, parentProductId });
-      if (!r) {
+      if (!r || (await hidden([r.childProductId])).has(r.childProductId)) {
         throw new HttpError(
           404,
           ERROR_CODES.GROUPED_ITEM_NOT_FOUND,
@@ -164,11 +187,19 @@ export class GroupedService {
     return this.toRow(row);
   }
 
-  async removeItem(parentProductId: string, itemId: string): Promise<void> {
+  /** Spec 193 (FR-080) — an item whose child is hidden from the caller is an item not found. */
+  async removeItem(parentProductId: string, itemId: string, hidden: HiddenProducts): Promise<void> {
     await this.#audited('grouped_item.delete', itemId, async (em) => {
       await this.assertGroupedParent(em, parentProductId);
+      if (!isUuidShape(itemId) || !isUuidShape(parentProductId)) {
+        throw new HttpError(
+          404,
+          ERROR_CODES.GROUPED_ITEM_NOT_FOUND,
+          `Grouped item "${itemId}" not found on parent ${parentProductId}.`,
+        );
+      }
       const row = await em.findOne(GroupedItem, { id: itemId, parentProductId });
-      if (!row) {
+      if (!row || (await hidden([row.childProductId])).has(row.childProductId)) {
         throw new HttpError(
           404,
           ERROR_CODES.GROUPED_ITEM_NOT_FOUND,
@@ -185,6 +216,13 @@ export class GroupedService {
     em: EntityManager,
     parentProductId: string,
   ): Promise<Product> {
+    if (!isUuidShape(parentProductId)) {
+      throw new HttpError(
+        404,
+        ERROR_CODES.PRODUCT_NOT_FOUND,
+        `Product "${parentProductId}" not found.`,
+      );
+    }
     const parent = await em.findOne(Product, { id: parentProductId });
     if (!parent || parent.deletedAt) {
       throw new HttpError(

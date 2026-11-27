@@ -6,6 +6,12 @@ import {
   SalesChannelSetDefaultBodySchema,
   SalesChannelUpdateBodySchema,
   type ChannelMemberEntityType,
+  type ChannelMemberIdListResponse,
+  type EntityMembershipListResponse,
+  type SalesChannelDetail,
+  type SalesChannelListResponse,
+  type SalesChannelSetDefaultResponse,
+  type SalesChannelSummary,
 } from '@endora-commerce/contracts';
 import { z } from 'zod';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -106,12 +112,15 @@ export async function registerSalesChannelsAdminRoutes(
     reply.header('etag', `W/"${channel.id}:${channel.version}"`);
   }
 
-  function serializeSummary(c: SalesChannel): Record<string, unknown> {
+  /** The published `SalesChannelSummarySchema` (issue #599). */
+  function serializeSummary(c: SalesChannel): SalesChannelSummary {
     return {
       id: c.id,
       code: c.code,
       name: c.name,
       active: c.active,
+      anonymousAccess: c.anonymousAccess,
+      prefixDefaultLanguage: c.prefixDefaultLanguage,
       systemDefault: c.systemDefault,
       defaultLanguage: c.defaultLanguage,
       defaultCurrency: c.defaultCurrency,
@@ -123,7 +132,8 @@ export async function registerSalesChannelsAdminRoutes(
     };
   }
 
-  function serializeDetail(c: SalesChannel): Record<string, unknown> {
+  /** The published `SalesChannelDetailSchema` (issue #599). */
+  function serializeDetail(c: SalesChannel): SalesChannelDetail {
     return {
       ...serializeSummary(c),
       languages: c.languages,
@@ -141,7 +151,7 @@ export async function registerSalesChannelsAdminRoutes(
   app.get(
     '/api/v1/admin/sales-channels',
     { preHandler: requireAdmin(SC_READ) },
-    async (request) => {
+    async (request): Promise<SalesChannelListResponse> => {
       const q = ListQuerySchema.parse(request.query ?? {});
       const result = await salesChannelsService.list({
         ...(q.page !== undefined ? { page: q.page } : {}),
@@ -162,7 +172,7 @@ export async function registerSalesChannelsAdminRoutes(
   app.get<{ Params: { code: string } }>(
     '/api/v1/admin/sales-channels/:code',
     { preHandler: requireAdmin(SC_READ) },
-    async (request, reply) => {
+    async (request, reply): Promise<SalesChannelDetail> => {
       const channel = await salesChannelsService.getByCode(request.params.code);
       if (channel === null) {
         throw new HttpError(
@@ -181,9 +191,11 @@ export async function registerSalesChannelsAdminRoutes(
   app.post(
     '/api/v1/admin/sales-channels',
     { preHandler: requireAdmin(SC_WRITE) },
-    async (request, reply) => {
+    async (request, reply): Promise<SalesChannelDetail> => {
       const body = SalesChannelCreateBodySchema.parse(request.body);
-      const channel = await salesChannelsService.create(body, auditContext(request));
+      // The Command Bus takes the actor and the request id from the request's
+      // TenantContext, so no audit context is passed.
+      const channel = await salesChannelsService.create(body);
       reply.code(201);
       setEtag(reply, channel);
       return serializeDetail(channel);
@@ -195,7 +207,7 @@ export async function registerSalesChannelsAdminRoutes(
   app.patch<{ Params: { code: string } }>(
     '/api/v1/admin/sales-channels/:code',
     { preHandler: requireAdmin(SC_WRITE) },
-    async (request, reply) => {
+    async (request, reply): Promise<SalesChannelDetail> => {
       const raw = (request.body ?? {}) as Record<string, unknown>;
       const { expectedVersion } = ExpectedVersionShape.parse({
         expectedVersion: raw['expectedVersion'],
@@ -206,7 +218,6 @@ export async function registerSalesChannelsAdminRoutes(
         request.params.code,
         body,
         expectedVersion,
-        auditContext(request),
       );
       setEtag(reply, channel);
       return serializeDetail(channel);
@@ -218,7 +229,7 @@ export async function registerSalesChannelsAdminRoutes(
   app.post<{ Params: { code: string } }>(
     '/api/v1/admin/sales-channels/:code/deactivate',
     { preHandler: requireAdmin(SC_WRITE) },
-    async (request, reply) => {
+    async (request, reply): Promise<SalesChannelDetail> => {
       const channel = await salesChannelsService.deactivate(
         request.params.code,
         auditContext(request),
@@ -231,7 +242,7 @@ export async function registerSalesChannelsAdminRoutes(
   app.post<{ Params: { code: string } }>(
     '/api/v1/admin/sales-channels/:code/activate',
     { preHandler: requireAdmin(SC_WRITE) },
-    async (request, reply) => {
+    async (request, reply): Promise<SalesChannelDetail> => {
       const channel = await salesChannelsService.activate(
         request.params.code,
         auditContext(request),
@@ -255,7 +266,7 @@ export async function registerSalesChannelsAdminRoutes(
   app.post<{ Params: { code: string } }>(
     '/api/v1/admin/sales-channels/:code/set-default',
     { preHandler: requireAdmin(SC_WRITE) },
-    async (request, reply) => {
+    async (request, reply): Promise<SalesChannelSetDefaultResponse> => {
       SalesChannelSetDefaultBodySchema.parse(request.body ?? {});
       const result = await salesChannelsService.setDefault(request.params.code);
       setEtag(reply, result.channel);
@@ -348,7 +359,7 @@ export async function registerSalesChannelsAdminRoutes(
   app.get<{ Params: { code: string; entityType: string } }>(
     '/api/v1/admin/sales-channels/:code/:entityType',
     { preHandler: requireAdmin(SC_READ) },
-    async (request) => {
+    async (request): Promise<ChannelMemberIdListResponse> => {
       const entityType = parseEntityType(request.params.entityType);
       const channel = await requireChannelByCode(request.params.code);
       const q = PageQuerySchema.parse(request.query ?? {});
@@ -384,7 +395,8 @@ export async function registerSalesChannelsAdminRoutes(
         channel.id,
         entityType,
         request.params.entityId,
-        { actorAdminUserId: ctx.actorAdminUserId },
+        // A manual write: on a governed channel it is refused, never skipped.
+        { actorAdminUserId: ctx.actorAdminUserId, onGoverned: 'refuse' },
       );
       reply.code(result.changed ? 201 : 200);
       return {
@@ -413,6 +425,8 @@ export async function registerSalesChannelsAdminRoutes(
         {
           fallbackToDefault: q.fallbackToDefault ?? false,
           actorAdminUserId: ctx.actorAdminUserId,
+          // A manual write: on a governed channel it is refused, never skipped.
+          onGoverned: 'refuse',
         },
       );
       reply.code(200);
@@ -431,7 +445,7 @@ export async function registerSalesChannelsAdminRoutes(
   app.get<{ Params: { entityType: string; entityId: string } }>(
     '/api/v1/admin/sales-channels/by-entity/:entityType/:entityId',
     { preHandler: requireAdmin(SC_READ) },
-    async (request) => {
+    async (request): Promise<EntityMembershipListResponse> => {
       const entityType = parseEntityType(request.params.entityType);
       const channels = await membershipService.listChannelsForEntity(
         entityType,
@@ -440,20 +454,7 @@ export async function registerSalesChannelsAdminRoutes(
       return {
         entityType,
         entityId: request.params.entityId,
-        channels: channels.map((c) => ({
-          id: c.id,
-          code: c.code,
-          name: c.name,
-          active: c.active,
-          systemDefault: c.systemDefault,
-          defaultLanguage: c.defaultLanguage,
-          defaultCurrency: c.defaultCurrency,
-          themeCode: c.themeCode ?? null,
-          logoAssetId: c.logoAssetId ?? null,
-          version: c.version,
-          createdAt: c.createdAt.toISOString(),
-          updatedAt: c.updatedAt.toISOString(),
-        })),
+        channels: channels.map(serializeSummary),
       };
     },
   );

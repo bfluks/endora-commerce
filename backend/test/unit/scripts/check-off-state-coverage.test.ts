@@ -1,7 +1,11 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
   checkOffStateCoverage,
+  deploymentModulesUnder,
   harnessExportedFunctions,
   harnessExportsCoverage,
   harnessSitesIn,
@@ -364,10 +368,45 @@ describe('a subject the manifest index does not register', () => {
     ).toEqual([]);
   });
 
-  it('does not put an overlay module into the population it judges', () => {
-    // The other direction, and the one that would be wrong to get backwards:
-    // an overlay module owing a proof to a run that composes none of them
-    // would be a finding every bare-core pipeline reports and nobody can fix.
+  it('puts an overlay module that owns tables into the population (190, FR-046)', () => {
+    // It used to be outside, deliberately: an overlay module owing a proof to a
+    // run that composes none of them looked like a finding nobody could fix.
+    // D-297 made an overlay module with tables a full module, and FR-046 asks
+    // it for the off-state proof any switchable module owes — so the check
+    // counts every deployment's on disk, as `overlay:check` reads every
+    // deployment's artefacts, and the proof selects its deployment in-process.
+    const owing: ModuleUnderCheck[] = [
+      { moduleId: 'acme_notes', activationSettingCode: 'acme_notes.enabled' },
+    ];
+    const unproven = checkOffStateCoverage({
+      modules: MODULES,
+      files: [BLOG_PROOF, SEO_PROOF],
+      deploymentModules: ['acme_notes', 'example_overlay'],
+      deploymentPopulation: owing,
+    });
+    expect(unproven.population).toEqual(['acme_notes', 'blog', 'seo']);
+    expect(unproven.findings.map((finding) => [finding.kind, finding.moduleId])).toEqual([
+      ['uncovered-module', 'acme_notes'],
+    ]);
+
+    const proven = checkOffStateCoverage({
+      modules: MODULES,
+      files: [
+        BLOG_PROOF,
+        SEO_PROOF,
+        {
+          path: 'test/integration/overlay/acme-notes-off-state.test.ts',
+          text: "await expectModuleAbsent(h, 'acme_notes', { routes: ['/api/v1/admin/acme-notes'] });",
+        },
+      ],
+      deploymentModules: ['acme_notes', 'example_overlay'],
+      deploymentPopulation: owing,
+    });
+    expect(proven.covered).toEqual(['acme_notes', 'blog', 'seo']);
+    expect(proven.findings).toEqual([]);
+  });
+
+  it('leaves an overlay module that owns no table outside the population', () => {
     const result = checkOffStateCoverage({
       modules: MODULES,
       files: [BLOG_PROOF, SEO_PROOF],
@@ -375,6 +414,58 @@ describe('a subject the manifest index does not register', () => {
     });
     expect(result.population).toEqual(['blog', 'seo']);
     expect(result.findings).toEqual([]);
+  });
+
+  it('reads the owing population off every deployment on disk: tables and a switch', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'off-state-overlays-'));
+    const write = (path: string, text: string): void => {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), text);
+    };
+    const manifest = (id: string, activation: string): string =>
+      `export const manifest = { id: '${id}', activation: ${activation} };\n`;
+    write('a/modules/with_table/manifest.js', manifest('with_table', "{ settingCode: 'with_table.enabled', default: true }"));
+    write('a/modules/with_table/migrations/20261126T000000_with_table_init.js', 'export class X {}\n');
+    write('b/modules/with_entity/manifest.js', manifest('with_entity', "{ settingCode: 'with_entity.enabled', default: true }"));
+    write('b/modules/with_entity/entities/thing.entity.js', 'export class Thing {}\n');
+    write('b/modules/locked/manifest.js', manifest('locked', "{ nonDeactivatable: true, reason: 'r' }"));
+    write('b/modules/locked/migrations/20261126T000000_locked_init.js', 'export class Y {}\n');
+    write('b/modules/no_table/manifest.js', manifest('no_table', "{ settingCode: 'no_table.enabled', default: true }"));
+
+    const found = await deploymentModulesUnder([join(root, 'a', 'modules'), join(root, 'b', 'modules')]);
+    expect(found.ids).toEqual(['locked', 'no_table', 'with_entity', 'with_table']);
+    expect(found.population).toEqual([
+      { moduleId: 'locked', activationSettingCode: null },
+      { moduleId: 'with_entity', activationSettingCode: 'with_entity.enabled' },
+      { moduleId: 'with_table', activationSettingCode: 'with_table.enabled' },
+    ]);
+  });
+
+  // #1941 case 2: the population was keyed on the directory and on two directories holding
+  // files, so a module whose tables are declared only through its backend's `entities` export —
+  // the list the platform's ORM actually registers — owed no proof, and an id that differs from
+  // its directory name was reported under a name no `expectModuleAbsent` call can match.
+  it('keys the owing population on the manifest id and the backend entities export', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'off-state-overlays-'));
+    const write = (path: string, text: string): void => {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), text);
+    };
+    const manifest = (id: string): string =>
+      `export const manifest = { id: '${id}', activation: { settingCode: '${id}.enabled', default: true } };\n`;
+    write('a/modules/exported_only/manifest.js', manifest('exported_only'));
+    write('a/modules/exported_only/backend.js', 'class Thing {}\nexport const entities = [Thing];\n');
+    write('a/modules/empty_export/manifest.js', manifest('empty_export'));
+    write('a/modules/empty_export/backend.js', 'export const entities = [];\n');
+    write('a/modules/renamed_dir/manifest.js', manifest('renamed_module'));
+    write('a/modules/renamed_dir/migrations/20261126T000000_renamed_module_init.js', 'export class Z {}\n');
+
+    const found = await deploymentModulesUnder([join(root, 'a', 'modules')]);
+    expect(found.ids).toEqual(['empty_export', 'exported_only', 'renamed_module']);
+    expect(found.population).toEqual([
+      { moduleId: 'exported_only', activationSettingCode: 'exported_only.enabled' },
+      { moduleId: 'renamed_module', activationSettingCode: 'renamed_module.enabled' },
+    ]);
   });
 
   it('reads an id seeded beside a spread of the real baseline', () => {

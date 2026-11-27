@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   QUOTE_REQUEST_DOCUMENT_TYPE,
   quoteRequestDocumentChoicesSchema,
@@ -16,6 +16,7 @@ import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
 import { ADMIN_COOKIES, TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 import { ensureAdminWithRole } from '../../helpers/admin-search-fixtures.js';
 import { ensureSalesChannel } from '../../helpers/sales-channel-fixtures.js';
+import { bindOrganizationToDefaultChannel } from '../../helpers/sales-channel-access.js';
 import { withModuleOff } from '../../helpers/off-state.js';
 import { withSystemScope } from '../../../src/tenancy/escape-hatch.js';
 import {
@@ -55,6 +56,7 @@ interface Choices {
 }
 
 describe('quote request PDF — admin routes Q1–Q3 (spec 153)', () => {
+  const OTHER_REP_ID = randomUUID();
   let h: BackendServerHandle;
   let channelA: string;
   let channelB: string;
@@ -119,7 +121,7 @@ describe('quote request PDF — admin routes Q1–Q3 (spec 153)', () => {
     const a = await ensureSalesChannel(em, `qr153_a_${stamp}`);
     a.defaultLanguage = 'pl-PL';
     a.languages = ['pl-PL', 'en-US'];
-    await em.persistAndFlush(a);
+    await em.persist(a).flush();
     channelA = a.id;
     channelB = (await ensureSalesChannel(em, `qr153_b_${stamp}`)).id;
     quoteA = await raise();
@@ -136,7 +138,7 @@ describe('quote request PDF — admin routes Q1–Q3 (spec 153)', () => {
       const grants = ['rfqs:handle', 'price_lists:read'];
       if (!role) role = fork.create(AdminRole, { code: 'sales_representative', name: 'Sales Representative', permissions: grants });
       else role.permissions = Array.from(new Set([...role.permissions, ...grants]));
-      await fork.persistAndFlush(role);
+      await fork.persist(role).flush();
       const org = fork.create(Organization, {
         name: `153 foreign ${stamp}`,
         taxId: `PL153F${String(stamp).slice(-7)}`,
@@ -151,25 +153,32 @@ describe('quote request PDF — admin routes Q1–Q3 (spec 153)', () => {
         firstName: '153',
         lastName: 'Rep',
       });
-      await fork.persistAndFlush([org, rep]);
+      await fork.persist([org, rep]).flush();
       const account = fork.create(CustomerAccount, {
         organizationId: org.id,
         email: `153-foreign-${stamp}@scope.local`,
         passwordHash: 'x'.repeat(60),
         firstName: '153',
         lastName: 'Foreign',
-        role: 'regular_user',
       });
-      await fork.persistAndFlush([account, fork.create(OrganizationSalesRepAssignment, { organizationId: org.id, adminUserId: rep.id })]);
+      await fork.persist([account, fork.create(OrganizationSalesRepAssignment, { organizationId: org.id, adminUserId: rep.id })]).flush();
+      // #305 — the seeded organization is another representative's: an
+      // unassigned organization is in every representative's reach.
+      await fork.persist(fork.create(OrganizationSalesRepAssignment, { organizationId: TEST_ORGANIZATION_ID, adminUserId: OTHER_REP_ID })).flush();
       foreignOrg = org.id;
       ADMIN_COOKIES[REP_SESSION] = { adminUserId: rep.id };
       foreignQuote = account.id;
     });
     // `foreignQuote` held the account id above; raise the foreign quote now.
+    // The admin request below names no channel, so it is raised on the system
+    // default, which `createOnBehalf` accepts only for an Organization assigned
+    // to it (feature 163, owner decision 2026-10-29 "A").
+    await bindOrganizationToDefaultChannel(h, foreignOrg);
     foreignQuote = await raise(foreignOrg, foreignQuote);
   }, 90_000);
 
   afterAll(async () => {
+    await h.em().getConnection().execute('delete from organization_sales_rep_assignments where admin_user_id = ?', [OTHER_REP_ID]);
     delete ADMIN_COOKIES[NONE_SESSION];
     delete ADMIN_COOKIES[REP_SESSION];
     await sql(`delete from document_templates where document_type = ?`, [QUOTE_REQUEST_DOCUMENT_TYPE]);
@@ -343,6 +352,119 @@ describe('quote request PDF — admin routes Q1–Q3 (spec 153)', () => {
       expect(plain).not.toContain('List price');
       expect(plain).not.toContain('Discount %');
       expect(await headerOf(await sample('pl-PL'), 'pl-PL')).toEqual(expect.arrayContaining(['Lp.', 'Cena katalogowa', 'Rabat %']));
+    });
+  });
+
+  /**
+   * `specs/159-quote-request-item-groups/` T053 — the quote's groups on the PDF
+   * (FR-041–FR-044, SC-004): asserted on the definition the facility builds for
+   * a real export, read through a spy on the renderer the render port resolves to.
+   */
+  describe('line groups on the PDF (159 US3)', () => {
+    type Cell = { text: string; colSpan?: number };
+    type Built = { definition: { content: { stack?: { table?: { body: Cell[][] } }[] }[] } };
+    let groupedQuote: string;
+
+    const exportedBody = async (id: string): Promise<{ body: string[][]; source: string | undefined }> => {
+      const renderer = h.container.resolve('documentRenderer') as { buildDefinition: (input: unknown) => Promise<Built> };
+      const spy = vi.spyOn(renderer, 'buildDefinition');
+      try {
+        const res = await exportPdf(id, '?language=en-US');
+        expect(res.statusCode, res.body).toBe(200);
+        expect(spy).toHaveBeenCalledTimes(1);
+        const built = await (spy.mock.results[0]!.value as Promise<Built>);
+        const table = built.definition.content.find((node) => node.stack?.[0]?.table);
+        return {
+          // pdfmake fills the cells a `colSpan` covers in place; they read as empty here.
+          body: table!.stack![0]!.table!.body.map((row) => row.map((cell) => cell?.text ?? '')),
+          source: res.headers['x-document-template-source'] as string | undefined,
+        };
+      } finally {
+        spy.mockRestore();
+      }
+    };
+    const firstCells = (body: string[][]) => body.map((row) => row[0] ?? '');
+
+    beforeAll(async () => {
+      await sql(`delete from document_templates where document_type = ?`, [QUOTE_REQUEST_DOCUMENT_TYPE]);
+      const res = await h.app.inject({
+        method: 'POST',
+        url: QR,
+        cookies: ADMIN,
+        payload: {
+          organizationId: TEST_ORGANIZATION_ID,
+          customerAccountId: TEST_CUSTOMER_ID,
+          groups: [
+            { key: 'a', name: 'Hall A' },
+            { key: 'b', name: 'Hall B' },
+            { key: 'empty', name: 'Nothing here' },
+          ],
+          items: [
+            { productId: SEED_PRODUCT_101_ID, quantity: 1, agreedUnitPrice: 10, groupKey: 'b' },
+            { productId: SEED_PRODUCT_101_ID, quantity: 3, agreedUnitPrice: 8, groupKey: 'a' },
+            { productId: SEED_PRODUCT_101_ID, quantity: 5, agreedUnitPrice: 2 },
+            { productId: SEED_PRODUCT_101_ID, quantity: 2, agreedUnitPrice: 10, groupKey: 'a' },
+          ],
+        },
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      groupedQuote = (res.json() as { data: { id: string } }).data.id;
+    });
+
+    afterAll(async () => {
+      await sql(`delete from document_templates where document_type = ? and name like '159 %'`, [QUOTE_REQUEST_DOCUMENT_TYPE]);
+    });
+
+    const expectSections = (body: string[][]) => {
+      const cells = firstCells(body);
+      // Heading, lines, subtotal rows per non-empty group in saved order; Other items last; positions 1…n.
+      const headings = cells.filter((cell) => cell === 'Hall A · 2 items' || cell === 'Hall B · 1 item' || cell === 'Other items · 1 item');
+      expect(headings).toEqual(['Hall A · 2 items', 'Hall B · 1 item', 'Other items · 1 item']);
+      expect(cells.filter((cell) => /^\d+$/.test(cell))).toEqual(['1', '2', '3', '4']);
+      expect(cells.indexOf('Hall A · 2 items')).toBeLessThan(cells.indexOf('1'));
+      expect(cells.indexOf('Hall B · 1 item')).toBeGreaterThan(cells.indexOf('2'));
+      expect(cells.indexOf('Other items · 1 item')).toBeGreaterThan(cells.indexOf('3'));
+      expect(cells.join('|')).not.toContain('Nothing here');
+      // One subtotal row per totals row of the table, over the section (Hall A: 3 × 8 + 2 × 10 = 44).
+      const hallA = body.slice(cells.indexOf('Hall A · 2 items'), cells.indexOf('Hall B · 1 item'));
+      expect(hallA.some((row) => row[0] === 'Total net' && String(row.at(-1) ?? '').includes('44.00'))).toBe(true);
+    };
+
+    it('the built-in layout prints the groups without being configured (FR-041, FR-044)', async () => {
+      const { body, source } = await exportedBody(groupedQuote);
+      expect(source).toBe('built_in');
+      expectSections(body);
+    });
+
+    it('a template saved before the feature — grouping null, or no grouping key — prints them too', async () => {
+      const id = await template('159 pre-feature', null, true);
+      const { body, source } = await exportedBody(groupedQuote);
+      expect(source).toBe('default');
+      expectSections(body);
+
+      // A table stored with no `grouping` key at all.
+      const [row] = (await sql(`select content from document_templates where id = ?`, [id])) as { content: { languages: Record<string, { content: { type: string; props: Record<string, unknown> }[] }> } }[];
+      for (const tree of Object.values(row!.content.languages)) {
+        for (const node of tree.content) if (node.type === 'document_templates.ItemsTable') delete node.props['grouping'];
+      }
+      await sql(`update document_templates set content = ? where id = ?`, [JSON.stringify(row!.content), id]);
+      expectSections((await exportedBody(groupedQuote)).body);
+    });
+
+    it('a table set to No grouping prints the grouped quote flat', async () => {
+      const [row] = (await sql(`select id, content from document_templates where document_type = ? and name = '159 pre-feature'`, [QUOTE_REQUEST_DOCUMENT_TYPE])) as { id: string; content: { languages: Record<string, { content: { type: string; props: Record<string, unknown> }[] }> } }[];
+      for (const tree of Object.values(row!.content.languages)) {
+        for (const node of tree.content) if (node.type === 'document_templates.ItemsTable') node.props['grouping'] = { by: 'none' };
+      }
+      await sql(`update document_templates set content = ? where id = ?`, [JSON.stringify(row!.content), row!.id]);
+      const cells = firstCells((await exportedBody(groupedQuote)).body);
+      expect(cells.slice(1)).toEqual(['1', '2', '3', '4']);
+    });
+
+    it('a quote with no group prints its lines as before — no heading or subtotal row (SC-004)', async () => {
+      await sql(`delete from document_templates where document_type = ? and name like '159 %'`, [QUOTE_REQUEST_DOCUMENT_TYPE]);
+      const cells = firstCells((await exportedBody(quoteNone)).body);
+      expect(cells.slice(1)).toEqual(['1', '2']);
     });
   });
 

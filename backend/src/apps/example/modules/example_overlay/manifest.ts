@@ -22,7 +22,7 @@ export const EXAMPLE_OVERLAY_SETTING_CODES = {
  */
 const settings = defineModuleSettingsManifest({
   moduleCode: 'example_overlay',
-  groups: [{ code: 'example_overlay', name: 'Example Overlay' }],
+  groups: [{ code: 'example_overlay', name: 'Example overlay' }],
   settings: [
     {
       code: EXAMPLE_OVERLAY_SETTING_CODES.ACTIVATION,
@@ -38,7 +38,7 @@ const settings = defineModuleSettingsManifest({
 
 export const manifest = defineModuleManifest({
   id: 'example_overlay',
-  name: 'Example Overlay',
+  name: 'Example overlay',
   description: 'Reference client-only overlay module for the example deployment.',
   version: '1.0.0',
   // `backend.ts` resolves `requireAdmin`, which `auth` owns. An overlay module
@@ -55,4 +55,9 @@ export const manifest = defineModuleManifest({
       label: 'Manage the example overlay module',
     },
   ],
+  // `specs/189-command-middleware/` — the declaration half of the one command
+  // middleware this module contributes; `backend.ts` registers the code under
+  // the same id and phase. `observe` only: it reads what happened after the run
+  // settled and cannot slow, fail or change the write.
+  commandMiddleware: [{ id: 'organization-timing', phase: 'observe', actions: ['organization.'] }],
 });

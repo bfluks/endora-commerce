@@ -26,10 +26,9 @@ describe('CMS storefront hook by code contract (T068)', () => {
       defaultCurrency: 'PLN',
       active: true,
       systemDefault: false,
-      isPublic: true,
       status: 'active',
     });
-    await em.persistAndFlush(plChannel);
+    await em.persist(plChannel).flush();
   });
 
   afterAll(async () => {

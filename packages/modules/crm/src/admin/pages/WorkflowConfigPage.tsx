@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Navigate, useLocation } from 'react-router-dom';
 import { Plus, Trash2 } from 'lucide-react';
 import type {
+  OpportunityBoardCardConfig,
   OpportunityWorkflow,
   OpportunityWorkflowStatus,
   OrderStatusMapping,
@@ -12,27 +13,32 @@ import {
   Button,
   Card,
   CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
+  EditorSection,
   PageHeader,
 } from '@endora-commerce/admin-kit/ui';
 import {
+  BoardCardFieldsEditor,
+  ImmediateBadge,
   ModalDialog,
   StatusTransitionGraph,
   type StatusTransitionGraphStatus,
+  useServerReorder,
 } from '@endora-commerce/admin-kit/components';
 import { useAppLanguage, useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { crmApi, type OrderStatusOption } from '../api.js';
-import { BoardCardFieldsEditor } from '../components/BoardCardFieldsEditor.js';
+import { boardFieldLabel } from '../lib/board-fields.js';
 import { errorMessage, workflowStatusLabel } from '../lib/labels.js';
+import { CrmConfigurationTabs } from '../components/CrmConfigurationTabs.js';
+import {
+  VALUE_COUNTING_HASH,
+  workflowSection,
+  workflowSectionForHash,
+  workflowSectionPath,
+} from '../lib/workflow-sections.js';
 import { OrderStatusMappings } from './workflow/OrderStatusMappings.js';
 import { StatusDialog, type StatusDialogSubmit } from './workflow/StatusDialog.js';
 import { StatusesTable } from './workflow/StatusesTable.js';
 import { ValueCountingStatuses } from './workflow/ValueCountingStatuses.js';
-
-/** The anchor of the *Board card* section — what the board's own link points at. */
-const BOARD_CARD_ANCHOR = 'board-card';
 
 type DialogState = { kind: 'create' } | { kind: 'edit'; status: OpportunityWorkflowStatus } | null;
 
@@ -83,14 +89,24 @@ export function WorkflowConfigPage(): ReactNode {
     void load();
   }, [load]);
 
-  // The board links here as `#board-card`: the section is far down the page,
-  // and it exists only once the workflow has loaded.
-  const { hash } = useLocation();
-  const boardCardSection = useRef<HTMLDivElement>(null);
-  const loaded = workflow !== null;
-  useEffect(() => {
-    if (loaded && hash === `#${BOARD_CARD_ANCHOR}`) boardCardSection.current?.scrollIntoView?.();
-  }, [loaded, hash]);
+  const { pathname, hash } = useLocation();
+  const section = workflowSection(pathname);
+
+  const orderedStatuses = useMemo(
+    () =>
+      [...(workflow?.statuses ?? [])].sort(
+        (a, b) => a.weight - b.weight || a.code.localeCompare(b.code),
+      ),
+    [workflow],
+  );
+  const reorder = useServerReorder({
+    rows: orderedStatuses,
+    show: (statuses) => setWorkflow((current) => (current ? { ...current, statuses } : current)),
+    save: async (orderedCodes) => setWorkflow(await crmApi.reorderStatuses(orderedCodes)),
+    reload: async () => setWorkflow(await crmApi.getWorkflow()),
+    staleMessage: t('reorder.stale'),
+    failedMessage: (error) => errorMessage(error, t('reorder.failed')),
+  });
 
   const graphStatuses = useMemo<StatusTransitionGraphStatus[]>(
     () =>
@@ -154,7 +170,42 @@ export function WorkflowConfigPage(): ReactNode {
     }
   };
 
-  const header = <PageHeader title={t('workflow.title')} description={t('workflow.description')} />;
+  // The board's *Configure card* links to `#board-card`, an Opportunity's
+  // computed value to `#value-counting` (issue #1561): sections of one long
+  // page once, tabs of their own now, so the link opens its tab.
+  const hashSection = workflowSectionForHash(hash);
+  if (hashSection !== null && section === 'statuses') {
+    return <Navigate to={workflowSectionPath(hashSection)} replace />;
+  }
+
+  const header = (
+    <>
+      <PageHeader title={t('workflow.title')} />
+      {/* One strip for the whole configuration: the four workflow tabs and Tags (#1557, #1559). */}
+      <CrmConfigurationTabs />
+    </>
+  );
+
+  // The board card is its own resource: the editor loads it, the workflow is not needed.
+  if (section === 'boardCard') {
+    return (
+      <>
+        {header}
+        <EditorSection chrome="card" title={t('boardCard.title')}>
+          <BoardCardFieldsEditor
+            load={(): Promise<OpportunityBoardCardConfig> => crmApi.getBoardCardFields()}
+            save={(refs): Promise<OpportunityBoardCardConfig> => crmApi.setBoardCardFields(refs)}
+            fieldLabel={(field): string => boardFieldLabel(field, language, t)}
+            copy={{
+              titleAlways: t('boardCard.shown.titleAlways'),
+              builtinGroup: t('boardCard.available.builtin'),
+              noCustom: t('boardCard.available.noCustom'),
+            }}
+          />
+        </EditorSection>
+      </>
+    );
+  }
 
   if (workflow === null) {
     return (
@@ -168,7 +219,12 @@ export function WorkflowConfigPage(): ReactNode {
           <Alert variant="destructive">
             <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
               <span>{loadError ?? t('workflow.error.load')}</span>
-              <Button className="min-h-11 sm:min-h-8" variant="outline" size="sm" onClick={(): void => void load()}>
+              <Button
+                className="min-h-11 sm:min-h-8"
+                variant="outline"
+                size="sm"
+                onClick={(): void => void load()}
+              >
                 {tCore('common.action.retry')}
               </Button>
             </AlertDescription>
@@ -178,77 +234,86 @@ export function WorkflowConfigPage(): ReactNode {
     );
   }
 
-  const nextWeight = workflow.statuses.reduce((max, status) => Math.max(max, status.weight), 0) + 10;
+  const nextWeight =
+    workflow.statuses.reduce((max, status) => Math.max(max, status.weight), 0) + 10;
 
   return (
     <>
       {header}
 
-      {actionError ? (
-        <Alert variant="destructive" className="mb-4">
-          <AlertDescription>{actionError}</AlertDescription>
-        </Alert>
+      {section === 'statuses' ? (
+        // Every control here writes at once — the dialog's save, a move, an
+        // arrow — so the two sections share one card and no Save (Similarity).
+        <Card>
+          <CardContent className="space-y-(--section-gap)">
+            {actionError ? (
+              <Alert variant="destructive">
+                <AlertDescription>{actionError}</AlertDescription>
+              </Alert>
+            ) : null}
+            <EditorSection
+              title={t('workflow.statuses.title')}
+              action={
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <ImmediateBadge className="ml-0" />
+                  <Button
+                    className="min-h-11 sm:min-h-9"
+                    variant="outline"
+                    onClick={(): void => setDialog({ kind: 'create' })}
+                  >
+                    <Plus aria-hidden="true" />
+                    {t('workflow.status.add')}
+                  </Button>
+                </div>
+              }
+            >
+              {reorder.notice ? (
+                <Alert
+                  variant={reorder.notice.kind === 'stale' ? 'warning' : 'destructive'}
+                  live="assertive"
+                >
+                  <AlertDescription>{reorder.notice.message}</AlertDescription>
+                </Alert>
+              ) : null}
+              <StatusesTable
+                statuses={orderedStatuses}
+                language={language}
+                onEdit={(status): void => setDialog({ kind: 'edit', status })}
+                onDelete={setPendingDelete}
+                onMove={(status, delta): void => reorder.move(status.code, delta)}
+                reordering={reorder.busy}
+              />
+            </EditorSection>
+            <EditorSection
+              title={t('workflow.transitions.title')}
+              description={t('workflow.transitions.description')}
+              action={<ImmediateBadge className="ml-0" />}
+            >
+              <StatusTransitionGraph
+                statuses={graphStatuses}
+                transitions={graphTransitions}
+                statusLabel={graphLabel}
+                onAdd={(from, to): void => changeTransitions('add', from, to)}
+                onRemove={(from, to): void => changeTransitions('remove', from, to)}
+              />
+            </EditorSection>
+          </CardContent>
+        </Card>
       ) : null}
 
-      <Card className="mb-4">
-        <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3">
-          <div className="space-y-1.5">
-            <CardTitle>{t('workflow.statuses.title')}</CardTitle>
-            <CardDescription>{t('workflow.statuses.description')}</CardDescription>
-          </div>
-          <Button className="min-h-11 sm:min-h-9" variant="outline" onClick={(): void => setDialog({ kind: 'create' })}>
-            <Plus aria-hidden="true" />
-            {t('workflow.status.add')}
-          </Button>
-        </CardHeader>
-        <CardContent>
-          <StatusesTable
-            statuses={workflow.statuses}
-            language={language}
-            onEdit={(status): void => setDialog({ kind: 'edit', status })}
-            onDelete={setPendingDelete}
-          />
-        </CardContent>
-      </Card>
-
-      <Card className="mb-4">
-        <CardHeader>
-          <CardTitle>{t('workflow.transitions.title')}</CardTitle>
-          <CardDescription>{t('workflow.transitions.description')}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <StatusTransitionGraph
-            statuses={graphStatuses}
-            transitions={graphTransitions}
-            statusLabel={graphLabel}
-            onAdd={(from, to): void => changeTransitions('add', from, to)}
-            onRemove={(from, to): void => changeTransitions('remove', from, to)}
-          />
-        </CardContent>
-      </Card>
-
-      <Card className="mb-4">
-        <CardHeader>
-          <CardTitle>{t('workflow.mapping.title')}</CardTitle>
-          <CardDescription>{t('workflow.mapping.description')}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <OrderStatusMappings
-            workflow={workflow}
-            orderStatuses={orderStatuses}
-            language={language}
-            onSave={saveMappings}
-          />
-        </CardContent>
-      </Card>
+      {section === 'orderSync' ? (
+        <OrderStatusMappings
+          workflow={workflow}
+          orderStatuses={orderStatuses}
+          language={language}
+          onSave={saveMappings}
+        />
+      ) : null}
 
       {/* --- User Story 8: which statuses count towards a computed value --- */}
-      <Card className="mb-4">
-        <CardHeader>
-          <CardTitle>{t('value.counting.title')}</CardTitle>
-          <CardDescription>{t('value.counting.description')}</CardDescription>
-        </CardHeader>
-        <CardContent>
+      {section === 'value' ? (
+        // Keeps the anchor the value link has always named.
+        <div id={VALUE_COUNTING_HASH.slice(1)}>
           <ValueCountingStatuses
             workflow={workflow}
             orderStatuses={orderStatuses}
@@ -257,26 +322,14 @@ export function WorkflowConfigPage(): ReactNode {
               setWorkflow(await crmApi.setValueCountingStatuses(body));
             }}
           />
-        </CardContent>
-      </Card>
-      {/* --- end of User Story 8 ------------------------------------------- */}
-
-      {/* --- User Story 19: what a board card shows ------------------------- */}
-      <Card id={BOARD_CARD_ANCHOR} ref={boardCardSection} className="scroll-mt-4">
-        <CardHeader>
-          <CardTitle>{t('boardCard.title')}</CardTitle>
-          <CardDescription>{t('boardCard.description')}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <BoardCardFieldsEditor />
-        </CardContent>
-      </Card>
-      {/* --- end of User Story 19 ------------------------------------------ */}
+        </div>
+      ) : null}
 
       {dialog ? (
         <StatusDialog
           status={dialog.kind === 'edit' ? dialog.status : null}
           nextWeight={nextWeight}
+          takenCodes={workflow.statuses.map((status) => status.code)}
           language={language}
           onSubmit={submitStatus}
           onClose={(): void => setDialog(null)}
@@ -290,14 +343,16 @@ export function WorkflowConfigPage(): ReactNode {
           onClose={(): void => setPendingDelete(null)}
           footer={
             <>
-              <Button className="min-h-11 sm:min-h-9"
+              <Button
+                className="min-h-11 sm:min-h-9"
                 variant="outline"
                 disabled={deleting}
                 onClick={(): void => setPendingDelete(null)}
               >
                 {tCore('common.action.cancel')}
               </Button>
-              <Button className="min-h-11 sm:min-h-9"
+              <Button
+                className="min-h-11 sm:min-h-9"
                 variant="destructive"
                 disabled={deleting}
                 aria-busy={deleting}

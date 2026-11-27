@@ -28,8 +28,9 @@ Everything below is a **peer** dependency, so the application resolves exactly o
 
 **Third-party**
 
-- `@mikro-orm/core` ^6
-- `@mikro-orm/postgresql` ^6
+- `@mikro-orm/core` ^7.2.11
+- `@mikro-orm/decorators` ^7.2.11
+- `@mikro-orm/postgresql` ^7.2.11
 - `fastify` ^5.11.0
 - `fastify-plugin` ^6
 - `ioredis` ^5
@@ -37,6 +38,7 @@ Everything below is a **peer** dependency, so the application resolves exactly o
 ## What the tarball carries
 
 - `dist/` — the compiled JavaScript and its type declarations
+- `i18n/` — the translation bundles this package ships (`en`, `pl`), loaded by the platform
 - `docs/` — the package’s own pages in the Endora Commerce documentation site
 
 ## Install

@@ -25,7 +25,6 @@ export const CATEGORY_ADMIN_SEARCH_FIELDS: readonly AdminSearchFieldDescriptor[]
 ];
 
 export const PRODUCT_ADMIN_SEARCH_STATUS_KEYS: Readonly<Record<string, string>> = {
-  draft: 'adminSearch.product.status.draft',
   active: 'adminSearch.product.status.active',
   inactive: 'adminSearch.product.status.inactive',
 };
@@ -36,12 +35,15 @@ export interface CatalogAdminSearchQuery {
   readonly isUuid: boolean;
   readonly fields: readonly string[];
   readonly limit: number;
+  /** Spec 193 (FR-034) — the calling admin, whose visibility scope narrows the product search. */
+  readonly adminUserId: string;
 }
 
 export interface ProductAdminSearchRow {
   readonly id: string;
   readonly sku: string;
-  readonly name: Record<string, string>;
+  /** Feature 174 (FR-031) — the Global name, shown whatever the admin's language. */
+  readonly name: string;
   readonly type: string;
   readonly status: string;
 }
@@ -81,12 +83,13 @@ function forward(query: AdminSearchProviderQuery): CatalogAdminSearchQuery {
     isUuid: query.isUuid,
     fields: query.fields,
     limit: query.limit,
+    adminUserId: query.adminUserId,
   };
 }
 
 /**
  * The Product provider. Visibility is the product list's: `catalog:read`, and
- * every product that is not deleted — drafts and inactive ones included, with
+ * every product that is not deleted — inactive and archived ones included, with
  * their status (FR-016).
  */
 export function createProductAdminSearchProvider(deps: ProductAdminSearchProviderDeps): AdminSearchProvider {
@@ -105,7 +108,7 @@ export function createProductAdminSearchProvider(deps: ProductAdminSearchProvide
           const statusKey = PRODUCT_ADMIN_SEARCH_STATUS_KEYS[row.status];
           return {
             id: row.id,
-            title: pickLocalizedName(row.name, query.language) ?? row.sku,
+            title: row.name !== '' ? row.name : row.sku,
             subtitle: `${row.sku} · ${row.type}`,
             status: {
               code: row.status,

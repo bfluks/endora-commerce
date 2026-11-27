@@ -7,6 +7,8 @@ import {
   type ReturnedAddress,
 } from '../entities/organization-tax-id-validation.entity.js';
 import type { VatValidator, VatValidationResult } from './vat-validator-port.js';
+import { ERROR_CODES, isUuidShape } from '@endora-commerce/contracts';
+import { HttpError } from '@endora-commerce/platform/http';
 
 /**
  * Owns the tax-ID validation flow (feature 026 US7).
@@ -61,6 +63,7 @@ export class OrganizationTaxIdValidationService {
     organizationId: string,
     options: { limit?: number } = {},
   ): Promise<OrganizationTaxIdValidation[]> {
+    if (!isUuidShape(organizationId)) return [];
     const em = this.deps.emFactory();
     return em.find(
       OrganizationTaxIdValidation,
@@ -79,20 +82,28 @@ export class OrganizationTaxIdValidationService {
       deletedAt: null,
     });
 
-    const providerKind = this.pickProvider(org.taxId, input.providerHint ?? 'auto');
-    const result: VatValidationResult = await this.runProvider(providerKind, org.taxId);
+    // `specs/177-tax-id-scope/` FR-006 — a personal organization has no tax ID,
+    // so there is nothing to validate: refused before any provider is called
+    // and before any history row is written.
+    const taxId = org.taxId;
+    if (taxId == null) {
+      throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'This organization has no tax ID.');
+    }
+
+    const providerKind = this.pickProvider(taxId, input.providerHint ?? 'auto');
+    const result: VatValidationResult = await this.runProvider(providerKind, taxId);
 
     const record = em.create(OrganizationTaxIdValidation, {
       organizationId,
       provider: providerKind,
       outcome: result.outcome,
-      taxIdValue: org.taxId,
+      taxIdValue: taxId,
       legalNameReturned: result.legalName,
       addressReturned: result.address,
       errorKind: result.errorKind,
       requestedByAdminUserId: input.actorAdminUserId ?? null,
     });
-    await em.persistAndFlush(record);
+    await em.persist(record).flush();
 
     // Stamp the org's "last validation" summary fields regardless of
     // outcome — the admin panel reads `vatValidatedAt`, `vatValidationProvider`,

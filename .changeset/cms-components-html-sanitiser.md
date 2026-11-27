@@ -1,5 +1,0 @@
----
-'@endora-commerce/cms-components': patch
----
-
-`sanitizeHtml` and `sanitizeRichHtml` now share one DOM-free sanitiser, so a server render and a client render of the same props produce identical markup. The input is tokenised and the output rebuilt from the tokens the policy admits: event handler attributes are always removed, `href`/`src` and other URL attributes keep only `http`, `https`, `mailto`, `tel` and relative URLs (character references are decoded before the scheme is read), and a `<` that does not start an emitted tag is escaped. With sanitising on, the tag and attribute allowlist is unchanged and is now applied on the server too. With sanitising off (trusted HTML), arbitrary elements and attributes are still kept, but scripts, event handlers, `srcdoc`, URLs outside the schemes above (including `data:`), and inline styles containing `url(` or `expression` are removed. `sanitizeRichHtml` keeps the markup the rich text editor writes — colour and alignment styles, `class`, link `target`/`rel`, image `title` — and drops other attributes.

@@ -56,16 +56,27 @@ import { Redis } from 'ioredis';
 import {
   ApiInterceptorRegistry,
   AuditLogService,
+  CommandHookRegistry,
+  CommandMiddlewareRegistry,
+  createEntityExtensionReads,
+  EntityExtensionLoaderRegistry,
+  entityExtensionDeclarationsFrom,
+  commandMiddlewareFrom,
+  createCommandOutboxWake,
+  AuditRedactionService,
   activationDeclarationsFrom,
   capabilityRegistryFrom,
   buildServer,
   composeModules,
   composeSalesChannelsKernel,
   composeSettingsKernel,
+  createCursorSeal,
   createRegistrationOwnership,
   createRootContainer,
   forkScopedEm,
   healthRoutePlugin,
+  hookableActionsFrom,
+  moduleDependencyClosureFrom,
   platformLogger,
   registerOrm,
   registerRequestScopeHook,
@@ -79,7 +90,15 @@ import {
   type SettingsKernel,
 } from '@endora-commerce/platform/composition';
 import { CommandBus } from '@endora-commerce/platform/commands';
+import {
+  activeEntityExtensionContext,
+  activeSchemaExtensionContext,
+  createSchemaExtensionReads,
+  verifyEntityExtensions,
+  verifySchemaExtensions,
+} from '@endora-commerce/platform/db';
 import { EventBus } from '@endora-commerce/platform/events';
+import { effectiveState } from '@endora-commerce/platform/kernel';
 import type { TenantContext } from '@endora-commerce/platform/tenancy';
 
 import { mergeTestSupportRegistrations } from '../support/index.js';
@@ -255,6 +274,19 @@ export interface ComposeTestServerOptions {
    */
   readonly decorationOrder?: Readonly<Record<string, readonly string[]>> | undefined;
   /**
+   * The order the deployment declares for command-hook modules no manifest
+   * dependency ranks (`specs/176-command-hooks-outbox/` FR-014), forwarded to
+   * `composeModules` as `composeApp` forwards it. An option for
+   * `decorationOrder`'s reason: a composition that declares none still composes.
+   */
+  readonly commandHookOrder?: Readonly<Record<string, readonly string[]>> | undefined;
+  /**
+   * The `admit` command-middleware tie-break the deployment declares
+   * (`specs/189-command-middleware/` FR-031), forwarded to `composeModules` as
+   * `composeApp` forwards it, for `commandHookOrder`'s reason.
+   */
+  readonly commandMiddlewareOrder?: readonly string[] | undefined;
+  /**
    * Which module ids presence reports as enabled.
    *
    * Defaults to every module the composition's manifests declare, which is what
@@ -291,6 +323,8 @@ export interface TestServerHandle {
   readonly composed: ComposedModules;
   /** The composition's own closer, kept so teardown needs no second reference. */
   readonly closeOrm: () => Promise<void>;
+  /** Closes the outbox wake-up's producer queue, if a commit ever built it (176 P3). */
+  readonly closeOutboxWake: () => Promise<void>;
 }
 
 export async function composeTestServer(
@@ -300,6 +334,22 @@ export async function composeTestServer(
   const manifests = composition.manifests.map((entry) => entry.manifest);
 
   const orm = await composition.orm.open();
+  // As `composeApp` does (`specs/178-extensible-columns/` FR-026): the declared
+  // extension columns are held to the database before anything composes over
+  // it. With no declaration — every composition this kit serves today — it
+  // issues no statement.
+  await verifySchemaExtensions(
+    (sql, params = []) =>
+      orm.em.getConnection().execute(sql, params, 'all') as Promise<Record<string, unknown>[]>,
+    activeSchemaExtensionContext(),
+  );
+  // And the declared side tables, read-only, as `composeApp` holds them
+  // (`specs/187-side-table-extensions/` FR-022): one catalog query.
+  await verifyEntityExtensions(
+    (sql, params = []) =>
+      orm.em.getConnection().execute(sql, params, 'all') as Promise<Record<string, unknown>[]>,
+    activeEntityExtensionContext(),
+  );
   // Mirror the production seam: forks stamp the tenant filter from the ambient
   // `TenantContext`, which the request-scope hook below establishes.
   const em = (): EntityManager => forkScopedEm(orm);
@@ -345,7 +395,9 @@ export async function composeTestServer(
   // Everything from here is disposable, and a failure between here and the
   // handle has to give it back. The re-throw is unconditional: this catch
   // releases resources and decides nothing.
+  let closeOutboxWake = async (): Promise<void> => undefined;
   const release = async (): Promise<void> => {
+    await closeOutboxWake();
     redis.disconnect();
     realSubscriber?.disconnect();
     await composition.orm.close();
@@ -361,13 +413,45 @@ export async function composeTestServer(
     });
     const auditLogService = new AuditLogService(em);
     const eventBus = new EventBus();
-    const commandBus = new CommandBus(orm, auditLogService, eventBus);
+    // `specs/176-command-hooks-outbox/` P2 — as `composeApp` builds it: one
+    // registry, shared by the bus and every module context, sealed by
+    // `composeModules`, presence asked per Command from the effective state.
+    const commandHookRegistry = new CommandHookRegistry({
+      isPresent: (moduleId) => effectiveState.isPresent(moduleId),
+    });
+    // P3 — the outbox wake-up, as `composeApp` builds it: on this root's Redis,
+    // closed before the connection goes. It enqueues only after a commit that
+    // wrote outbox rows, and no worker consumes it here — a test drives the
+    // drain itself.
+    const commandOutboxWake = createCommandOutboxWake(redis);
+    closeOutboxWake = () => commandOutboxWake.close();
+    // `specs/189-command-middleware/` FR-041 — as `composeApp` builds it: one
+    // registry, shared by the bus and every module context, sealed by
+    // `composeModules`, presence asked per call from the effective state, its
+    // failures on the platform logger.
+    const commandMiddlewareRegistry = new CommandMiddlewareRegistry({
+      isPresent: (moduleId) => effectiveState.isPresent(moduleId),
+      log: platformLogger(),
+    });
+    // `specs/187-side-table-extensions/` B1 — as `composeApp` builds it: judged
+    // against the composed manifests' `extends`, sealed by `composeModules`.
+    const entityExtensionLoaderRegistry = new EntityExtensionLoaderRegistry({
+      declarations: entityExtensionDeclarationsFrom(manifests),
+    });
+    const commandBus = new CommandBus(orm, auditLogService, eventBus, {
+      hooks: commandHookRegistry,
+      outboxWake: commandOutboxWake,
+      middleware: commandMiddlewareRegistry,
+    });
 
     const salesChannels = composeSalesChannelsKernel({
       emFactory: em,
       eventBus,
       redis,
+      redisSubscriber,
       auditLogService,
+      // Spec 193 (R-10) — a governor of a switched-off module governs nothing (FR-073).
+      isModulePresent: (moduleId) => effectiveState.isPresent(moduleId),
     });
     const settings = composeSettingsKernel({
       emFactory: em,
@@ -419,13 +503,31 @@ export async function composeTestServer(
       redisSubscriber,
       eventBus,
       commandBus,
+      // 176 P2 — as `composeApp` registers it, for the execution-plan route.
+      commandHookRegistry,
       auditLogService,
+      // Issue #844 — as `composeApp` registers it.
+      auditRedactionService: new AuditRedactionService(em, auditLogService),
+      // `specs/178-extensible-columns/` FR-051 — as `composeApp` registers it, so
+      // a host route's `?extensions=` resolves in a test composition too.
+      schemaExtensionReads: createSchemaExtensionReads({
+        declarations: () => activeSchemaExtensionContext().declarations,
+        state: effectiveState,
+      }),
+      // `specs/187-side-table-extensions/` FR-054 — as `composeApp` registers it.
+      entityExtensionReads: createEntityExtensionReads({
+        registry: entityExtensionLoaderRegistry,
+        state: effectiveState,
+      }),
       apiInterceptors,
       resolvedModuleRegistry: composition.manifests,
       // Whether this process runs queue consumers — the platform's one
       // module-agnostic switch (`specs/134-paid-module-extraction/` research
       // D16). A harness runs none: every test process shares the queues.
       processRunsWorkers: false,
+      // Issue #497 — the cursor seal production keys with the session key. A
+      // harness pins its own, so a cursor issued on one request opens on the next.
+      cursorSeal: createCursorSeal('test-kit-cursor-seal'),
       ...options.values,
     });
 
@@ -443,6 +545,22 @@ export async function composeTestServer(
       // that resolves an ambiguity in production and not in its tests composes
       // a different platform on the one axis a deployment can change.
       decorationOrder: options.decorationOrder,
+      // 176 P2 — sealed at the end of the call, against the same manifest set.
+      commandHookRegistry,
+      commandHooks: {
+        hookableActions: hookableActionsFrom(manifests),
+        moduleDependencies: moduleDependencyClosureFrom(manifests),
+        commandHookOrder: options.commandHookOrder,
+      },
+      // 189 P1 — sealed after the hook registry, against the same manifest set.
+      commandMiddlewareRegistry,
+      commandMiddleware: {
+        declarations: commandMiddlewareFrom(manifests),
+        moduleDependencies: moduleDependencyClosureFrom(manifests),
+        commandMiddlewareOrder: options.commandMiddlewareOrder,
+      },
+      // 187 B1 — sealed after the middleware registry.
+      entityExtensionLoaderRegistry,
     });
 
     const composedContext: ComposedPlatformContext = { ...platform, composed };
@@ -479,6 +597,8 @@ export async function composeTestServer(
     composed.contribute({
       salesChannelsCache: salesChannels.cache,
       salesChannelBridgeRegistry: salesChannels.bridgeRegistry,
+      // The membership-governor contribution point: a register-only facade (TM-10); sealed after boot.
+      salesChannelMembershipGovernors: salesChannels.membershipGovernors.registrationPort(),
       salesChannelMembershipPort: salesChannels.membershipService,
       salesChannelResolutionPort: salesChannels.resolver,
       // The channel a **channel-scoped** settings read resolves against outside
@@ -531,6 +651,8 @@ export async function composeTestServer(
     // production composition root runs it (D-45). A boot hook may therefore
     // resolve anything. It is also what closes the contribution window.
     await composed.runBootHooks();
+    // Spec 193 (TM-10) — membership governors register from boot hooks only.
+    salesChannels.membershipGovernors.seal();
 
     const app = await buildServer({
       sessionCookieSecret: 'test-secret-do-not-use-in-production',
@@ -559,6 +681,7 @@ export async function composeTestServer(
       salesChannels,
       composed,
       closeOrm: () => composition.orm.close(),
+      closeOutboxWake,
     };
   } catch (error) {
     await release();
@@ -579,6 +702,8 @@ export async function teardownTestServer(handle: TestServerHandle): Promise<void
   // Runs every registration's disposer and drops the resolution cache, so a
   // file's composed services do not outlive its server.
   await handle.container.dispose();
+  // The outbox wake-up's producer queue shares `redis`; it goes first.
+  await handle.closeOutboxWake();
   handle.redis.disconnect();
   // Unsubscribe and drop listeners **before** disconnecting. A subscribed
   // client that is merely disconnected keeps its subscription set, and ioredis

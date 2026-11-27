@@ -3,6 +3,7 @@ import { renderToString } from 'react-dom/server';
 import { PdpStickyBuyBar } from '../components/mobile/PdpStickyBuyBar';
 import { PdpPriceToggle } from '../components/pricing/PdpPriceToggle';
 import type { AddToCartResult } from '../lib/cartAddState';
+import { LINE_QUANTITY_MAX } from '@endora-commerce/contracts';
 
 /**
  * Feature 044 / US3 — sticky PDP buy bar + net/gross price toggle.
@@ -16,9 +17,17 @@ import type { AddToCartResult } from '../lib/cartAddState';
 const noop = async (): Promise<AddToCartResult> => ({ status: 'idle' });
 
 describe('PdpStickyBuyBar', () => {
+  it('bounds the quantity input at the line quantity bound (issue #351)', () => {
+    const html = renderToString(
+      <PdpStickyBuyBar locale="en-US" productId="p" addToCartAction={noop} addToCartLabel="Do koszyka" />,
+    );
+    const input = html.match(/<input[^>]*name="quantity"[^>]*>/)?.[0] ?? '';
+    expect(input).toContain(`max="${LINE_QUANTITY_MAX}"`);
+  });
+
   it('renders the quantity stepper, add-to-cart label and product id', () => {
     const html = renderToString(
-      <PdpStickyBuyBar
+      <PdpStickyBuyBar locale="en-US"
         productId="prod-1"
         addToCartAction={noop}
         addToCartLabel="Do koszyka"
@@ -33,7 +42,7 @@ describe('PdpStickyBuyBar', () => {
 
   it('renders the datasheet shortcut only when a href is supplied', () => {
     const withDoc = renderToString(
-      <PdpStickyBuyBar
+      <PdpStickyBuyBar locale="en-US"
         productId="p"
         addToCartAction={noop}
         addToCartLabel="Do koszyka"
@@ -43,7 +52,7 @@ describe('PdpStickyBuyBar', () => {
     expect(withDoc).toContain('https://cdn/x.pdf');
 
     const without = renderToString(
-      <PdpStickyBuyBar productId="p" addToCartAction={noop} addToCartLabel="Do koszyka" />,
+      <PdpStickyBuyBar locale="en-US" productId="p" addToCartAction={noop} addToCartLabel="Do koszyka" />,
     );
     expect(without).not.toContain('href="https');
   });
@@ -56,6 +65,7 @@ describe('PdpPriceToggle', () => {
         basePrice={{ amount: '100.00', currency: 'PLN' }}
         salePrice={null}
         locale="pl-PL"
+        vatRate={0.23}
         labels={{ net: 'NETTO', gross: 'BRUTTO' }}
       />,
     );

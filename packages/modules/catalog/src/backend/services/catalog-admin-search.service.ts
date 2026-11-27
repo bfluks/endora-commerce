@@ -1,21 +1,28 @@
-import type { EntityManager, Knex } from '@mikro-orm/postgresql';
+import type { EntityManager } from '@mikro-orm/postgresql';
 import type { CatalogAttributeReadPort } from '@endora-commerce/contracts';
 import type {
   CatalogAdminSearchQuery,
   CategoryAdminSearchRow,
   ProductAdminSearchRow,
 } from '../admin-search-provider.js';
+import {
+  predicateClause,
+  requireVisibility,
+  type AdminProductReadScope,
+  type CatalogAdminProductVisibility,
+} from './admin-product-visibility.js';
 
 /**
  * Global search over products and categories (`specs/150-admin-global-search/`,
  * T048).
  *
  * The admin lists' rows: every product and category that is not deleted —
- * drafts and inactive ones included (FR-016) — with no channel or audience
+ * inactive and archived ones included (FR-016) — with no channel or audience
  * filter, because the admin screens have none (research R-19). Only the
  * selected fields are matched, literally (`likeEscaped`, Postgres' default
- * `\` LIKE escape). A name matches in **any** language (one value of the
- * per-language map, never a key); `quickSearchAttributes` are the attributes
+ * `\` LIKE escape). A product matches on its Global name (feature 174,
+ * FR-031: one string); a category name matches in **any** language (one value
+ * of its per-language map, never a key); `quickSearchAttributes` are the attributes
  * this module flags `quickSearchable`, read through its own attribute port as
  * the storefront type-ahead does. Identifiers (SKU, slug) rank exact → prefix
  * → the rest, then most recent change, then id; `limit + 1` rows, no count.
@@ -24,40 +31,49 @@ export class CatalogAdminSearchService {
   constructor(
     private readonly emFactory: () => EntityManager,
     private readonly attributeRead: Pick<CatalogAttributeReadPort, 'listByFlag'>,
+    /** Spec 193 — `product_visibility_rules`' predicates; without it a narrowed scope refuses. */
+    private readonly visibility?: CatalogAdminProductVisibility,
   ) {}
 
-  async searchProducts(query: CatalogAdminSearchQuery): Promise<{ rows: ProductAdminSearchRow[]; hasMore: boolean }> {
+  /**
+   * Spec 193 (FR-034) — a narrowed `scope` puts the visibility predicate inside the statement, so
+   * the `limit + 1` probe behind `hasMore` counts visible rows only.
+   */
+  async searchProducts(
+    scope: AdminProductReadScope,
+    query: CatalogAdminSearchQuery,
+  ): Promise<{ rows: ProductAdminSearchRow[]; hasMore: boolean }> {
+    const visibility = requireVisibility(this.visibility, scope);
+    const visible = visibility ? predicateClause(visibility.productPredicate(scope, { productId: '"products"."id"' })) : null;
+    if (visible === false) return { rows: [], hasMore: false };
     const fields = new Set(query.fields);
     const contains = `%${query.likeEscaped}%`;
     const quickKeys = fields.has('quickSearchAttributes')
       ? (await this.attributeRead.listByFlag('quickSearchable')).map((a) => a.key)
       : [];
-    const matches: Array<(qb: Knex.QueryBuilder) => void> = [];
-    if (fields.has('sku')) matches.push((qb) => qb.orWhereRaw('"sku" ilike ?', [contains]));
-    if (fields.has('name')) {
-      matches.push((qb) =>
-        qb.orWhereRaw('exists (select 1 from jsonb_each_text("name") n where n.value ilike ?)', [contains]),
-      );
-    }
-    if (fields.has('slug')) matches.push((qb) => qb.orWhereRaw('"slug" ilike ?', [contains]));
+    // One predicate per selected field, OR-combined; every value is a `?` placeholder.
+    const matches: SqlFragment[] = [];
+    if (fields.has('sku')) matches.push({ sql: '"sku" ilike ?', params: [contains] });
+    if (fields.has('name')) matches.push({ sql: '"name" ilike ?', params: [contains] });
+    if (fields.has('slug')) matches.push({ sql: '"slug" ilike ?', params: [contains] });
     for (const key of quickKeys) {
-      matches.push((qb) => qb.orWhereRaw('"attribute_values"->>? ilike ?', [key, contains]));
+      matches.push({ sql: '"attribute_values"->>? ilike ?', params: [key, contains] });
     }
-    if (query.isUuid) matches.push((qb) => qb.orWhereRaw('"id" = ?::uuid', [query.text]));
+    if (query.isUuid) matches.push({ sql: '"id" = ?::uuid', params: [query.text] });
     const identifiers = ['sku', 'slug'].filter((f) => fields.has(f));
     const rows = await this.#page<{
       id: string;
       sku: string;
-      name: Record<string, string>;
+      name: string;
       type: string;
       status: string;
-    }>('products', ['id', 'sku', 'name', 'type', 'status'], matches, identifiers, query);
+    }>('products', ['id', 'sku', 'name', 'type', 'status'], matches, identifiers, query, visible);
     return {
       hasMore: rows.length > query.limit,
       rows: rows.slice(0, query.limit).map((r) => ({
         id: r.id,
         sku: r.sku,
-        name: parseJson(r.name),
+        name: r.name,
         type: r.type,
         status: r.status,
       })),
@@ -69,14 +85,15 @@ export class CatalogAdminSearchService {
   ): Promise<{ rows: CategoryAdminSearchRow[]; hasMore: boolean }> {
     const fields = new Set(query.fields);
     const contains = `%${query.likeEscaped}%`;
-    const matches: Array<(qb: Knex.QueryBuilder) => void> = [];
+    const matches: SqlFragment[] = [];
     if (fields.has('name')) {
-      matches.push((qb) =>
-        qb.orWhereRaw('exists (select 1 from jsonb_each_text("name") n where n.value ilike ?)', [contains]),
-      );
+      matches.push({
+        sql: 'exists (select 1 from jsonb_each_text("name") n where n.value ilike ?)',
+        params: [contains],
+      });
     }
-    if (fields.has('slug')) matches.push((qb) => qb.orWhereRaw('"slug" ilike ?', [contains]));
-    if (query.isUuid) matches.push((qb) => qb.orWhereRaw('"id" = ?::uuid', [query.text]));
+    if (fields.has('slug')) matches.push({ sql: '"slug" ilike ?', params: [contains] });
+    if (query.isUuid) matches.push({ sql: '"id" = ?::uuid', params: [query.text] });
     const identifiers = fields.has('slug') ? ['slug'] : [];
     const rows = await this.#page<{ id: string; name: Record<string, string> }>(
       'categories',
@@ -96,19 +113,13 @@ export class CatalogAdminSearchService {
   async #page<T>(
     table: 'products' | 'categories',
     columns: readonly string[],
-    matches: ReadonlyArray<(qb: Knex.QueryBuilder) => void>,
+    matches: readonly SqlFragment[],
     identifiers: readonly string[],
     query: CatalogAdminSearchQuery,
+    visible: SqlFragment | null = null,
   ): Promise<T[]> {
     if (matches.length === 0) return [];
     const em = this.emFactory();
-    const builder = em
-      .getKnex()(table)
-      .select(columns.map((c) => (c === 'id' ? em.getKnex().raw('"id"::text as id') : c)))
-      .whereNull('deleted_at')
-      .andWhere((or) => {
-        for (const match of matches) match(or);
-      });
     const exact: string[] = [];
     const starts: string[] = [];
     const exactBindings: string[] = [];
@@ -123,15 +134,23 @@ export class CatalogAdminSearchService {
       starts.push(`"${column}" ilike ?`);
       startBindings.push(`${query.likeEscaped}%`);
     }
-    if (exact.length > 0) {
-      const prefix = starts.length > 0 ? ` when ${starts.join(' or ')} then 1` : '';
-      builder.orderByRaw(`case when ${exact.join(' or ')} then 0${prefix} else 2 end`, [
+    const prefix = starts.length > 0 ? ` when ${starts.join(' or ')} then 1` : '';
+    const rank = exact.length > 0 ? `case when ${exact.join(' or ')} then 0${prefix} else 2 end, ` : '';
+    // `table` and `columns` are this file's own constants; values go in as `?` placeholders.
+    const select = columns.map((c) => (c === 'id' ? '"id"::text as "id"' : `"${c}"`)).join(', ');
+    return em.execute<T[]>(
+      `select ${select} from "${table}"
+        where "deleted_at" is null and (${matches.map((m) => m.sql).join(' or ')})${visible ? ` and ${visible.sql}` : ''}
+        order by ${rank}"updated_at" desc, "id" asc
+        limit ?`,
+      [
+        ...matches.flatMap((m) => m.params),
+        ...(visible ? visible.params : []),
         ...exactBindings,
         ...startBindings,
-      ]);
-    }
-    builder.orderBy('updated_at', 'desc').orderBy('id', 'asc').limit(query.limit + 1);
-    return (await em.execute(builder)) as T[];
+        query.limit + 1,
+      ],
+    );
   }
 
   /** Each category's ancestors' names, root first — one recursive read for the whole page. */
@@ -166,6 +185,12 @@ export class CatalogAdminSearchService {
     }
     return out;
   }
+}
+
+/** A predicate and the values for its `?` placeholders, in order. */
+interface SqlFragment {
+  readonly sql: string;
+  readonly params: readonly unknown[];
 }
 
 function parseJson(value: Record<string, string> | string): Record<string, string> {

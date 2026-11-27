@@ -83,13 +83,13 @@ describe('the anonymous notify-when-available endpoint answers one refusal for t
         slug: `notify-oracle-${label}-${stamp}`,
         type: 'simple',
         status: 'active',
-        name: { 'en-US': `Notify oracle probe ${label}` },
-        description: { 'en-US': 'Out of stock, so the notify-me path is reachable.' },
+        name: `Notify oracle probe ${label}`,
+        description: 'Out of stock, so the notify-me path is reachable.',
         visibility: 'public',
         attributeValues: { defaultPrice: 10 },
         ...extra,
       });
-      await em.persistAndFlush(product);
+      await em.persist(product).flush();
       return product.id;
     };
 
@@ -112,7 +112,6 @@ describe('the anonymous notify-when-available endpoint answers one refusal for t
       currencies: ['PLN'],
       defaultCurrency: 'PLN',
       active: true,
-      isPublic: true,
     });
     const elsewhere = em.create(SalesChannel, {
       code: `${code}-elsewhere`,
@@ -122,9 +121,8 @@ describe('the anonymous notify-when-available endpoint answers one refusal for t
       currencies: ['PLN'],
       defaultCurrency: 'PLN',
       active: true,
-      isPublic: true,
     });
-    await em.persistAndFlush([channel, elsewhere]);
+    await em.persist([channel, elsewhere]).flush();
 
     // Written with SQL rather than through `SalesChannelMembershipService` for
     // the reason `channel-assortment-fixture.ts` gives: the service audits and

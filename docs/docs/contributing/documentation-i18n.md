@@ -19,11 +19,11 @@ This page is the workflow for **docs-site** translations. Admin UI string bundle
 ## What must be translated
 
 `pnpm --filter backend run check:docs-translations` enumerates every
-English source and expects a pinned cache entry plus a materialised markdown
+English source and expects a translation pin plus a materialised markdown
 file for each locale in `docs/locales.config.json` → `translateLocales`
 (v1: `pl` only):
 
-| Layer | English source | Cache `sourcePath` key |
+| Layer | English source | Pin `sourcePath` key |
 | --- | --- | --- |
 | Hand-authored site pages | `docs/docs/**/*.md` (excluding generated categories) | repo-relative path, e.g. `docs/docs/intro.md` |
 | Module reference (generated) | `docs/docs/module-reference/*.md` | `generated:module-reference/<slug>` |
@@ -32,6 +32,11 @@ file for each locale in `docs/locales.config.json` → `translateLocales`
 
 Paths listed in `docs/translation-skip.json` are excluded (today:
 `docs/docs/contributing/translations.md`, which is the Admin UI glossary).
+
+The hand-authored layer includes the pages the site itself keeps under
+`docs/docs/modules/`, such as `README.md` and `lifecycle.md`. The module pages
+that `composer:generate` copies into that directory are not sources there: each
+is checked once, under its module's own path.
 
 Chrome — the navbar, the footer and the sidebar **category** labels declared in
 `docs/sidebars.js` and `docs/sidebars.modules.generated.js` — is translated in
@@ -85,48 +90,84 @@ Steps 1–2 are file edits; step 3 is the local guard.
 
 1. **Edit the English source** — hand-authored page under `docs/docs/`, or the
    module's own `docs/` directory at the package root (not under `src/`).
-2. **Write or update the Polish materialisation** in the same merge request:
-   - Add or update the cache entry at
-     `docs/translation-cache/pl/<sourceKey>.json` (slashes in the source path
-     become `--`, e.g. `docs/docs/intro.md` →
-     `docs--docs--intro.md.json`).
-   - Set `sourceHash` to the sha256 of the normalised English **body** (YAML
-     front matter stripped; see `hashSourceBody()` in
-     `backend/scripts/lib/docs-translation-cache.ts`).
-   - Set `content` to the full Polish markdown (front matter + body).
-   - Copy `content` to the materialised path
-     `docs/i18n/pl/docusaurus-plugin-content-docs/current/<docId>.md`
-     (e.g. the `catalog` module's own `docs/catalog.md` →
-     `.../current/modules/catalog.md`).
+2. **Write or update the Polish page** in the same merge request, at
+   `docs/i18n/pl/docusaurus-plugin-content-docs/current/<docId>.md`
+   (e.g. `docs/docs/intro.md` → `.../current/intro.md`, the `catalog` module's
+   own `docs/catalog.md` → `.../current/modules/catalog.md`). That page is the
+   translation: it is what Docusaurus builds.
    - If you changed a sidebar **category** label, or a navbar or footer string,
      add the matching id to the file named for it in *Where a message id
      belongs* above. A sidebar **doc** entry owes no id.
-3. **Run the completeness check**:
+3. **Re-pin the page, then run the completeness check**:
 
    ```bash
+   pnpm --filter backend run docs:translations:pin docs/docs/intro.md
    pnpm --filter backend run check:docs-translations
    ```
 
-   Exit code `0` = every source has a fresh cache entry, a materialised file
-   from which Docusaurus can resolve a title, and every chrome id in the file
-   that reads it. Exit code `2` lists `missing-translation`,
-   `stale-translation`, `missing-sidebar-message`, `chrome-message-missing`,
-   `chrome-message-inert` or `doc-title-unresolvable` findings.
+   The pin command records the hash of the English body the Polish page now
+   matches (*Translation pins* below). Name the pages you translated, by their
+   English path or their pin key; with no names it re-pins every page whose
+   English body has moved. Pinning tells the check that the translation is up
+   to date, so pin only pages you have actually brought up to date.
 
-### Cache entry shape
+   Exit code `0` = every source has a fresh pin, a materialised file from which
+   Docusaurus can resolve a title and whose headings match the English page,
+   and every chrome id in the file that reads it. Exit code `2` lists
+   `missing-translation`, `stale-translation`, `malformed-pin`,
+   `missing-sidebar-message`, `chrome-message-missing`, `chrome-message-inert`,
+   `doc-title-unresolvable` or `structure-divergence` findings.
+
+   **`structure-divergence`** compares the heading outline of a freshly pinned
+   page with its translation, because a pin only says which English body the
+   translation was made from: a merge that drops an English section and
+   re-pins passes the hash while the Polish page keeps the section. Headings
+   are paired by the id they render with — an explicit `{#anchor}`, or the
+   slug Docusaurus derives from the English heading text — so give a Polish
+   heading the English id (`## Wyłączanie modułu {#switching-the-module-off}`)
+   rather than an id of its own. A paired heading at another level, an
+   explicit anchor on one side only, or a different number of the remaining
+   headings at one level is a finding. The limit: headings without an
+   explicit anchor are compared only as a count per level, so dropping one
+   section and adding another at the same level on the same side is not seen.
+
+### Translation pins
+
+A pin is a small JSON file at `docs/translation-cache/<locale>/<sourceKey>.json`.
+Slashes in the source path become `--`, e.g. `docs/docs/intro.md` →
+`docs--docs--intro.md.json`. It says which English body the translation was
+made from, and nothing else:
 
 ```json
 {
   "sourcePath": "docs/docs/intro.md",
   "sourceHash": "<sha256 of English body>",
   "locale": "pl",
-  "content": "---\ntitle: Wstęp\n---\n\n…",
   "meta": {
     "provider": "manual",
     "updatedAt": "2026-09-17T12:00:00.000Z"
   }
 }
 ```
+
+`sourceHash` is the sha256 of the normalised English **body**, with the YAML
+front matter stripped (`hashSourceBody()` in
+`backend/scripts/lib/docs-translation-cache.ts`). So a change to the English
+front matter alone does not make the translation stale. Let
+`docs:translations:pin` write pins rather than editing them by hand. It
+refuses, and writes nothing, when a page it would pin has no Polish page, when
+the Polish page's body is the English body, or when a name you passed is not a
+documentation source. A pin that is already fresh is left untouched.
+
+The check reports a pin holding anything else as `malformed-pin`. That covers
+an unresolved conflict marker, and the `content` copy of the whole page that
+entries carried before issue #671.
+
+**Resolving a conflict in a pin.** Two branches that both change the same
+English page conflict on its `sourceHash`. Take either side, make sure the
+Polish page is right for the merged English page, and run
+`pnpm --filter backend run docs:translations:pin <page>`. The hash is derived,
+so it is regenerated rather than merged.
 
 Preserve code fences, inline code, URLs, file paths, CLI commands, JSON/YAML
 literals, HTTP methods/paths and module ids unchanged in Polish prose.
@@ -151,8 +192,6 @@ add its row in the same pull request.
 
 After regeneration, **manually mirror Polish** under `docs/i18n/pl/`:
 
-- cache entries keyed as `generated:module-reference/<slug>` (and the module-map
-  repo-relative path),
 - materialised files under
   `docs/i18n/pl/docusaurus-plugin-content-docs/current/module-reference/` and
   `.../modules/`,
@@ -162,8 +201,12 @@ After regeneration, **manually mirror Polish** under `docs/i18n/pl/`:
   `doc` entries owe nothing — their Polish label is the materialised page's own
   title.
 
-Do not edit generated English files for Polish — update the i18n tree and cache
-instead.
+Then run `docs:translations:pin` for the regenerated pages. They are pinned as
+`generated:module-reference/<slug>` and under the module map's repo-relative
+path.
+
+Do not edit generated English files for Polish. Update the i18n tree and
+re-pin instead.
 
 `pnpm --filter backend run docs:collect` (English copies into `docs/docs/modules/`)
 does not write Polish; committed i18n files supply the Polish locale at build
@@ -193,14 +236,16 @@ example, German:
    `footer.json`, `docs/i18n/de/docusaurus-plugin-content-docs/current.json`,
    and `docs/i18n/de/code.json` for component-emitted ids only (*Where a message
    id belongs* above).
-4. Manually author cache entries under `docs/translation-cache/de/` and
-   materialised markdown under
+4. Manually author the materialised markdown under
    `docs/i18n/de/docusaurus-plugin-content-docs/current/` for every English
-   source (same layers and keys as Polish).
+   source (same layers as Polish), then run
+   `pnpm --filter backend run docs:translations:pin` to write the pins under
+   `docs/translation-cache/de/`.
 5. Run `pnpm --filter backend run check:docs-translations` and
    `pnpm --filter docs run build` — both must exit `0`.
 
-All consumers (`check-docs-translations.ts`, Docusaurus config, future hooks)
+All consumers (`check-docs-translations.ts`, `pin-docs-translations.ts`,
+Docusaurus config, future hooks)
 read `loadDocsLocales()` from `docs/locales.config.json` — do not hard-code
 locale codes in scripts.
 

@@ -40,12 +40,22 @@ describe('quote_requests expiry sweep — which requests are due, and who wins a
     reachedBatchLimit: boolean;
   }
   interface WorkerDeps {
-    notificationService: { enqueue: (...args: never[]) => Promise<number> };
+    notificationService: { record: (...args: never[]) => Promise<number> };
     batchSize?: number;
     onRequestFailed?: (rfqId: string, error: unknown) => void;
   }
   interface ServiceWithEm {
     deps: { emFactory: () => EntityManager };
+  }
+  /**
+   * The admin service's operator writes are Commands since issue #1824: they
+   * run on the Command Bus's transactional EntityManager, not on `emFactory`'s.
+   */
+  interface CommandRunner {
+    run<T>(command: { run: (ctx: { em: EntityManager }) => Promise<T> }): Promise<T>;
+  }
+  interface AdminServiceWithBus {
+    deps: { commandBus: CommandRunner };
   }
   const handle = () =>
     (
@@ -54,7 +64,7 @@ describe('quote_requests expiry sweep — which requests are due, and who wins a
           handle(): {
             expiryWorker: { sweep(now?: Date): Promise<Sweep>; hasExpirable(now?: Date): Promise<boolean>; deps: WorkerDeps };
             rfqService: ServiceWithEm;
-            adminService: ServiceWithEm;
+            adminService: AdminServiceWithBus;
           };
         };
       }
@@ -288,13 +298,12 @@ describe('quote_requests expiry sweep — which requests are due, and who wins a
       const channel = em.create(SalesChannel, {
         code: `qr-expiry-${Date.now()}`,
         name: { 'en-US': 'QR expiry probe' },
-        isPublic: true,
         defaultLanguage: 'en-US',
         defaultCurrency: 'PLN',
         languages: ['en-US'],
         currencies: ['PLN'],
       });
-      await em.persistAndFlush(channel);
+      await em.persist(channel).flush();
       otherChannel = { id: channel.id, code: channel.code };
     });
 
@@ -439,6 +448,37 @@ describe('quote_requests expiry sweep — which requests are due, and who wins a
       };
     };
 
+    /**
+     * {@link duringNext} for a write that runs as a Command (issue #1824): the
+     * injection happens inside the next Command's own `em.find` — between its
+     * reading the request and its taking the row.
+     */
+    const duringNextCommandFind = (service: AdminServiceWithBus, inject: () => Promise<void>): (() => void) => {
+      const original = service.deps.commandBus;
+      let done = false;
+      service.deps.commandBus = {
+        run: (command) =>
+          original.run({
+            ...command,
+            run: (ctx) => {
+              const target = ctx.em as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+              const real = target['find']!.bind(ctx.em);
+              target['find'] = async (...args: unknown[]) => {
+                if (!done) {
+                  done = true;
+                  await inject();
+                }
+                return real(...args);
+              };
+              return command.run(ctx);
+            },
+          }),
+      };
+      return () => {
+        service.deps.commandBus = original;
+      };
+    };
+
     it('sweep first: the buyer’s accept is refused with a conflict, and the request is Expired and nothing else', async () => {
       const id = await createdFromAdmin();
       await quietFor(id, EXPIRY_DAYS + 1);
@@ -470,7 +510,7 @@ describe('quote_requests expiry sweep — which requests are due, and who wins a
       const id = await submitted();
       await quote(id);
       await quietFor(id, EXPIRY_DAYS + 1);
-      const restore = duringNext(handle().adminService, 'find', async () => {
+      const restore = duringNextCommandFind(handle().adminService, async () => {
         await worker().sweep();
       });
       try {
@@ -524,10 +564,18 @@ describe('quote_requests expiry sweep — which requests are due, and who wins a
       await quietFor(older, EXPIRY_DAYS + 0.5);
       await quietFor(younger, EXPIRY_DAYS + 0.25);
       const deps = worker().deps;
-      const original = deps.notificationService.enqueue;
+      const original = deps.notificationService.record;
       let accepted: number | undefined;
-      deps.notificationService.enqueue = (async (...args: never[]) => {
-        if (accepted === undefined) accepted = (await accept(younger)).statusCode;
+      let accepting = false;
+      deps.notificationService.record = (async (...args: never[]) => {
+        // The recording step is shared, and the accept records inside its own
+        // row lock (`specs/179-rfq-and-customer-notifications/` WP-04): only the
+        // sweep's call starts the accept, and only once.
+        const input = (args as unknown as [unknown, { change: string }])[1];
+        if (input.change === 'expired' && !accepting) {
+          accepting = true;
+          accepted = (await accept(younger)).statusCode;
+        }
         return original.apply(deps.notificationService, args);
       }) as never;
       try {
@@ -536,7 +584,7 @@ describe('quote_requests expiry sweep — which requests are due, and who wins a
         expect(result).toMatchObject({ expiredCount: 1, failedCount: 0 });
         expect(announced).toEqual([older]);
       } finally {
-        deps.notificationService.enqueue = original;
+        deps.notificationService.record = original;
       }
       expect(await statusOf(older)).toBe('Expired');
       const final = await row(younger);
@@ -559,10 +607,10 @@ describe('quote_requests expiry sweep — which requests are due, and who wins a
     await quietFor(healthy, EXPIRY_DAYS + 0.1);
 
     const deps = worker().deps;
-    const original = deps.notificationService.enqueue;
-    deps.notificationService.enqueue = (async (...args: never[]) => {
-      const input = (args as unknown as Array<{ quoteRequestId: string }>)[0]!;
-      if (input.quoteRequestId !== healthy) throw new Error('expiry rules test: this request always fails');
+    const original = deps.notificationService.record;
+    deps.notificationService.record = (async (...args: never[]) => {
+      const input = (args as unknown as [unknown, { rfq: { id: string } }])[1];
+      if (input.rfq.id !== healthy) throw new Error('expiry rules test: this request always fails');
       return original.apply(deps.notificationService, args);
     }) as never;
     deps.batchSize = 2;
@@ -581,7 +629,7 @@ describe('quote_requests expiry sweep — which requests are due, and who wins a
       expect(await worker().hasExpirable(later)).toBe(true);
       expect(await worker().sweep(later)).toMatchObject({ expiredCount: 0, failedCount: 2 });
     } finally {
-      deps.notificationService.enqueue = original;
+      deps.notificationService.record = original;
       delete deps.batchSize;
       delete deps.onRequestFailed;
     }

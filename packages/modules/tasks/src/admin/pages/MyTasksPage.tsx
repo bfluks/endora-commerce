@@ -1,0 +1,198 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { CircleCheck, Plus } from 'lucide-react';
+import type { TaskSummary } from '@endora-commerce/contracts';
+import { useAuth, useListViewModePreference } from '@endora-commerce/admin-kit/lib';
+import { Button, EmptyState, PageHeader } from '@endora-commerce/admin-kit/ui';
+import { ListPage, ResponsiveTable, ViewModeToggle, type ListPageLoad } from '@endora-commerce/admin-kit/components';
+import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { tasksApi } from '../api.js';
+import { useDigestDisclosure } from '../components/DigestControl.js';
+import { TaskBoard } from '../components/TaskBoard.js';
+import { TaskFilters } from '../components/TaskFilters.js';
+import { useTaskColumns } from '../components/task-columns.js';
+import { errorMessage } from '../lib/labels.js';
+import { apiQuery, hasFilters } from '../lib/task-filters.js';
+import { useTaskVocabulary } from '../lib/use-task-vocabulary.js';
+
+/** The list id the list/board choice is remembered under — not the Tasks screen's. */
+const LIST_ID = 'tasks-mine';
+const CUSTOM_FIELDS_READ_PERMISSION = 'custom_fields:read';
+
+/**
+ * What *My Tasks* is (`GET /tasks/mine` implies it; the board is told): the
+ * caller's own, open, published Tasks.
+ */
+const IMPLIED = new URLSearchParams([
+  ['assignee', 'me'],
+  ['statusCategory', 'open'],
+  ['draft', 'false'],
+]);
+
+/**
+ * *My Tasks* (`specs/165-task-management/` User Story 3 scenario 6, FR-018;
+ * 163's FR-033) — **replaces** 163's `MyTasks`.
+ *
+ * The caller's open Tasks, the soonest due first and undated ones last, as a
+ * list or as a board — the choice remembered on its own
+ * (`listViewModes['tasks-mine']`) — with the Tasks screen's filters, less the
+ * three it implies (assignee, open or closed, drafts). The list is the server's
+ * answer of up to 500, in its order; the board is the Tasks board asked for
+ * the same set, its closed lanes left empty. The caller's *Daily digest*
+ * (`specs/165-task-management/` User Story 7) is a closed disclosure in the
+ * header that says its state, so the list is the first thing below the title
+ * (issue #1563).
+ *
+ * The list view is the kit's `ListPage` since issue #1749: the filters a
+ * toolbar row, a reload `busy` over the rows on screen. It is the server's
+ * answer of up to 500, so there is no pager.
+ */
+export function MyTasksPage(): ReactNode {
+  const t = useTranslation('tasks');
+  /** Where focus returns after *Clear filters* in the empty state (WCAG 2.4.3). */
+  const searchRef = useRef<HTMLInputElement>(null);
+  const { hasPermission } = useAuth();
+  const customFields = hasPermission(CUSTOM_FIELDS_READ_PERMISSION);
+  const canWrite = hasPermission('tasks:write');
+  const columns = useTaskColumns();
+  const vocabulary = useTaskVocabulary();
+  const [mode, setMode] = useListViewModePreference(LIST_ID);
+  const digest = useDigestDisclosure();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const address = searchParams.toString();
+  const params = useMemo(() => new URLSearchParams(address), [address]);
+  const filtered = hasFilters(params);
+  const [rows, setRows] = useState<TaskSummary[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  /** A read is in flight — the first, or a reload after a filter change (`aria-busy`, T092). */
+  const [loading, setLoading] = useState(true);
+  const sequence = useRef(0);
+
+  const navigate = useCallback(
+    (next: URLSearchParams): void => setSearchParams(next, { replace: true }),
+    [setSearchParams],
+  );
+
+  const mineQuery = useMemo(() => {
+    const query = apiQuery(params, { customFields });
+    // `/tasks/mine` implies these and refuses them; an address carrying one (an old link) is not passed on.
+    for (const key of IMPLIED.keys()) query.delete(key);
+    return query.toString();
+  }, [params, customFields]);
+  const boardQuery = useMemo(
+    () => apiQuery(params, { customFields, implied: IMPLIED }).toString(),
+    [params, customFields],
+  );
+
+  const load = useCallback(async (): Promise<void> => {
+    const current = ++sequence.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const loaded = await tasksApi.myTasks(new URLSearchParams(mineQuery));
+      if (current === sequence.current) setRows(loaded);
+    } catch (failure) {
+      if (current === sequence.current) setError(errorMessage(failure, t('mine.error')));
+    } finally {
+      if (current === sequence.current) setLoading(false);
+    }
+  }, [mineQuery, t]);
+
+  useEffect(() => {
+    if (mode === 'list') void load();
+  }, [mode, load]);
+
+  const clear = (): void => navigate(new URLSearchParams());
+
+  const headerActions = (
+    <>
+      {digest.trigger}
+      <ViewModeToggle mode={mode} onChange={setMode} />
+      <Button className="min-h-11 sm:min-h-9" variant="outline" asChild>
+        <Link to="/tasks">{t('mine.all')}</Link>
+      </Button>
+    </>
+  );
+
+  const filters = (
+    <div className="min-w-0 flex-1">
+      <TaskFilters
+        idPrefix="tasks-mine"
+        searchRef={searchRef}
+        params={params}
+        onChange={navigate}
+        statuses={vocabulary.workflow?.statuses.filter((status) => status.category === 'open') ?? []}
+        priorities={vocabulary.priorities ?? []}
+        implied={{ assignee: true, statusCategory: true, draft: true }}
+        customFields={customFields}
+        filtered={filtered}
+        onClear={clear}
+      />
+    </div>
+  );
+
+  if (mode === 'board') {
+    return (
+      <>
+        <PageHeader title={t('mine.title')} actions={headerActions} />
+        {/* The caller's own daily digest (User Story 7, FR-036), opened from its summary in the header (#1563). */}
+        {digest.panel}
+        <div className="mb-4">{filters}</div>
+        <TaskBoard query={boardQuery} workflow={vocabulary.workflow} filtered={filtered} />
+      </>
+    );
+  }
+
+  const listLoad: ListPageLoad = error ? { kind: 'error', message: error } : rows === null ? { kind: 'loading' } : { kind: 'ready' };
+
+  return (
+    <ListPage
+      title={t('mine.title')}
+      actions={headerActions}
+      // The caller's own daily digest (User Story 7, FR-036), opened from its
+      // summary in the header (#1563) — the slot under the header.
+      tabs={digest.panel}
+      toolbar={filters}
+      count={t('mine.count', { count: rows?.length ?? 0 })}
+      load={listLoad}
+      busy={loading && rows !== null}
+      onRetry={(): void => void load()}
+    >
+      <ResponsiveTable
+        data={rows ?? []}
+        columns={columns}
+        keyExtractor={(row): string => row.id}
+        emptyState={
+          filtered ? (
+            <EmptyState
+              variant="no-results"
+              title={t('list.noResults.title')}
+              description={t('list.noResults.body')}
+              onClearFilters={clear}
+              focusAfterClear={searchRef}
+            />
+          ) : (
+            <EmptyState
+              icon={<CircleCheck size={20} />}
+              title={t('mine.empty.title')}
+              description={t('mine.empty.body')}
+              action={
+                canWrite ? (
+                  <Button className="min-h-11 sm:min-h-9" asChild>
+                    <Link to="/tasks/new">
+                      <Plus aria-hidden="true" />
+                      {t('list.new')}
+                    </Link>
+                  </Button>
+                ) : null
+              }
+            />
+          )
+        }
+      />
+    </ListPage>
+  );
+}
+
+/** The default export the route declaration's dynamic-import factory resolves. */
+export default MyTasksPage;

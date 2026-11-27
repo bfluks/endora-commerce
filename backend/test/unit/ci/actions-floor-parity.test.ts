@@ -86,15 +86,26 @@ const ACCEPTANCE_PUBLIC_JOBS = readWorkflowJobs(ACCEPTANCE_PUBLIC_WORKFLOW);
  * triggers — is `actions-tranche-one-parity.test.ts`; it is read here only so
  * the host-wide rules below reach it.
  */
-const TRANCHE_ONE_JOBS = ['pack-gate.yml', 'boot-gate.yml', 'build-docs.yml'].flatMap((file) =>
-  readWorkflowJobs(workflowSource(file)),
-);
+const TRANCHE_ONE_JOBS = [
+  'pack-gate.yml',
+  'boot-gate.yml',
+  'build-docs.yml',
+  'acceptance-instance.yml',
+  'acceptance-package-schema.yml',
+  'acceptance-storefront-scaffold.yml',
+].flatMap((file) => readWorkflowJobs(workflowSource(file)));
 /**
  * The documentation publication (129 T046b), held by
  * `docs-publish-workflow.test.ts`; read here only so the host-wide rules below
  * reach its two jobs.
  */
 const DOCS_PUBLICATION_JOBS = readWorkflowJobs(workflowSource('publish-docs.yml'));
+/**
+ * The complete backend suite, nightly and on dispatch (issue #968): the port
+ * of `test:backend` and `test:backend:deployment`. Read here only so the
+ * host-wide rules below reach it.
+ */
+const BACKEND_SUITE_JOBS = readWorkflowJobs(workflowSource('backend-suite.yml'));
 
 /** The five of window §3.1, named as both hosts name them. */
 const FLOOR = [
@@ -130,15 +141,26 @@ describe('the floor parsed a population that looks like both hosts', () => {
     // `test/unit/ci/dco-signoff.test.ts`), the public acceptance mode is a
     // dormant `workflow_dispatch` (W5.4), and the open-source demo's build and
     // deploy (W7.5, D-274) are held by `test/unit/ci/demo-workflow.test.ts`.
-    // `pack-gate.yml`, `boot-gate.yml` and `build-docs.yml` are tranche 1, not
-    // the floor, and are held by `actions-tranche-one-parity.test.ts`;
+    // `pack-gate.yml`, `boot-gate.yml`, `build-docs.yml`,
+    // `acceptance-instance.yml`, `acceptance-package-schema.yml` and
+    // `acceptance-storefront-scaffold.yml` are tranche 1, not the floor, and are held by
+    // `actions-tranche-one-parity.test.ts`;
     // `publish-docs.yml` (T046b) by `docs-publish-workflow.test.ts`;
     // `release.yml` (the release page and the Discord post, keyed on the
-    // release tag) by `release-workflow.test.ts`.
+    // release tag) by `release-workflow.test.ts`. `backend-suite.yml` is the
+    // nightly complete suite (issue #968), not a floor job: D-198 keeps it off
+    // pull requests. `storefront-build.yml` builds the storefront on every pull
+    // request so `check:themes` gates a merge (issue #109); GitLab built it only
+    // in a `master`-only image stage, so it ports nothing, and it is held by
+    // `test/unit/ci/storefront-themes-gate.test.ts`.
     // All are listed so that any new workflow still has to be named here by
     // whoever adds it.
     expect(WORKFLOW_FILES).toEqual([
+      'acceptance-instance.yml',
+      'acceptance-package-schema.yml',
       'acceptance-public.yml',
+      'acceptance-storefront-scaffold.yml',
+      'backend-suite.yml',
       'boot-gate.yml',
       'build-docs.yml',
       'dco.yml',
@@ -148,9 +170,19 @@ describe('the floor parsed a population that looks like both hosts', () => {
       'publish.yml',
       'quality.yml',
       'release.yml',
+      'storefront-build.yml',
     ]);
-    expect(TRANCHE_ONE_JOBS.map((job) => job.name)).toEqual(['pack-gate', 'boot-gate', 'build:docs']);
+    expect(TRANCHE_ONE_JOBS.map((job) => job.name)).toEqual([
+      'pack-gate',
+      'boot-gate',
+      'build:docs',
+      'acceptance:instance',
+      'acceptance:package-schema',
+      'acceptance:storefront-scaffold',
+    ]);
     expect(DOCS_PUBLICATION_JOBS).toHaveLength(2);
+    // The shards, the deployment overlays and the per-tree-root organizations run (177).
+    expect(BACKEND_SUITE_JOBS).toHaveLength(3);
     expect(QUALITY_JOBS.map((job) => job.name)).toEqual([...FLOOR]);
     expect(PUBLISH_JOBS.map((job) => job.name)).toEqual(['publish:packages']);
     expect(
@@ -198,7 +230,13 @@ describe('the ported jobs are given what their scripts need', () => {
    */
   const runsWorkspaceCode = (line: string): boolean => /\bpnpm\s+(--filter\b|-r\b)/.test(line);
 
-  for (const job of [...QUALITY_JOBS, ...PUBLISH_JOBS, ...TRANCHE_ONE_JOBS, ...DOCS_PUBLICATION_JOBS]) {
+  for (const job of [
+    ...QUALITY_JOBS,
+    ...PUBLISH_JOBS,
+    ...TRANCHE_ONE_JOBS,
+    ...DOCS_PUBLICATION_JOBS,
+    ...BACKEND_SUITE_JOBS,
+  ]) {
     it(`holds for \`${job.name ?? job.id}\``, () => {
       const first = job.runLines.findIndex(runsWorkspaceCode);
       if (first === -1) return;
@@ -278,6 +316,7 @@ describe('the workflows run on hosted runners, at the node version GitLab names'
       ...ACCEPTANCE_PUBLIC_JOBS,
       ...TRANCHE_ONE_JOBS,
       ...DOCS_PUBLICATION_JOBS,
+      ...BACKEND_SUITE_JOBS,
     ]
       .filter((job) => !/^\s{4}permissions:\s*$/m.test(job.body))
       .map((job) => job.name ?? job.id);

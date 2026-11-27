@@ -19,12 +19,17 @@ export type ApiKeyStatus = z.infer<typeof apiKeyStatusSchema>;
  * - `catalog:write` — PIM by-SKU upsert — UNBOUND KEYS ONLY
  * - `orders:read`   — distributor order reads — BOUND KEYS ONLY
  * - `orders:write`  — distributor order intake — BOUND KEYS ONLY
+ * - `platform.api_description.read` — the API description
+ *   (`GET /api/v1/_openapi.json`, `GET /api/v1/_docs`); the same code an
+ *   administrator's role holds to read it, and like every scope it can be
+ *   issued only by an administrator who holds it
  */
 export const apiKeyScopeSchema = z.enum([
   'catalog:read',
   'catalog:write',
   'orders:read',
   'orders:write',
+  'platform.api_description.read',
 ]);
 export type ApiKeyScope = z.infer<typeof apiKeyScopeSchema>;
 
@@ -59,6 +64,12 @@ export const apiKeySchema = z.object({
   expiresAt: isoDateTimeSchema.nullable(),
 });
 export type ApiKey = z.infer<typeof apiKeySchema>;
+
+/** `GET /api/v1/admin/api-keys` — every key, revoked ones included, newest first (issue #599). */
+export const apiKeyListResponseSchema = z.object({
+  data: z.array(apiKeySchema),
+});
+export type ApiKeyListResponse = z.infer<typeof apiKeyListResponseSchema>;
 
 export const createApiKeyRequestSchema = z.object({
   name: z.string().min(1).max(160),

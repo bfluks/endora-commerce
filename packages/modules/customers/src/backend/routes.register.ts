@@ -8,13 +8,20 @@
 // job, exactly as before.
 import type {} from '@fastify/cookie';
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { SESSION_COOKIE_NAME, customerRegisterRequestSchema } from '@endora-commerce/contracts';
+import {
+  SESSION_COOKIE_NAME,
+  customerRegisterRequestSchema,
+  requestScopeLanguage,
+  type CustomerRegistrationOptionsResponse,
+} from '@endora-commerce/contracts';
+import { currentSalesChannel } from '@endora-commerce/platform/kernel';
 import type { CustomerRegistrationService } from './services/customer-registration-service.js';
 
 /**
- * Public standalone-registration route (feature 040, US1 / FR-002).
- * Gated inside the service by the
- * `customers.allow_registration_without_organization` setting.
+ * Public standalone-registration routes (feature 040, US1 / FR-002): the
+ * registration itself, gated inside the service by the
+ * `customers.allow_registration_without_organization` setting, and the read
+ * of that gate the storefront renders from (issue #756).
  */
 export interface CustomersRegisterDeps {
   registrationService: CustomerRegistrationService;
@@ -39,6 +46,23 @@ export async function registerCustomersRegisterRoutes(
   app: FastifyInstance,
   deps: CustomersRegisterDeps,
 ): Promise<void> {
+  /**
+   * Issue #756 — whether the storefront may offer individual registration,
+   * read before `/register-customer` renders its form. Public, like the
+   * registration it describes, and the same answer that route applies. Not
+   * cached: an operator switching the setting off should not leave the form
+   * on offer for another minute only to refuse it on submit.
+   */
+  app.get('/api/v1/storefront/settings/customer-registration', async (_request, reply) => {
+    reply.header('cache-control', 'no-store');
+    const body: CustomerRegistrationOptionsResponse = {
+      data: {
+        allowRegistrationWithoutOrganization: await deps.registrationService.allowsStandalone(),
+      },
+    };
+    return body;
+  });
+
   app.post(
     '/api/v1/customers/register',
     { schema: { body: customerRegisterRequestSchema } },
@@ -49,6 +73,9 @@ export async function registerCustomersRegisterRoutes(
         password: body.password,
         firstName: body.firstName,
         lastName: body.lastName,
+        // Issue #652 (D-292) — the language the new account records: the
+        // request's first tag resolved against its channel.
+        preferredLanguage: registeringLanguage(request.headers['accept-language']),
         ip: request.ip,
         ...(typeof request.headers['user-agent'] === 'string'
           ? { userAgent: request.headers['user-agent'] }
@@ -69,4 +96,10 @@ export async function registerCustomersRegisterRoutes(
       };
     },
   );
+}
+
+/** `requestScopeLanguage(requestChannel, Accept-Language)`; `null` with no channel. */
+function registeringLanguage(acceptLanguage: string | readonly string[] | undefined): string | null {
+  const channel = currentSalesChannel();
+  return channel ? requestScopeLanguage(channel, acceptLanguage) : null;
 }

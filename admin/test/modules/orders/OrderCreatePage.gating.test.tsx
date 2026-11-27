@@ -3,7 +3,9 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
+import { byId } from '../../helpers/developer-ids';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
+import { orgSalesChannels } from './org-sales-channels';
 
 /**
  * Feature 145, User Story 2 (FR-021, FR-025): on Create order, **Items** and
@@ -41,9 +43,9 @@ vi.mock('react-router-dom', async () => {
 
 const { OrderCreatePage } = await import('../../../../packages/modules/orders/src/admin/pages/OrderCreatePage');
 
-const JAN = { id: 'cust-1', email: 'jan@acme.test', firstName: 'Jan', lastName: 'Kowalski', organizationName: 'Acme' };
-const EWA = { id: 'cust-2', email: 'ewa@beta.test', firstName: 'Ewa', lastName: 'Nowak', organizationName: 'Beta' };
-const PRODUCT = { id: 'prod-1', sku: 'SKU-1', slug: 'p1', status: 'active', name: { 'en-US': 'Widget' } };
+const JAN = { id: 'cust-1', email: 'jan@acme.test', firstName: 'Jan', lastName: 'Kowalski', organizationName: 'Acme', organizationId: 'org-1' };
+const EWA = { id: 'cust-2', email: 'ewa@beta.test', firstName: 'Ewa', lastName: 'Nowak', organizationName: 'Beta', organizationId: 'org-2' };
+const PRODUCT = { id: 'prod-1', sku: 'SKU-1', slug: 'p1', status: 'active', name: 'Widget' };
 
 const PREVIEW = {
   lines: [{ productId: 'prod-1', quantity: 1, unitPrice: '10.00', currency: 'PLN', lineTotal: 10 }],
@@ -60,6 +62,7 @@ const QUICK_SEARCH = 'orderCreate.items.quickSearch';
 
 const BUNDLE = passthroughBundle('core', [
   'common.action.back',
+  'orders.page.title',
   'common.combobox.clearSelection',
   ITEMS,
   SUMMARY,
@@ -78,13 +81,13 @@ beforeEach(() => {
     if (path.startsWith('/api/v1/admin/customers')) return Promise.resolve({ data: [JAN, EWA] });
     if (path === '/api/v1/admin/catalog/products/prod-1') return Promise.resolve({ data: PRODUCT });
     if (path.startsWith('/api/v1/admin/catalog/products')) return Promise.resolve({ data: [PRODUCT] });
-    if (path.startsWith('/api/v1/admin/sales-channels')) {
-      return Promise.resolve({
-        items: [
+    if (path.endsWith('/sales-channels')) {
+      return Promise.resolve(
+        orgSalesChannels([
           { id: 'chan-1', code: 'CH1', name: { 'en-US': 'Channel 1' }, active: true },
           { id: 'chan-2', code: 'CH2', name: { 'en-US': 'Channel 2' }, active: true },
-        ],
-      });
+        ]),
+      );
     }
     return Promise.resolve({ data: [] });
   });
@@ -109,20 +112,20 @@ function renderPage(entry = '/orders/new'): void {
   );
 }
 
-async function pick(comboLabel: string, optionLabel: string): Promise<void> {
-  await userEvent.click(screen.getByLabelText(comboLabel));
+async function pick(comboLabel: string | HTMLElement, optionLabel: string): Promise<void> {
+  await userEvent.click(typeof comboLabel === 'string' ? screen.getByLabelText(comboLabel) : comboLabel);
   const option = await screen.findByRole('option', { name: new RegExp(optionLabel) });
   await userEvent.click(option);
 }
 
 async function pickCustomer(name: string): Promise<void> {
-  await userEvent.type(screen.getByLabelText('customerAccountId'), name.split(' ')[0]!);
-  await pick('customerAccountId', name);
+  await userEvent.type(byId('customerAccountId'), name.split(' ')[0]!);
+  await pick(byId('customerAccountId'), name);
 }
 
 /** Clear a combobox through its own clear button. */
-async function clearCombobox(label: string): Promise<void> {
-  const input = screen.getByLabelText(label);
+async function clearCombobox(label: string | HTMLElement): Promise<void> {
+  const input = (typeof label === 'string' ? screen.getByLabelText(label) : label);
   const container = input.closest('div.relative') as HTMLElement;
   await userEvent.click(within(container).getByRole('button', { name: 'common.combobox.clearSelection' }));
 }
@@ -164,7 +167,7 @@ describe('OrderCreatePage — Items and Order summary gated on customer and sale
     await pickCustomer('Jan Kowalski');
     expectGated(MISSING_CHANNEL);
 
-    await pick('salesChannelId', 'Channel 1');
+    await pick(byId('salesChannelId'), 'Channel 1');
     expect(await screen.findByText(ITEMS)).toBeInTheDocument();
     expect(screen.queryByText(MISSING_CHANNEL)).not.toBeInTheDocument();
     // No line priced yet — no summary.
@@ -174,20 +177,23 @@ describe('OrderCreatePage — Items and Order summary gated on customer and sale
     expect(await screen.findByText(SUMMARY)).toBeInTheDocument();
   });
 
-  it('names the customer when only the channel is set', async () => {
+  // Issue #515 — the channels offered are the customer's Organization's, so
+  // there is no channel to choose before there is a customer.
+  it('offers no channel before a customer is chosen', async () => {
     renderPage();
-    await pick('salesChannelId', 'Channel 1');
-    expectGated(MISSING_CUSTOMER);
+    expect(byId('salesChannelId')).toBeDisabled();
+    expectGated(MISSING_BOTH);
+    expect(getSpy.mock.calls.some(([p]) => String(p).endsWith('/sales-channels'))).toBe(false);
   });
 
   it('keeps the lines and re-prices them when the customer or channel changes (sc. 3)', async () => {
     renderPage();
     await pickCustomer('Jan Kowalski');
-    await pick('salesChannelId', 'Channel 1');
+    await pick(byId('salesChannelId'), 'Channel 1');
     await addWidget();
     await screen.findByText(SUMMARY);
 
-    await pick('salesChannelId', 'Channel 2');
+    await pick(byId('salesChannelId'), 'Channel 2');
     await waitFor(() =>
       expect(previewCalls().at(-1)).toMatchObject({
         customerAccountId: 'cust-1',
@@ -196,8 +202,12 @@ describe('OrderCreatePage — Items and Order summary gated on customer and sale
       }),
     );
 
-    await clearCombobox('customerAccountId');
+    // Another customer's Organization has channels of its own: the choice is
+    // asked again (issue #515), and the lines stay.
+    await clearCombobox(byId('customerAccountId'));
     await pickCustomer('Ewa Nowak');
+    await waitFor(() => expect(byId('salesChannelId')).toBeEnabled());
+    await pick(byId('salesChannelId'), 'Channel 2');
     await waitFor(() =>
       expect(previewCalls().at(-1)).toMatchObject({
         customerAccountId: 'cust-2',
@@ -211,21 +221,22 @@ describe('OrderCreatePage — Items and Order summary gated on customer and sale
   it('hides both sections when a required field is cleared and brings the same lines back (sc. 4, FR-025)', async () => {
     renderPage();
     await pickCustomer('Jan Kowalski');
-    await pick('salesChannelId', 'Channel 1');
+    await pick(byId('salesChannelId'), 'Channel 1');
     await addWidget();
     await screen.findByText(SUMMARY);
 
-    await clearCombobox('salesChannelId');
+    await clearCombobox(byId('salesChannelId'));
     await waitFor(() => expectGated(MISSING_CHANNEL));
 
-    await pick('salesChannelId', 'Channel 1');
+    await pick(byId('salesChannelId'), 'Channel 1');
     await waitFor(() => expect(widgetLine()).toBeInTheDocument());
     expect(await screen.findByText(SUMMARY)).toBeInTheDocument();
   });
 
   it('shows Items at once when opened with a customer and a sales channel (sc. 5)', async () => {
     renderPage('/orders/new?customerAccountId=cust-1&salesChannelId=chan-1');
-    expect(screen.getByText(ITEMS)).toBeInTheDocument();
+    // As soon as the Organization's channels are read and the link's is among them (issue #515).
+    expect(await screen.findByText(ITEMS)).toBeInTheDocument();
     expect(screen.getByLabelText(QUICK_SEARCH)).toBeInTheDocument();
     expect(screen.queryByText(MISSING_BOTH)).not.toBeInTheDocument();
   });
@@ -233,17 +244,17 @@ describe('OrderCreatePage — Items and Order summary gated on customer and sale
   it('still counts hidden lines as unsaved work (Edge Cases)', async () => {
     renderPage();
     await pickCustomer('Jan Kowalski');
-    await pick('salesChannelId', 'Channel 1');
+    await pick(byId('salesChannelId'), 'Channel 1');
     await addWidget();
 
-    // Back to the opened state for every field but the lines, which are now hidden.
-    await clearCombobox('customerAccountId');
-    await clearCombobox('salesChannelId');
+    // Back to the opened state for every field but the lines, which are now
+    // hidden. Clearing the customer clears the channel with it (issue #515).
+    await clearCombobox(byId('customerAccountId'));
     await waitFor(() => expectGated(MISSING_BOTH));
 
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     try {
-      await userEvent.click(screen.getByRole('link', { name: 'common.action.back' }));
+      await userEvent.click(screen.getByRole('link', { name: 'orders.page.title' }));
       expect(confirm).toHaveBeenCalledTimes(1);
     } finally {
       confirm.mockRestore();

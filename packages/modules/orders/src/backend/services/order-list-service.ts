@@ -1,6 +1,22 @@
-import type { EntityManager, FilterQuery, Knex } from '@mikro-orm/postgresql';
-import type { CustomerAccountReadPort, OrganizationDetailsPort } from '@endora-commerce/contracts';
+import { raw, type EntityManager, type FilterQuery } from '@mikro-orm/postgresql';
+import {
+  customFieldFilterUnavailable,
+  type CustomerAccountReadPort,
+  type CustomFieldFilters,
+  type CustomFieldListFilterCondition,
+  type CustomFieldListFilterPort,
+  type OrganizationDetailsPort,
+} from '@endora-commerce/contracts';
+import {
+  orgConstraintFor,
+  orgScopeSql,
+  orgScopeWhere,
+  reachesNoOrganization,
+  type OrgConstraint,
+  type OrgScopeSql,
+} from '@endora-commerce/platform/tenancy';
 import { Order } from '../entities/order.entity.js';
+import { OrderExternalReference } from '../entities/order-external-reference.entity.js';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import type { OrderStatusGraphService } from './order-status-graph-service.js';
 import type { OrderAdminSearchQuery, OrderAdminSearchRow } from '../admin-search-provider.js';
@@ -25,6 +41,8 @@ export interface OrderListQuery {
    */
   placedByCustomerAccountId?: string | undefined;
   q?: string | undefined;
+  /** `specs/182-related-payers/` FR-073 — orders this Organization pays for. */
+  payerOrganizationId?: string | undefined;
   /** Dedicated org / customer name filters, AND-combined with the global `q`. */
   orgName?: string | undefined;
   customerName?: string | undefined;
@@ -32,13 +50,55 @@ export interface OrderListQuery {
   placedTo?: string | undefined;
   totalMin?: number | undefined;
   totalMax?: number | undefined;
+  /**
+   * Filters on the Order custom fields marked as list filters
+   * (`specs/157-custom-fields-list-filters/`), turned into one condition by
+   * `custom_fields`' `customFieldListFilterPort`.
+   */
+  customFieldFilters?: CustomFieldFilters | undefined;
   sort?: string | undefined;
   page: number;
   pageSize: number;
 }
 
+/**
+ * The organizations an admin order list is confined to, as the platform states
+ * the reach (issue #305) — a sales representative's is every organization
+ * nobody else governs, which no list of allowed ids can express. Built by
+ * {@link orderListScopeFor}; absent ⇒ every organization.
+ */
 export interface OrderListScope {
-  allowedOrganizationIds: string[];
+  /** On `organizationId`, for the entity manager. */
+  readonly where: Record<string, unknown>;
+  /** On the `organization_id` column, for SQL. */
+  readonly sql: OrgScopeSql;
+  /** Nothing is reached: no statement need run. */
+  readonly empty: boolean;
+}
+
+/**
+ * The list scope a constraint implies, or `undefined` for every organization.
+ *
+ * With **no argument** — the ambient constraint — `where` is `{}`: `Order` is
+ * `@OrgScoped`, so the global filter already applies exactly this predicate to
+ * every statement the list issues through the entity manager, and spelling it
+ * a second time made each of them carry the reach twice (issue #955, architect
+ * ruling Q3: the orders list for a sales representative ran four statements,
+ * each with the excluded set twice). `sql` stays, for `searchForAdmin`, which
+ * reads through knex where no global filter applies; `empty` stays, for the
+ * short-circuit.
+ *
+ * With an **explicit** constraint — `orderListPort`'s caller-authorised
+ * allowed set, narrower than the ambient scope — `where` carries it.
+ */
+export function orderListScopeFor(constraint?: OrgConstraint): OrderListScope | undefined {
+  const effective = constraint ?? orgConstraintFor();
+  if (effective.kind === 'all') return undefined;
+  return {
+    where: constraint === undefined ? {} : orgScopeWhere('organizationId', effective),
+    sql: orgScopeSql('organization_id', effective),
+    empty: reachesNoOrganization(effective),
+  };
 }
 
 export interface AdminOrderRow {
@@ -85,7 +145,8 @@ const SORTABLE = new Set(['placedAt', 'businessId', 'total', 'status']);
  *
  * Server-side filter / sort / search / pagination for the admin orders list,
  * plus per-status counts. Search `q` matches the business Order ID, the
- * Organization name, and the customer (email / first / last name).
+ * Organization name, the customer (email / first / last name) and an external
+ * system's reference for the order (issue #1030).
  */
 export class OrderListService {
   constructor(
@@ -104,6 +165,13 @@ export class OrderListService {
      */
     private readonly organizationDetails: OrganizationDetailsPort,
     private readonly customerAccountRead: CustomerAccountReadPort,
+    /**
+     * `customFieldListFilterPort` — the custom-field filters as one condition
+     * (feature 157). Absent where the list is never asked to filter on custom
+     * fields; a request that does is then refused rather than answered
+     * unfiltered.
+     */
+    private readonly customFieldListFilter: Pick<CustomFieldListFilterPort, 'condition'> | null = null,
   ) {}
 
   async list(query: OrderListQuery, scope?: OrderListScope): Promise<OrderListResult> {
@@ -112,8 +180,9 @@ export class OrderListService {
     // Base filter shared by the page query and the per-status counts.
     const base: FilterQuery<Order> = {};
     const and: FilterQuery<Order>[] = [];
-    if (scope) base.organizationId = { $in: scope.allowedOrganizationIds };
+    if (scope) Object.assign(base, scope.where);
     if (query.organizationId) base.organizationId = query.organizationId;
+    if (query.payerOrganizationId) base.payerOrganizationId = query.payerOrganizationId;
     if (query.placedByCustomerAccountId) {
       base.placedByCustomerAccountId = query.placedByCustomerAccountId;
     }
@@ -137,15 +206,17 @@ export class OrderListService {
     if (query.q && query.q.trim()) {
       const q = query.q.trim();
       const like = `%${q}%`;
-      const [orgIds, customerIds] = await Promise.all([
+      const [orgIds, customerIds, externallyReferencedIds] = await Promise.all([
         this.organizationDetails.searchIdsByName(q),
         this.customerAccountRead.searchIdsByName(q),
+        this.orderIdsByExternalReference(like),
       ]);
       and.push({
         $or: [
           { businessId: { $ilike: like } },
           { organizationId: { $in: orgIds } },
           { placedByCustomerAccountId: { $in: customerIds } },
+          { id: { $in: externallyReferencedIds } },
         ],
       });
     }
@@ -161,6 +232,21 @@ export class OrderListService {
     }
     if (and.length) base.$and = and;
 
+    // One condition per request, awaited once; each statement below wraps it in
+    // a raw fragment of its own, because a raw fragment is not reused.
+    const customFieldCondition = await this.customFieldCondition(query.customFieldFilters);
+    const narrowed = (where: FilterQuery<Order>): FilterQuery<Order> => {
+      if (customFieldCondition === null) return where;
+      const object = where as Record<string, unknown> & { $and?: FilterQuery<Order>[] };
+      return {
+        ...object,
+        $and: [
+          ...(object.$and ?? []),
+          { id: { $in: raw(`(${customFieldCondition.sql})`, [...customFieldCondition.params]) } },
+        ],
+      } as FilterQuery<Order>;
+    };
+
     // The two axis filters, kept out of `base` so each axis's counts can be
     // taken over every filter but its own — which is what makes an option's
     // number mean "this is what selecting it would yield". With no
@@ -172,16 +258,18 @@ export class OrderListService {
       : {};
 
     const [counts, paymentStatusCounts] = await Promise.all([
-      this.countsBy(em, { ...base, ...paymentStatusFilter }, 'status'),
-      this.countsBy(em, { ...base, ...statusFilter }, 'paymentStatus'),
+      this.countsBy(em, narrowed({ ...base, ...paymentStatusFilter }), 'status'),
+      this.countsBy(em, narrowed({ ...base, ...statusFilter }), 'paymentStatus'),
     ]);
 
     // Page query adds both axis filters on top of the base.
-    const where: FilterQuery<Order> = { ...base, ...statusFilter, ...paymentStatusFilter };
+    const where: FilterQuery<Order> = narrowed({ ...base, ...statusFilter, ...paymentStatusFilter });
     const { field, dir } = parseSort(query.sort);
     const offset = (query.page - 1) * query.pageSize;
     const [orders, total] = await em.findAndCount(Order, where, {
-      orderBy: { [field]: dir },
+      // `id` breaks ties in the key's direction so offset pages never repeat
+      // or skip an order sharing the sort key (issue #1760).
+      orderBy: { [field]: dir, id: dir },
       limit: query.pageSize,
       offset,
     });
@@ -191,10 +279,29 @@ export class OrderListService {
   }
 
   /**
+   * Issue #1030 — the orders an external system's reference matches, for the
+   * list's `q`: matched the way the order number is, a case-insensitive
+   * fragment, whichever system recorded it. The message is not searched; it
+   * is the other system's words, not a number an operator is given.
+   *
+   * The entries are org-scoped, so the ambient tenant filter already confines
+   * this to the caller's organizations, and the list's own `scope` still
+   * applies to the orders the ids come back as.
+   */
+  private async orderIdsByExternalReference(like: string): Promise<string[]> {
+    const rows = await this.emFactory().find(
+      OrderExternalReference,
+      { reference: { $ilike: like } },
+      { fields: ['orderId'] },
+    );
+    return [...new Set(rows.map((row) => row.orderId))];
+  }
+
+  /**
    * Global search over orders (`specs/150-admin-global-search/`, T028).
    *
-   * The list's own visibility: `scope` is the organization set the list is
-   * confined to (absent ⇒ every organization), applied **in the statement**;
+   * The list's own visibility: `scope` is the reach the list is confined to
+   * (absent ⇒ every organization), applied **in the statement**;
    * the organization and customer name lookups go through the same owners'
    * ports `list` uses. Only the selected fields are matched, literally
    * (`likeEscaped`, Postgres' default `\` LIKE escape), and the identifier
@@ -213,23 +320,28 @@ export class OrderListService {
       fields.has('customer') ? this.customerAccountRead.searchIdsByName(query.text) : [],
     ]);
 
-    // One predicate per selected field, OR-combined. Id sets go through
-    // `whereIn` (knex expands an array binding into a list, never an array).
-    const matches: Array<(qb: Knex.QueryBuilder) => void> = [];
-    if (fields.has('number')) matches.push((qb) => qb.orWhereRaw('"business_id" ilike ?', [contains]));
-    if (orgIds.length > 0) matches.push((qb) => qb.orWhereIn('organization_id', orgIds));
+    // One predicate per selected field, OR-combined; every value is a `?`
+    // placeholder, an id set one placeholder per id.
+    const matches: Array<{ sql: string; params: readonly unknown[] }> = [];
+    if (fields.has('number')) matches.push({ sql: '"business_id" ilike ?', params: [contains] });
+    if (orgIds.length > 0) {
+      matches.push({ sql: `"organization_id" in (${orgIds.map(() => '?').join(', ')})`, params: orgIds });
+    }
     if (customerIds.length > 0) {
-      matches.push((qb) => qb.orWhereIn('placed_by_customer_account_id', customerIds));
+      matches.push({
+        sql: `"placed_by_customer_account_id" in (${customerIds.map(() => '?').join(', ')})`,
+        params: customerIds,
+      });
     }
     if (fields.has('billingCompanyName')) {
-      matches.push((qb) => qb.orWhereRaw(`"billing_address"->>'companyName' ilike ?`, [contains]));
+      matches.push({ sql: `"billing_address"->>'companyName' ilike ?`, params: [contains] });
     }
     if (fields.has('billingTaxId')) {
-      matches.push((qb) => qb.orWhereRaw(`"billing_address"->>'taxId' ilike ?`, [contains]));
+      matches.push({ sql: `"billing_address"->>'taxId' ilike ?`, params: [contains] });
     }
-    if (query.isUuid) matches.push((qb) => qb.orWhereRaw('"id" = ?::uuid', [query.text]));
+    if (query.isUuid) matches.push({ sql: '"id" = ?::uuid', params: [query.text] });
     if (matches.length === 0) return { rows: [], hasMore: false };
-    if (scope && scope.allowedOrganizationIds.length === 0) return { rows: [], hasMore: false };
+    if (scope?.empty) return { rows: [], hasMore: false };
 
     const exact: string[] = [];
     const starts: string[] = [];
@@ -257,20 +369,24 @@ export class OrderListService {
         : `case when ${exact.join(' or ')} then 0${starts.length > 0 ? ` when ${starts.join(' or ')} then 1` : ''} else 2 end`;
 
     const em = this.emFactory();
-    const builder = em
-      .getKnex()('orders')
-      .select('id')
-      .where((qb) => {
-        if (scope) qb.whereIn('organization_id', scope.allowedOrganizationIds);
-        qb.andWhere((or) => {
-          for (const match of matches) match(or);
-        });
-      });
-    if (rank !== null) builder.orderByRaw(rank, [...rankBindings, ...prefixBindings] as Knex.RawBinding[]);
-    builder.orderBy('updated_at', 'desc').orderBy('id', 'asc').limit(query.limit + 1);
-    // `em.execute(builder)`, not `await builder`: a knex handle carries no
-    // transaction context (issue #207).
-    const ids = ((await em.execute(builder)) as Array<{ id: string }>).map((r) => r.id);
+    // The reach first, then the OR of the matches — the list's own visibility,
+    // in the statement. `em.execute` runs on the EntityManager's transaction
+    // context (issue #207).
+    const where = [
+      ...(scope ? [{ sql: `(${scope.sql.sql})`, params: scope.sql.params }] : []),
+      { sql: `(${matches.map((m) => m.sql).join(' or ')})`, params: matches.flatMap((m) => m.params) },
+    ];
+    const ids = (
+      await em.execute<Array<{ id: string }>>(
+        `select "id" from "orders" where ${where.map((w) => w.sql).join(' and ')}
+          order by ${rank === null ? '' : `${rank}, `}"updated_at" desc, "id" asc limit ?`,
+        [
+          ...where.flatMap((w) => w.params),
+          ...(rank === null ? [] : [...rankBindings, ...prefixBindings]),
+          query.limit + 1,
+        ],
+      )
+    ).map((r) => r.id);
     const page = ids.slice(0, query.limit);
     if (page.length === 0) return { rows: [], hasMore: false };
 
@@ -291,6 +407,15 @@ export class OrderListService {
         statusName: r.statusName,
       })),
     };
+  }
+
+  /** The request's custom-field filters as one condition, or `null` when none applies. */
+  private async customFieldCondition(
+    filters: CustomFieldFilters | undefined,
+  ): Promise<CustomFieldListFilterCondition | null> {
+    if (filters === undefined || Object.keys(filters).length === 0) return null;
+    if (this.customFieldListFilter === null) throw customFieldFilterUnavailable(Object.keys(filters));
+    return this.customFieldListFilter.condition('order', filters);
   }
 
   /** Counts over `where`, grouped by one of the order's two status axes. */

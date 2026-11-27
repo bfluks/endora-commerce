@@ -1,3 +1,5 @@
+import { CommandMiddlewareRegistry, commandMiddlewareFrom } from '@endora-commerce/platform/composition';
+import { manifest as exampleOverlayManifest } from '../../src/apps/example/modules/example_overlay/manifest.js';
 import { describe, expect, it } from 'vitest';
 import { EventBus } from '@endora-commerce/platform/events';
 import { createRootContainer } from '@endora-commerce/platform/composition';
@@ -58,7 +60,7 @@ function corePricingModule(calls: { count: number }): ModuleEntry {
             calls.count += 1;
             return { priceListId: 'core-list' };
           },
-          listBracketMinQuantities: async (): Promise<number[]> => [1, 5],
+          listTierStarts: async (): Promise<number[]> => [1, 5],
         }),
       });
     },
@@ -83,6 +85,14 @@ function compose(entries: readonly ModuleEntry[]): {
     // The overlay module registers one; a root that mounts no registry refuses
     // the registration, which would make every case here fail for that reason.
     interceptorRegistry: new ApiInterceptorRegistry(),
+    // `specs/189-command-middleware/` — and it contributes an `observe`
+    // command middleware, which a root with no middleware registry refuses for
+    // the same reason. Sealed against its own manifest's declaration.
+    commandMiddlewareRegistry: new CommandMiddlewareRegistry({ log: log() }),
+    commandMiddleware: {
+      declarations: commandMiddlewareFrom([exampleOverlayManifest]),
+      moduleDependencies: {},
+    },
   });
   return { cradle: container.cradle as unknown as Record<string, unknown> };
 }
@@ -94,7 +104,7 @@ describe('T-A — a deployment’s overlay module decorates a core registration 
 
     const pricing = cradle['pricingService'] as {
       resolveLinePrice(input: unknown): Promise<{ priceListId: string } | null>;
-      listBracketMinQuantities(): Promise<number[]>;
+      listTierStarts(): Promise<number[]>;
     };
     const line = await pricing.resolveLinePrice({});
 
@@ -104,7 +114,7 @@ describe('T-A — a deployment’s overlay module decorates a core registration 
     expect(calls.count).toBe(1);
     expect(line?.priceListId).toBe('overlay:core-list');
     // A method the decoration does not touch is core's, not a copy of it.
-    expect(await pricing.listBracketMinQuantities()).toEqual([1, 5]);
+    expect(await pricing.listTierStarts()).toEqual([1, 5]);
   });
 });
 

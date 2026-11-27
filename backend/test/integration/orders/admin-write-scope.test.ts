@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Invoice } from '../../helpers/package-entities.js';
 import { AdminRole, AdminUser, Organization, OrganizationSalesRepAssignment } from '../../helpers/package-entities.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -19,10 +20,11 @@ import {
 
 import { CustomerAccount } from '../../helpers/package-entities.js';
 
-import { ADMIN_COOKIES, TEST_CUSTOMER_ID } from '../../helpers/test-actors.js';
+import { ADMIN_COOKIES, TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 
 import { SEED_PRODUCT_101_ID } from '../../helpers/seed-catalog.js';
 import { systemDefaultSalesChannelId } from '../../helpers/sales-channel-fixtures.js';
+import { bindOrganizationsToFixtureChannelsSql } from '../../helpers/sales-channel-access.js';
 import { Order, OrderComment } from '../../helpers/package-entities.js';
 
 
@@ -60,6 +62,7 @@ describe('Admin order routes honour the sales-rep assignment scope (feature 085 
   let repCookie: string;
   let assignedOrgId: string;
   let foreignOrgId: string;
+  const OTHER_REP_ID = randomUUID();
 
   const orders: Record<string, string> = {};
   /** A customer account inside the rep's assigned organization. */
@@ -141,7 +144,7 @@ describe('Admin order routes honour the sales-rep assignment scope (feature 085 
     } else {
       role.permissions = Array.from(new Set([...role.permissions, 'orders:read', 'orders:write']));
     }
-    await em.persistAndFlush(role);
+    await em.persist(role).flush();
 
     const rep = em.create(AdminUser, {
       email: `phase-e-rep-${stamp}@085.local`,
@@ -152,16 +155,26 @@ describe('Admin order routes honour the sales-rep assignment scope (feature 085 
     });
     const assigned = newOrganization(em, 'Phase E assigned org', 'A');
     const foreign = newOrganization(em, 'Phase E foreign org', 'F');
-    await em.persistAndFlush([rep, assigned, foreign]);
+    await em.persist([rep, assigned, foreign]).flush();
     assignedOrgId = assigned.id;
     foreignOrgId = foreign.id;
+    // Issue #515 — the admin create and preview accept only a channel the
+    // customer's Organization is assigned to; these Organizations are written
+    // directly, so they are bound to the fixture channels here.
+    await bindOrganizationsToFixtureChannelsSql(em, [assignedOrgId, foreignOrgId]);
 
-    await em.persistAndFlush(
+    await em.persist([
       em.create(OrganizationSalesRepAssignment, {
         organizationId: assignedOrgId,
         adminUserId: rep.id,
       }),
-    );
+      // #305 — the foreign organization is another representative's: an
+      // unassigned organization is in every representative's reach.
+      em.create(OrganizationSalesRepAssignment, { organizationId: foreignOrgId, adminUserId: OTHER_REP_ID }),
+      // …and so is the seeded customer's organization, which the "customer
+      // outside the scope" cases below act for.
+      em.create(OrganizationSalesRepAssignment, { organizationId: TEST_ORGANIZATION_ID, adminUserId: OTHER_REP_ID }),
+    ]).flush();
 
     // One pair per route under test, so no assertion depends on a transition an
     // earlier assertion applied.
@@ -175,17 +188,23 @@ describe('Admin order routes honour the sales-rep assignment scope (feature 085 
       'ownInvoice',
       'foreignInvoice',
       'platformAdminForeign',
+      'foreignRefundedPayment',
     ] as const;
     const rows = keys.map((key) =>
       newOrder(em, key.startsWith('own') ? assignedOrgId : foreignOrgId),
     );
-    await em.persistAndFlush(rows);
+    await em.persist(rows).flush();
     keys.forEach((key, i) => {
       orders[key] = rows[i]!.id;
     });
+    // Issue #1574 — a refunded order outside the scope: the 404 has to win over
+    // the 409 its payment status would earn, or the refusal confirms it exists.
+    const refundedRow = rows[keys.indexOf('foreignRefundedPayment')]!;
+    refundedRow.paymentStatus = 'refunded';
+    await em.flush();
 
     for (const key of ['ownComment', 'foreignComment'] as const) {
-      await em.persistAndFlush(
+      await em.persist(
         em.create(OrderComment, {
           orderId: orders[key]!,
           authorAdminUserId: null,
@@ -194,13 +213,13 @@ describe('Admin order routes honour the sales-rep assignment scope (feature 085 
           isCustomerVisible: false,
           notifyCustomer: false,
         }),
-      );
+      ).flush();
     }
 
     for (const key of ['ownInvoice', 'foreignInvoice'] as const) {
       const number = `FV/085E/${key}/${stamp}`;
       invoiceNumbers[key] = number;
-      await em.persistAndFlush(
+      await em.persist(
         em.create(Invoice, {
           orderId: orders[key]!,
           kind: 'invoice',
@@ -209,7 +228,7 @@ describe('Admin order routes honour the sales-rep assignment scope (feature 085 
           total: '12.30',
           status: 'ready',
         }),
-      );
+      ).flush();
     }
 
     const assignedCustomer = em.create(CustomerAccount, {
@@ -219,7 +238,7 @@ describe('Admin order routes honour the sales-rep assignment scope (feature 085 
       firstName: 'Assigned',
       lastName: 'Buyer',
     });
-    await em.persistAndFlush(assignedCustomer);
+    await em.persist(assignedCustomer).flush();
     assignedCustomerId = assignedCustomer.id;
 
     repCookie = `stub-phase-e-rep-${stamp}`;
@@ -227,6 +246,7 @@ describe('Admin order routes honour the sales-rep assignment scope (feature 085 
   });
 
   afterAll(async () => {
+    await h.em().getConnection().execute('delete from organization_sales_rep_assignments where admin_user_id = ?', [OTHER_REP_ID]);
     delete ADMIN_COOKIES[repCookie];
     await teardownBackendServer(h);
   });
@@ -235,6 +255,19 @@ describe('Admin order routes honour the sales-rep assignment scope (feature 085 
     const row = await h.em().findOne(Order, { id: orderId });
     return row?.status ?? null;
   };
+
+  it('refuses a payment-status change on an order outside the scope as not found, before the transition graph is asked (#1574)', async () => {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/orders/${orders['foreignRefundedPayment']}/payment-status`,
+      payload: { to: 'paid' },
+      cookies: { b2b_session: repCookie },
+    });
+    expect(res.statusCode, res.body).toBe(404);
+    expect((res.json() as { error: { code: string } }).error.code).toBe(ERROR_CODES.ORDER_NOT_FOUND);
+    const row = await h.em().fork().findOne(Order, { id: orders['foreignRefundedPayment']! });
+    expect(row?.paymentStatus).toBe('refunded');
+  });
 
   it('refuses a status write on an order outside the scope, as not found', async () => {
     const res = await h.app.inject({

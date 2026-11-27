@@ -37,6 +37,8 @@ interface AdminAttributeOption {
   key: string;
   label: Record<string, string>;
   labelDefault: string;
+  /** The API form of the attribute's value type. */
+  type?: string;
 }
 
 export interface FeedCriteriaPanelProps {
@@ -161,10 +163,14 @@ export function FeedCriteriaPanel(props: FeedCriteriaPanelProps): ReactNode {
 
   const attributeFields = useMemo<RuleAttributeField[]>(
     () =>
-      attributes.map((attribute) => ({
-        attributeKey: attribute.key,
-        label: localized(attribute.label, attribute.labelDefault || attribute.key),
-      })),
+      attributes
+        // Feature 172 (FR-044) — a Page Builder content attribute holds a
+        // document, which no selection rule can compare.
+        .filter((attribute) => attribute.type !== 'page_builder')
+        .map((attribute) => ({
+          attributeKey: attribute.key,
+          label: localized(attribute.label, attribute.labelDefault || attribute.key),
+        })),
     [attributes, localized],
   );
 
@@ -177,7 +183,6 @@ export function FeedCriteriaPanel(props: FeedCriteriaPanelProps): ReactNode {
       status: [
         { value: 'active', label: 'active' },
         { value: 'inactive', label: 'inactive' },
-        { value: 'draft', label: 'draft' },
       ],
       productType: ['simple', 'configurable', 'grouped', 'bundle', 'virtual'].map((type) => ({
         value: type,
@@ -214,7 +219,7 @@ export function FeedCriteriaPanel(props: FeedCriteriaPanelProps): ReactNode {
 
       <div aria-live="polite" className="text-sm text-muted-foreground">
         {counting ? (
-          <span className="b2b-help">{t('feeds.criteria.counting')}</span>
+          <span>{t('feeds.criteria.counting')}</span>
         ) : countError !== null ? (
           <span className="text-destructive">{countError}</span>
         ) : preview ? (

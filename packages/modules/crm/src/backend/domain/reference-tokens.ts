@@ -4,9 +4,12 @@ import {
 } from '@endora-commerce/contracts';
 
 /**
- * The Products and Orders a free text mentions — `[[product:<uuid>]]`,
- * `[[order:<uuid>]]` — in first-appearance order, each target once
- * (`specs/143-crm-sales-opportunities/research.md` R-21).
+ * What a free text refers to — the five-type grammar shared with Projects
+ * (`specs/163-projects-and-tasks/` FR-044, research R-14): `[[product:<uuid>]]`,
+ * `[[order:<uuid>]]`, `[[admin_user:<uuid>]]`, `[[quote_request:<uuid>]]` and
+ * `[[task:<uuid>]]` — in first-appearance order, each target once
+ * (`specs/143-crm-sales-opportunities/research.md` R-21). Every type is stored
+ * and resolved; a text written before the last two were added holds a subset.
  *
  * **The grammar is written once, in the contracts package**, because the Admin
  * UI's composer inserts with it and its renderer splits on it; this is the

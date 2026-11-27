@@ -5,7 +5,14 @@ import {
   generateCouponsRequestSchema,
   upsertPromotionRequestSchema,
   upsertPromotionRuleRequestSchema,
+  type Promotion as PromotionView,
   type PromotionAction,
+  type PromotionCouponDto,
+  type PromotionCouponListResponse,
+  type PromotionListResponse,
+  type PromotionRuleDetailResponse,
+  type PromotionRuleListResponse,
+  type PromotionRuleRecord,
 } from '@endora-commerce/contracts';
 import type { PromotionService, UpsertPromotionInput } from './services/promotion-service.js';
 import type { CouponService } from './services/coupon-service.js';
@@ -30,7 +37,7 @@ export interface PromotionRuleTargetPorts {
   paymentMethods?: () => Promise<Array<{ id: string; code: string; name: string }>>;
   deliveryMethods?: () => Promise<Array<{ id: string; code: string; name: string }>>;
 }
-import { promotionStatsGroupBySchema } from '@endora-commerce/contracts';
+import { adminPromotionListQuerySchema, promotionStatsGroupBySchema } from '@endora-commerce/contracts';
 import type { Promotion } from './entities/promotion.entity.js';
 import type { PromotionCoupon } from './entities/promotion-coupon.entity.js';
 import type { PromotionRuleEntity } from './entities/promotion-rule.entity.js';
@@ -103,15 +110,28 @@ export async function registerPromotionRoutes(
   const writeGate = requireAdmin(PROMOTION_PERMISSIONS.WRITE);
   const deleteGate = requireAdmin(PROMOTION_PERMISSIONS.DELETE);
 
-  app.get('/api/v1/admin/promotions', { preHandler: readGate }, async () => {
-    const rows = await promotionService.list();
-    return { data: rows.map(serialize) };
+  app.get('/api/v1/admin/promotions', { preHandler: readGate }, async (request): Promise<PromotionListResponse> => {
+    // Issue #1664 — an offset page for the list screen's pager; a caller that
+    // names no `pageSize` keeps the whole list, as before.
+    const query = adminPromotionListQuerySchema.parse(request.query ?? {});
+    const { rows, total } = await promotionService.listPage(
+      query.pageSize === undefined
+        ? { offset: 0 }
+        : { offset: (query.page - 1) * query.pageSize, limit: query.pageSize },
+    );
+    return {
+      data: rows.map(serialize),
+      meta:
+        query.pageSize === undefined
+          ? { page: 1, pageSize: Math.max(total, 1), total }
+          : { page: query.page, pageSize: query.pageSize, total },
+    };
   });
 
   app.get<{ Params: { id: string } }>(
     '/api/v1/admin/promotions/:id',
     { preHandler: readGate },
-    async (request) => {
+    async (request): Promise<{ data: PromotionView }> => {
       const row = await promotionService.getById(request.params.id);
       return { data: serialize(row) };
     },
@@ -123,7 +143,7 @@ export async function registerPromotionRoutes(
   });
 
   // Feature 045 (US6) — standalone named rules.
-  app.get('/api/v1/admin/promotion-rules', { preHandler: readGate }, async () => {
+  app.get('/api/v1/admin/promotion-rules', { preHandler: readGate }, async (): Promise<PromotionRuleListResponse> => {
     const rows = await ruleStore.list();
     return { data: rows.map(serializeRule) };
   });
@@ -131,7 +151,7 @@ export async function registerPromotionRoutes(
   app.get<{ Params: { id: string } }>(
     '/api/v1/admin/promotion-rules/:id',
     { preHandler: readGate },
-    async (request) => {
+    async (request): Promise<PromotionRuleDetailResponse> => {
       const row = await ruleStore.getById(request.params.id);
       const usedBy = await ruleStore.usedBy(request.params.id);
       return { data: serializeRule(row), usedBy };
@@ -141,7 +161,7 @@ export async function registerPromotionRoutes(
   app.post(
     '/api/v1/admin/promotion-rules',
     { preHandler: writeGate, schema: { body: upsertPromotionRuleRequestSchema } },
-    async (request, reply) => {
+    async (request, reply): Promise<{ data: PromotionRuleRecord }> => {
       const body = upsertPromotionRuleRequestSchema.parse(request.body);
       const row = await ruleStore.create({
         name: body.name,
@@ -156,7 +176,7 @@ export async function registerPromotionRoutes(
   app.put<{ Params: { id: string } }>(
     '/api/v1/admin/promotion-rules/:id',
     { preHandler: writeGate, schema: { body: upsertPromotionRuleRequestSchema } },
-    async (request) => {
+    async (request): Promise<{ data: PromotionRuleRecord }> => {
       const body = upsertPromotionRuleRequestSchema.parse(request.body);
       const row = await ruleStore.update(request.params.id, {
         name: body.name,
@@ -179,7 +199,7 @@ export async function registerPromotionRoutes(
   app.post(
     '/api/v1/admin/promotions',
     { preHandler: writeGate, schema: { body: upsertPromotionRequestSchema } },
-    async (request, reply) => {
+    async (request, reply): Promise<{ data: PromotionView }> => {
       const body = upsertPromotionRequestSchema.parse(request.body);
       const row = await promotionService.upsert(toUpsertInput(body));
       reply.status(201);
@@ -190,7 +210,7 @@ export async function registerPromotionRoutes(
   app.put<{ Params: { id: string } }>(
     '/api/v1/admin/promotions/:id',
     { preHandler: writeGate, schema: { body: upsertPromotionRequestSchema } },
-    async (request) => {
+    async (request): Promise<{ data: PromotionView }> => {
       const body = upsertPromotionRequestSchema.parse(request.body);
       const row = await promotionService.updateById(request.params.id, toUpsertInput(body));
       return { data: serialize(row) };
@@ -228,7 +248,7 @@ export async function registerPromotionRoutes(
   app.get<{ Params: { id: string } }>(
     '/api/v1/admin/promotions/:id/coupons',
     { preHandler: readGate },
-    async (request) => {
+    async (request): Promise<PromotionCouponListResponse> => {
       const coupons = await couponService.listForPromotion(request.params.id);
       return { data: coupons.map(serializeCoupon) };
     },
@@ -237,7 +257,10 @@ export async function registerPromotionRoutes(
   app.post<{ Params: { id: string }; Body: { code?: unknown } }>(
     '/api/v1/admin/promotions/:id/coupons',
     { preHandler: writeGate },
-    async (request, reply) => {
+    async (
+      request,
+      reply,
+    ): Promise<{ data: PromotionCouponDto } | { error: { code: string; message: string } }> => {
       const code = typeof request.body?.code === 'string' ? request.body.code.trim() : '';
       if (!code) {
         reply.status(400);
@@ -381,7 +404,8 @@ function toUpsertInput(body: UpsertBody): UpsertPromotionInput {
   };
 }
 
-function serializeRule(r: PromotionRuleEntity): Record<string, unknown> {
+/** The published `promotionRuleRecordSchema` (issue #599). */
+function serializeRule(r: PromotionRuleEntity): PromotionRuleRecord {
   return {
     id: r.id,
     name: r.name,
@@ -392,7 +416,8 @@ function serializeRule(r: PromotionRuleEntity): Record<string, unknown> {
   };
 }
 
-function serializeCoupon(c: PromotionCoupon): Record<string, unknown> {
+/** The published `promotionCouponSchema` (issue #599). */
+function serializeCoupon(c: PromotionCoupon): PromotionCouponDto {
   return {
     id: c.id,
     promotionId: c.promotionId,
@@ -404,7 +429,8 @@ function serializeCoupon(c: PromotionCoupon): Record<string, unknown> {
   };
 }
 
-function serialize(row: Promotion): Record<string, unknown> {
+/** The published `promotionSchema` (issue #599). */
+function serialize(row: Promotion): PromotionView {
   const action: PromotionAction | null = row.actionType
     ? ({ type: row.actionType, ...row.actionConfig } as PromotionAction)
     : null;

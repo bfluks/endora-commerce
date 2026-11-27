@@ -1,4 +1,5 @@
-import { Entity, OptionalProps, PrimaryKey, Property } from '@mikro-orm/core';
+import { OptionalProps } from '@mikro-orm/core';
+import { Entity, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import { GlobalEntity } from '@endora-commerce/platform/tenancy';
 import { randomUUID } from 'crypto';
 
@@ -31,7 +32,9 @@ export class BlogPost {
     | 'content'
     | 'metaTitle'
     | 'metaDescription'
-    | 'metaKeywords';
+    | 'metaKeywords'
+    | 'mainImageAssetId'
+    | 'authorAdminUserId';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -65,6 +68,14 @@ export class BlogPost {
 
   @Property({ type: 'json' })
   content: Record<string, unknown> = {};
+
+  /** Library asset shown on post cards (feature 163, data-model §1.2). */
+  @Property({ type: 'uuid', fieldName: 'main_image_asset_id', nullable: true })
+  mainImageAssetId?: string | null;
+
+  /** Feature 171 (US7) — the administrator named as author; read through `adminUserReadPort`. */
+  @Property({ type: 'uuid', fieldName: 'author_admin_user_id', nullable: true })
+  authorAdminUserId?: string | null;
 
   @Property({ type: 'integer' })
   version: number = 1;

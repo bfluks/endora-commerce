@@ -1,6 +1,4 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { getSessionCookie, getAnonCartCookie, setAnonCartCookie } from '../../../lib/session';
 import {
   CART_UNAVAILABLE,
@@ -8,27 +6,56 @@ import {
   applyCartCoupon,
   clearCartCoupon,
   type CartCookieJar,
+  type CartSummary,
 } from '../../../lib/api/cart';
 import { listAddresses, createAddress } from '../../../lib/api/organization';
-import { listDeliveryMethods, listPaymentMethods } from '../../../lib/api/methods';
+import { listDeliveryMethods, listPaymentMethods, listPaymentMethodsForPayer } from '../../../lib/api/methods';
+import { listCheckoutPayers } from '../../../lib/api/related-payers';
+import {
+  CheckoutPayerScope,
+  PayerAwarePaymentMethods,
+  PayerSelector,
+  PayerTotals,
+  type PayerTotalsInput,
+  type PayerTotalsResult,
+} from '../../../components/checkout/CheckoutPayer';
 import { CheckoutForm } from '../../../components/checkout/CheckoutForm';
 import { listCountries } from '../../../lib/api/dictionary';
-import { placeOrder } from '../../../lib/api/orders';
+import { placeOrder, previewOrderTotal, type QuoteCommitmentRefusal } from '../../../lib/api/orders';
+import { BelowMinimumSummary } from '../../../components/checkout/BelowMinimumSummary';
+import {
+  canPlaceOrder,
+  checkoutBelowMinimumRows,
+  type CheckoutBelowMinimumLine,
+} from '../../../lib/cartMinimum';
 import { getMyCreditLimit } from '../../../lib/api/credit-limit';
 import { getResolvedQuickOrderDefaults } from '../../../lib/api/quick-order';
 import { CreditLimitWidget } from '../../../components/CreditLimitWidget';
-import { PaymentMethods } from '../../../components/checkout/PaymentMethods';
 import { ShippingMethods } from '../../../components/checkout/ShippingMethods';
 import { AddressSection } from '../../../components/checkout/AddressSection';
+import { isPersonalOrganization } from '../../../lib/account/organization-area';
 import { PlaceOrderButton } from '../../../components/checkout/PlaceOrderButton';
+import { QuoteValidityNotice } from '../../../components/checkout/QuoteValidityNotice';
 import { blockTitle, placeOrderBlock } from '../../../lib/checkout/place-order-gate';
-import { selectablePaymentMethods } from '../../../lib/checkout/payment-method-eligibility';
+import {
+  payerSelectablePaymentMethods,
+  selectablePaymentMethods,
+} from '../../../lib/checkout/payment-method-eligibility';
 import { tForLocale } from '../../../lib/i18n/messages';
-import { CouponField } from '../../../components/checkout/CouponField';
+import { format } from '../../../lib/i18n/format';
+import { formatCount } from '../../../lib/orderMinimum';
+import {
+  CouponField,
+  CouponScope,
+  type CouponActionState,
+} from '../../../components/checkout/CouponField';
+import { revalidatePath } from 'next/cache';
 import { getServerContext } from '../../../lib/server-context';
 import { formatMoney } from '../../../lib/i18n/money';
 import { OrganizationModerationBanner } from '../../../components/OrganizationModerationBanner';
 import { StorefrontApiError } from '../../../lib/api/client';
+import { CHECKOUT_ERRORS } from '../../../lib/commerce-errors';
+import { errorFiguresQuery } from '../../../lib/url-error-figures';
 import { getMe } from '../../../lib/api/account';
 import { BeginCheckoutTracker } from '../../../components/analytics/EcommerceTrackers';
 import {
@@ -36,6 +63,9 @@ import {
   ensureShippingAdapterDataOnFormData,
 } from '../../../lib/checkout/shipping-adapter-data';
 import type { Metadata } from 'next';
+import { lineAmountHalfUp, organizationCompanyTaxId } from '@endora-commerce/contracts';
+import { localeRedirect } from '../../../lib/i18n/navigation';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -55,19 +85,21 @@ export const metadata: Metadata = { robots: { index: false, follow: false } };
  * needs an authenticated session.
  */
 
-export default async function CheckoutPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ error?: string; couponError?: string }>;
+export default async function CheckoutPage(_props: {
+  /**
+   * Issue #745 — no `error`: no checkout action redirects here with one (placement refusals go
+   * to `/checkout/failure`), so whatever a link puts there is not read. Issue #1250 — nor
+   * `couponError`: the coupon action answers its refusal as state rather than a redirect.
+   */
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }): Promise<ReactNode> {
   const session = await getSessionCookie();
-  if (!session) redirect('/login?next=/checkout');
+  if (!session) return await localeRedirect('/login?next=/checkout');
 
-  const params = await searchParams;
   const jar: CartCookieJar = await readJar();
   // Feature 036 (T039) — resolve the active locale so checkout components
   // can render their copy in PL/EN.
-  const { locale, ctx } = await getServerContext();
+  const { locale, ctx, modules } = await getServerContext();
 
   let loaded: [
     Awaited<ReturnType<typeof getCart>>,
@@ -102,7 +134,7 @@ export default async function CheckoutPage({
     // that as "not logged in" and bounce to login with a return path, rather
     // than crashing the page with an unhandled UNAUTHORIZED error.
     if (err instanceof StorefrontApiError && err.status === 401) {
-      redirect('/login?next=/checkout');
+      return await localeRedirect('/login?next=/checkout');
     }
     throw err;
   }
@@ -119,7 +151,7 @@ export default async function CheckoutPage({
   // `carts` is not present (issue #132). There is nothing to check out, and the
   // cart page owns the copy that says so — sending the buyer there is one
   // absence explained in one place rather than two.
-  if (cartResult === CART_UNAVAILABLE) redirect('/cart');
+  if (cartResult === CART_UNAVAILABLE) return await localeRedirect('/cart');
   if (cartResult.newAnonCookie) await setAnonCartCookie(cartResult.newAnonCookie);
   const cart = cartResult.cart;
   const canTransact = me?.organization?.canTransact ?? true;
@@ -134,6 +166,27 @@ export default async function CheckoutPage({
     creditAvailable: creditLimit ? creditAvailable : null,
     cartTotal,
   });
+
+  // `specs/182-related-payers/` (FR-060, FR-066) — the payers this buyer may name at
+  // checkout (on the buyer's terms; a payer's-terms link is chosen on the cart), and each
+  // payer's own payment methods. None ⇒ no *Paid by* choice and checkout is unchanged.
+  // RP-16 (c) — the credit method is offered for a payer by the buyer's own rule, on the
+  // payer's available credit, which the payer list carries.
+  // FR-060, FR-110 — a cart bought for a payer on its terms fixes that payer here.
+  const fixedPayerId = cart.buyingFor?.terms === 'payer' ? cart.buyingFor.organizationId : null;
+  const payers = modules.isPresent('related_payers')
+    ? (await listCheckoutPayers(session, ctx)).filter((p) =>
+        fixedPayerId ? p.payerOrganizationId === fixedPayerId : p.commercialTerms === 'buyer',
+      )
+    : [];
+  const methodsByPayer: Record<string, typeof paymentMethods> = {};
+  for (const payer of payers) {
+    methodsByPayer[payer.payerOrganizationId] = payerSelectablePaymentMethods(
+      await listPaymentMethodsForPayer(session, ctx, payer.payerOrganizationId),
+      payer,
+      cartTotal,
+    );
+  }
 
   /**
    * **No gateway is collapsed here, deliberately.**
@@ -157,24 +210,60 @@ export default async function CheckoutPage({
   // (`delivery_methods` for one, `payment_methods` / `payments` for the other),
   // which `listDeliveryMethods` and `listPaymentMethods` degrade to the same
   // empty answer. Which reason wins is `placeOrderBlock`'s and not this page's.
-  const placeOrderBlockReason = placeOrderBlock({
-    canTransact,
-    deliveryMethodCount: deliveryMethods.length,
-    paymentMethodCount: paymentMethods.length,
-  });
   const tr = tForLocale(locale);
 
   if (cart.items.length === 0) {
     return (
       <div className="b2b-auth">
-        <h1>Checkout</h1>
-        <p>Your cart is empty — add a product before checking out.</p>
+        <h1>{tr('commerce.checkout.heading')}</h1>
+        <p>{tr('commerce.checkout.empty')}</p>
         <p>
-          <Link href="/catalog">Browse the catalog</Link>
+          <LocalizedLink href="/catalog">{tr('commerce.common.browseCatalog')}</LocalizedLink>
         </p>
       </div>
     );
   }
+
+  // Issue #750 (`specs/170-organization-roles/`, FR-031) — a basket the member's role must send
+  // for approval first, one already awaiting it, or one the organization blocks (rejected by its
+  // admin, or a rejected/completed cart — owner ruling on PR #754) cannot be placed: placement
+  // refuses it. The verdict is the one the cart page renders its primary control from, the
+  // backend's `primaryCta` derived from the role and the cart's state, so this page does not
+  // judge it a second time. The cart page carries the notice and the control that applies.
+  if (
+    cart.primaryCta === 'submit_for_approval' ||
+    cart.primaryCta === 'awaiting_approval' ||
+    cart.primaryCta === 'blocked_by_organization'
+  ) {
+    return await localeRedirect('/cart');
+  }
+
+  // Feature 155 (FR-013, FR-036, FR-037) — the basket lines placement will refuse. The
+  // checkout preview is the authority here: it confirms a quote source is still valid before
+  // honouring a quote line's exemption, which the cart view takes at face value. It needs a
+  // delivery and a payment method, so it is asked with the ones the page preselects; the lines
+  // do not depend on which. A preview that cannot be read falls back to the cart view's own
+  // flags — advisory either way, since placement binds (contract §8).
+  //
+  // Issue #167 — the same preview says whether the basket is priced at a quote placement will no
+  // longer honour (its validity ended, or it no longer applies). The cart view cannot tell: it
+  // has no word of the quote's state. Without a preview there is no verdict, and placement's own
+  // refusal reaches the buyer on the failure page in their language.
+  const { belowMinimumLines, quoteCommitmentRefusal } = await readCheckoutVerdict({
+    session,
+    ctx,
+    cart,
+    deliveryMethodId: preselectedId(deliveryMethods, defaults?.deliveryMethodId ?? null),
+    paymentMethodId: preselectedId(paymentMethods, defaults?.paymentMethodId ?? null),
+  });
+  const belowMinimumRows = checkoutBelowMinimumRows(belowMinimumLines, cart.items, locale);
+  const placeOrderBlockReason = placeOrderBlock({
+    canTransact,
+    deliveryMethodCount: deliveryMethods.length,
+    paymentMethodCount: paymentMethods.length,
+    belowMinimum: !canPlaceOrder({ belowMinimumLines }),
+    quoteEnded: quoteCommitmentRefusal !== null,
+  });
 
   // Feature 036 (US2) — the buyer may pick a saved address or enter a new one,
   // so an empty saved-address book no longer blocks checkout.
@@ -194,136 +283,226 @@ export default async function CheckoutPage({
           currency: it.unitPrice.currency,
         }))}
       />
-      <h1>Checkout</h1>
+      <h1>{tr('commerce.checkout.heading')}</h1>
       <OrganizationModerationBanner
         status={me?.organization?.status}
         message={me?.organization?.moderationMessage ?? null}
+        locale={locale}
       />
-      {params.error ? <p className="b2b-auth__error">{params.error}</p> : null}
+      <QuoteValidityNotice
+        id={QUOTE_ENDED_NOTICE_ID}
+        refusal={quoteCommitmentRefusal}
+        locale={locale}
+        quoteRequestsPresent={modules.isPresent('quote_requests')}
+      />
+      <BelowMinimumSummary id={BELOW_MINIMUM_SUMMARY_ID} rows={belowMinimumRows} locale={locale} />
 
-      <CheckoutForm action={submitAction} className="b2b-auth__form">
-        <AddressSection
-          deliveryAddresses={deliveryAddrs}
-          billingAddresses={billingAddrs}
-          locale={locale}
-          countries={countries}
-          preferredShippingAddressId={defaults?.shippingAddressId ?? null}
-          preferredBillingAddressId={defaults?.billingAddressId ?? null}
-          organizationName={me?.organization?.legalName || me?.organization?.name || null}
-          organizationTaxId={me?.organization?.taxId ?? null}
-        />
-
-        <ShippingMethods
-          methods={deliveryMethods}
-          preferredId={defaults?.deliveryMethodId ?? null}
-          locale={locale}
-        />
-
-        <PaymentMethods
-          methods={paymentMethods}
-          currency={cart.subtotal.currency}
-          preferredId={defaults?.paymentMethodId ?? null}
-          locale={locale}
-        />
-
-        <CouponField
-          applied={cart.discount ?? null}
-          error={params.couponError ?? null}
-          applyAction={applyCouponAction}
-          clearAction={clearCouponAction}
-          locale={locale}
-        />
-        <div className="b2b-auth__field">
-          <label htmlFor="note">Note for the seller (optional)</label>
-          <textarea id="note" name="customerNote" rows={3} maxLength={4000} placeholder=" " />
-        </div>
-
-        {creditLimit ? (
-          <div className="mt-[16px]">
-            <CreditLimitWidget limit={creditLimit} locale={locale} />
-            {creditAvailable < cartTotal ? (
-              <p className="b2b-auth__hint">
-                Your cart total ({formatMoney(cartTotal, cart.subtotal.currency, locale)}) exceeds the
-                available credit. The credit-limit payment option is hidden until you reduce
-                the cart or contact support to raise your limit.
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-
-        <h3>Review</h3>
-        <table className="b2b-account__table">
-          <tbody>
-            {cart.items.map((it) => (
-              <tr key={it.id}>
-                <td style={{ fontFamily: 'var(--font-sans)' }}>
-                  {/* Feature 043 — `displayName` carries the packaging-unit
-                      suffix (e.g. "… (Paleta)"); prefer it over the bare
-                      `productName`. Surface the SKU beneath for buyer
-                      reference, matching the cart line. */}
-                  <div>{it.displayName || it.productName || it.productId}</div>
-                  {it.productSku ? (
-                    <div className="font-mono text-[11px] uppercase text-muted">
-                      {it.productSku}
-                    </div>
-                  ) : null}
-                </td>
-                <td className="text-right">x {it.quantity}</td>
-                <td className="text-right">
-                  {formatMoney(it.unitPrice.amount * it.quantity, it.unitPrice.currency, locale)}
-                </td>
-              </tr>
-            ))}
-            <tr>
-              <th colSpan={2} scope="row" className="text-right">
-                Subtotal
-              </th>
-              <th className="text-right">
-                {formatMoney(cart.subtotal.amount, cart.subtotal.currency, locale)}
-              </th>
-            </tr>
-            {cart.discount ? (
-              <tr>
-                <th colSpan={2} scope="row" className="text-right">
-                  Discount ({cart.discount.code})
-                </th>
-                <th className="text-right">
-                  −{formatMoney(cart.discount.amount, cart.discount.currency, locale)}
-                </th>
-              </tr>
-            ) : null}
-            {cart.grandTotal ? (
-              <tr>
-                <th colSpan={2} scope="row" className="text-right">
-                  <strong>Total</strong>
-                </th>
-                <th className="text-right">
-                  <strong>
-                    {formatMoney(cart.grandTotal.amount, cart.grandTotal.currency, locale)}
-                  </strong>
-                </th>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-
-        <div className="b2b-auth__actions items-center justify-between">
-          <Link
-            href="/cart"
-            className="inline-flex items-center gap-2 rounded-sm border border-line bg-surface px-[16px] py-[10px] font-medium text-fg-soft transition-[background-color,border-color,color] duration-150 hover:border-line-strong hover:bg-surface-alt hover:text-[color:var(--ink-900)]"
-          >
-            ← Back to cart
-          </Link>
-          <PlaceOrderButton
-            blocked={placeOrderBlockReason}
-            label="Place order"
-            pendingLabel="Placing order…"
-            title={blockTitle(placeOrderBlockReason, tr, me?.organization?.moderationMessage ?? null)}
+      {/* Issue #1250 — the coupon form sits after the checkout form, not inside it. */}
+      <CouponScope action={couponAction}>
+        <CheckoutForm action={submitAction} className="b2b-auth__form">
+          <CheckoutPayerScope payers={payers} initialPayerId={fixedPayerId} fixed={fixedPayerId !== null}>
+          <PayerSelector
+            locale={locale}
+            organizationName={me?.organization?.legalName || me?.organization?.name || null}
           />
-        </div>
-      </CheckoutForm>
+          <AddressSection
+            deliveryAddresses={deliveryAddrs}
+            billingAddresses={billingAddrs}
+            locale={locale}
+            personalOrganization={isPersonalOrganization(me?.organization ?? null)}
+            countries={countries}
+            preferredShippingAddressId={defaults?.shippingAddressId ?? null}
+            preferredBillingAddressId={defaults?.billingAddressId ?? null}
+            organizationName={me?.organization?.legalName || me?.organization?.name || null}
+            // A personal Organization's tax id is a placeholder, never a default (#757, #767).
+            organizationTaxId={me?.organization ? organizationCompanyTaxId(me.organization) : null}
+          />
+
+          <ShippingMethods
+            methods={deliveryMethods}
+            preferredId={defaults?.deliveryMethodId ?? null}
+            locale={locale}
+          />
+
+          <PayerAwarePaymentMethods
+            methods={paymentMethods}
+            methodsByPayer={methodsByPayer}
+            currency={cart.subtotal.currency}
+            preferredId={defaults?.paymentMethodId ?? null}
+            locale={locale}
+          />
+          <PayerTotals action={payerTotalsAction} locale={locale} />
+          </CheckoutPayerScope>
+
+          <CouponField applied={cart.discount ?? null} locale={locale} />
+          <div className="b2b-auth__field">
+            <label htmlFor="note">{tr('commerce.checkout.note')}</label>
+            <textarea id="note" name="customerNote" rows={3} maxLength={4000} placeholder=" " />
+          </div>
+
+          {creditLimit ? (
+            <div className="mt-[16px]">
+              <CreditLimitWidget limit={creditLimit} locale={locale} />
+              {creditAvailable < cartTotal ? (
+                <p className="b2b-auth__hint">
+                  {format(tr('commerce.checkout.creditExceeded'), {
+                    total: formatMoney(cartTotal, cart.subtotal.currency, locale),
+                  })}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          <h3>{tr('commerce.checkout.review')}</h3>
+          <table className="b2b-account__table">
+            <tbody>
+              {cart.items.map((it) => (
+                <tr key={it.id}>
+                  <td style={{ fontFamily: 'var(--font-sans)' }}>
+                    {/* Feature 043 — `displayName` carries the packaging-unit
+                        suffix (e.g. "… (Paleta)"); prefer it over the bare
+                        `productName`. Surface the SKU beneath for buyer
+                        reference, matching the cart line. */}
+                    <div>{it.displayName || it.productName || it.productId}</div>
+                    {it.productSku ? (
+                      <div className="font-mono text-[11px] uppercase text-muted">
+                        {it.productSku}
+                      </div>
+                    ) : null}
+                  </td>
+                  <td className="text-right">
+                    {format(tr('commerce.checkout.quantity'), { count: formatCount(it.quantity, locale) })}
+                  </td>
+                  <td className="text-right">
+                    {formatMoney(Number(lineAmountHalfUp(it.unitPrice.amount, it.quantity)), it.unitPrice.currency, locale)}
+                  </td>
+                </tr>
+              ))}
+              <tr>
+                <th colSpan={2} scope="row" className="text-right">
+                  {tr('commerce.common.subtotal')}
+                </th>
+                <th className="text-right">
+                  {formatMoney(cart.subtotal.amount, cart.subtotal.currency, locale)}
+                </th>
+              </tr>
+              {cart.discount ? (
+                <tr>
+                  <th colSpan={2} scope="row" className="text-right">
+                    {cart.discount.code
+                      ? format(tr('commerce.common.discountWithCode'), { code: cart.discount.code })
+                      : tr('commerce.common.discount')}
+                  </th>
+                  <th className="text-right">
+                    −{formatMoney(cart.discount.amount, cart.discount.currency, locale)}
+                  </th>
+                </tr>
+              ) : null}
+              {/* Issue #853: the review sums net amounts, so its last row is the
+                  net total, not what the buyer pays. VAT and gross are a design task. */}
+              {cart.grandTotal ? (
+                <tr>
+                  <th colSpan={2} scope="row" className="text-right">
+                    <strong>{tr('commerce.checkout.netTotal')}</strong>
+                  </th>
+                  <th className="text-right">
+                    <strong>
+                      {formatMoney(cart.grandTotal.amount, cart.grandTotal.currency, locale)}
+                    </strong>
+                  </th>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+
+          <div className="b2b-auth__actions items-center justify-between">
+            <LocalizedLink
+              href="/cart"
+              className="inline-flex items-center gap-2 rounded-sm border border-line bg-surface px-[16px] py-[10px] font-medium text-fg-soft transition-[background-color,border-color,color] duration-150 hover:border-line-strong hover:bg-surface-alt hover:text-[color:var(--ink-900)]"
+            >
+              ← {tr('commerce.checkout.backToCart')}
+            </LocalizedLink>
+            <PlaceOrderButton
+              blocked={placeOrderBlockReason}
+              label={tr('commerce.checkout.placeOrder')}
+              pendingLabel={tr('commerce.checkout.placingOrder')}
+              title={blockTitle(placeOrderBlockReason, tr, me?.organization?.moderationMessage ?? null)}
+              describedBy={
+                placeOrderBlockReason === 'below-minimum'
+                  ? BELOW_MINIMUM_SUMMARY_ID
+                  : placeOrderBlockReason === 'quote-ended'
+                    ? QUOTE_ENDED_NOTICE_ID
+                    : undefined
+              }
+            />
+          </div>
+        </CheckoutForm>
+      </CouponScope>
     </div>
   );
+}
+
+const BELOW_MINIMUM_SUMMARY_ID = 'checkout-below-minimum';
+const QUOTE_ENDED_NOTICE_ID = 'checkout-quote-ended';
+
+/** The method the checkout section preselects: the buyer's default when offered, else the first. */
+function preselectedId(methods: ReadonlyArray<{ id: string }>, preferredId: string | null): string | null {
+  if (preferredId !== null && methods.some((m) => m.id === preferredId)) return preferredId;
+  return methods[0]?.id ?? null;
+}
+
+/**
+ * Feature 155 — the preview's `belowMinimumLines`, or the cart view's own flags when the
+ * preview cannot be asked (no method to ask it with) or does not answer. Issue #167 — and the
+ * preview's `quoteCommitmentRefusal`, `null` without a preview.
+ */
+async function readCheckoutVerdict(input: {
+  session: string;
+  ctx: Awaited<ReturnType<typeof getServerContext>>['ctx'];
+  cart: CartSummary;
+  deliveryMethodId: string | null;
+  paymentMethodId: string | null;
+}): Promise<{
+  belowMinimumLines: CheckoutBelowMinimumLine[];
+  quoteCommitmentRefusal: QuoteCommitmentRefusal | null;
+}> {
+  if (input.deliveryMethodId !== null && input.paymentMethodId !== null) {
+    // `specs/182-related-payers/` FR-117 — a cart bought for a payer on its terms is previewed
+    // naming that payer, as placement will be.
+    const fixedPayer = input.cart.buyingFor?.terms === 'payer' ? input.cart.buyingFor.organizationId : null;
+    const preview = await previewOrderTotal(
+      input.session,
+      {
+        deliveryMethodId: input.deliveryMethodId,
+        paymentMethodId: input.paymentMethodId,
+        ...(fixedPayer ? { payerOrganizationId: fixedPayer } : {}),
+      },
+      input.ctx,
+    ).catch(() => null);
+    if (preview !== null) {
+      return {
+        belowMinimumLines: preview.belowMinimumLines ?? [],
+        quoteCommitmentRefusal: preview.quoteCommitmentRefusal ?? null,
+      };
+    }
+  }
+  const lines: CheckoutBelowMinimumLine[] = [];
+  for (const item of input.cart.items) {
+    if (item.unavailable === true) {
+      lines.push({ cartItemId: item.id, productId: item.productId, kind: 'product_unavailable' });
+    } else if (item.belowMinimum) {
+      lines.push({
+        cartItemId: item.id,
+        productId: item.productId,
+        kind: item.belowMinimum.kind,
+        minimum: item.belowMinimum.minimum,
+        ...(item.belowMinimum.packagingUnitName !== undefined
+          ? { packagingUnitName: item.belowMinimum.packagingUnitName }
+          : {}),
+      });
+    }
+  }
+  return { belowMinimumLines: lines, quoteCommitmentRefusal: null };
 }
 
 async function readJar(): Promise<CartCookieJar> {
@@ -362,12 +541,16 @@ async function buildPlaceOrderPayload(
   const promo = (formData.get('promotionCode') as string | null) || undefined;
   const note = (formData.get('customerNote') as string | null) || undefined;
   const deliveryAddressId = await resolveAddress('delivery', 'delivery');
-  const billingAddressId =
-    formData.get('billingSameAsShipping') != null
+  // `specs/182-related-payers/` — with a payer, billing is one of the payer's addresses and
+  // the company data is the payer's: no override is sent (FR-061, FR-062).
+  const payerOrganizationId = field('payerOrganizationId');
+  const billingAddressId = payerOrganizationId
+    ? field('payerBillingAddressId')
+    : formData.get('billingSameAsShipping') != null
       ? deliveryAddressId
       : await resolveAddress('billing', 'billing');
-  const billingCompanyName = field('billingCompanyName');
-  const billingTaxId = field('billingTaxId');
+  const billingCompanyName = payerOrganizationId ? '' : field('billingCompanyName');
+  const billingTaxId = payerOrganizationId ? '' : field('billingTaxId');
   const deliveryPointProvider = field('deliveryPointProvider');
   const deliveryPointId = field('deliveryPointId');
   const deliveryPointMethodId = field('deliveryPointMethodId');
@@ -382,6 +565,7 @@ async function buildPlaceOrderPayload(
     billingAddressId,
     deliveryMethodId: selectedDeliveryMethodId,
     paymentMethodId: (formData.get('paymentMethodId') as string) ?? '',
+    ...(payerOrganizationId ? { payerOrganizationId } : {}),
     ...(promo ? { promotionCode: promo } : {}),
     ...(note ? { customerNote: note } : {}),
     ...(billingCompanyName ? { billingCompanyName } : {}),
@@ -406,31 +590,33 @@ async function buildPlaceOrderPayload(
 async function submitAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login?next=/checkout');
+  if (!session) return await localeRedirect('/login?next=/checkout');
 
+  const { ctx } = await getServerContext();
   let order;
   try {
     // The action's own request carries the channel the buyer is shopping, and
     // the placement has to be told: see `placeOrder`.
-    const { ctx } = await getServerContext();
     order = await placeOrder(session, await buildPlaceOrderPayload(session, formData), ctx);
   } catch (err) {
     // Feature 036 (US4) — placement failed: the transaction rolled back, so the
     // cart is intact. Send the buyer to the Failure Page with a reason-specific
     // message and a "Try again" button (rather than re-rendering checkout).
-    // `detail` is the backend's sentence in the buyer's language; `message`
-    // carries the error code in front of it for logs. A refusal for changed
-    // cart prices (`CART_PRICE_CHANGED`) reads as that sentence, and the cart
-    // the buyer goes back to already holds the current prices.
-    const message =
-      err instanceof StorefrontApiError ? err.detail : 'Could not place the order.';
-    redirect(`/checkout/failure?reason=${encodeURIComponent(message)}`);
+    // Issue #745 — the reason travels as a code, never the backend's sentence:
+    // the failure page words it, and reads a code it does not know as its
+    // generic failure. A refusal for changed cart prices (`CART_PRICE_CHANGED`)
+    // says so, and the cart the buyer goes back to already holds the current
+    // prices.
+    // Issue #791 — a minimum or credit-limit refusal also carries its figures, as typed values.
+    return await localeRedirect(
+      `/checkout/failure?reason=${CHECKOUT_ERRORS.failureCode(err, 'PLACE_FAILED')}${errorFiguresQuery(err)}`,
+    );
   }
   // Feature 036 — a gateway method returns a redirect next-action; send the
   // buyer to the gateway. Otherwise land on the Success Page, which shows the
   // customer-facing business Order ID.
   if (order.nextAction?.kind === 'redirect_to_gateway') {
-    redirect(order.nextAction.url);
+    return await localeRedirect(order.nextAction.url);
   }
   // Four more redirects used to stand here, one per gateway whose adapter
   // settles on a step of this platform's own rather than on a hosted page —
@@ -439,51 +625,93 @@ async function submitAction(formData: FormData): Promise<void> {
   // free storefront knows one gateway handover: the `redirect_to_gateway` next
   // action above, which is `orders`' own contract and names no vendor. A shop
   // that copies an inline gateway's fragment in re-adds its hop here.
-  redirect(`/checkout/success?id=${order.id}`);
+  return await localeRedirect(`/checkout/success?id=${order.id}`);
 }
 
 /**
- * Feature 036 (US3) — apply (or replace) a coupon on the cart, then re-render
- * checkout so the discount is reflected in the summary before placing the
- * order. The cart is the source of truth `placeOrder` reads. A rejected code
- * round-trips back with a reason-specific message; totals stay unchanged.
+ * Feature 036 (US3) — apply (or replace) a coupon on the cart, or remove it, and re-render
+ * checkout so the summary reflects it before the order is placed. The cart is the source of
+ * truth `placeOrder` reads.
+ *
+ * Issue #1250 — the action belongs to the coupon's own form and answers a state rather than
+ * redirecting: a redirect re-rendered checkout from scratch and the checkout form lost what the
+ * buyer had entered. `revalidatePath` makes the same response carry the re-rendered page, so the
+ * totals change and the checkout form is reconciled, not replaced. A rejected code answers its
+ * reason worded in the page language (issue #745: a code is mapped, never echoed); totals stay
+ * unchanged.
  */
-async function applyCouponAction(formData: FormData): Promise<void> {
+/**
+ * `specs/182-related-payers/` RP-16 (b), FR-064 — the totals for a chosen payer: the existing
+ * order preview asked with the payer, so the figures shown are the ones placement writes. A
+ * refused or failed preview answers `null`, which the page shows as "could not be computed";
+ * placement still refuses what the preview would have.
+ */
+async function payerTotalsAction(input: PayerTotalsInput): Promise<PayerTotalsResult | null> {
   'use server';
-  const jar = await readJar();
-  if (!jar.session && !jar.anon) redirect('/login?next=/checkout');
-  const code = ((formData.get('couponCode') as string | null) ?? '').trim();
-  if (!code) redirect('/checkout');
-  const result = await applyCartCoupon(jar, code);
-  if (result.outcome === 'rejected') {
-    redirect(`/checkout?couponError=${encodeURIComponent(couponRejectionMessage(result.reason))}`);
-  }
-  redirect('/checkout');
+  const session = await getSessionCookie();
+  if (!session || !input.deliveryMethodId || !input.paymentMethodId) return null;
+  const { ctx } = await getServerContext();
+  const preview = await previewOrderTotal(
+    session,
+    {
+      deliveryMethodId: input.deliveryMethodId,
+      paymentMethodId: input.paymentMethodId,
+      payerOrganizationId: input.payerOrganizationId,
+      ...(input.billingAddressId ? { billingAddressId: input.billingAddressId } : {}),
+    },
+    ctx,
+  ).catch(() => null);
+  if (!preview) return null;
+  return {
+    subtotal: preview.subtotal,
+    taxTotal: preview.taxTotal,
+    deliveryTotal: preview.deliveryTotal,
+    paymentSurcharge: preview.paymentSurcharge,
+    discountTotal: preview.discountTotal,
+    total: preview.total,
+    currency: preview.currency,
+  };
 }
 
-async function clearCouponAction(): Promise<void> {
+async function couponAction(
+  _prev: CouponActionState | null,
+  formData: FormData,
+): Promise<CouponActionState> {
   'use server';
   const jar = await readJar();
-  if (!jar.session && !jar.anon) redirect('/login?next=/checkout');
-  await clearCartCoupon(jar);
-  redirect('/checkout');
+  if (!jar.session && !jar.anon) return await localeRedirect('/login?next=/checkout');
+  const code = ((formData.get('couponCode') as string | null) ?? '').trim();
+  if (formData.get('couponIntent') === 'remove') {
+    await clearCartCoupon(jar);
+    revalidatePath('/checkout');
+    return { outcome: 'removed', code: '', message: null };
+  }
+  if (!code) return { outcome: 'idle', code: '', message: null };
+  const result = await applyCartCoupon(jar, code);
+  if (result.outcome === 'rejected') {
+    const { locale } = await getServerContext();
+    return { outcome: 'rejected', code, message: couponRejectionMessage(result.reason, locale) };
+  }
+  revalidatePath('/checkout');
+  return { outcome: 'applied', code, message: null };
 }
 
 /** Map the typed coupon-rejection reasons to a localized buyer message. */
-function couponRejectionMessage(reason: string): string {
+function couponRejectionMessage(reason: string, locale: string): string {
+  const t = tForLocale(locale);
   switch (reason) {
     case 'invalid_code':
     case 'coupon_format_invalid':
-      return 'This coupon code is invalid.';
+      return t('commerce.cart.coupon.rejected.invalidCode');
     case 'expired':
-      return 'This coupon has expired.';
+      return t('commerce.checkout.coupon.expired');
     case 'below_min_spend':
-      return 'Your cart does not meet this coupon’s minimum spend.';
+      return t('commerce.checkout.coupon.belowMinSpend');
     case 'wrong_channel':
     case 'wrong_customer_group':
     case 'wrong_organization':
-      return 'This coupon is not available for your account.';
+      return t('commerce.checkout.coupon.notAvailable');
     default:
-      return 'This coupon could not be applied.';
+      return t('commerce.checkout.coupon.generic');
   }
 }

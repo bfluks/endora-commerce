@@ -1,24 +1,26 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type {
+  CustomerAccountPreferencePort,
   CustomerAccountReadPort,
   CustomerAuthPort,
   OrderListPort,
+  OrganizationPermissionPort,
+  OrganizationRoleReadPort,
   RfqCustomerPort,
 } from '@endora-commerce/contracts';
 import {
   SESSION_COOKIE_NAME,
   changePasswordRequestSchema,
-  customerAddressInputSchema,
+  patchCustomerPreferredLanguageBodySchema,
+  toScopeChannel,
   updateCustomerDefaultsRequestSchema,
   ERROR_CODES,
+  type PatchCustomerPreferredLanguageResponse,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
-import type { CustomerAddressService } from './services/customer-address-service.js';
+import { getResolvedChannel } from '@endora-commerce/platform/kernel';
 import type { CustomerDefaultsService } from './services/customer-defaults-service.js';
-import {
-  serializeCustomerAddress,
-  serializeOrganizationAddress,
-} from './serializers.js';
+import { addressBookRetired } from './address-book-retired.js';
 
 /**
  * Customer self-service routes (feature 040, US1). Each endpoint is scoped to
@@ -52,6 +54,12 @@ export interface CustomersSelfDeps {
    * route file no longer needs at all.
    */
   accounts: CustomerAccountReadPort;
+  /**
+   * `specs/170-organization-roles/` WP-03 — the profile names the member's
+   * role and effective permissions (FR-008, FR-056), not the legacy enum.
+   */
+  organizationRoles: Pick<OrganizationRoleReadPort, 'roleRef'>;
+  organizationPermissions: Pick<OrganizationPermissionPort, 'effective'>;
   requireCustomer: RequireCustomerGuard;
   resolveCustomerActor: ResolveCustomerActor;
   customerAuthService: CustomerAuthPort;
@@ -65,8 +73,12 @@ export interface CustomersSelfDeps {
    */
   orderList: OrderListPort;
   rfqService: RfqCustomerPort;
-  customerAddressService: CustomerAddressService;
   customerDefaultsService: CustomerDefaultsService;
+  /**
+   * Issue #652 (D-292) — `customer_accounts`' preference write, for the buyer's
+   * explicit choice of their e-mail language.
+   */
+  preferences: CustomerAccountPreferencePort;
 }
 
 export async function registerCustomersSelfRoutes(
@@ -75,7 +87,20 @@ export async function registerCustomersSelfRoutes(
 ): Promise<void> {
   const { accounts, requireCustomer, customerAuthService, resolveCustomerActor } = deps;
   const { orderList, rfqService } = deps;
-  const { customerAddressService, customerDefaultsService } = deps;
+  const { customerDefaultsService } = deps;
+
+  /**
+   * The caller's Organization. Always on the actor since D-178; the account
+   * read is the type guard's other arm, not a supported org-less mode.
+   */
+  const organizationOf = async (actor: CustomerActorView): Promise<string> => {
+    if (actor.organizationId !== null) return actor.organizationId;
+    const customer = await accounts.findById(actor.customerAccountId);
+    if (!customer) {
+      throw new HttpError(404, ERROR_CODES.CUSTOMER_NOT_FOUND, 'Customer not found.');
+    }
+    return customer.organizationId;
+  };
 
   // GET /api/v1/me/customer — own profile
   app.get(
@@ -91,6 +116,23 @@ export async function registerCustomersSelfRoutes(
           'Customer not found.',
         );
       }
+      const [organizationRole, effective] = await Promise.all([
+        deps.organizationRoles.roleRef(
+          customer.organizationId,
+          customer.organizationRoleId,
+          await request.responseLanguage(),
+        ),
+        deps.organizationPermissions.effective({
+          customerAccountId: customer.id,
+          organizationId: customer.organizationId,
+          organizationRoleId: customer.organizationRoleId,
+        }),
+      ]);
+      if (!organizationRole) {
+        // Every account holds a role of its own Organization (a composite
+        // foreign key): a role the port cannot find is a broken invariant.
+        throw new HttpError(500, ERROR_CODES.INTERNAL, "The customer's organization role could not be found.");
+      }
       return {
         data: {
           id: customer.id,
@@ -100,8 +142,41 @@ export async function registerCustomersSelfRoutes(
           organizationId: customer.organizationId ?? null,
           customerGroupId: customer.customerGroupId ?? null,
           twoFactorEnabled: customer.twoFactorEnabled,
+          preferredLanguage: customer.preferredLanguage,
+          organizationRole,
+          permissions: [...effective.permissions],
         },
       };
+    },
+  );
+
+  // PATCH /api/v1/me/customer/preferred-language — issue #652 (D-292).
+  //
+  // The buyer's explicit choice of the language their e-mails are written in,
+  // and the only write that overwrites a stored value. The language must be one
+  // the request's sales channel offers — matched case-insensitively, stored as
+  // the channel spells it — so a sender resolving it against that channel
+  // finds it exactly. The actor's own row only; the id is never read from the
+  // request.
+  app.patch(
+    '/api/v1/me/customer/preferred-language',
+    { preHandler: requireCustomer, schema: { body: patchCustomerPreferredLanguageBodySchema } },
+    async (request): Promise<PatchCustomerPreferredLanguageResponse> => {
+      const actor = resolveCustomerActor(request);
+      const body = patchCustomerPreferredLanguageBodySchema.parse(request.body);
+      const requested = body.preferredLanguage.toLowerCase();
+      const offered = toScopeChannel(getResolvedChannel()).languages.find(
+        (language) => language.toLowerCase() === requested,
+      );
+      if (offered === undefined) {
+        throw new HttpError(
+          422,
+          ERROR_CODES.PREFERRED_LANGUAGE_NOT_OFFERED,
+          'This store does not offer that language.',
+        );
+      }
+      const account = await deps.preferences.setPreferredLanguage(actor.customerAccountId, offered);
+      return { data: { preferredLanguage: account.preferredLanguage ?? offered } };
     },
   );
 
@@ -163,103 +238,35 @@ export async function registerCustomersSelfRoutes(
       if (actor.organizationId === null) {
         return { data: [] };
       }
+      // The customer's own quote requests only — never the Organization's.
       const data = await rfqService.listForCustomer({
         customerAccountId: actor.customerAccountId,
         organizationId: actor.organizationId,
-        isOrgAdmin: false,
       });
       return { data };
     },
   );
 
-  // ── Address book (US2) ──────────────────────────────────────────────────
+  // ── Address book (US2) — retired ──────────────────────────────────────
+  //
+  // `specs/173-b2c-address-book-merge/` release 1 (OD-3, OD-5, OD-8): the
+  // personal address book is retired for everyone. Every former endpoint
+  // answers `410 CUSTOMER_ADDRESS_BOOK_RETIRED` — reads included, since the
+  // book they served no longer exists for its customer — and the one book is
+  // the Organization's, at `/api/v1/organizations/mine/addresses`. The
+  // customer guard still runs first, so an anonymous caller is told to sign in
+  // rather than about a book. Release 2 removes these routes.
+  for (const [method, url] of [
+    ['GET', '/api/v1/me/customer/addresses'],
+    ['POST', '/api/v1/me/customer/addresses'],
+    ['PATCH', '/api/v1/me/customer/addresses/:addressId'],
+    ['DELETE', '/api/v1/me/customer/addresses/:addressId'],
+    ['PUT', '/api/v1/me/customer/addresses/:addressId/default'],
+  ] as const) {
+    app.route({ method, url, preHandler: requireCustomer, handler: async () => addressBookRetired() });
+  }
 
-  // GET /api/v1/me/customer/addresses — personal + org-shared
-  app.get(
-    '/api/v1/me/customer/addresses',
-    { preHandler: requireCustomer },
-    async (request) => {
-      const actor = resolveCustomerActor(request);
-      const personal = await customerAddressService.listPersonal(actor.customerAccountId);
-      // As above — unreachable since D-178, kept as a type guard.
-      const organization =
-        actor.organizationId === null
-          ? []
-          : await customerAddressService.listOrganizationAddresses(actor.organizationId);
-      return {
-        data: {
-          personal: personal.map(serializeCustomerAddress),
-          organization: organization.map(serializeOrganizationAddress),
-        },
-      };
-    },
-  );
-
-  // POST /api/v1/me/customer/addresses
-  app.post(
-    '/api/v1/me/customer/addresses',
-    { preHandler: requireCustomer, schema: { body: customerAddressInputSchema } },
-    async (request, reply) => {
-      const actor = resolveCustomerActor(request);
-      const body = customerAddressInputSchema.parse(request.body);
-      const created = await customerAddressService.create(actor.customerAccountId, {
-        kind: body.kind,
-        recipientName: body.recipientName,
-        street: body.street,
-        city: body.city,
-        postalCode: body.postalCode,
-        country: body.country,
-        phone: body.phone,
-        isDefault: body.isDefault,
-      });
-      reply.code(201);
-      return { data: serializeCustomerAddress(created) };
-    },
-  );
-
-  // PATCH /api/v1/me/customer/addresses/:addressId
-  app.patch<{ Params: { addressId: string } }>(
-    '/api/v1/me/customer/addresses/:addressId',
-    { preHandler: requireCustomer, schema: { body: customerAddressInputSchema.partial() } },
-    async (request) => {
-      const actor = resolveCustomerActor(request);
-      const body = customerAddressInputSchema.partial().parse(request.body);
-      const updated = await customerAddressService.update(
-        actor.customerAccountId,
-        request.params.addressId,
-        body,
-      );
-      return { data: serializeCustomerAddress(updated) };
-    },
-  );
-
-  // PUT /api/v1/me/customer/addresses/:addressId/default
-  app.put<{ Params: { addressId: string } }>(
-    '/api/v1/me/customer/addresses/:addressId/default',
-    { preHandler: requireCustomer },
-    async (request) => {
-      const actor = resolveCustomerActor(request);
-      const updated = await customerAddressService.setDefault(
-        actor.customerAccountId,
-        request.params.addressId,
-      );
-      return { data: serializeCustomerAddress(updated) };
-    },
-  );
-
-  // DELETE /api/v1/me/customer/addresses/:addressId
-  app.delete<{ Params: { addressId: string } }>(
-    '/api/v1/me/customer/addresses/:addressId',
-    { preHandler: requireCustomer },
-    async (request, reply) => {
-      const actor = resolveCustomerActor(request);
-      await customerAddressService.delete(actor.customerAccountId, request.params.addressId);
-      reply.code(204);
-      return null;
-    },
-  );
-
-  // ── Default payment / delivery method + addresses (US2) ──────────────────
+  // ── Default payment / delivery method; address defaults read (US2) ──────
 
   // GET /api/v1/me/customer/defaults
   app.get(
@@ -267,7 +274,9 @@ export async function registerCustomersSelfRoutes(
     { preHandler: requireCustomer },
     async (request) => {
       const actor = resolveCustomerActor(request);
-      return { data: await customerDefaultsService.getForCustomer(actor.customerAccountId) };
+      return {
+        data: await customerDefaultsService.getForCustomer(actor.customerAccountId, await organizationOf(actor)),
+      };
     },
   );
 
@@ -278,13 +287,17 @@ export async function registerCustomersSelfRoutes(
     async (request) => {
       const actor = resolveCustomerActor(request);
       const body = updateCustomerDefaultsRequestSchema.parse(request.body);
+      // FR-010 — an address default lives in the Organization book now, where
+      // it is set; naming one here, even as `null`, is a personal-book write.
+      if (body.billingAddressId !== undefined || body.shippingAddressId !== undefined) {
+        addressBookRetired();
+      }
       const updated = await customerDefaultsService.setForCustomer(
         actor.customerAccountId,
+        await organizationOf(actor),
         {
           paymentMethodId: body.paymentMethodId,
           deliveryMethodId: body.deliveryMethodId,
-          billingAddressId: body.billingAddressId,
-          shippingAddressId: body.shippingAddressId,
         },
         {
           customerAccountId: actor.customerAccountId,

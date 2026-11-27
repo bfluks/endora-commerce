@@ -1,13 +1,7 @@
 import type { FastifyRequest } from 'fastify';
 import { describe, expect, it } from 'vitest';
-import {
-  createModuleContext,
-  createModuleRegistrationSink,
-  createRootContainer,
-  registerValues,
-} from '@endora-commerce/platform/composition';
-import { EventBus } from '@endora-commerce/platform/events';
 import { HttpError } from '@endora-commerce/platform/http';
+import { composeModuleForTest } from '@endora-commerce/test-kit/module';
 import { registerModule } from './index.js';
 
 /**
@@ -31,21 +25,14 @@ import { registerModule } from './index.js';
  */
 
 const contextFor = (overrides: Record<string, unknown>) => {
-  const container = createRootContainer();
-  registerValues(container, {
-    emFactory: () => ({}) as never,
-    eventBus: new EventBus(),
-    auditLogService: {},
-    ...overrides,
+  const { container } = composeModuleForTest({
+    module: { id: 'quote_requests', registerModule },
+    values: {
+      emFactory: () => ({}) as never,
+      auditLogService: {},
+      ...overrides,
+    },
   });
-  const ctx = createModuleContext({
-    module: { id: 'quote_requests', version: '1.0.0' },
-    container,
-    eventBus: new EventBus(),
-    sink: createModuleRegistrationSink(),
-    log: { info: () => {}, warn: () => {}, error: () => {} },
-  });
-  registerModule(ctx);
   return container;
 };
 
@@ -58,10 +45,13 @@ describe('quote_requests — the actor resolvers it defaults', () => {
     expect(container.hasRegistration('rfqAdminContextResolver')).toBe(true);
   });
 
-  it('answers the customer context from the actor and the account read port', async () => {
+  it('answers the customer context from the actor alone — its role, and no legacy role read', async () => {
+    // `specs/170-organization-roles/` WP-05 (R-15, R-30): the account read
+    // port is not asked; whether the caller sees the whole Organization is
+    // the service's question to `organizationPermissionPort`.
     const container = contextFor({
       customerAccountReadPort: {
-        findById: () => Promise.resolve({ role: 'organization_admin' }),
+        findById: () => Promise.reject(new Error('the legacy role is not read')),
       },
     });
     const resolve = container.cradle
@@ -69,17 +59,25 @@ describe('quote_requests — the actor resolvers it defaults', () => {
 
     await expect(
       resolve(
-        requestWith({ kind: 'customer', customerAccountId: 'cust-1', organizationId: 'org-1' }),
+        requestWith({
+          kind: 'customer',
+          customerAccountId: 'cust-1',
+          organizationId: 'org-1',
+          organizationRoleId: 'role-1',
+        }),
       ),
     ).resolves.toEqual({
       customerAccountId: 'cust-1',
       organizationId: 'org-1',
-      isOrgAdmin: true,
+      organizationRoleId: 'role-1',
     });
+    await expect(
+      resolve(requestWith({ kind: 'customer', customerAccountId: 'cust-1', organizationId: 'org-1' })),
+    ).resolves.toEqual({ customerAccountId: 'cust-1', organizationId: 'org-1', organizationRoleId: null });
   });
 
   it('refuses a non-customer caller with a 401 rather than an undefined context', async () => {
-    const container = contextFor({ customerAccountReadPort: { findById: () => Promise.resolve(null) } });
+    const container = contextFor({});
     const resolve = container.cradle
       .rfqCustomerContextResolver as (request: FastifyRequest) => Promise<unknown>;
     await expect(resolve(requestWith({ kind: 'anonymous' }))).rejects.toBeInstanceOf(HttpError);

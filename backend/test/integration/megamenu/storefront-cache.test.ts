@@ -53,6 +53,7 @@ describe('Megamenu storefront cache (T083)', () => {
         items: [
           {
             parentId: null,
+            presentation: 'mega',
             position: 0,
             kind: 'external-link',
             labels: { 'en-US': label },

@@ -77,13 +77,13 @@ describe.skipIf(!shouldRun)('catalog list — p95 latency', () => {
         slug: `perf-${idx}`,
         type: 'simple',
         status: 'active',
-        name: { 'en-US': `Perf product ${idx}` },
-        description: { 'en-US': `Synthetic product ${idx} for perf bench.` },
+        name: `Perf product ${idx}`,
+        description: `Synthetic product ${idx} for perf bench.`,
         visibility: 'public',
         attributeValues: { defaultPrice: 10 + (i % 100) },
       });
     });
-    await em.persistAndFlush(products);
+    await em.persist(products).flush();
 
     // Channel membership — the storefront read is scoped to the channel an
     // anonymous request resolves, which is the system default. Written as raw

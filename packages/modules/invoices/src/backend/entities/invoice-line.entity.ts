@@ -1,6 +1,17 @@
-import { Entity, Index, OptionalProps, PrimaryKey, Property } from '@mikro-orm/core';
+import { OptionalProps } from '@mikro-orm/core';
+import { Entity, Index, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import { GlobalEntity } from '@endora-commerce/platform/tenancy';
 import { randomUUID } from 'crypto';
+
+/**
+ * Issue #904 — what an invoice line is (`invoice_lines.line_kind`). A
+ * `price_reduction` is a correction's line; the others are an issued
+ * document's. A `retained` line (issue #854) is an amount withheld on a
+ * return, at the VAT rate of the goods it was withheld from; it names no order
+ * item, so a correction never reads it as goods.
+ */
+export const INVOICE_LINE_KINDS = ['goods', 'delivery', 'payment_surcharge', 'discount', 'price_reduction', 'retained'] as const;
+export type InvoiceLineKind = (typeof INVOICE_LINE_KINDS)[number];
 
 /**
  * Immutable snapshot of one invoice line at issuance (feature 047). Independent
@@ -10,7 +21,7 @@ import { randomUUID } from 'crypto';
 @Entity({ tableName: 'invoice_lines' })
 @Index({ properties: ['invoiceId', 'ordinal'] })
 export class InvoiceLine {
-  [OptionalProps]?: 'id' | 'orderItemId';
+  [OptionalProps]?: 'id' | 'orderItemId' | 'lineKind';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -45,4 +56,16 @@ export class InvoiceLine {
 
   @Property({ type: 'uuid', nullable: true })
   orderItemId?: string | null;
+
+  /**
+   * Issue #904 — the line's kind, written for every line of an invoice or a
+   * proforma issued from now on, the 0 % delivery and surcharge lines included.
+   * `null`: a line issued before, or one no writer names yet (a correction's
+   * goods and discount lines), told apart as it always was — by its
+   * `orderItemId` and its sign. A correction's credited delivery or surcharge
+   * (issue #876) is written with its kind: it names no order item and is
+   * positive, so nothing else would tell the two apart.
+   */
+  @Property({ type: 'string', length: 24, nullable: true })
+  lineKind?: InvoiceLineKind | null = null;
 }

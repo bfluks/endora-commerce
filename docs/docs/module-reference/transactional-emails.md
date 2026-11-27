@@ -16,7 +16,7 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | | |
 | --- | --- |
 | Module id | `transactional_emails` |
-| Name | Transactional Emails |
+| Name | Transactional emails |
 | Version | `1.0.0` |
 | Ships from | `@endora-commerce/mod-transactional-emails` |
 | Licence | `MIT` |
@@ -29,6 +29,7 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 
 | Module | Binding | What it means |
 | --- | --- | --- |
+| `_i18n` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `assets_library` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `email` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `sales_channels` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
@@ -46,6 +47,7 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | Action | Opens | Permission |
 | --- | --- | --- |
 | `open-email-blocks` | `/transactional-emails/blocks` | `transactional_emails:read` |
+| `open-email-branding` | `/transactional-emails/branding` | `transactional_emails:read` |
 | `open-email-templates` | `/transactional-emails/templates` | `transactional_emails:read` |
 | `open-transactional-emails` | `/transactional-emails` | `transactional_emails:read` |
 

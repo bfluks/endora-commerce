@@ -1,8 +1,10 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
   CatalogCategoryReadPort,
+  CatalogProductAvailabilityPort,
+  CatalogProductUrlKeyReadPort,
   CatalogProductReadPort,
-  ListingPricePort,
+  ListingPriceDetailPort,
   OrganizationDetailsPort,
   SearchQueryPort,
   SearchReindexPort,
@@ -105,6 +107,14 @@ export function registerModule(ctx: ModuleContext): void {
           // reserves for the membership accessor. A statement names no import
           // specifier, so neither was visible to Phase C.
           catalogCategories: lazyPort<CatalogCategoryReadPort>(ctx, 'catalogCategoryReadPort'),
+          // Feature 163 — documents carry availability per channel language,
+          // and hydration asks `catalog` again for every hit.
+          catalogAvailability: lazyPort<CatalogProductAvailabilityPort>(
+            ctx,
+            'catalogProductAvailabilityPort',
+          ),
+          // Feature 163 (T113a, R28) — a result card links to the effective key.
+          catalogUrlKeys: lazyPort<CatalogProductUrlKeyReadPort>(ctx, 'catalogProductUrlKeyReadPort'),
           salesChannelMembership: lazyPort<SalesChannelMembershipPort>(
             ctx,
             'salesChannelMembershipPort',
@@ -131,7 +141,7 @@ export function registerModule(ctx: ModuleContext): void {
           }),
           // Issue #132 — the result list prices through the same port the
           // popup already used.
-          listingPrices: lazyPort<ListingPricePort>(ctx, 'pricingService'),
+          listingPrices: lazyPort<ListingPriceDetailPort>(ctx, 'pricingService'),
           // ...and, now, the same organisation read the popup already used, so
           // both halves of the search box quote one figure to one buyer.
           organizations: lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),

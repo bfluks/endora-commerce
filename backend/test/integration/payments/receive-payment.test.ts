@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
   OrderReadPort,
-  OrderTransitionPort,
+  OrderCommandPort,
   PaymentMethodReadPort,
 } from '@endora-commerce/contracts';
 import {
@@ -15,11 +15,10 @@ import {
   ReceivePaymentHandler,
   type SettlementLogger,
 } from '../../../../packages/modules/payments/src/backend/services/receive-payment-handler.js';
-import type { OrderPaymentStatusApplyPort } from '../../../../packages/modules/orders/src/ports/index.js';
+import { seedCreditLimitWithActiveReservation, SEED_CREDIT_LIMIT_ORDER_ID } from '../../helpers/seed-credit-limit.js';
+import type { OrderPaymentStatusApplyPort, OrderPaymentSettlementEffectsPort } from '../../../../packages/modules/orders/src/ports/index.js';
 import { PaymentService } from '../../../../packages/modules/payments/src/backend/services/payment-service.js';
-import { PaymentMethod, type PaymentMethodRow } from '../../helpers/package-entities.js';
-import { Order } from '../../helpers/package-entities.js';
-import { Payment } from '../../helpers/package-entities.js';
+import { CreditLimitReservation, PaymentMethod, Order, Payment, type PaymentMethodRow } from '../../helpers/package-entities.js';
 
 interface Fixture {
   method: PaymentMethodRow;
@@ -46,7 +45,7 @@ async function seedOrderWithPayment(
     statusOnSuccess: opts.statusOnSuccess ?? 'paid',
     statusOnFailure: opts.statusOnFailure ?? 'on_hold',
   });
-  await em.persistAndFlush(method);
+  await em.persist(method).flush();
 
   const order = em.create(Order, {
     organizationId: randomUUID(),
@@ -65,7 +64,7 @@ async function seedOrderWithPayment(
     currency: 'PLN',
     placedAt: new Date(),
   });
-  await em.persistAndFlush(order);
+  await em.persist(order).flush();
 
   const payment = em.create(Payment, {
     orderId: order.id,
@@ -73,7 +72,7 @@ async function seedOrderWithPayment(
     amount: '123.00',
     currency: 'PLN',
   });
-  await em.persistAndFlush(payment);
+  await em.persist(payment).flush();
 
   return { method, order, payment };
 }
@@ -88,21 +87,26 @@ describe('ReceivePaymentHandler', () => {
    * Feature 080's T048 makes it three: `orders.payment_status` used to be
    * written from inside this handler on the `Order` entity, and is now
    * `orderPaymentStatusApplyPort.applyPaymentStatus(tx, …)` — the same
-   * transaction, the same constraint, resolved off the same container. All
-   * are gated ports, so resolving them here is what the four gateways do
+   * transaction, the same constraint, resolved off the same container.
+   * The composed apply service receives `orderTransitionEffectService` from
+   * `orders`; it records owed effects itself, while the separate effects port
+   * remains here for the post-commit drain. All are gated ports, so resolving
+   * them here is what the four gateways do
    * through `receivePaymentPort`, and a test that stubbed them would stop
    * exercising the seam it is here to keep honest — the lifecycle one above
    * all, since the whole point of Phase D is that the graph now answers.
    */
   const handlerPorts = (): [
     PaymentMethodReadPort,
-    OrderTransitionPort,
+    OrderCommandPort,
     OrderPaymentStatusApplyPort,
+    OrderPaymentSettlementEffectsPort,
     SettlementLogger,
   ] => [
     h.container.resolve<PaymentMethodReadPort>('paymentMethodReadPort'),
-    h.container.resolve<OrderTransitionPort>('orderTransitionPort'),
+    h.container.resolve<OrderCommandPort>('orderCommandPort'),
     h.container.resolve<OrderPaymentStatusApplyPort>('orderPaymentStatusApplyPort'),
+    h.container.resolve<OrderPaymentSettlementEffectsPort>('orderPaymentSettlementEffectsPort'),
     quiet,
   ];
 
@@ -179,6 +183,30 @@ describe('ReceivePaymentHandler', () => {
   });
 
   /**
+   * Review of #1963 (`specs/186-aggregate-ports/` US4) — a method whose
+   * `statusOnFailure` names no configured status, in a spelling the admin
+   * status-code pattern would refuse (`On-Hold`; the method's own schema
+   * accepts any 1–64 characters). The lifecycle port answers that as the
+   * `unknown_status` outcome, so the settlement still records the decline and
+   * answers the provider normally, rather than throwing into a retry loop.
+   */
+  it('records a decline whose configured failure status is no status at all, and moves nothing', async () => {
+    const { order, payment } = await seedOrderWithPayment(h.em(), { statusOnFailure: 'On-Hold' });
+    const warnings: Array<Record<string, unknown>> = [];
+    const ports = handlerPorts();
+    ports[4] = { warn: (details) => void warnings.push(details as Record<string, unknown>) };
+    const handler = new ReceivePaymentHandler(h.em, ...ports);
+
+    const res = await handler.receive({ paymentId: payment.id, outcome: 'failure', failureReason: 'declined' });
+
+    expect(res.status).toBe('failed');
+    const reloadedOrder = await h.em().findOne(Order, { id: order.id }, { refresh: true });
+    expect(reloadedOrder!.status).toBe('new');
+    expect(reloadedOrder!.paymentStatus).toBe('failed');
+    expect(warnings).toEqual([expect.objectContaining({ orderId: order.id, to: 'On-Hold', refusal: 'unknown_status' })]);
+  });
+
+  /**
    * FR-006 — a second decline on an order already at the failure status is a
    * no-op on the lifecycle and still records the attempt. The buyer may keep
    * trying, and each attempt is its own row.
@@ -232,7 +260,7 @@ describe('ReceivePaymentHandler', () => {
 
     await expect(
       handler.receive({ paymentId: payment.id, outcome: 'failure', failureReason: 'late' }),
-    ).rejects.toMatchObject({ statusCode: 409 });
+    ).rejects.toMatchObject({ statusCode: 409, code: 'PAYMENT_ALREADY_PAID', details: { code: 'mark_failed' } });
   });
 
   it('opens a retry Payment after a failure, preserving prior attempts (T035)', async () => {
@@ -284,11 +312,18 @@ describe('ReceivePaymentHandler', () => {
   it('refuses to open an attempt against a settled payment (#264)', async () => {
     const service = paymentService();
 
+    // Each with its own code since issue #630, where all four were `VALIDATION_FAILED`.
+    const codes = {
+      paid: 'PAYMENT_ALREADY_PAID',
+      refunded: 'PAYMENT_REFUNDED',
+      partially_refunded: 'PAYMENT_REFUNDED',
+      deferred: 'PAYMENT_SETTLED_OUT_OF_BAND',
+    } as const;
     for (const status of ['paid', 'refunded', 'partially_refunded', 'deferred'] as const) {
       const { order, payment } = await seedOrderWithPayment(h.em());
       payment.status = status;
-      await h.em().persistAndFlush(payment);
-      await expect(service.openRetry(order.id)).rejects.toMatchObject({ statusCode: 409 });
+      await h.em().persist(payment).flush();
+      await expect(service.openRetry(order.id)).rejects.toMatchObject({ statusCode: 409, code: codes[status] });
       expect(await service.listForOrder(order.id)).toHaveLength(1);
     }
   });
@@ -308,7 +343,7 @@ describe('ReceivePaymentHandler', () => {
 
     const settled = await seedOrderWithPayment(h.em());
     settled.payment.status = 'paid';
-    await h.em().persistAndFlush(settled.payment);
+    await h.em().persist(settled.payment).flush();
     await service.failAttempt(settled.payment.id, 'late');
     const [untouched] = await service.listForOrder(settled.order.id);
     expect(untouched?.status).toBe('paid');
@@ -370,5 +405,38 @@ describe('ReceivePaymentHandler', () => {
     expect(res.status).toBe('paid');
     const reloadedOrder = await h.em().findOne(Order, { id: order.id });
     expect(reloadedOrder!.status).toBe('paid');
+  });
+
+  /**
+   * #1576 — settling a deferred (credit-limit) order via `receive` returns a
+   * paid payment and changes its active credit reservation to released.
+   */
+  it('#1576 releases the credit reservation when a deferred credit-limit order is settled', async () => {
+    await seedCreditLimitWithActiveReservation(h.em());
+
+    // Precondition: reservation is active and credit is consumed.
+    const reservationBefore = await h.em().findOne(CreditLimitReservation, {
+      orderId: SEED_CREDIT_LIMIT_ORDER_ID,
+    });
+    expect(reservationBefore).not.toBeNull();
+    expect(reservationBefore!.status).toBe('active');
+
+    const payment = await h.em().findOne(Payment, { orderId: SEED_CREDIT_LIMIT_ORDER_ID });
+    expect(payment).not.toBeNull();
+    expect(payment!.status).toBe('deferred');
+
+    const handler = new ReceivePaymentHandler(h.em, ...handlerPorts());
+
+    const res = await handler.receive({
+      paymentId: payment!.id,
+      outcome: 'success',
+    });
+    expect(res.status).toBe('paid');
+
+    // Postcondition: the reservation is released after receive completes.
+    const reservationAfter = await h.em().findOne(CreditLimitReservation, {
+      orderId: SEED_CREDIT_LIMIT_ORDER_ID,
+    }, { refresh: true });
+    expect(reservationAfter!.status).toBe('released');
   });
 });

@@ -1,9 +1,9 @@
 ---
-title: admin_users
+title: Administratorzy
 description: Konta administratorów platformy i logowanie jako klient
 ---
 
-# `admin_users`
+# Administratorzy (`admin_users`)
 
 Konta administratorów platformy (oddzielne od kont klientów) oraz logowanie jako klient
 (impersonacja).
@@ -14,18 +14,24 @@ Zarządzanie użytkownikami i rolami wymaga uprawnienia `admin_users:manage`.
 
 | Metoda i ścieżka | Przeznaczenie |
 | --- | --- |
-| `POST /api/v1/auth/admin/login` | Logowanie administratora (z weryfikacją 2FA, gdy wymaga tego rola). Powtarzane błędne hasła są ograniczane: 429 `ADMIN_AUTHENTICATION_THROTTLED` z nagłówkiem `Retry-After` — patrz niżej |
+| `POST /api/v1/auth/admin/login` | Logowanie administratora (z weryfikacją dwuetapową, gdy wymaga tego rola). Powtarzane błędne hasła są ograniczane: 429 `ADMIN_AUTHENTICATION_THROTTLED` z nagłówkiem `Retry-After` — patrz niżej |
 | `POST /api/v1/auth/admin/logout` | Zakończenie sesji administratora |
+| `GET /api/v1/admin/me` | Zalogowany administrator, z rolą, uprawnieniami i preferencjami Admin UI; dowolna sesja administratora, bez kodu uprawnienia |
 | `PATCH /api/v1/admin/me` | Zalogowany administrator edytuje własne imię i nazwisko oraz zmienia własne hasło; nie jest potrzebne żadne uprawnienie. Nowe `password` musi być wysłane razem z `currentPassword`: bez niego żądanie jest odrzucane z 400 `VALIDATION_FAILED`, z błędnym — z 403 `CURRENT_PASSWORD_INVALID`, z nowym hasłem takim samym jak obecne — z 400 `NEW_PASSWORD_UNCHANGED`, a odrzucone żądanie niczego nie zmienia — imienia i nazwiska również. Przyjęta zmiana hasła wylogowuje wszystkie pozostałe sesje konta (zob. *Sesje a zmiana hasła*). Powtarzane błędne bieżące hasła są ograniczane tak samo jak błędne hasła przy logowaniu (429 `ADMIN_AUTHENTICATION_THROTTLED`) |
 | `GET /api/v1/admin/admin-users` | Lista administratorów (usunięte konta są pomijane) |
 | `POST /api/v1/admin/admin-users` | Utworzenie administratora. Pole `adminRoleId` jest wymagane: konto bez roli jest odrzucane z 400 `ADMIN_USER_ROLE_REQUIRED`. Powtórzony e-mail jest odrzucany z `EMAIL_ALREADY_REGISTERED` |
 | `PATCH /api/v1/admin/admin-users/:id` | Aktualizacja imienia, przypisanej roli lub statusu; nie ustawia hasła — pole `password` jest odrzucane z 400 `VALIDATION_FAILED`. Rolę można zmienić na inną, ale nie można jej usunąć: `adminRoleId: null` jest odrzucane z 400 `ADMIN_USER_ROLE_REQUIRED`. Ustawienie `status: 'inactive'` wylogowuje konto ze wszystkich sesji |
+| `POST /api/v1/admin/admin-users/:id/password` | Ustawienie hasła innego administratora; wylogowuje konto ze wszystkich sesji (zob. *Sesje a zmiana hasła*) |
 | `DELETE /api/v1/admin/admin-users/:id` | Usunięcie miękkie (ustawia `deletedAt` i `status='inactive'`) oraz wylogowanie konta ze wszystkich sesji |
 | `GET /api/v1/admin/admin-roles` | Lista ról z tablicami uprawnień |
-| `PUT /api/v1/admin/admin-roles/:code` | Utworzenie lub aktualizacja roli według kodu; nieznane uprawnienia zwracają 400 `VALIDATION_FAILED` |
+| `PUT /api/v1/admin/admin-roles/:code` | Utworzenie lub aktualizacja roli według kodu; nieznane uprawnienia zwracają 400 `VALIDATION_FAILED`. Włączenie `requiresTwoFactor` jest odrzucane z 409 `MFA_REQUIRED_FOR_ROLE_TWO_FACTOR`, gdy MFA jest wyłączone albo nie ma klucza szyfrowania; odpowiedź zawiera `signedOutAdministrators` (zob. *Role wymagające weryfikacji dwuetapowej*) |
+| `GET /api/v1/admin/admin-roles/:code/two-factor-impact` | Ilu posiadaczy roli nie ma drugiego składnika i zostałoby wylogowanych po włączeniu jej wymogu (`unprotectedAdministrators`; `null`, gdy MFA jest wyłączone) |
 | `DELETE /api/v1/admin/admin-roles/:id` | Usunięcie; odrzucane z 409 `ADMIN_ROLE_IN_USE`, gdy rola jest nadal przypisana do jakiegokolwiek użytkownika — **także usuniętego miękko**, bo jego przypisanie wraca po przywróceniu konta. Odpowiedź wskazuje, która grupa ma tę rolę (`details.code` to `assigned` albo `assigned_to_deleted`) i ilu jest takich użytkowników |
 | `GET /api/v1/admin/permissions` | Kanoniczny katalog uprawnień (moduł / kod / etykieta), z którego korzysta macierz uprawnień w panelu |
-| `POST /api/v1/admin/organizations/:id/impersonate` | Rozpoczęcie logowania jako klient; przed wydaniem ciasteczka zapisuje wpis audytu `impersonation.start` |
+| `GET /api/v1/admin/me/preferences` | Własne preferencje panelu administracyjnego zalogowanego administratora; kod uprawnienia nie jest potrzebny (zob. *Preferencje panelu administracyjnego*) |
+| `PATCH /api/v1/admin/me/preferences` | Zmiana jednej lub kilku z nich; niepoprawne żądanie jest odrzucane z 400 `VALIDATION_FAILED` i nic nie zostaje zapisane |
+| `POST /api/v1/admin/me/preferences/legacy-import` | Jednorazowe przeniesienie rozmiarów stron z przeglądarki; nigdy nie nadpisuje wartości zapisanej na serwerze |
+| `POST /api/v1/admin/organizations/:id/impersonate` | Rozpoczęcie logowania jako klient (`customers:impersonate`); przed wydaniem ciasteczka zapisuje wpis audytu `impersonation.start` |
 | `POST /api/v1/admin/impersonation/end` | Powrót do pierwotnej sesji administratora |
 
 ## Zasięg uprawnienia `admin_users:manage`
@@ -73,6 +79,67 @@ Polecenie aktualizuje istniejące konto, ustawia podane hasło i przypisuje rol�
 chyba że `--role` wskazuje inną. Przy aktualizacji konta nie dostają roli automatycznie:
 oznaczałoby to nadanie dostępu, o którym nikt nie zdecydował.
 
+## Role wymagające weryfikacji dwuetapowej
+
+Pole **Wymaga weryfikacji dwuetapowej od przypisanych użytkowników** w roli
+(`requiresTwoFactor`) sprawia, że każdy posiadacz roli loguje się z drugim
+składnikiem, tak jak ustawienie `mfa.admin.totp_enforced` wymaga tego od
+wszystkich administratorów. Oba źródła się sumują: administrator musi użyć
+drugiego składnika, gdy obowiązuje którekolwiek z nich.
+
+Przy logowaniu — hasłem albo przez Google lub Microsoft — posiadacz, który ma
+skonfigurowaną weryfikację dwuetapową, jest proszony o kod. Posiadacz, który
+jej nie ma, zostaje przeprowadzony przez konfigurację i dostaje sesję dopiero
+po jej zakończeniu. Ekran weryfikacji dwuetapowej posiadacza pokazuje ten wymóg
+(`totpEnforcedForScope`).
+
+**Kto zostaje wylogowany.** Sesja administratora trwa trzydzieści dni, więc
+wymóg nie czeka na następne logowanie:
+
+- gdy rola zaczyna wymagać weryfikacji dwuetapowej, od razu zostają wylogowani
+  wszyscy jej posiadacze, którzy jej nie skonfigurowali;
+- gdy administrator bez skonfigurowanej weryfikacji dostaje taką rolę, zostaje
+  od razu wylogowany.
+
+Posiadacze, którzy już korzystają z weryfikacji dwuetapowej, pozostają
+zalogowani. Administrator wprowadzający zmianę zachowuje sesję, z której ją
+wprowadził, i przy następnym logowaniu zostanie poproszony o konfigurację.
+Ekran ról przed zapisaniem podaje, ilu posiadaczy zostanie wylogowanych, a po
+zapisaniu — ilu wylogowano. Odrzucony zapis nikogo nie wylogowuje. Każde
+wylogowanie jest zapisywane w dzienniku audytu jako
+`mfa.admin_sessions_ended_for_requirement`, z rolą i liczbą administratorów.
+
+Włączenie `mfa.admin.totp_enforced` w **Ustawieniach** działa tak samo wobec
+wszystkich administratorów: każdy, kto nie skonfigurował weryfikacji
+dwuetapowej, zostaje od razu wylogowany, z wyjątkiem sesji, z której wprowadzono
+zmianę. Ekran ustawień najpierw pyta o potwierdzenie i podaje, ilu
+administratorów zostanie wylogowanych. Wpis w dzienniku audytu wskazuje wtedy
+ustawienie zamiast roli (`objectType: 'setting'`, `trigger: 'setting_enabled'`).
+
+**Kiedy wymogu nie da się włączyć.** Pole egzekwuje moduł MFA, dlatego:
+
+- gdy MFA jest wyłączone, pole jest nieaktywne i rola nie może zacząć wymagać
+  weryfikacji dwuetapowej (409 `MFA_REQUIRED_FOR_ROLE_TWO_FACTOR`,
+  `details.reason: 'mfa_off'`). Rola, która już jej wymaga, zachowuje to
+  ustawienie i zacznie ono znów obowiązywać po ponownym włączeniu MFA.
+  Wyłączenie wymogu jest zawsze dozwolone;
+- nie można wyłączyć MFA, dopóki którakolwiek rola wymaga weryfikacji
+  dwuetapowej: ekran modułów odmawia z 409 `MFA_DEACTIVATION_BLOCKED` i podaje
+  te role (`details.roleCodes`). Najpierw odznacz pole w tych rolach;
+- bez `MFA_SECRET_ENCRYPTION_KEY` nie da się skonfigurować ani sprawdzić
+  drugiego składnika, więc rola nie może też zacząć go wymagać
+  (`details.reason: 'encryption_key_missing'`). Rola, która już go wymaga,
+  **nie jest stosowana**: jej posiadacze logują się samym hasłem i nikt nie
+  zostaje wylogowany z powodu otrzymania tej roli. Ekran ról pokazuje pod polem
+  *Nie obowiązuje: brak klucza szyfrowania* (odczyt roli zawiera
+  `twoFactorNotice.code: 'encryption_key_missing'`), a instancja przy każdym
+  starcie zapisuje błąd z nazwami ról i liczbą ich posiadaczy bez drugiego
+  składnika. Ustaw klucz i uruchom instancję ponownie, aby wymóg znów
+  obowiązywał, albo odznacz pole w tych rolach.
+
+Gdy wdrożenie całkowicie usuwa moduł MFA, logowanie nie wymaga drugiego
+składnika, niezależnie od ustawień ról.
+
 ## Sesje a zmiana hasła
 
 Sesja jest poświadczeniem, dlatego jest unieważniana wtedy, gdy przestaje obowiązywać to, co
@@ -84,12 +151,13 @@ potwierdzała:
 | Inny administrator resetuje hasło (`POST /api/v1/admin/admin-users/:id/password`) | Wszystkie sesje konta |
 | Konto zostaje dezaktywowane (`status: 'inactive'`) albo usunięte | Wszystkie sesje konta |
 | Polecenie `admin_users create` (`admin:create`) zostaje uruchomione ponownie dla konta, które już istnieje | Wszystkie sesje konta. Zapis trafia do dziennika audytu jako `admin_user.change_password` z `via: 'cli'` i bez administratora wykonującego |
-| Administrator wyłącza własne uwierzytelnianie dwuskładnikowe (`POST /api/v1/admin/account/mfa/disable`) | Wszystkie sesje konta **poza tą, z której wysłano żądanie** |
+| Administrator wyłącza własną weryfikację dwuetapową (`POST /api/v1/admin/account/mfa/disable`) | Wszystkie sesje konta **poza tą, z której wysłano żądanie** |
+| Rola konta zaczyna wymagać weryfikacji dwuetapowej albo konto dostaje taką rolę, a nie ma jej skonfigurowanej | Wszystkie sesje konta, **poza tą, z której wprowadzono zmianę, jeśli wprowadziło ją to konto** (zob. *Role wymagające weryfikacji dwuetapowej*) |
 
 „Wszystkie sesje” to logowania w innych przeglądarkach i na innych urządzeniach oraz sesje
 logowania jako klient rozpoczęte przez tego administratora. Te same zapisy wycofują każde
 logowanie, które konto rozpoczęło i którego nie dokończyło — oczekującą weryfikację drugiego
-składnika albo bilet konfiguracji uwierzytelniania dwuskładnikowego — dlatego logowania
+składnika albo bilet konfiguracji weryfikacji dwuetapowej — dlatego logowania
 rozpoczętego starym hasłem nie da się później dokończyć. Najpierw zapisywany jest nowy stan,
 a dopiero potem unieważniane są sesje, więc po unieważnieniu nie da się już niczego uzyskać
 starym hasłem. Po samodzielnej zmianie hasła
@@ -148,8 +216,8 @@ Co to oznacza w praktyce:
 - **Hasła i kody drugiego składnika są liczone osobno.** Hasło jest liczone
   wszędzie tam, gdzie się o nie pyta — przy logowaniu, jako bieżące hasło, gdy
   administrator zmienia własne, oraz przy potwierdzaniu wyłączenia
-  uwierzytelniania dwuskładnikowego — i tak samo kod: w drugim kroku
-  logowania, przy potwierdzaniu wyłączenia uwierzytelniania dwuskładnikowego
+  weryfikacji dwuetapowej — i tak samo kod: w drugim kroku
+  logowania, przy potwierdzaniu wyłączenia weryfikacji dwuetapowej
   oraz przy ponownym generowaniu kodów odzyskiwania.
 - **Jednocześnie sprawdzanych jest najwyżej pięć prób z jednego adresu** (20
   dla jednego konta). Próba ponad ten limit otrzymuje 429 z `Retry-After: 1`
@@ -194,7 +262,7 @@ ani przez ten limit odrzucana. Dlatego:
   ponownie ukończyć logowanie, żeby stać się znanym. Nie jest honorowany, dopóki
   konto jest dezaktywowane lub usunięte, ale **ponowna aktywacja konta z tym
   samym hasłem przywraca pliki cookie, które jego urządzenia już mają**. Reset
-  uwierzytelniania dwuskładnikowego, jego włączenie ani wyłączenie ich nie
+  weryfikacji dwuetapowej, jej włączenie ani wyłączenie ich nie
   unieważnia. Żeby wszystkie urządzenia konta stały się nieznane, zmień jego
   hasło.
 - **Plik cookie ustawia wyłącznie logowanie, które zweryfikowało hasło lub
@@ -320,6 +388,93 @@ tych samych liczników przez port `adminAuthenticationThrottlePort`
 porównanie jednym wywołaniem `verify(attempt, check)`. Próba niesie adres
 klienta i zweryfikowaną wartość pliku cookie znanego urządzenia.
 
+## Profil autora
+
+Funkcja 171. Każdy administrator może prowadzić na swojej stronie profilu publiczny
+**profil autora** — **avatar** (obraz z biblioteki, ten sam w każdym języku) oraz tekst
+**o mnie** w każdym języku treści, do 2000 znaków. Blog pokazuje je przy wpisach, których
+autorem jest ten administrator: imię i nazwisko, avatar oraz tekst w języku czytelnika
+(a gdy go brak — w domyślnym języku kanału).
+
+- `PATCH /api/v1/admin/me` oraz `PATCH /api/v1/admin/admin-users/:id` (ten drugi z
+  uprawnieniem `admin_users:manage`) przyjmują `avatarAssetId` (`null` go usuwa) i `bio`
+  (`{ "<język>": "<tekst>" }`, `null` je usuwa). Avatar, który nie wskazuje aktywnego zasobu
+  biblioteki, jest odrzucany z `422 ADMIN_USER_AVATAR_NOT_FOUND`; gdy biblioteka zasobów jest
+  wyłączona, avatara nie da się ustawić (`MODULE_DISABLED`), a reszta profilu się zapisuje.
+  Zmiana trafia do wpisu audytu `admin_user.update`.
+- Biblioteka liczy avatar jako użycie obrazu (*Administrator „…”*), więc nie da się go usunąć,
+  dopóki administrator go wyświetla. Usunięty administrator nie ma avatara.
+- Nic więcej o administratorze — e-mail, rola, status — nie trafia do storefrontu.
+
+## Preferencje panelu administracyjnego
+
+Układ panelu administracyjnego każdego administratora jest przechowywany na serwerze, razem z
+jego kontem: pozycje przypięte w pasku bocznym, zwinięte grupy paska, to, czy pasek jest zwinięty
+do ikon (tryb szyny), oraz liczba wierszy na stronie każdej listy. Układ podąża za administratorem
+do każdej przeglądarki i do zainstalowanej aplikacji, a nikt inny go nie widzi.
+
+### Dla operatorów
+
+- **Przypinanie pozycji** — wskaż pozycję paska bocznego albo przejdź do niej klawiaturą: za nią
+  pojawi się przycisk przypinania (z klawiatury to kolejny przystanek klawisza Tab po pozycji).
+  Po jego użyciu pozycja trafia na koniec sekcji **Przypięte** na górze paska; zostaje też w swoim
+  miejscu. Na telefonie i tablecie przycisk jest widoczny zawsze.
+- **Przypinanie z palety poleceń** (⌘K / Ctrl+K) — wynik, który otwiera pozycję paska bocznego,
+  ma obok siebie przycisk przypinania, a **Alt+Enter** (⌥↵ na Macu) przypina lub odpina
+  zaznaczony wynik. **Enter** nadal go otwiera. Paleta pozostaje otwarta z tym samym wyszukiwaniem.
+- **Odpinanie** — tym samym przyciskiem, w przypiętym wierszu albo w wierszu samej pozycji. W
+  zwiniętym pasku (trybie szyny) sekcja Przypięte jest pierwszą ikoną; jej wysuwane menu
+  wymienia przypięte pozycje, każdą z przyciskiem odpinania.
+- **Zmiana kolejności** — przeciągnij przypięty wiersz; albo ustaw fokus na jego uchwycie,
+  naciśnij spację, przesuń strzałkami i ponownie naciśnij spację (Escape anuluje); na ekranie
+  dotykowym użyj przycisków w górę i w dół. Każde przypięcie, odpięcie i przesunięcie jest
+  ogłaszane czytnikom ekranu.
+- **Przypięte pozycje, których nie możesz otworzyć, nie są pokazywane.** Gdy stracisz
+  uprawnienie wymagane przez pozycję albo jej moduł zostanie wyłączony, przypięcie znika
+  wszędzie — i wraca w to samo miejsce, gdy dostęp wróci. Nic nie jest usuwane.
+- **Gdy zmiany nie da się zapisać** (na przykład bez połączenia), działa ona dalej na tym ekranie,
+  a jeden komunikat pod górnym paskiem o tym informuje; zapis zostanie ponowiony, gdy wróci
+  połączenie albo strona wróci na pierwszy plan. Zamknij komunikat przyciskiem **Zamknij**.
+- **Po aktualizacji, która to wprowadziła**, każda lista otwiera się z rozmiarem strony wybranym
+  wcześniej w tej przeglądarce — zostaje on przeniesiony raz, chyba że na serwerze był już
+  zapisany — a pasek boczny otwiera się z rozwiniętymi grupami i niezwinięty, bo dawne wartości
+  w przeglądarce nie były przypisane do administratora. Zwiń go ponownie raz; od tej chwili
+  układ jest pamiętany wszędzie.
+
+### Dla programistów
+
+- **Przechowywanie.** Tabela `admin_user_preferences` (`AdminUserPreference`, encja globalna
+  platformy): jeden wiersz na administratora i preferencję, wartość jako `jsonb`; wiersze są
+  usuwane razem z wierszem administratora i zachowywane, gdy konto zostanie dezaktywowane lub
+  usunięte miękko.
+- **Zamknięty zbiór** to `ADMIN_PREFERENCE_KEYS` w `@endora-commerce/contracts`:
+  `sidebarPins` (cele, najwyżej 200, każdy jest trasą paska bocznego), `sidebarCollapsedGroups`
+  (klucze grup, najwyżej 32; sekcja Przypięte zwija się jako `pinned`), `sidebarRailMode`
+  (wartość logiczna) i `listPageSizes` (identyfikator listy → jedna z wartości 5, 10, 20, 50,
+  100, 500; najwyżej 128 list). Limity chronią serwer; nie są limitami produktu, a panel nigdy nie
+  odmawia przypięcia. Zapis jest ścisły (`adminPreferencesPatchSchema`): nieznany klucz, zły
+  kształt, duplikat lub wartość ponad limit to 400 `VALIDATION_FAILED` i nic nie zostaje
+  zapisane. Odczyt jest tolerancyjny: wartość, której późniejsze wydanie już nie rozumie, jest
+  zwracana tak, jak zapisano, a panel ją pomija.
+- **Trasy.** `GET` i `PATCH /api/v1/admin/me/preferences` oraz
+  `POST /api/v1/admin/me/preferences/legacy-import` wymagają sesji i żadnego kodu uprawnienia, a
+  żadna trasa nie przyjmuje identyfikatora administratora — więc nikt, także rola z symbolem
+  wieloznacznym, nie może odczytać ani zmienić preferencji innego administratora. `PATCH`
+  zastępuje każdą wskazaną preferencję paska bocznego i scala `listPageSizes` po liście (`null`
+  usuwa listę); import dodaje tylko listy, których serwer nie ma. Każda odpowiedź to cały
+  dokument. `GET /api/v1/admin/me` też zawiera `preferences`, więc panel otwiera się już
+  z przypięciami, zwiniętymi grupami i w trybie szyny; gdy nie da się ich odczytać, pole ma
+  wartość `null`, logowanie mimo to się udaje, a panel niczego nie zapisuje, dopóki późniejszy
+  odczyt się nie powiedzie.
+- **Na ekranie** `usePageSizePreference(scope)` z `@endora-commerce/admin-kit/lib` daje liście
+  zapamiętany rozmiar strony: wystarczy wybrać identyfikator listy (`'catalog-products'`). Dwa
+  ekrany o tym samym identyfikatorze dzielą jedną wartość. Wartość jest odczytywana przy otwarciu
+  listy, więc zmiana z innego urządzenia obowiązuje od następnego otwarcia.
+  `useAdminPreference(key)` i `useAdminPreferencesStatus()` odczytują i zapisują preferencje paska
+  bocznego; dostarcza je `AuthProvider`, więc nic więcej nie trzeba montować.
+- **Bez wpisu w dzienniku audytu.** To osobiste ustawienia interfejsu, a nie dane biznesowe:
+  zapisy nie przechodzą przez Command Bus i dziennik audytu ich nie rejestruje.
+
 ## Logowanie jako klient
 
 `impersonation-service.ts` realizuje wzorzec przełączenia użytkownika: rozpoczyna nową sesję
@@ -327,14 +482,32 @@ przypisaną do docelowego klienta, z zapamiętanym w tle identyfikatorem adminis
 czysto, zapisując `impersonation.end`. Każda czynność wykonana w takiej sesji jest zapisywana w
 dzienniku audytu zarówno z `actorAdminUserId`, jak i z `impersonatedCustomerAccountId`.
 
+Wpis `impersonation.start` podaje kształt rozpoczęcia, nigdy jego wartości (zgłoszenie #470):
+`hasReason`, `reasonLength`, gdy podano powód, `organizationScoped` (czy rozpoczęcie wskazało
+organizację konta) oraz `valueChangeId`. Dziennik audytu to jedna ogólnoplatformowa tabela, którą
+czyta każdy z uprawnieniem `audit_log:read`, niezależnie od tego, które organizacje widzi, dlatego
+powód wpisany przez administratora jest przechowywany w `admin_impersonation_reasons`,
+a `valueChangeId` to identyfikator tego wiersza. Wiersz i wpis są zapisywane w jednej transakcji,
+zanim powstanie sesja: rozpoczęcie, które nie powiedzie się przy którymkolwiek zapisie, nie
+zostawia żadnego z nich i nikogo nie loguje. Gdy konto klienta zostaje zanonimizowane, jego powody
+są usuwane (`impersonation.reasons_erase`, z liczbą usuniętych). Żaden ekran nie pokazuje jeszcze
+zapisanego powodu.
+
 ## Encje
 
-`AdminUser` (e-mail, passwordHash, stan uwierzytelniania dwuskładnikowego, jedno `adminRoleId`,
+`AdminUser` (e-mail, passwordHash, stan weryfikacji dwuetapowej, jedno `adminRoleId`,
 `status`, usunięcie miękkie przez `deletedAt`).
 
+`AdminUserPreference` (administrator, klucz preferencji, wartość `jsonb`, `updatedAt`) — zob.
+*Preferencje panelu administracyjnego*.
+
+`ImpersonationReason` (konto klienta, jego organizacja, administrator, powód, `at`) —
+`@CustomerScoped`, jeden wiersz na każde logowanie jako klient rozpoczęte z powodem; zob.
+*Logowanie jako klient*.
+
 `AdminRole` (kod, nazwa wyświetlana, JSONB `permissions[]`, `requiresTwoFactor`). Symbol
-wieloznaczny `*` służy wyłącznie do inicjalizacji platformy i jest odrzucany przez trasę zapisu
-roli.
+wieloznaczny `*` daje każde uprawnienie; lista, która go zawiera, jest zapisywana jako dokładnie
+`['*']`, a zapisać go może tylko posiadacz `*` (zob. *Zasięg uprawnienia `admin_users:manage`*).
 
 ## Punkty rozszerzenia
 

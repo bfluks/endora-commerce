@@ -13,7 +13,7 @@ import { withModuleOff } from '../../helpers/off-state.js';
 
 import { AuditLogEntry } from '@endora-commerce/platform/kernel';
 
-import { CreditLimit, Refund, ReturnCase, ReturnCaseItem } from '../../helpers/package-entities.js';
+import { CreditLimit, InvoiceLine, Refund, ReturnCase, ReturnCaseItem } from '../../helpers/package-entities.js';
 
 import { ADMIN_COOKIE, CUSTOMER_COOKIE, anyReasonId, resetReturnGraph, seedReturnableOrder } from './helpers.js';
 
@@ -231,9 +231,9 @@ describe('returns — the settlement ordering law (D-91)', () => {
       expect(refused.statusCode).toBe(503);
     });
 
-    // The credit did move before the document was refused: the effects run
-    // money-first, and the top-up is what the retry must not repeat.
-    expect(await grantedAmount()).toBe(560);
+    // Nothing moved: the correction is validated before any money (issue #417,
+    // review of PR #423), so the 503 from `invoices` came before the top-up.
+    expect(await grantedAmount()).toBe(500);
 
     const retried = await settle(id, {
       resolutionType: 'credit',
@@ -260,5 +260,43 @@ describe('returns — the settlement ordering law (D-91)', () => {
     expect(settled.corrections, 'one corrective invoice, not two').toHaveLength(1);
     expect(settled.refunds[0]!.correctiveInvoiceId).toBe(settled.corrections[0]!.id);
     expect(settled.audits, 'the audit entry is part of the write, not best-effort').toHaveLength(1);
+  });
+
+  // Issue #417, review of PR #423 — nothing moves before the correction is known to go through.
+  it('refuses a case line named twice with a 400, before any money moves', async () => {
+    await grantCreditLimit(500);
+    const { id, itemId, orderId } = await receivedCase();
+    await issueInvoice(orderId);
+    const res = await settle(id, {
+      resolutionType: 'credit',
+      lines: [
+        { returnCaseItemId: itemId, approvedRefundAmount: 60 },
+        { returnCaseItemId: itemId, approvedRefundAmount: 40 },
+      ],
+    });
+    expect(res.statusCode).toBe(400);
+    await expectNothingSettled(id, orderId, { itemId, untouchedAmount: 100 });
+    expect(await grantedAmount(), 'no credit for a settlement that was refused').toBe(500);
+  });
+
+  it('refuses a correction that cannot be made before the money moves, not after', async () => {
+    await grantCreditLimit(500);
+    const { id, itemId, orderId } = await receivedCase();
+    await issueInvoice(orderId);
+    // The original invoice no longer names the returned order item: the correction
+    // cannot mirror a VAT rate for it and refuses.
+    await withSystemScope('test: unlink the invoice lines', async () => {
+      const em = h.em().fork();
+      const original = await em.findOneOrFail(Invoice, { orderId, kind: 'invoice' });
+      for (const line of await em.find(InvoiceLine, { invoiceId: original.id })) line.orderItemId = null;
+      await em.flush();
+    });
+    const res = await settle(id, {
+      resolutionType: 'credit',
+      lines: [{ returnCaseItemId: itemId, approvedRefundAmount: 60 }],
+    });
+    expect(res.statusCode).toBe(422);
+    await expectNothingSettled(id, orderId, { itemId, untouchedAmount: 100 });
+    expect(await grantedAmount(), 'no credit before a correction that refuses').toBe(500);
   });
 });

@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
+import { shippedModuleBundle } from '../../helpers/core-bundle';
+import { developerIdLabels } from '../../helpers/developer-ids';
 
 const getSpy = vi.fn();
 const deleteSpy = vi.fn();
@@ -86,21 +88,60 @@ beforeEach(() => {
   putSpy.mockResolvedValue({ data: { transitions: [] } });
 });
 
-const BUNDLE = passthroughBundle('core', []);
+const BUNDLE = {
+  ...passthroughBundle('core', ['common.action.delete', 'common.action.cancel', 'orders.page.title']),
+  ...shippedModuleBundle('orders', 'en'),
+};
 
-function renderPage(): void {
-  renderWithI18n(
+function renderPage(language: 'en' | 'pl' = 'en'): { container: HTMLElement } {
+  return renderWithI18n(
     <MemoryRouter>
       <OrderStatusConfigPage />
     </MemoryRouter>,
     BUNDLE,
+    { language },
   );
 }
 
 describe('OrderStatusConfigPage', () => {
+  // Issue #1809 — the list named every status by its default (English) name in a Polish admin.
+  it("names the statuses in the admin's language", async () => {
+    getSpy.mockResolvedValue({
+      data: {
+        ...GRAPH,
+        statuses: [
+          { ...GRAPH.statuses[0], name: { en: 'New', pl: 'Nowy' }, defaultName: 'New' },
+          { ...GRAPH.statuses[1], name: { en: 'Pending', pl: 'Oczekujące' }, defaultName: 'Pending' },
+          { ...GRAPH.statuses[2], name: { en: 'Cancelled', pl: 'Anulowane' }, defaultName: 'Cancelled' },
+        ],
+      },
+    });
+    renderPage('pl');
+    // The row's own actions are named by the status, so they say which name it is shown by.
+    expect(await screen.findByRole('button', { name: 'Edit status Oczekujące' })).toBeInTheDocument();
+    expect(screen.getAllByText('Nowy').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Pending')).toBeNull();
+  });
+
+  it('names its icon buttons and the actions column in words, not developer ids (#1475)', async () => {
+    const { container } = renderPage();
+    expect(await screen.findByRole('button', { name: 'Edit status Pending' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Actions' })).toBeInTheDocument();
+    expect(developerIdLabels(container)).toEqual([]);
+  });
+
+  // #1549 (SALES-27): the way back is the header's back link to Orders, not an outline Back button.
+  it('goes back to Orders through the header back link', async () => {
+    renderPage();
+    const heading = await screen.findByRole('heading', { level: 1 });
+    const back = within(heading.closest('header')!).getByRole('link', { name: 'orders.page.title' });
+    expect(back).toHaveAttribute('href', '/orders');
+    expect(screen.queryByRole('link', { name: 'common.action.back' })).toBeNull();
+  });
+
   it('lists the configured statuses and transitions', async () => {
     renderPage();
-    await waitFor(() => expect(screen.getByLabelText('delete-new')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete status New' })).toBeInTheDocument());
     expect(screen.getAllByText('new').length).toBeGreaterThan(0);
     expect(screen.getAllByText('pending').length).toBeGreaterThan(0);
     expect(screen.getAllByText('cancelled').length).toBeGreaterThan(0);
@@ -109,24 +150,28 @@ describe('OrderStatusConfigPage', () => {
 
   it('disables delete for the initial/system status but allows a deletable one', async () => {
     renderPage();
-    await waitFor(() => expect(screen.getByLabelText('delete-new')).toBeInTheDocument());
-    expect(screen.getByLabelText('delete-new')).toBeDisabled(); // initial + system
-    expect(screen.getByLabelText('delete-cancelled')).toBeDisabled(); // system
-    expect(screen.getByLabelText('delete-pending')).not.toBeDisabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete status New' })).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Delete status New' })).toBeDisabled(); // initial + system
+    expect(screen.getByRole('button', { name: 'Delete status Cancelled' })).toBeDisabled(); // system
+    expect(screen.getByRole('button', { name: 'Delete status Pending' })).not.toBeDisabled();
   });
 
   it('calls DELETE when removing a deletable status', async () => {
     renderPage();
-    await waitFor(() => expect(screen.getByLabelText('delete-pending')).toBeInTheDocument());
-    await userEvent.click(screen.getByLabelText('delete-pending'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete status Pending' })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Delete status Pending' }));
     // Confirm in the deletion dialog.
-    await userEvent.click(screen.getByLabelText('confirm-delete'));
+    await userEvent.click(
+      within(screen.getByRole('dialog', { name: 'core.orderStatusConfig.deleteConfirm.title' })).getByRole('button', {
+        name: 'common.action.delete',
+      }),
+    );
     expect(deleteSpy).toHaveBeenCalledWith('/api/v1/admin/orders/statuses/pending');
   });
 
   it('adds a new transition via the From/To form', async () => {
     renderPage();
-    await waitFor(() => expect(screen.getByLabelText('delete-new')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete status New' })).toBeInTheDocument());
     await userEvent.selectOptions(
       screen.getByLabelText('core.orderStatusConfig.col.from'),
       'pending',
@@ -142,7 +187,7 @@ describe('OrderStatusConfigPage', () => {
 
   it('does not re-add an already-existing transition', async () => {
     renderPage();
-    await waitFor(() => expect(screen.getByLabelText('delete-new')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete status New' })).toBeInTheDocument());
     await userEvent.selectOptions(screen.getByLabelText('core.orderStatusConfig.col.from'), 'new');
     await userEvent.selectOptions(screen.getByLabelText('core.orderStatusConfig.col.to'), 'pending');
     await userEvent.click(
@@ -153,9 +198,102 @@ describe('OrderStatusConfigPage', () => {
 
   it('exposes the graph connect-mode toggle', async () => {
     renderPage();
-    await waitFor(() => expect(screen.getByLabelText('delete-new')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete status New' })).toBeInTheDocument());
     expect(
       screen.getByRole('button', { name: 'core.orderStatusConfig.graph.connectMode' }),
     ).toBeInTheDocument();
+  });
+
+  it('says which graph toggles are on, not only by colour (aria-pressed, issue #1445)', async () => {
+    renderPage();
+    const connect = await screen.findByRole('button', { name: 'core.orderStatusConfig.graph.connectMode' });
+    expect(connect).toHaveAttribute('aria-pressed', 'false');
+    await userEvent.click(connect);
+    expect(connect).toHaveAttribute('aria-pressed', 'true');
+
+    const layout = screen.getByRole('group', { name: 'core.orderStatusConfig.graph.layout' });
+    const none = within(layout).getByRole('button', { name: 'core.orderStatusConfig.graph.layoutNone' });
+    const force = within(layout).getByRole('button', { name: 'core.orderStatusConfig.graph.layoutForce' });
+    const pressed = (): string[] =>
+      within(layout).getAllByRole('button').filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.textContent ?? '');
+    expect(pressed()).toHaveLength(1);
+    await userEvent.click(force);
+    expect(force).toHaveAttribute('aria-pressed', 'true');
+    expect(none).toHaveAttribute('aria-pressed', 'false');
+    expect(pressed()).toEqual(['core.orderStatusConfig.graph.layoutForce']);
+  });
+});
+
+/**
+ * Issues #1439 (DS-05) and #1441 (DS-07), UX audit 2026-11-17 — no create form
+ * drawn open under the list. *Add status* sits in the statuses card's header as
+ * an outline button and opens the kit's dialog, whose submit is the one filled
+ * button while it is open. The graph's in-editor *Add transition* is outline too.
+ */
+describe('OrderStatusConfigPage — Add status opens a dialog (DS-05, DS-07)', () => {
+  const classes = (el: HTMLElement): string[] => el.className.split(/\s+/);
+
+  it('draws no add form on the page, only an outline Add status in the statuses card header', async () => {
+    renderPage();
+    await screen.findByRole('button', { name: 'Delete status New' });
+    expect(screen.queryByRole('region', { name: 'New status' })).toBeNull();
+    expect(screen.queryByLabelText('core.orderStatusConfig.col.code')).toBeNull();
+    const add = screen.getByRole('button', { name: 'core.orderStatusConfig.addStatus' });
+    expect(add.closest('[data-slot="card-header"]')).not.toBeNull();
+    expect(classes(add)).not.toContain('bg-primary');
+    expect(classes(add)).toContain('border-input');
+  });
+
+  it('draws the graph\'s Add transition as outline, not filled', async () => {
+    renderPage();
+    const add = await screen.findByRole('button', { name: 'core.orderStatusConfig.addTransition' });
+    expect(classes(add)).not.toContain('bg-primary');
+    expect(classes(add)).toContain('border-input');
+  });
+
+  it('creates a status from the dialog and closes it', async () => {
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: 'core.orderStatusConfig.addStatus' }));
+    const dialog = screen.getByRole('dialog', { name: 'New status' });
+    const submit = within(dialog).getByRole('button', { name: 'core.orderStatusConfig.addStatus' });
+    expect(submit).toBeDisabled();
+    // Every text field of the form is the kit's `Input`.
+    const raw = [...dialog.querySelectorAll('input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="hidden"])')].filter(
+      (input) => !/\bborder-input\b/.test(input.className),
+    );
+    expect(raw).toEqual([]);
+    await userEvent.type(within(dialog).getByLabelText('core.orderStatusConfig.col.code'), ' awaiting_stock ');
+    await userEvent.type(within(dialog).getByLabelText('core.orderStatusConfig.field.defaultName'), 'Awaiting stock');
+    await userEvent.click(within(dialog).getByRole('checkbox'));
+    await userEvent.click(submit);
+    expect(postSpy).toHaveBeenCalledWith(
+      '/api/v1/admin/orders/statuses',
+      expect.objectContaining({ code: 'awaiting_stock', defaultName: 'Awaiting stock', isTerminal: true, name: {} }),
+    );
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(getSpy.mock.calls.filter(([url]) => url === '/api/v1/admin/orders/statuses').length).toBeGreaterThan(1);
+  });
+
+  it('keeps the dialog open and says why when the server refuses the status', async () => {
+    const { ApiError } = await import('@endora-commerce/admin-kit/lib');
+    postSpy.mockRejectedValueOnce(
+      new ApiError(409, { error: { code: 'ORDER_STATUS_EXISTS', message: 'Status "pending" already exists.' } } as never),
+    );
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: 'core.orderStatusConfig.addStatus' }));
+    const dialog = screen.getByRole('dialog', { name: 'New status' });
+    await userEvent.type(within(dialog).getByLabelText('core.orderStatusConfig.col.code'), 'pending');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'core.orderStatusConfig.addStatus' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Status "pending" already exists.');
+    expect(screen.getByRole('dialog', { name: 'New status' })).toBeInTheDocument();
+  });
+
+  it('closes on Cancel without a request', async () => {
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: 'core.orderStatusConfig.addStatus' }));
+    const dialog = screen.getByRole('dialog', { name: 'New status' });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'common.action.cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(postSpy).not.toHaveBeenCalled();
   });
 });

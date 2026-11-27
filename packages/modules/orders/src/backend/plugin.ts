@@ -21,6 +21,7 @@ import {
 } from './services/order-service.js';
 import { OrderStatusGraphService } from './services/order-status-graph-service.js';
 import { OrderTransitionService } from './services/order-transition-service.js';
+import { applyStatusAsOutcome } from './services/order-status-outcome.js';
 import type { OrderTransitionEffectService } from './services/order-transition-effect-service.js';
 import { OrderListService } from './services/order-list-service.js';
 import { OrderListViewService } from './services/order-list-view-service.js';
@@ -28,6 +29,7 @@ import { OrderExportService } from './services/order-export-service.js';
 import { OrderCommentService } from './services/order-comment-service.js';
 import { OrderReorderService } from './services/order-reorder-service.js';
 import { OrderCloneToQuoteService } from './services/order-clone-to-quote-service.js';
+import { OrderAccessService } from './services/order-access-service.js';
 import { OrderConfirmationService } from './services/order-confirmation-service.js';
 import { OrderCreationAdminService } from './services/order-creation-admin-service.js';
 import { CustomerOrderCancellationService } from './services/order-cancellation-service.js';
@@ -37,10 +39,12 @@ import type { OrganizationConfirmationEmailsPort } from '../ports/organization-c
 import type {
   AddressReadPort,
   AddressServicePort,
-  AssetReadPort,
+  CustomFieldCarryPort,
+  CustomFieldListFilterPort,
   CustomFieldValuePort,
   CartReadPort,
   CartWritePort,
+  CatalogProductAvailabilityPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
   DeliveryMethodReadPort,
@@ -50,10 +54,12 @@ import type {
   InvoicePdfPort,
   InvoiceReadPort,
   LinePricePort,
+  LinePricesPort,
   OrderStatusRegistry,
-  OrderTransitionPort,
   OrganizationDetailsPort,
+  OrganizationPermissionPort,
   OrganizationRestrictionPort,
+  RelatedPayerPolicyPort,
   PaymentAdapterRegistryPort,
   PaymentMethodReadPort,
   QuoteRequestReadPort,
@@ -67,6 +73,7 @@ import type { PurchaseConversionService } from './services/purchase-conversion-s
 import type { OrderConfirmationRenderers } from './email-templates/order-confirmation.js';
 // Feature 035 — shipping-method adapter framework + shipment lifecycle.
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import type { OrdersTranslate } from './orders-prose.js';
 
 /**
  * Composition root for the commerce surface — carts + orders + invoice
@@ -77,19 +84,27 @@ import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 export interface OrdersModuleOptions {
   emFactory: () => EntityManager;
   eventBus: EventBus;
-  /** Feature 054 — audits order-config/comment writes co-transactionally when provided. */
-  commandBus?: CommandBus;
+  /**
+   * Feature 054 — audits order-config writes co-transactionally;
+   * `specs/186-aggregate-ports/` US4 — runs the status, payment-status and
+   * comment Commands, so it is required.
+   */
+  commandBus: CommandBus;
   requireCustomer: (req: FastifyRequest, reply: unknown) => Promise<void>;
   requireAdmin: RequireAdminFactory;
   resolveCustomerContext: (req: FastifyRequest) => {
     customerAccountId: string;
     organizationId: string;
     impersonatorAdminUserId?: string | null;
+    /** The member's role as the auth hook stamped it (feature 170, R-15). */
+    organizationRoleId?: string | null;
   };
   /** Audit-log writer; OrderService stamps order.place_on_behalf rows on impersonated checkouts. */
   auditLogService?: AuditPort;
   /** Feature 055 — validates + persists Order custom-field values on the admin edit path. */
   customFieldValues?: CustomFieldValuePort;
+  /** Feature 157 — the admin list's custom-field filters (offered fields and one condition). */
+  customFieldListFilter?: CustomFieldListFilterPort;
   /** Feature 034 — mailer for the order-confirmation e-mail (best-effort, post-commit). */
   mailer?: EmailMailerPort;
   /**
@@ -124,7 +139,7 @@ export interface OrdersModuleOptions {
    * catalogue's legacy `defaultPrice` attribute. Absence is now a `lazyPort`
    * gate that throws `MODULE_DISABLED`, which nothing can mistake for a price.
    */
-  pricingService: LinePricePort;
+  pricingService: LinePricePort & LinePricesPort;
   /**
    * Feature 038 (US3) — the org address book. The admin create-order flow and
    * the external intake persist (and clean up) addresses typed inline on the
@@ -171,7 +186,22 @@ export interface OrdersModuleOptions {
    * create path resolve from the modules that own the rows (feature 075).
    */
   catalogProductRead: CatalogProductReadPort;
+  /**
+   * Feature 163 — `catalog`'s availability answer: placement refuses a line
+   * whose product is no longer available at the order's (channel, language)
+   * to its Organization (FR-006), and the admin preview reports it.
+   */
+  catalogProductAvailability: Pick<
+    CatalogProductAvailabilityPort,
+    'filterAvailable' | 'effectiveOrderRules' | 'effectiveTexts'
+  >;
   customerAccountRead: CustomerAccountReadPort;
+  /**
+   * `organizations` — the buyer's order read scope asks it whether the buyer
+   * holds `orders.view_organization` (`specs/170-organization-roles/` FR-049).
+   * `organizations` is non-deactivatable, so this is the port, not an accessor.
+   */
+  organizationPermissions: OrganizationPermissionPort;
   organizationDetails: OrganizationDetailsPort;
   /**
    * `organizations` — the per-Organization delivery- and payment-method
@@ -179,18 +209,11 @@ export interface OrdersModuleOptions {
    * total preview, that names a method outside them.
    */
   organizationRestriction: OrganizationRestrictionPort;
+  /** `specs/182-related-payers/` — read only for an order naming a payer. */
+  relatedPayerPolicy?: RelatedPayerPolicyPort;
   /** Accessors: both owners are deactivatable `degrades-without` edges. */
   deliveryMethodRead: () => DeliveryMethodReadPort | null;
   paymentMethodRead: () => PaymentMethodReadPort | null;
-  /**
-   * This module's own lifecycle-write port (feature 085).
-   *
-   * Handed in rather than reached for: the port is registered in `backend.ts`,
-   * which is where every gate in this module is applied, and the buyer's
-   * cancellation is a caller of the seam like any other. Resolving it here
-   * would need the container, which a module does not see.
-   */
-  orderTransitionPort: OrderTransitionPort;
   /**
    * The three `inventory` ports the stock reservation runs on, as one accessor
    * (D-94.4, issue #188; feature 080, T048). `null` ⇒ `inventory` is not
@@ -203,7 +226,6 @@ export interface OrdersModuleOptions {
     readonly planning: InventoryFulfilmentPlanningPort;
     readonly reservationApply: InventoryReservationApplyPort;
   } | null;
-  assetRead: AssetReadPort;
   /**
    * `invoices` is deactivatable and declares this module, so its two ports are
    * accessors and the edge is `degrades-without`: `null` ⇒ no invoice surface.
@@ -224,6 +246,12 @@ export interface OrdersModuleOptions {
    * nothing.
    */
   quoteRequestRead: () => QuoteRequestReadPort | null;
+  /**
+   * `custom_fields`' carry port (`specs/162-custom-fields-value-carry/`): the
+   * vouched Quote Request's custom-field values the new Order receives. An
+   * accessor resolved per call; `custom_fields` is not deactivatable.
+   */
+  customFieldCarry: () => CustomFieldCarryPort;
   /**
    * The payment row placement opens (feature 080, T048; D-179). A value and not
    * an accessor, unlike the two `invoices` names above and unlike `inventory`:
@@ -274,14 +302,12 @@ export interface OrdersModuleOptions {
   /** Feature 026 US4 — same for delivery methods. */
   resolveOrganizationDeliveryMethodAllowList?: (req: FastifyRequest) => Promise<string[] | null>;
   /**
-   * Feature 026 US6 — sales-rep ownership scoping for the admin orders list.
-   * Platform admins return `{ allowAll: true }`; sales reps return the set
-   * of organization ids they own.
+   * Feature 026 US6 — whether the admin orders list is scoped at all.
+   * Platform admins return `{ allowAll: true }`; sales reps `{ allowAll:
+   * false }`, and the list is then confined to the ambient tenant reach
+   * (issue #305: every organization nobody else governs).
    */
-  resolveAdminOrdersScope?: (req: FastifyRequest) => Promise<
-    | { allowAll: true }
-    | { allowAll: false; allowedOrganizationIds: string[] }
-  >;
+  resolveAdminOrdersScope?: (req: FastifyRequest) => Promise<{ allowAll: boolean }>;
   /**
    * Feature 027 US2 — promotion engine used by the cart's coupon flow.
    * When provided, `POST /api/v1/cart/coupon` validates the code via
@@ -334,6 +360,12 @@ export interface OrdersModuleOptions {
    */
   exposeOrderStatusGraphService?: (service: OrderStatusGraphService) => void;
   /**
+   * `specs/186-aggregate-ports/` US4 — the comment service the admin route
+   * runs, for `orderCommandPort.addComment`: one instance, so the port's
+   * comment is the route's Command with the route's notice after it.
+   */
+  exposeOrderCommentService?: (service: OrderCommentService) => void;
+  /**
    * The follow-ups an order transition owes, recorded with the status and run
    * after it commits (`specs/142-order-transition-atomicity/`). Built in
    * `backend.ts`, where the two owners' ports are resolved and their presence
@@ -343,6 +375,11 @@ export interface OrdersModuleOptions {
   transitionEffects: OrderTransitionEffectService;
   /** The module's logger; the transition engine warns through it. */
   log?: PlatformLogger;
+  /**
+   * This module's bundle, from which the in-code order confirmation takes its
+   * sentences in the channel's language (issue #95). Absent, English.
+   */
+  translate?: OrdersTranslate;
   /**
    * Feature 027 §R5 — Redis client used by the cart-pricing-recompute
    * cache. When provided alongside `pricingService`, every full-cart
@@ -458,12 +495,15 @@ export function commerceModule(options: OrdersModuleOptions) {
       options.resolveOrderConfirmationRecipients,
     );
 
+    // The buyer's order read scope (FR-049), one instance for the list, the
+    // detail and every action reading an order by id.
+    const orderAccessService = new OrderAccessService(options.organizationPermissions);
     const orderService = new OrderService(
       options.emFactory,
       options.eventBus as OrderEventBus,
       options.auditLogService,
       options.creditLimit,
-      undefined,
+      orderAccessService,
       {
         paymentAdapters: options.paymentAdapterRegistry,
         orderStatusRegistry: options.paymentOrderStatusRegistry,
@@ -490,13 +530,17 @@ export function commerceModule(options: OrdersModuleOptions) {
           : {}),
         resolveTaxRate: options.resolveTaxRate,
         transitionEffects: options.transitionEffects,
+        commandBus: options.commandBus,
         ...(options.log ? { log: options.log } : {}),
+        ...(options.translate ? { translate: options.translate } : {}),
         neighbours: {
           organizationDetails: options.organizationDetails,
           organizationRestriction: options.organizationRestriction,
+          ...(options.relatedPayerPolicy ? { relatedPayerPolicy: options.relatedPayerPolicy } : {}),
           customerAccountRead: options.customerAccountRead,
           addressRead: options.addressRead,
           catalogProductRead: options.catalogProductRead,
+          catalogProductAvailability: options.catalogProductAvailability,
           paymentMethodRead: options.paymentMethodRead,
           deliveryMethodRead: options.deliveryMethodRead,
           inventory: options.inventory,
@@ -504,6 +548,7 @@ export function commerceModule(options: OrdersModuleOptions) {
           cartRead: options.cartRead,
           invoicePlacementApply: options.invoicePlacementApply,
           quoteRequestRead: options.quoteRequestRead,
+          customFieldCarry: options.customFieldCarry,
           paymentPlacementApply: options.paymentPlacementApply,
         },
         ...(options.mailer ? { mailer: options.mailer } : {}),
@@ -528,8 +573,8 @@ export function commerceModule(options: OrdersModuleOptions) {
       options.emFactory,
       options.eventBus,
       orderStatusGraphService,
+      options.commandBus,
       options.transitionEffects,
-      options.auditLogService,
       options.log,
     );
     // Feature 043 — hand the configured transition engine to composition so the
@@ -540,15 +585,26 @@ export function commerceModule(options: OrdersModuleOptions) {
     if (options.exposeOrderStatusGraphService) {
       options.exposeOrderStatusGraphService(orderStatusGraphService);
     }
-    // Feature 085 (US3) — the buyer's own cancellation. It writes through
-    // `orderTransitionPort` rather than through the service beside it: the port
-    // is the seam as this module publishes it, it answers a refusal as a value,
-    // and going through it means the buyer's cancellation gets the stock and
-    // credit release and the audit entry by exactly the path every other
-    // cancellation now takes.
+    // Feature 085 (US3) — the buyer's own cancellation. It writes through the
+    // outcome-shaped transition `orderCommandPort.applyStatus` publishes
+    // (`applyStatusAsOutcome`), so a refusal is a value and the buyer's
+    // cancellation gets the stock and credit release and the audit entry by
+    // exactly the path every other cancellation takes — and not through the
+    // port itself, which a customer-session route never resolves
+    // (`specs/186-aggregate-ports/` R-7, R-17.5).
     const customerOrderCancellation = new CustomerOrderCancellationService({
       emFactory: options.emFactory,
-      transitions: options.orderTransitionPort,
+      transitions: {
+        applyStatus: (input) =>
+          applyStatusAsOutcome(
+            {
+              emFactory: options.emFactory,
+              transitions: () => orderTransitionService,
+              graph: () => orderStatusGraphService,
+            },
+            input,
+          ),
+      },
       graphService: orderStatusGraphService,
       paymentMethodRead: options.paymentMethodRead,
       // Issue #284 — the kernel audit log, read back. The transition entries
@@ -563,6 +619,7 @@ export function commerceModule(options: OrdersModuleOptions) {
       orderStatusGraphService,
       options.organizationDetails,
       options.customerAccountRead,
+      options.customFieldListFilter ?? null,
     );
     if (options.exposeOrderListService) options.exposeOrderListService(orderListService);
     const orderListViewService = new OrderListViewService(options.emFactory, options.log);
@@ -571,6 +628,7 @@ export function commerceModule(options: OrdersModuleOptions) {
       options.emFactory,
       orderStatusGraphService,
       options.customerAccountRead,
+      options.commandBus,
       options.mailer,
       options.getTransactionalEmailSender,
     );
@@ -579,6 +637,7 @@ export function commerceModule(options: OrdersModuleOptions) {
       options.cartWritePort,
       options.catalogProductRead,
       options.customerAccountRead,
+      options.organizationPermissions,
       options.resolveReorderEnabled,
       options.mailer,
       options.getTransactionalEmailSender,
@@ -586,6 +645,7 @@ export function commerceModule(options: OrdersModuleOptions) {
     const orderCloneToQuoteService = new OrderCloneToQuoteService(
       options.emFactory,
       () => options.getRfqService?.() ?? null,
+      options.organizationPermissions,
     );
     const orderCreationAdminService = new OrderCreationAdminService(
       options.emFactory,
@@ -593,11 +653,15 @@ export function commerceModule(options: OrdersModuleOptions) {
       orderService,
       options.addressService,
       options.customerAccountRead,
+      options.salesChannelMembership,
+      options.catalogProductRead,
       options.mailer,
       options.getTransactionalEmailSender,
+      options.customFieldValues,
     );
 
     if (options.exposeOrderService) options.exposeOrderService(orderService);
+    if (options.exposeOrderCommentService) options.exposeOrderCommentService(orderCommentService);
 
     await registerOrderRoutes(app, {
       orderService,
@@ -620,6 +684,7 @@ export function commerceModule(options: OrdersModuleOptions) {
       pricingService: options.pricingService,
       resolveTaxRate: options.resolveTaxRate,
       catalogProductRead: options.catalogProductRead,
+      catalogProductAvailability: options.catalogProductAvailability,
       customerAccountRead: options.customerAccountRead,
       organizationDetails: options.organizationDetails,
       ...(options.salesChannelMembership
@@ -629,7 +694,6 @@ export function commerceModule(options: OrdersModuleOptions) {
       paymentMethodRead: options.paymentMethodRead,
       invoiceRead: options.invoiceRead,
       invoicePdf: options.invoicePdf,
-      assetRead: options.assetRead,
       ...(options.assertOrganizationCanTransact
         ? { assertOrganizationCanTransact: options.assertOrganizationCanTransact }
         : {}),
@@ -637,7 +701,9 @@ export function commerceModule(options: OrdersModuleOptions) {
         ? { resolveAdminOrdersScope: options.resolveAdminOrdersScope }
         : {}),
       ...(options.customFieldValues ? { customFieldValues: options.customFieldValues } : {}),
-      ...(options.commandBus ? { commandBus: options.commandBus } : {}),
+      ...(options.customFieldListFilter ? { customFieldListFilter: options.customFieldListFilter } : {}),
+      commandBus: options.commandBus,
+      organizationPermissions: () => options.organizationPermissions,
     });
 
     // Feature 062 — external orders namespace for bound api keys. Mounted only
@@ -651,6 +717,7 @@ export function commerceModule(options: OrdersModuleOptions) {
         catalogProductRead: options.catalogProductRead,
         organizationDetails: options.organizationDetails,
         salesChannelMembership: options.salesChannelMembership,
+        catalogAvailability: options.catalogProductAvailability,
         pricingService: options.pricingService,
         redis: options.redis,
         auditLogService: options.auditLogService,

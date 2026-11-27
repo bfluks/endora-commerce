@@ -38,10 +38,14 @@ import {
   evaluateA15,
   ADMIN_LOGIN_PATH,
   evaluateA5,
+  registryModuleIds,
   evaluateA6,
   evaluateA7,
   evaluateA8,
   evaluateA9,
+  evaluateA18,
+  evaluateA19,
+  evaluateA20,
   evaluateA16,
   evaluateA17,
   type ActorScopeObservation,
@@ -423,6 +427,45 @@ describe('A5 — the built admin bundle holds exactly the installed modules', ()
     const noLayers = evaluateA5(bundle({ expected: [], named: [] }));
     expect(noLayers.state).toBe('unmeasured');
     expect(noLayers.detail).toContain('publishes an admin layer');
+  });
+});
+
+/**
+ * A5's reading of the bundle. The registry is `{ moduleId: '<id>', … }` in the
+ * generated source; what reaches `dist` is whatever the minifier prints, and
+ * Vite 8 prints string literals as template literals — measured on a created
+ * instance: `{moduleId:`admin_roles`,contributions:Bf}`. A reading bound to
+ * `"` and `'` found 0 of 20 there, and A7's bundle half read the same empty set.
+ */
+describe('registryModuleIds — the module ids the built admin registry names', () => {
+  it('reads them in every quoting a minifier prints', () => {
+    const text =
+      'im=[{moduleId:`admin_roles`,contributions:Bf},{moduleId:"catalog",contributions:Kf},' +
+      "{ moduleId: 'orders', contributions: x }]";
+    expect(registryModuleIds(text)).toEqual(['admin_roles', 'catalog', 'orders']);
+  });
+
+  it('names nothing that is not a registry entry, and no id twice', () => {
+    expect(
+      registryModuleIds(
+        'const moduleIdLabel = `catalog`; moduleId:`a`,contributions:x,moduleId:`a`,contributions:y',
+      ),
+    ).toEqual(['a']);
+    expect(registryModuleIds('moduleId:`not-an-id`,contributions:x')).toEqual([]);
+    expect(registryModuleIds('moduleId:`a",contributions:x')).toEqual([]);
+  });
+
+  /**
+   * Measured on a created instance: with the quote fixed, the bundle named a
+   * 21st module, `core` — audit_logs' filter keeps an unrecorded action as
+   * `{ action: current, moduleId: 'core' }`. Only the registry entry, whose next
+   * key is `contributions`, is a module the bundle names.
+   */
+  it('reads only the registry entry, not every object that carries a moduleId', () => {
+    const text =
+      "[...e,{action:t,moduleId:`core`}];im=[{moduleId:`catalog`,contributions:Bf}," +
+      "{ moduleId: 'orders',\n  contributions: x }]";
+    expect(registryModuleIds(text)).toEqual(['catalog', 'orders']);
   });
 });
 
@@ -1355,6 +1398,50 @@ describe('A8 — an overlay module is composed and its decoration is in the repo
   });
 });
 
+/**
+ * `specs/190-overlay-full-modules/` T021 (FR-015, FR-003): a compiled overlay that no longer
+ * matches `apps/`, or one that breaks the layout, is refused before it runs, and a clean build
+ * composes. The probe is the instance's own `module:status` (and its API, for one case).
+ */
+describe('A18 — a stale or malformed overlay build is refused, a clean one composes', () => {
+  type Case = Parameters<typeof evaluateA18>[0]['cases'][number];
+  const refused = (kind: Case['kind']): Case => ({
+    kind,
+    probe: 'module:status',
+    code: 1,
+    output: `[overlay] … [${kind}] apps/x`,
+  });
+  const observation = (overrides: Partial<Parameters<typeof evaluateA18>[0]> = {}): Parameters<typeof evaluateA18>[0] => ({
+    cases: [refused('stale'), refused('unbuilt'), refused('orphan'), refused('package-in-disguise')],
+    clean: { code: 0, output: 'installed=29' },
+    ...overrides,
+  });
+
+  it('passes when every case is refused by name and the clean build composes', () => {
+    const result = evaluateA18(observation());
+    expect(result.state).toBe('pass');
+    expect(result.detail).toContain('stale, unbuilt, orphan, package-in-disguise');
+  });
+
+  it('fails on a case that ran instead of being refused', () => {
+    const result = evaluateA18(observation({ cases: [{ kind: 'stale', probe: 'api', code: 0, output: 'listening' }] }));
+    expect(result.state).toBe('fail');
+    expect(result.detail).toContain('stale');
+  });
+
+  it('fails on a refusal that does not name the case — another refusal is not this one', () => {
+    const result = evaluateA18(
+      observation({ cases: [{ kind: 'orphan', probe: 'module:status', code: 1, output: 'DATABASE_URL must be set' }] }),
+    );
+    expect(result.state).toBe('fail');
+  });
+
+  it('fails when the clean build does not compose, and is unmeasured when nothing was probed', () => {
+    expect(evaluateA18(observation({ clean: { code: 1, output: 'x' } })).state).toBe('fail');
+    expect(evaluateA18(observation({ failure: 'no overlay module to edit' })).state).toBe('unmeasured');
+  });
+});
+
 describe('A9 — the tenancy guard is active in the created instance', () => {
   const tenancy = (
     overrides: Partial<Parameters<typeof evaluateA9>[0]> = {},
@@ -1752,3 +1839,101 @@ describe('A17 — a request is confined to what its authenticated actor may reac
     expect(evaluateA17({ ...measured, apiKey: null }).state).toBe('unmeasured');
   });
 });
+
+/**
+ * `specs/190-overlay-full-modules/` T080 (US1, SC-001): an overlay module that owns a table, in a
+ * created instance. `setup` passes over it and applies its migration — read file by file from the compiled tree the
+ * instance's own build produced — and its route answers with the row that migration seeded, read
+ * through the entity its `backend.ts` exports.
+ */
+describe('A19 — an overlay module that owns a table migrates and serves its rows', () => {
+  const MIGRATION = 'Migration20270101T000000InstanceAcceptanceNotesInit';
+  const observation = (overrides: Partial<Parameters<typeof evaluateA19>[0]> = {}): Parameters<typeof evaluateA19>[0] => ({
+    moduleId: 'instance_acceptance_notes',
+    migrationName: MIGRATION,
+    seeded: 'seeded by its own migration',
+    built: { code: 0, output: '' },
+    migrated: { code: 0, output: '' },
+    applied: [MIGRATION],
+    probe: { status: 200, body: { bodies: ['seeded by its own migration'] } },
+    ...overrides,
+  });
+
+  it('passes when the migration is applied and the route reads the seeded row', () => {
+    const result = evaluateA19(observation());
+    expect(result.state).toBe('pass');
+    expect(result.detail).toContain(MIGRATION);
+  });
+
+  it('fails when `setup` exits non-zero, or applied nothing of the overlay', () => {
+    expect(evaluateA19(observation({ migrated: { code: 1, output: '[overlay] refused' } })).state).toBe('fail');
+    expect(evaluateA19(observation({ applied: [] })).state).toBe('fail');
+  });
+
+  it('fails when the route does not answer with the row', () => {
+    expect(evaluateA19(observation({ probe: { status: 500, body: {} } })).state).toBe('fail');
+    expect(evaluateA19(observation({ probe: { status: 200, body: { bodies: [] } } })).state).toBe('fail');
+  });
+
+  it('is unmeasured when the build failed or nothing answered', () => {
+    expect(evaluateA19(observation({ built: { code: 2, output: 'tsc' } })).state).toBe('unmeasured');
+    expect(evaluateA19(observation({ probe: null })).state).toBe('unmeasured');
+    expect(evaluateA19(observation({ failure: 'no deployment' })).state).toBe('unmeasured');
+  });
+});
+
+describe('A20 — the admin is built for one deployment, and holds that deployment’s overlay admin layer', () => {
+  type Observation = Parameters<typeof evaluateA20>[0];
+  const ok = { code: 0, output: '' };
+  const observation = (overrides: Partial<Observation> = {}): Observation => ({
+    moduleId: 'instance_acceptance_screens',
+    deployment: 'acme',
+    marker: 'a20-overlay-screen',
+    generated: ok,
+    deploymentBuild: ok,
+    deploymentHolds: true,
+    bareBuild: ok,
+    bareHolds: false,
+    typecheck: ok,
+    ...overrides,
+  });
+
+  it('passes when the deployment bundle holds the screen and the bare-core bundle does not', () => {
+    const result = evaluateA20(observation());
+    expect(result).toMatchObject({ id: 'A20', state: 'pass' });
+    expect(result.detail).toContain('DEPLOYMENT=acme');
+  });
+
+  it('fails when `generate` refused the tree the overlay admin layer is in', () => {
+    const result = evaluateA20(observation({ generated: { code: 1, output: 'palette coverage is not clean' } }));
+    expect(result.state).toBe('fail');
+    expect(result.detail).toContain('palette coverage is not clean');
+  });
+
+  it('fails when the admin built for the deployment does not hold the screen', () => {
+    expect(evaluateA20(observation({ deploymentHolds: false })).state).toBe('fail');
+    expect(evaluateA20(observation({ deploymentBuild: { code: 1, output: 'Could not resolve' } })).state).toBe('fail');
+  });
+
+  it('fails when the bare-core bundle holds the overlay screen too — SC-004', () => {
+    const result = evaluateA20(observation({ bareHolds: true }));
+    expect(result.state).toBe('fail');
+    expect(result.detail).toContain('bare core');
+  });
+
+  it('reports the admin type-check beside the verdict rather than judging it', () => {
+    // The admin member of a created instance installs no React types, so its
+    // own `src/main.tsx` does not type-check either (measured 2026-11-26, #1855).
+    const result = evaluateA20(observation({ typecheck: { code: 2, output: 'error TS7016' } }));
+    expect(result.state).toBe('pass');
+    expect(result.detail).toContain('`typecheck` exited 2');
+    expect(evaluateA20(observation()).detail).toContain('`typecheck` passed');
+  });
+
+  it('is unmeasured when there was nothing to build', () => {
+    expect(evaluateA20(observation({ failure: 'the created tree holds no `admin/` member' })).state).toBe(
+      'unmeasured',
+    );
+  });
+});
+

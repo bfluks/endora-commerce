@@ -163,10 +163,19 @@ wywołujący dostaje odpowiedź 503 `MODULE_DISABLED`, a nie operację wykonaną
 ```ts
 ctx.di.providePort(
   'organizationRestrictionPort',
-  ctx.asFunction(({ emFactory, auditLogService }: Cradle) =>
-    new OrganizationRestrictionService(emFactory, auditLogService)).singleton(),
+  ctx.asFunction(({ emFactory, commandBus }: Cradle) =>
+    new OrganizationRestrictionService(emFactory, commandBus)).singleton(),
 );
 ```
+
+**Port zapisu jest portem swojego agregatu.** Gdy inny kod musi zapisywać
+agregat, którego jesteś właścicielem, rozszerz `<aggregate>CommandPort` tego
+agregatu, zamiast publikować port skrojony pod jedno żądanie: każda metoda
+uruchamia tę samą audytowaną komendę co twoja trasa panelu administracyjnego
+dla tej operacji, z aktorem z bieżącego kontekstu, i nie sprawdza uprawnień.
+Metody opublikowanego portu należą do
+[powierzchni kontraktu](./contract-surface.md): wycofaj metodę na jedno wydanie,
+zanim ją usuniesz albo zmienisz.
 
 ### `ctx.di.register({...})` — własne usługi i punkty wpięcia
 
@@ -262,6 +271,16 @@ Dwie kolejne reguły, które łatwo przeoczyć:
 Większość krawędzi to pobrania. Kształt „push” służy rejestrom — domyślnym e-mailom
 transakcyjnym, rejestrom referencji, tabelom adapterów — w których moduł dodaje coś, co host
 później przegląda.
+
+**Jedna krawędź nie jest żadnym z nich: działanie wewnątrz zapisu innego modułu.** Moduł, który
+musi zareagować, gdy działa polecenie innego modułu — odrzucić je, zapisać obok własny wiersz albo
+dostać informację po zatwierdzeniu — rejestruje się przez `ctx.commandHooks([...])` na akcji, którą
+właściciel deklaruje w manifeście jako dostępną dla hooków. Nikt niczego nie pobiera: Command Bus
+uruchamia hook `beforeCommit` w transakcji właściciela, a dla odbiorcy `afterCommit` zapisuje
+wiersz w kolejce dostarczeń, i pomija każde z nich przy danym wywołaniu, dopóki moduł hooka jest wyłączony.
+Rejestracja jest zamykana razem z kompozycją, więc wykonuje się ją w `registerModule`, nigdy
+w hooku startowym. Punkt rozszerzenia, jego kolejność i odmowy opisuje
+[Command Bus](./command-bus.md#command-hooks-beforecommit).
 
 **Rejestr wkładów nigdy nie jest blokowanym portem.** Reguła:
 
@@ -443,7 +462,7 @@ część **nie została jeszcze** dostarczona. Dziś jej jedynym wywołującym j
 `check-port-dependencies.ts`, w czasie budowania; okno potwierdzenia i odpowiedź 409
 `MODULE_DEACTIVATION_UNCONFIRMED` są jeszcze w przygotowaniu, a dzisiejsze okno to zwykłe
 `window.confirm`, które podaje nazwę modułu i nic więcej
-(`admin/src/modules/platform/ModuleActivationControl.tsx`). Ustalone z góry jest to, że będzie
+(`packages/admin-shell/src/modules/platform/ModuleActivationControl.tsx`). Ustalone z góry jest to, że będzie
 **jedna** funkcja wywoływana przez oba miejsca, aby po ich wprowadzeniu zbiór identyfikatorów w
 oknie i zbiór w `details.consequences` nie mogły się rozjechać: będą tym samym wyrażeniem
 obliczonym dwa razy, a nie dwiema listami, które ktoś utrzymuje w zgodności. Dwa niezależne
@@ -529,6 +548,18 @@ dane), **literał obiektu** (worek zależności to rekord — oznaczenie go spra
 `this.deps.<anything>()` było wywołaniem portu, 39 razy w jednym przebiegu) oraz **pole odczytane z
 portu**. Uruchom z `PORT_CATCH_WHY=1`, aby zobaczyć każdy alias wraz z miejscem, które go
 wprowadziło.
+
+**Obiekt zbudowany z worka zależności jest za to śledzony metoda po metodzie.** Skoro
+`new ProjectReadService({ access, organizations: lazyPort(…) })` nie może nieść blokady jako
+wartość, nie oznaczając każdej metody klasy, sprawdzenie śledzi go jako **obiekt przechowujący** —
+którą instancję klasy, domknięcie albo literał obiektu przechowuje dana deklaracja — i przypisuje
+blokadę dopiero tam, gdzie ten obiekt jest *wywoływany*: `read.list()` sięga tam, dokąd sięga
+`ProjectReadService#list`, a `read.getOrFail()`, odczyt wiersza, nie sięga nigdzie i nie jest
+miejscem do oceny. Klucz jest odczytywany z worka, który odbiorca faktycznie przechowuje, nigdy po
+samej pisowni w obrębie modułu. Wywołanie na takim obiekcie niesie to, co **wydostaje się** z
+metody: odpowiedź o obecności, którą własny `catch` metody celowo pochłania, jest oceniana przy tym
+`catch`, a nie ponownie u wywołującego. `PORT_CATCH_UNIT=<regex>` wypisuje, co wydostaje się z
+każdej pasującej metody lub domknięcia.
 
 **Alias jest widoczny tam, gdzie jest jego wiązanie, i nigdzie indziej.** `const` ma zasięg pliku,
 bo taki ma w kodzie. **Klucz obiektu zależności** ma zasięg modułu, bo klasa, która go otrzymuje,
@@ -1169,7 +1200,7 @@ pnpm run cli search reindex
 
 # W klonie repozytorium Endora Commerce:
 pnpm --filter backend run cli -- --list
-pnpm --filter backend run cli -- search reindex  # albo alias: pnpm search:reindex
+pnpm --filter backend run cli -- search reindex  # albo alias: pnpm --filter backend run search:reindex
 ```
 
 To samo przejście po drzewie i ta sama funkcja `detectHookExport`, które obsługują `installHook`,

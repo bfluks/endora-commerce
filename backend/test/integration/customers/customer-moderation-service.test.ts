@@ -20,11 +20,20 @@ import { hashPassword } from '@endora-commerce/platform/kernel';
 // transitive parent ambiguous and the ORM refuses to initialise.
 import { CustomerAccountReadService } from '../../../../packages/modules/customer_accounts/dist/backend/services/customer-account-ports.js';
 import { twoFactorEnrolmentsFor } from '../../helpers/two-factor-enrolments.js';
-import { customerAccountLifecycleWriteFor } from '../../helpers/customer-account-ports.js';
+import { customerAccountCommandsFor } from '../../helpers/customer-account-ports.js';
+import { predefinedRoleIdOf } from '../../helpers/seed-organization-roles.js';
 
 /**
  * Feature 040, US3 — block/unblock: authority, session revocation, login gate,
  * audit, idempotency, and the org-owner depletion guard.
+ *
+ * `specs/186-aggregate-ports/` (#1822): the service runs `customer_accounts`'
+ * block Command, which ends the sessions after its commit and holds the guard.
+ *
+ * `specs/170-organization-roles/` WP-03 (T058): the guard counts the holders
+ * of the Organization's *Administrator* role (`countAdministrators`), judges
+ * the target by the role it holds rather than the legacy column, and applies to
+ * company Organizations only (T120, owner ruling PR-3).
  */
 describe('CustomerModerationService', () => {
   let db: TestDb;
@@ -38,15 +47,17 @@ describe('CustomerModerationService', () => {
     isPlatformAdmin: true,
   };
 
-  async function makeOrg(): Promise<string> {
+  async function makeOrg(isPersonal = false): Promise<string> {
     const org = em.create(Organization, {
+      isPersonal,
       name: 'Mod Org',
-      taxId: `PL${String(Math.floor(performance.now() * 1000)).slice(-10).padStart(10, '0')}`,
+      // A personal organization has no tax ID (specs/177-tax-id-scope/).
+      taxId: isPersonal ? null : `PL${String(Math.floor(performance.now() * 1000)).slice(-10).padStart(10, '0')}`,
       status: 'active',
       vatStatus: 'vat_payer',
       registeredAddress: { street: 'ul. Testowa 1', city: 'Warszawa', postalCode: '00-001', country: 'PL' },
     });
-    await em.persistAndFlush(org);
+    await em.persist(org).flush();
     return org.id;
   }
 
@@ -73,11 +84,18 @@ describe('CustomerModerationService', () => {
 
   function makeService(canSee: boolean): CustomerModerationService {
     const visibility: SalesRepVisibility = { canSeeOrganization: async () => canSee };
+    const organizationRoles = { predefinedRoleId: (organizationId: string, kind: 'administrator' | 'member') => predefinedRoleIdOf(em, organizationId, kind) };
+    const accounts = new CustomerAccountReadService(() => em, twoFactorEnrolmentsFor(() => em, 'customer'), organizationRoles);
+    // `specs/186-aggregate-ports/` (#1822) — the block's session revocation
+    // and depletion guard are inside `customer_accounts`' Command; the
+    // operator's request is the scope the route would give it.
     return new CustomerModerationService(
-      new CustomerAccountReadService(() => em, twoFactorEnrolmentsFor(() => em, 'customer')),
-      customerAccountLifecycleWriteFor(() => em, audit),
+      accounts,
+      customerAccountCommandsFor(() => em, audit, {
+        actingFor: platformAdmin.adminUserId,
+        sessions: createAuthSessionPort(sessions),
+      }),
       new CustomerAuthorityService(visibility),
-      sessions,
     );
   }
 
@@ -94,7 +112,7 @@ describe('CustomerModerationService', () => {
       lastName: 'Target',
       ...over,
     });
-    await em.persistAndFlush(c);
+    await em.persist(c).flush();
     return c;
   }
 
@@ -192,9 +210,33 @@ describe('CustomerModerationService', () => {
   it('refuses to block the last organization admin (depletion guard, 409)', async () => {
     const svc = makeService(true);
     const orgId = await makeOrg();
-    const onlyAdmin = await makeCustomer({ organizationId: orgId, role: 'organization_admin' });
+    const onlyAdmin = await makeCustomer({
+      organizationId: orgId,
+      organizationRoleId: await predefinedRoleIdOf(em, orgId, 'administrator'),
+    });
     await expect(
       svc.block({ targetCustomerAccountId: onlyAdmin.id, actor: platformAdmin }),
     ).rejects.toMatchObject({ code: 'ORG_OWNER_DEPLETION' });
+  });
+
+  it('blocks an administrator when another unblocked one remains', async () => {
+    const svc = makeService(true);
+    const orgId = await makeOrg();
+    const administratorRoleId = await predefinedRoleIdOf(em, orgId, 'administrator');
+    const first = await makeCustomer({ organizationId: orgId, organizationRoleId: administratorRoleId });
+    await makeCustomer({ organizationId: orgId, organizationRoleId: administratorRoleId });
+    const blocked = await svc.block({ targetCustomerAccountId: first.id, actor: platformAdmin });
+    expect(blocked.blockedAt).not.toBeNull();
+  });
+
+  it('blocks a personal Organization’s administrator — its only member (PR-3, T120)', async () => {
+    const svc = makeService(true);
+    const orgId = await makeOrg(true);
+    const individual = await makeCustomer({
+      organizationId: orgId,
+      organizationRoleId: await predefinedRoleIdOf(em, orgId, 'administrator'),
+    });
+    const blocked = await svc.block({ targetCustomerAccountId: individual.id, actor: platformAdmin });
+    expect(blocked.blockedAt).not.toBeNull();
   });
 });

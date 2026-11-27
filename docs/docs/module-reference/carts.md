@@ -37,8 +37,11 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | `quote_requests` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `sales_channels` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `settings` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
+| `taxes` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
+| `transactional_emails` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `promotions` | gating only | resolves `promotionCodePort`; withheld from `dependencies` because the install order cannot carry the edge |
 | `promotions` | gating only | resolves `promotionService`; withheld from `dependencies` because the install order cannot carry the edge |
+| `related_payers` | no | degrades-without `relatedPayerPolicyPort` — no payer can be chosen on the cart, and a cart bought for a payer returns to the buyer's own prices on its next read |
 
 ## Permissions
 
@@ -46,11 +49,12 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | --- | --- | --- |
 | `carts:read` | View customer carts | — |
 | `carts:reject` | Reject a cart pending organization approval | — |
-| `customers:manage` | Manage customer organizations | — |
 
 ## Command palette
 
-_None._
+| Action | Opens | Permission |
+| --- | --- | --- |
+| `open-carts` | `/carts` | `carts:read` |
 
 ## Settings
 

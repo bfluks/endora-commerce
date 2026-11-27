@@ -23,7 +23,7 @@
  * module to move.
  *
  * Every ordinary read and write of an order is published in
- * `@endora-commerce/contracts` — `OrderReadPort`, `OrderTransitionPort`,
+ * `@endora-commerce/contracts` — `OrderReadPort`, `OrderCommandPort`,
  * `OrderStatusRegistry` — and belongs there. What lands here is only what
  * cannot: the qualifying test D-171 states is not *"is this a real published
  * port"* but *"does this signature stop the interface living in
@@ -72,14 +72,32 @@ import type { OrderPaymentStatus, OrderStatus } from '@endora-commerce/contracts
  * first narrowing).
  *
  * `status` is the lifecycle axis and is read-only here: the settlement decides
- * the *money* axis and asks `orderTransitionPort` for the lifecycle move after
+ * the *money* axis and asks `orderCommandPort` for the lifecycle move after
  * its transaction has committed, so what the caller needs back is the status
  * the order is at, to hand to that port as the "from" it observed.
  */
 export interface OrderPaymentStatusApplied {
   readonly orderId: string;
   readonly status: OrderStatus | string;
+  /** The payment status the order is at **after** the call — unmoved unless `outcome` is `applied`. */
   readonly paymentStatus: OrderPaymentStatus;
+  /**
+   * Issue #1574 — what became of the asked-for status, judged against the
+   * money axis's transition graph (`PAYMENT_STATUS_TRANSITIONS` in the
+   * contracts) for the `settlement` actor:
+   *
+   * - `applied` — an edge of the graph; the column moved.
+   * - `unchanged` — the order was already there; nothing was written.
+   * - `refused` — not an edge (a late decline on a paid order, a late success
+   *   on a refunded one, a full refund of an unpaid one); nothing was written.
+   *
+   * A refusal is an answer, never a throw: throwing would roll back the
+   * settlement transaction and with it the payment row, which records a true
+   * provider fact. The caller decides what a refused move means for the rest
+   * of its work — `payments` asks for no lifecycle move behind one.
+   */
+  readonly outcome: 'applied' | 'unchanged' | 'refused';
+  readonly owesEffects: boolean;
 }
 
 /**
@@ -100,7 +118,7 @@ export interface OrderPaymentStatusApplied {
  * module publishes no entity class by name.
  *
  * **The lifecycle half is not here and must not come here.** `order.status` is
- * `OrderTransitionPort.applyStatus` in `@endora-commerce/contracts`, called
+ * `OrderCommandPort.applyStatus` in `@endora-commerce/contracts`, called
  * *after* the settlement transaction commits, because it obtains its own
  * `EntityManager` and a call from inside would write the order on a second
  * pooled connection the caller's rollback cannot reach (issue #200). This port
@@ -117,7 +135,12 @@ export interface OrderPaymentStatusApplied {
  */
 export interface OrderPaymentStatusApplyPort {
   /**
-   * Stamp `paymentStatus` on the order and report what it was found at.
+   * Stamp `paymentStatus` on the order — when the graph allows it — and
+   * record any effects owed by the move on the same transaction. Report where
+   * the order is, whether it moved, and whether an obligation is owed.
+   * `owesEffects` is true even when the obligation already exists and the
+   * insert does nothing; it is false for unchanged or refused moves and for
+   * moves that owe no effect.
    *
    * `em` is **required** (D-169). Its one caller is the settlement handler,
    * which always passes the `EntityManager` its own transaction runs on; an
@@ -134,6 +157,26 @@ export interface OrderPaymentStatusApplyPort {
     em: EntityManager,
     input: { orderId: string; paymentStatus: OrderPaymentStatus },
   ): Promise<OrderPaymentStatusApplied | null>;
+}
+
+/**
+ * Attempts the follow-up owed by a payment-status settlement after commit.
+ *
+ * Container name: `orderPaymentSettlementEffectsPort`. Owner: `orders`.
+ *
+ * `orderPaymentStatusApplyPort` records the obligation on the settlement
+ * transaction. This port drains it after commit, on its own `EntityManager`
+ * (issue #200). `orders` is `nonDeactivatable`, so this port is always present
+ * when `orders` is installed.
+ */
+export interface OrderPaymentSettlementEffectsPort {
+  /**
+   * Attempt every outstanding follow-up of one order, now. Uses its own
+   * `EntityManager` — must be called **after** the settlement transaction
+   * commits. Ordinary failures are logged and left for the sweep; a
+   * `ModuleDisabledError` propagates (fail-closed).
+   */
+  drainForOrder(orderId: string): Promise<void>;
 }
 
 /**

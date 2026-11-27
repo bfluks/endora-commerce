@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CatalogCategoryRecord, CatalogProductRecord } from '@endora-commerce/contracts';
-import { buildRuleMeta } from './meta-tag-resolver.service.js';
+import { buildRuleMeta, seoMetaAddress, walkSeoScopes } from './meta-tag-resolver.service.js';
+import type { SeoMetaOverride } from '../entities/seo-meta-override.entity.js';
 
 /**
  * Unit-level coverage of the rule builder. The override + locale-fallback
@@ -9,32 +10,24 @@ import { buildRuleMeta } from './meta-tag-resolver.service.js';
  */
 
 describe('buildRuleMeta', () => {
-  it('uses the requested locale when available', () => {
-    const product = {
-      name: { 'en-US': 'English name', 'pl-PL': 'Polska nazwa' },
-      description: { 'en-US': 'English desc', 'pl-PL': 'Polski opis' },
-    } as unknown as CatalogProductRecord;
+  // Feature 174: the rule builder reads the product's name and description as one string each;
+  // the resolver hands it the effective texts at (C, L) (`effectiveTexts`, T121).
+  it('derives the product rule from the Global texts', () => {
+    const product = { name: 'Polska nazwa', description: 'Polski opis' } as unknown as CatalogProductRecord;
     const meta = buildRuleMeta('product', { product }, 'pl-PL');
     expect(meta.title).toBe('Polska nazwa');
     expect(meta.description).toBe('Polski opis');
     expect(meta.openGraph.title).toBe('Polska nazwa');
   });
 
-  it('falls back to en-US when the requested locale is missing', () => {
-    const product = {
-      name: { 'en-US': 'Fallback name' },
-      description: { 'en-US': 'Fallback desc' },
-    } as unknown as CatalogProductRecord;
-    const meta = buildRuleMeta('product', { product }, 'de-DE');
-    expect(meta.title).toBe('Fallback name');
+  it('a product without a description derives an empty one', () => {
+    const product = { name: 'Name', description: null } as unknown as CatalogProductRecord;
+    expect(buildRuleMeta('product', { product }, 'de-DE').description).toBe('');
   });
 
   it('truncates an over-long title with an ellipsis', () => {
     const long = 'a'.repeat(120);
-    const product = {
-      name: { 'en-US': long },
-      description: { 'en-US': 'short' },
-    } as unknown as CatalogProductRecord;
+    const product = { name: long, description: 'short' } as unknown as CatalogProductRecord;
     const meta = buildRuleMeta('product', { product }, 'en-US');
     expect(meta.title.length).toBeLessThanOrEqual(60);
     expect(meta.title.endsWith('…')).toBe(true);
@@ -47,5 +40,98 @@ describe('buildRuleMeta', () => {
     const meta = buildRuleMeta('category', { category }, 'en-US');
     expect(meta.title).toBe('Widgets');
     expect(meta.description).toBe('Browse Widgets.');
+  });
+});
+
+/**
+ * Feature 163 (T114, T117a), rewritten by 174 — the per-field walk channel × language →
+ * channel → Global → derived, and the addressing rule of a request. The `[PG]` cases are in
+ * `backend/test/contract/seo/product-meta-read-relaxed.test.ts` (route, scope refusals) and
+ * `backend/test/integration/seo/product-meta-three-levels-migration.test.ts` (the table's shapes).
+ */
+const C1 = '00000000-0000-4000-8000-0000000000c1';
+const C2 = '00000000-0000-4000-8000-0000000000c2';
+
+function row(fields: Partial<SeoMetaOverride>): SeoMetaOverride {
+  return { salesChannelId: null, locale: null, title: null, description: null, ogTitle: null, ogDescription: null, ogImageUrl: null, ...fields } as SeoMetaOverride;
+}
+
+const fallback = { title: 'Derived', description: 'Derived d', ogTitle: 'Derived og', ogDescription: 'Derived ogd', ogImageUrl: null };
+
+// Feature 174 (FR-010) — C×L → C → Global → derived; a locale-only row is never read.
+describe('walkSeoScopes', () => {
+  const rows = [
+    row({ salesChannelId: C1, locale: 'pl-PL', title: 'CxL' }),
+    row({ salesChannelId: C1, title: 'C', description: 'C d' }),
+    row({ title: 'G', description: 'G d', ogTitle: 'G og' }),
+    row({ locale: 'pl-PL', ogDescription: 'language row' }),
+    row({ salesChannelId: C2, locale: 'pl-PL', title: 'other channel' }),
+  ];
+
+  it('takes each field from the most specific row that sets it', () => {
+    const walked = walkSeoScopes(rows, C1, 'pl-PL', fallback);
+    expect(walked).toMatchObject({ title: 'CxL', description: 'C d', ogTitle: 'G og', ogDescription: 'Derived ogd' });
+    expect(walked.sources).toEqual({
+      title: 'set',
+      description: 'inherited_channel',
+      ogTitle: 'inherited_global',
+      ogDescription: 'derived',
+      ogImageUrl: 'derived',
+    });
+  });
+
+  it('matches the language case-insensitively and never crosses languages or channels', () => {
+    expect(walkSeoScopes(rows, C1, 'pl-pl', fallback).title).toBe('CxL');
+    expect(walkSeoScopes(rows, C1, 'de-DE', fallback)).toMatchObject({ title: 'C', ogTitle: 'G og' });
+    expect(walkSeoScopes(rows, null, 'pl-PL', fallback)).toMatchObject({ title: 'G', description: 'G d' });
+    expect(walkSeoScopes([], C1, 'pl-PL', fallback)).toMatchObject(fallback);
+  });
+});
+
+describe('walkSeoScopes — empty overrides (174, owner round 6)', () => {
+  it('an empty override stops the fallback and yields the derived value', () => {
+    const rows = [row({ salesChannelId: C1, locale: 'pl-PL', title: '' }), row({ title: 'G', description: '' })];
+    const walked = walkSeoScopes(rows, C1, 'pl-PL', fallback);
+    expect(walked.title).toBe(fallback.title);
+    expect(walked.description).toBe(fallback.description);
+    expect(walked.sources.title).toBe('set_empty');
+    expect(walked.sources.description).toBe('set_empty');
+  });
+
+  it('reads a product Language-only row as nothing (FR-010)', () => {
+    const walked = walkSeoScopes([row({ locale: 'pl-PL', title: 'language row' })], C1, 'pl-PL', fallback);
+    expect(walked.title).toBe(fallback.title);
+    expect(walked.sources.title).toBe('derived');
+  });
+});
+
+describe('seoMetaAddress', () => {
+  it('reads a product request naming neither half as the Global row (174, FR-010)', () => {
+    expect(seoMetaAddress({ entityType: 'product', entityId: 'p' })).toEqual({
+      entityType: 'product',
+      entityId: 'p',
+      channelId: null,
+      locale: null,
+    });
+  });
+
+  it('refuses a product Language-only address: there is no Language scope (174, FR-010)', () => {
+    expect(() => seoMetaAddress({ entityType: 'product', entityId: 'p', locale: 'pl-PL' })).toThrow(
+      expect.objectContaining({ statusCode: 422 }),
+    );
+  });
+
+  it('keeps the en-US language row for a category or CMS page naming neither half', () => {
+    expect(seoMetaAddress({ entityType: 'category', entityId: 'c' })).toMatchObject({ channelId: null, locale: 'en-US' });
+  });
+
+  it('keeps a channel row without a locale', () => {
+    expect(seoMetaAddress({ entityType: 'product', entityId: 'p', channelId: C1 })).toMatchObject({ channelId: C1, locale: null });
+  });
+
+  it('refuses a channel on anything but a product', () => {
+    expect(() => seoMetaAddress({ entityType: 'category', entityId: 'c', channelId: C1 })).toThrow(
+      expect.objectContaining({ statusCode: 422 }),
+    );
   });
 });

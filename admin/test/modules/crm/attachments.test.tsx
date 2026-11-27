@@ -131,7 +131,7 @@ async function openTab(permissions: readonly string[] = WRITER): Promise<HTMLEle
 
 /** What the Attachments tab is called when it holds `count` files. */
 const countedTab = (count: number): string =>
-  en('opportunity.tabs.counted', { label: en('opportunity.tabs.attachments'), count });
+  core('common.tabs.counted', { label: en('opportunity.tabs.attachments'), count });
 
 const row = (panel: HTMLElement, name: string): HTMLElement =>
   within(panel).getByText(name).closest('tr') as HTMLElement;
@@ -147,6 +147,12 @@ describe('the Attachments tab', () => {
     expect(within(row(panel, 'brief.pdf')).getByText(/2[.,]5\s?MB/)).toBeInTheDocument();
     expect(within(row(panel, 'brief.pdf')).getByText('Ada Min')).toBeInTheDocument();
     expect(within(row(panel, 'drawing.dwg')).getByText(/512\s?(B|byte)/)).toBeInTheDocument();
+  });
+
+  it('does not explain where the files are kept or how a download works (#1487)', async () => {
+    const panel = await openTab();
+    await within(panel).findByText('brief.pdf');
+    expect(within(panel).queryByText(/media library|download link/i)).toBeNull();
   });
 
   it('says there are no attachments yet', async () => {

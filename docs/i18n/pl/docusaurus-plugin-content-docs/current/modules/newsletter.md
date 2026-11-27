@@ -1,9 +1,9 @@
 ---
-title: newsletter
+title: Newsletter
 description: Newsletter na własnej infrastrukturze — lista subskrybentów, tagi, segmenty, jednorazowe kampanie i wieloetapowe automatyzacje ze zgodą zbieraną osobno w każdym kanale
 ---
 
-# `newsletter`
+# Newsletter (`newsletter`)
 
 Wysyłka newslettera na własnej infrastrukturze. Pozwala operatorom budować listę subskrybentów,
 dzielić ją na segmenty według **tagów** i **pól niestandardowych** oraz docierać do odbiorców przez
@@ -29,14 +29,37 @@ wyłączać**, aby nie kolidował z zewnętrzną usługą e-mail marketingu (Mai
   ważności; niepotwierdzeni subskrybenci `pending` wygasają po `newsletter.confirm_ttl_hours`.
 - **Tagi i pola niestandardowe** — definiuje je operator; tagi decydują o odbiorcach kampanii i
   uruchamiają automatyzacje, a pola niestandardowe uzupełniają dane subskrybentów (ustawiane przez
-  API, panel administracyjny lub formularz zapisu) i służą jako kryteria automatyzacji.
+  API, panel administracyjny lub formularz zapisu) i służą jako kryteria automatyzacji. Wartość
+  pola niestandardowego jest zapisywana tylko wtedy, gdy jej klucz jest zdefiniowanym polem **i**
+  wartość pasuje do typu pola (tak/nie → `true`/`false`, liczba → skończona liczba, data →
+  istniejąca data `YYYY-MM-DD`, tekst → najwyżej 500 znaków; `null` czyści wartość); każda inna
+  wartość jest pomijana, a żądanie nie jest odrzucane.
 - **Kampania** — jednorazowa wysyłka do odbiorców `all` / ręcznie wybranej grupy `group` / `tag` /
   `tag_list`. Tworzona we wspólnym edytorze e-maili Page Builder (ta sama paleta bloków co e-maile
-  transakcyjne): temat, drzewo treści Puck i zmienne; podgląd na przykładowych danych; wysyłka od
-  razu albo w zaplanowanym terminie.
+  transakcyjne): temat, drzewo treści Puck i zmienne; podgląd na przykładowych danych w oknie
+  **Podgląd e-maila** edytora; wysyłka od razu albo w zaplanowanym terminie. Edytor najpierw pyta
+  o ustawienia — nazwę, język, temat i odbiorców — a treść jest pod nimi; ręczną grupę wybiera się,
+  wyszukując aktywnych subskrybentów po adresie e-mail, i widać w niej, kto już do niej należy.
+  **Wyślij** zapisuje kampanię, a potem prosi o potwierdzenie,
+  podając temat i liczbę subskrybentów, do których trafi wysyłka (aktywnych i niewykluczonych —
+  według tej samej reguły co sama wysyłka); odbiorców, do których nic by nie trafiło, panel
+  odrzuca, zanim o cokolwiek zapyta.
 - **Automatyzacja** — liniowa sekwencja kroków `send` / `wait N days`, uruchamiana dla odbiorców
   all / tag / tag-list. Kroki wysyłki korzystają z tego samego edytora e-maili. Model kroków
   zaprojektowano tak, by później można było dodać rozgałęzienia warunkowe bez przebudowy.
+  Aktywna automatyzacja zapisuje subskrybenta, gdy ten **nowo** spełni jej warunek
+  uruchomienia — zaraz po zapisaniu subskrypcji albo potwierdzenia:
+  - `all` — gdy subskrybent staje się aktywny: zapis z pojedynczą zgodą, potwierdzenie przy
+    podwójnej zgodzie albo ponowny zapis po wypisaniu się. Subskrybent, który jeszcze nie
+    potwierdził zapisu, nie jest zapisywany.
+  - `tag` / `tag_list` — gdy aktywny subskrybent ma jeden z tagów warunku (dowolny z nich): przy
+    aktywacji z już nadanym tagiem albo gdy kolejny zapis dodaje ten tag.
+
+  Aktywacja automatyzacji **nie** zapisuje subskrybentów, którzy już spełniają jej warunek —
+  zapisywani są tylko ci, którzy spełnią go od tej chwili. Ponowne wysłanie formularza bez żadnej
+  zmiany nikogo nie zapisuje, adres na liście blokad nigdy nie jest zapisywany, a subskrybent
+  przechodzi przez tę samą automatyzację jeden raz (zasada ponownego wejścia `once`). Gdy moduł
+  jest wyłączony, nikt nie jest zapisywany.
 - **Bloki e-mail** — wielokrotnego użytku fragmenty bezpieczne dla programów pocztowych, edytowane
   tym samym edytorem Puck i wstawiane przez `EmailInsertBlock` tam, gdzie to skonfigurowano.
 - **Zmienne** — katalog zmiennych newslettera obejmuje `subscriber.email`, `customFields.*`,
@@ -45,8 +68,17 @@ wyłączać**, aby nie kolidował z zewnętrzną usługą e-mail marketingu (Mai
 - **Identyfikacja wizualna** — logo i kolor akcentu pochodzą z kanału sprzedaży kampanii lub
   automatyzacji. Kampania albo automatyzacja utworzona bez kanału sprzedaży jest podglądana
   i wysyłana z identyfikacją wizualną **domyślnego** kanału sprzedaży.
-- **Dostawca wysyłki** — wybierany i konfigurowany w panelu administracyjnym; hasło SMTP jest
-  przechowywane jako ustawienie typu `secret` (AES-256-GCM, na granicy API tylko do zapisu).
+- **Dostawca wysyłki** — połączenie SMTP (host, port, TLS, nazwa użytkownika, hasło) to
+  wielokrotnego użytku konfiguracja **Email adapter** w wariancie SMTP, tworzona na ekranie
+  **Poświadczenia** (*Credentials*) i wybierana w ustawieniu *Email credentials*
+  (`newsletter.email_credentials`); hasło jest przechowywane w postaci zaszyfrowanej i nigdy nie jest
+  zwracane. Ekran **Usługa wysyłki** newslettera ustawia adres i nazwę nadawcy oraz tempo wysyłki
+  i testuje połączenie (`GET`/`PUT /api/v1/admin/newsletter/provider`, `POST …/provider/test`).
+  Działająca konfiguracja to taka, którą da się odczytać i która jest w wariancie SMTP; konfiguracja
+  Amazon SES nie jest jeszcze obsługiwana. Bez niej instancja produkcyjna (`NODE_ENV=production`)
+  odrzuca wysyłkę kampanii kodem `NEWSLETTER_PROVIDER_NOT_CONFIGURED`, test połączenia kończy się
+  błędem, a kampania już zaplanowana oznacza każdego odbiorcę jako nieudanego z podaniem przyczyny.
+  Instancja deweloperska lub testowa zapisuje wtedy e-maile w logu serwera (konsolowe ujście).
 
 ## Wysyłka
 
@@ -67,10 +99,45 @@ więcej workerach żadna wiadomość nie zostanie wysłana dwa razy.
 
 ## Zaangażowanie odbiorców
 
-Śledzenie otwarć korzysta z piksela 1×1; śledzenie kliknięć przepisuje linki na podpisane
-przekierowania. Liczniki wysłanych / dostarczonych / nieudanych / otwartych / klikniętych dla
-każdej kampanii (oraz kliknięcia poszczególnych linków) są sumowane z `newsletter_send_records` i
-`newsletter_engagement_events`. Śledzenie można wyłączyć w każdej kampanii.
+E-maile kampanii mogą zawierać śledzenie otwarć i kliknięć, dodawane w chwili wysyłki wiadomości
+do każdego odbiorcy. Oba rodzaje śledzenia są **wyłączone**, dopóki operator ich nie włączy
+(zobacz ustawienia poniżej); instancja bez zmienionych ustawień wysyła kampanie bez śledzenia.
+
+- **Otwarcia** — przed końcem treści wiadomości dodawany jest niewidoczny obrazek 1×1,
+  `GET /api/v1/newsletter/open.gif?token=…`. Jego wczytanie zapisuje otwarcie w rekordzie wysyłki
+  odbiorcy.
+- **Kliknięcia** — każdy bezwzględny link `http(s)` jest zamieniany na
+  `GET /api/v1/newsletter/click?token=…&u=<destination>`. Token jest podpisany i powiązany z
+  rekordem wysyłki, z identyfikatorem linku numerowanym w kolejności występowania w dokumencie
+  (`link-1`, `link-2`, …) oraz z adresem docelowym, więc przekierowanie prowadzi wyłącznie do
+  linku, z którym e-mail został wysłany. Token, którego nie da się zweryfikować, daje odpowiedź
+  `410`; adres docelowy niezgodny z tokenem prowadzi na stronę główną storefrontu. Linki
+  `mailto:` i `tel:`, kotwice w obrębie strony, linki względne oraz własne linki modułu
+  (wypisanie, potwierdzenie) pozostają bez zmian. Część tekstowa wiadomości jest wysyłana bez
+  zmian.
+
+Oba adresy są budowane na publicznym bazowym adresie API, z którego korzysta link do wypisania,
+a oba tokeny są ważne przez rok. Kliknięcie śledzonego linku liczy się także jako otwarcie, więc
+odbiorca, którego program pocztowy blokuje obrazki, zostaje policzony, gdy kliknie link.
+
+Dwa ustawienia w grupie **Newsletter** włączają i wyłączają oba rodzaje śledzenia niezależnie od
+siebie. Oba są domyślnie **wyłączone**, więc kampania jest śledzona dopiero wtedy, gdy operator
+włączy je na ekranie ustawień. Każde można ustawić osobno dla każdego kanału sprzedaży (kampania
+bez kanału sprzedaży korzysta z wartości domyślnego kanału sprzedaży):
+
+| Ustawienie | Gdy wyłączone (domyślnie) |
+| --- | --- |
+| `newsletter.tracking.opens_enabled` | obrazek nie jest dodawany, a otwarcia nie są liczone |
+| `newsletter.tracking.clicks_enabled` | linki prowadzą prosto do celu, a kliknięcia nie są liczone |
+
+Kampania utworzona przez API z `trackingEnabled: false` jest wysyłana bez obu rodzajów śledzenia.
+E-maile automatyzacji nie są śledzone.
+
+Liczniki wysłanych / dostarczonych / nieudanych / otwartych / klikniętych dla każdej kampanii
+(oraz kliknięcia poszczególnych linków) są sumowane z `newsletter_send_records` i
+`newsletter_engagement_events`. Liczba otwarć jest przybliżona: program pocztowy blokujący obrazki
+nie zgłasza żadnego otwarcia, a program, który wczytuje obrazki za czytelnika, zgłasza otwarcie,
+które mogło nie nastąpić.
 
 ## Uprawnienia
 
@@ -78,11 +145,179 @@ każdej kampanii (oraz kliknięcia poszczególnych linków) są sumowane z `news
 - `newsletter:write` — zarządzanie subskrybentami, kampaniami, automatyzacjami, blokami i dostawcą
   wysyłki.
 
+## Odmowy
+
+API administracyjne odrzuca zapis, na który nie pozwala bieżący stan, z własnym kodem błędu i
+zdaniem w języku operatora. Wartości, które to zdanie wymienia, są przekazywane w `details`:
+
+| Kod | Status | Kiedy | `details` |
+| --- | --- | --- | --- |
+| `NEWSLETTER_CAMPAIGN_NOT_EDITABLE` | 422 | Edycja kampanii, która nie jest wersją roboczą ani zaplanowaną | `campaignId`, `status` |
+| `NEWSLETTER_CAMPAIGN_NOT_CANCELLABLE` | 422 | Anulowanie kampanii, która nie jest wersją roboczą ani zaplanowaną | `campaignId`, `status` |
+| `NEWSLETTER_PROVIDER_NOT_CONFIGURED` | 422 | Wysyłka kampanii na instancji produkcyjnej, gdy nie wybrano działających poświadczeń e-mail (zob. *Dostawca wysyłki*) | — |
+| `NEWSLETTER_AUTOMATION_ACTIVE` | 422 | Edycja aktywnej automatyzacji; najpierw ją wstrzymaj | `automationId`, `status` |
+| `NEWSLETTER_CUSTOM_FIELD_KEY_TAKEN` | 409 | Utworzenie pola niestandardowego o istniejącym kluczu | `key` |
+| `NEWSLETTER_EMAIL_BLOCK_CODE_TAKEN` | 409 | Utworzenie bloku e-mail o istniejącym kodzie | `blockCode` |
+| `NEWSLETTER_EMAIL_BLOCK_SYSTEM` | 422 | Usunięcie systemowego bloku e-mail | `blockId`, `blockCode` |
+| `NEWSLETTER_TAG_CODE_TAKEN` | 409 | Utworzenie tagu o istniejącym kodzie | `tagCode` |
+| `NEWSLETTER_TAG_IN_USE` | 409 | Usunięcie tagu, na który kieruje kampania lub który wyzwala automatyzację | `tagId`, `tagCode` |
+
+Do zgłoszenia #626 każda z tych odmów była odpowiedzią `VALIDATION_FAILED` z angielskim zdaniem,
+a odmowy dotyczące dostawcy wysyłki i używanego tagu niosły tokeny `details.code`
+`provider_not_configured` i `tag_in_use`, których już nie ma. Automatyzacja z nieprawidłowymi
+krokami jest nadal odrzucana przy aktywacji odpowiedzią `422 VALIDATION_FAILED` (`details.code`
+`automation_invalid` i lista `issues`), a zapis wskazujący nieznany kanał sprzedaży — odpowiedzią
+`400 VALIDATION_FAILED`: obie dotyczą samego żądania.
+
 ## Storefront
 
 Komponent formularza zapisu wielokrotnego użytku (server action, z możliwością przypisania tagu),
 strona potwierdzenia podwójnej zgody, strona wypisania (z opcjonalnym powodem) oraz panel na koncie
 klienta pokazujący stan subskrypcji i tagi, z przyciskami zapisu i wypisania.
+
+### Blok zapisu w Page Builderze
+
+Moduł deklaruje blok Page Buildera `newsletter.Signup` (sekcja palety
+*Formularze*, etykieta **Zapis do newslettera**), dzięki któremu redaktor może
+umieścić formularz zapisu na dowolnej stronie CMS:
+
+| Opcja | Znaczenie |
+| --- | --- |
+| Nagłówek, tekst | Opcjonalny nagłówek (z poziomem) i tekst sformatowany nad formularzem. |
+| Etykieta pola e-mail, tekst zastępczy, etykieta przycisku | Własne teksty formularza. |
+| Tematy | Do 12 pól wyboru, każde z etykietą i **tagiem** newslettera; zaznaczone trafiają do subskrybenta jako tagi. W panelu administracyjnym tag wybiera się po nazwie z listy istniejących tagów newslettera, a blok zapisuje jego kod. Zapisany kod, którego nie ma na liście, pozostaje wybrany; bez listy (brak uprawnienia `newsletter:read`, wyłączony moduł) kod wpisuje się jako tekst. **Topics required** wymaga zaznaczenia co najmniej jednego. Temat z nieprawidłowym kodem tagu nie jest pokazywany. |
+| Atrybuty subskrybenta | Do 10 **pól niestandardowych** newslettera, pokazywanych po polu e-mail, a przed tematami. W panelu administracyjnym każde wybiera się spośród istniejących pól niestandardowych, co zapisuje też jego typ i etykietę. Pole tak/nie jest polem wyboru; pole tekstowe, liczbowe lub daty — odpowiednim polem do wpisania (tekst ma najwyżej 500 znaków). Każde ma opcjonalną **etykietę** (inaczej etykietę samego pola), **podpowiedź w polu** (nie dla pola tak/nie) i przełącznik **Wymagane**: wymagane pole wyboru trzeba zaznaczyć, każde inne wymagane pole — wypełnić. |
+| Etykieta zgody | Tekst pola zgody, które jest zawsze pokazywane i zawsze wymagane. To tekst sformatowany w jednej linii, więc może zawierać link do polityki prywatności. |
+| Układ | W linii (pole i przycisk obok siebie) albo w ramce. |
+| Położenie przycisku, kształt pola | **Obok pola** (domyślnie) albo **Wewnątrz pola**: pole e-mail i przycisk mają wspólną ramkę, **Zaokrągloną** (domyślnie) albo w kształcie **Pigułki**. |
+| Kolumny tematów | Tematy w siatce 1–4 kolumn; pozostawione puste, układają się w jednym zawijanym rzędzie. |
+| Ukryj etykietę pola e-mail | Ukrywa wizualnie etykietę pola e-mail; pozostaje ona etykietą pola, więc czytniki ekranu nadal ją odczytują. Użyj tekstu zastępczego, aby widzący odwiedzający wiedzieli, co wpisać. |
+| Komunikaty | Teksty pokazywane po zapisie: oczekiwanie na potwierdzenie, zapisano oraz odmowy (brak zgody, nieprawidłowy e-mail, nie wybrano tematu, usługa niedostępna oraz — przy atrybutach subskrybenta — brak wymaganego pola, który pozostawiony pusty korzysta z przetłumaczonego tekstu sklepu). |
+
+Każdy tekst można przetłumaczyć akcją **Przetłumacz** w Page Builderze. Na
+najwyższym poziomie strony blok ma też ustawienia sekcji (kotwicę, schemat
+kolorów, tło, odstępy, szerokość).
+
+**Droga zapisu.** Blok to zwykły formularz HTML wysyłany do własnego handlera
+storefrontu, `POST /newsletter/subscribe`
+(`storefront/app/newsletter/subscribe/route.ts`), więc działa bez JavaScriptu.
+Handler:
+
+- odpowiada `404`, dopóki moduł newslettera nie jest obecny;
+- sprawdza adres e-mail tą samą regułą co backend, wymaga `consent=on`,
+  zachowuje najwyżej 12 kodów tematów zgodnych z `^[a-z0-9_-]{1,64}$` i pomija
+  pozostałe, a jako `returnTo` przyjmuje tylko ścieżkę w tym samym źródle
+  (wszystko inne wraca na `/`);
+- odczytuje atrybuty subskrybenta opisane przez blok (najwyżej 10), zamienia
+  każdą wartość na jej typ — zaznaczone pole wyboru to `true`, niezaznaczone
+  `false`, liczba, gdy jest liczbą, data, gdy ma postać `YYYY-MM-DD`, tekst
+  przycięty, najwyżej 500 znaków — i odrzuca zapis z `reason=fields`, gdy brakuje
+  wymaganego;
+- zapisuje przez istniejący `POST /api/v1/newsletter/subscribe` w kanale
+  sprzedaży żądania, z zaznaczonymi tematami jako `tags`, atrybutami jako
+  `customFields` i `source: 'cms-block'`;
+- bez JavaScriptu przekierowuje (`303`) z powrotem na stronę z
+  `?newsletter=pending|active|error&reason=consent|email|topics|fields|unavailable`
+  i kotwicą sekcji jako fragmentem, a blok pokazuje odpowiedni komunikat;
+- z JavaScriptem blok wysyła formularz z `Accept: application/json` i dostaje
+  `{status: 'pending' | 'active'}` (200) albo `{error: …}` (400); komunikat
+  pojawia się na miejscu, a wpisany adres zostaje.
+
+To, czy odpowiedzią jest `pending` czy `active`, zależy od trybu potwierdzania
+zapisu w kanale. Subskrypcja jest zapisywana jak każda inna: ustawiane jest
+`consentAt`, wpis audytu `newsletter_subscriber.subscribe` zawiera `source: 'cms-block'`,
+więc te zapisy można odróżnić od pozostałych, a kod tematu, który nie pasuje do
+żadnego istniejącego tagu, jest pomijany — storefront nie tworzy tagów. Moduł
+ponownie sprawdza każdą wartość atrybutu względem własnych definicji pól
+niestandardowych i zachowuje tylko wartości o pasującym typie (zob. *Tagi i pola
+niestandardowe*).
+
+**Rząd pól wyboru z tematami.** Aby pokazać tematy jako rząd pól wyboru — na
+przykład w stopce strony — najpierw utwórz tagi (**Newsletter → Tagi i pola**), a potem
+w bloku dodaj po jednym temacie na tag, nadaj mu etykietę widoczną dla
+odwiedzających i wybierz jego tag. Pozostaw **Kolumny tematów** puste, aby
+tematy układały się w jednym zawijanym rzędzie, albo ustaw 2–4, aby utworzyć
+siatkę; włącz **Topics required**, jeśli zapis bez tematu ma być odrzucany.
+
+Gdy moduł jest wyłączony, blok nie jest oferowany w palecie, zapisany blok nic
+nie wyświetla, a handler odpowiada `404`.
+
+`newsletter.Signup` to własny newsletter platformy. Moduł CMS zachowuje osobny
+formularz **Zapis do newslettera**, `cms.NewsletterSignup`, który wysyła dane do
+dowolnego zewnętrznego endpointu, dla usługi newslettera spoza platformy.
+
+## W dzienniku audytu
+
+Zapis, ponowny zapis, potwierdzenie, wypisanie, zablokowanie po odbiciu lub skardze, dezaktywacja i
+usunięcie subskrybenta to osobne wpisy w dzienniku audytu całej platformy. Ten dziennik czyta każdy, kto ma
+`audit_log:read`, bez względu na to, co widzi, dlatego wpis nazywa subskrybenta identyfikatorem i
+nie zawiera adresu e-mail ani wolnego tekstu: status, źródło, kod powodu blokady i to, czy przy
+wypisaniu podano powód (`hasReason`). Adres jest przy subskrybencie, powód przy subskrybencie i
+jego blokadzie. Wpisy zapisane przed tą zmianą zachowują to, z czym zostały zapisane.
+
+Wpisy są zapisywane pod poniższymi akcjami. Wpisy zapisane przed zgłoszeniem
+#1843 zachowują wcześniejsze nazwy, więc wyszukiwanie, raport lub filtr
+obejmujący oba okresy musi uwzględnić obie nazwy.
+
+| Akcja | Przed zgłoszeniem #1843 |
+| --- | --- |
+| `newsletter_subscriber.subscribe` | `newsletter_subscribe` |
+| `newsletter_subscriber.resubscribe` | `newsletter_resubscribe` |
+| `newsletter_subscriber.confirm` | `newsletter_confirm` |
+| `newsletter_subscriber.unsubscribe` | `newsletter_unsubscribe` |
+| `newsletter_subscriber.deactivate` | `newsletter_deactivate` |
+| `newsletter_subscriber.delete` | `newsletter_delete` |
+| `newsletter_suppression.bounce` | `newsletter_bounce` |
+| `newsletter_suppression.complaint` | `newsletter_complaint` |
+
+Odbicie lub skarga jest zapisywana jako `newsletter_suppression.*` bez względu
+na to, czy wpis wskazuje subskrybenta adresu, czy — dla adresu bez subskrybenta —
+jego wiersz blokady.
+
+## Akcje dostępne dla hooków
+
+Inny moduł, na przykład moduł nakładkowy wdrożenia albo zainstalowany pakiet,
+może brać udział w zapisie do newslettera przez hook polecenia (command hook).
+Typowe zastosowanie to przyznanie kodu rabatowego nowemu subskrybentowi.
+Zarejestruj hook na referencji z `NEWSLETTER_HOOKABLE_ACTIONS`
+(`@endora-commerce/contracts`) i dodaj `newsletter` do `dependencies` w swoim
+manifeście. Hook `beforeCommit` działa wewnątrz transakcji zapisu. Widzi
+niezatwierdzonego subskrybenta, może zapisywać do własnych tabel albo uruchomić
+polecenie przez `ctx.run` i może odrzucić zapis własnym kodem. Odrzucenie
+wycofuje cały zapis: nie powstaje subskrybent, tagi, wpis audytu ani e-mail z
+potwierdzeniem. Handler `afterCommit` jest dostarczany przez outbox platformy po
+zatwierdzeniu zapisu, co najmniej raz. Gdy subskrybent należy do klienta, handler
+działa w kontekście przypiętym do Organizacji tego klienta. W przeciwnym razie
+działa w zakresie systemowym procesu opróżniającego outbox. To, jak hooki są
+uruchamiane, porządkowane i odrzucane, opisuje strona architektury *Command Bus*.
+
+| Akcja | Referencja | Kiedy działa |
+| --- | --- | --- |
+| `newsletter_subscriber.subscribe` | `NEWSLETTER_HOOKABLE_ACTIONS.subscribe` | Zapisuje się adres, który nie ma subskrybenta: `POST /api/v1/newsletter/subscribe` (także blok Page Buildera), strona newslettera na koncie klienta albo operator dodający subskrybenta |
+| `newsletter_subscriber.resubscribe` | `NEWSLETTER_HOOKABLE_ACTIONS.resubscribe` | Ponownie zapisuje się adres, który ma już subskrybenta, tymi samymi drogami |
+| `newsletter_subscriber.confirm` | `NEWSLETTER_HOOKABLE_ACTIONS.confirm` | Subskrybent `pending` otwiera link potwierdzający (double opt-in) i staje się `active` |
+
+Wszystkie trzy oferują obie fazy. Hook i wiersz outboxu dostają te same dane, a
+zawierają one wyłącznie identyfikatory i kody: `subscriberId`, `status` (po
+zapisie), `previousStatus` (`null` dla nowego subskrybenta), `salesChannelId`,
+`customerAccountId`, `organizationId` i `tagIds` subskrybenta. Nigdy nie dostają
+adresu e-mail, tokenu potwierdzenia ani wypisania, źródła ani wartości pola
+niestandardowego. Hook, który potrzebuje więcej, odczytuje subskrybenta przez
+`ctx.em`. W praktyce:
+
+- przy double opt-in `subscribe` kończy się stanem `pending`, a `confirm`
+  następuje po otwarciu linku. Przy single opt-in `subscribe` kończy się stanem
+  `active` i potwierdzenie nie następuje. Aby zadziałać raz dla każdego nowo
+  aktywnego subskrybenta, działaj, gdy `status` jest `active`, a
+  `previousStatus` nie;
+- ponowne wysłanie formularza przez subskrybenta, który jest już aktywny,
+  uruchamia `resubscribe` z `previousStatus` równym `status`;
+- ponowne otwarcie linku potwierdzającego albo link dla subskrybenta, który nie
+  jest już w stanie `pending`, nie uruchamia żadnego hooka.
+
+Żaden wywołujący nie przekazuje jeszcze do tych zapisów danych rozszerzeń
+(`extensions`). Wypisanie, blokada po odbiciu lub skardze, dezaktywacja i
+usunięcie nie są dostępne dla hooków.
 
 ## Schemat
 
@@ -90,5 +325,6 @@ Migracja `20260629T200954_newsletter_init.ts` tworzy `newsletter_subscribers`, `
 `newsletter_subscriber_tags`, `newsletter_custom_fields`, `newsletter_suppressions`,
 `newsletter_email_blocks` (z tabelą łączącą z kanałami), `newsletter_campaigns` (z tabelą łączącą z
 grupami), `newsletter_send_records`, `newsletter_engagement_events`, `newsletter_automations` i
-`newsletter_automation_runs`. Konfiguracja dostawcy wysyłki i tryb zgody są przechowywane w module
-**ustawień** (bez osobnej tabeli danych uwierzytelniających).
+`newsletter_automation_runs`. Nadawca, tempo wysyłki i tryb zgody są przechowywane w module
+**ustawień**, a połączenie SMTP w module **poświadczeń** (bez osobnej tabeli danych
+uwierzytelniających).

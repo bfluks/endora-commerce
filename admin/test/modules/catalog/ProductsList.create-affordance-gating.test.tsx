@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
-import { adminSession, withSession } from '../../helpers/render-with-session';
+import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
+
+// Issue #1455 (CAT-02) — the list asks whether `import_export` is on before it offers Import / export.
+const PRESENCE = modulePresence({ present: ['catalog', 'import_export'] });
 
 /**
  * The product create affordance is gated on the code its destination takes
@@ -86,30 +89,23 @@ function answerList(response: unknown): void {
 
 const BUNDLE = passthroughBundle('catalog', [
   'productsList.title',
-  'productsList.subtitle',
-  'productsList.action.import',
-  'productsList.action.export',
   'productsList.action.newProduct',
   'productsList.loading',
   'productsList.empty.title',
-  'productsList.empty.prefix',
-  'productsList.empty.button',
-  'productsList.empty.suffix',
-  'productsList.empty.readOnly',
+  'productsList.empty.noData.title',
+  'productsList.empty.noData.body',
+  'productsList.empty.noData.readOnly',
   'productsList.column.product',
   'productsList.column.sku',
   'productsList.column.status',
   'productsList.column.type',
   'productsList.column.visibility',
   'productsList.column.updated',
-  'productsList.chip.type',
-  'productsList.chip.stock',
-  'productsList.chip.category',
-  'productsList.chip.channel',
+  'productsList.filter.type',
+  'productsList.filter.typeAll',
   'productsList.search.placeholder',
   'productsList.tab.all',
   'productsList.tab.active',
-  'productsList.tab.draft',
   'productsList.tab.inactive',
   'productsList.error.load',
 ]);
@@ -122,20 +118,20 @@ const ONE_ROW = {
       slug: 'gate-sku',
       type: 'simple',
       status: 'active',
-      name: { 'en-US': 'Gated widget' },
+      name: 'Gated widget',
       visibility: 'public',
       attributeValues: {},
       updatedAt: '2026-09-08T10:00:00.000Z',
     },
   ],
   pagination: { page: 0, pageSize: 25, total: 1 },
-  counts: { all: 1, active: 1, draft: 0, inactive: 0 },
+  counts: { all: 1, active: 1, inactive: 0, archived: 0 },
 };
 
 const NO_ROWS = {
   data: [],
   pagination: { page: 0, pageSize: 25, total: 0 },
-  counts: { all: 0, active: 0, draft: 0, inactive: 0 },
+  counts: { all: 0, active: 0, inactive: 0, archived: 0 },
 };
 
 function mount(permissions: readonly string[]): void {
@@ -144,7 +140,7 @@ function mount(permissions: readonly string[]): void {
       <MemoryRouter>
         <ProductsList />
       </MemoryRouter>,
-      { session: adminSession({ permissions }) },
+      { presence: PRESENCE, session: adminSession({ permissions }) },
     ),
     BUNDLE,
   );
@@ -191,23 +187,26 @@ describe('the empty-state create affordance', () => {
     vi.clearAllMocks();
   });
 
-  it('degrades to advice for a role holding catalog:read alone', async () => {
+  // Issue #1448 (DS-15): an empty catalog with no filter applied is "no products
+  // yet", not "no products match these filters" — the operator applied none.
+  it('says why there is nothing to create for a role holding catalog:read alone', async () => {
     mount(['catalog:read']);
 
-    await screen.findByText('productsList.empty.title');
-    expect(screen.queryByText('productsList.empty.button')).toBeNull();
-    // The sentence the button sat inside goes with it, rather than rendering as
-    // *"Try clearing filters, or use  to create one."* — the half of the advice
-    // that survives is its own key.
-    expect(screen.queryByText('productsList.empty.prefix')).toBeNull();
-    expect(screen.getByText('productsList.empty.readOnly')).toBeInTheDocument();
+    const title = await screen.findByText('productsList.empty.noData.title');
+    expect(title.closest('[data-empty-state="no-data"]')).not.toBeNull();
+    expect(screen.getByText('productsList.empty.noData.readOnly')).toBeInTheDocument();
+    expect(screen.queryByText('productsList.action.newProduct')).toBeNull();
+    expect(screen.queryByText('productsList.empty.title')).toBeNull();
   });
 
-  it('offers the create for a role holding catalog:write', async () => {
+  it('offers the create once, in the empty state, for a role holding catalog:write', async () => {
     mount(['catalog:read', 'catalog:write']);
 
-    await screen.findByText('productsList.empty.title');
-    expect(screen.getByText('productsList.empty.button')).toBeInTheDocument();
-    expect(screen.queryByText('productsList.empty.readOnly')).toBeNull();
+    const title = await screen.findByText('productsList.empty.noData.title');
+    const block = title.closest('[data-empty-state="no-data"]') as HTMLElement;
+    expect(within(block).getByRole('button', { name: /productsList\.action\.newProduct/ })).toBeInTheDocument();
+    // The header's New product steps back while the empty state carries it (Von Restorff).
+    expect(screen.getAllByRole('button', { name: /productsList\.action\.newProduct/ })).toHaveLength(1);
+    expect(screen.getByText('productsList.empty.noData.body')).toBeInTheDocument();
   });
 });

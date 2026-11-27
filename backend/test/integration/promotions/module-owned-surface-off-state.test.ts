@@ -67,13 +67,14 @@ describe('promotions contributes no palette action while off (Constitution XVII 
       .sort();
   };
 
-  it('advertises both of its palette actions while on, and neither while off', async () => {
+  it('advertises its palette actions while on, and none while off', async () => {
     // The positive control comes first: without it an empty list would prove
     // nothing, because a registry answering nothing to anybody would pass.
-    expect(await actionIds()).toEqual(['new-promotion', 'open-promotions']);
+    // `open-promotion-rules` arrived with issue #516 (Principle XVI).
+    expect(await actionIds()).toEqual(['new-promotion', 'open-promotion-rules', 'open-promotions']);
     await withModuleOff('promotions', 'deactivated', async () => {
       expect(await actionIds()).toEqual([]);
     });
-    expect(await actionIds()).toEqual(['new-promotion', 'open-promotions']);
+    expect(await actionIds()).toEqual(['new-promotion', 'open-promotion-rules', 'open-promotions']);
   });
 });

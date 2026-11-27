@@ -1,7 +1,9 @@
-import { apiMutate, extractSessionCookieValue } from './mutations';
+import { apiGetAuthed, apiMutate, extractSessionCookieValue } from './mutations';
 import { StorefrontApiError, type RequestContext } from './client';
 import { withModuleAbsence } from './module-absence';
 import { backendBaseUrl } from '../env.mjs';
+import { activeChannelHeaders } from './channel-headers';
+import type { CartBuyingFor, CartBuyingForResetReason, CartRepricingSummary, CartVat } from '@endora-commerce/contracts';
 
 /**
  * The backend's origin, read per call.
@@ -37,6 +39,12 @@ export interface CartItem {
   unitPrice: { amount: number; currency: string };
   /** Feature 027 — qty × unitPrice, surfaced by the backend serializer. */
   lineTotal?: { amount: number; currency: string };
+  /**
+   * Issue #436 — the line's VAT rate (a fraction) and its own gross, answered
+   * by the full cart read; absent on the line-mutation replies.
+   */
+  taxRate?: number | null;
+  lineGross?: { amount: number; currency: string } | null;
   /** Feature 027 — true when the line should be dimmed on the page. */
   unavailable?: boolean;
   /** Feature 027 — populated when `unavailable` is true. */
@@ -58,6 +66,14 @@ export interface CartItem {
   packagingUnitName?: string | null;
   packagingUnitBaseQuantity?: number | null;
   displayName?: string | null;
+  /** Feature 155 — the product's current pieces minimum (`null` = none); the input floor. */
+  minOrderQuantity?: number | null;
+  /** Feature 155 — set when this line is below a current minimum and not exempt (FR-013). */
+  belowMinimum?: {
+    kind: 'pieces' | 'packaging_unit';
+    minimum: number;
+    packagingUnitName?: string;
+  } | null;
 }
 
 export interface CartSummary {
@@ -78,7 +94,16 @@ export interface CartSummary {
   appliedPromotions?: Array<{ promotionId: string; couponId: string | null; amount: number; currency: string }>;
   /** Feature 027 — grand total after the optional discount. */
   grandTotal?: { amount: number; currency: string };
-  /** Feature 027 — buyer-facing primary CTA derived from the two-axis state. */
+  /** `specs/182-related-payers/` FR-110 — the payer this cart is bought for; absent on an older backend. */
+  buyingFor?: CartBuyingFor | null;
+  /** FR-116 — why this read returned the cart to the buyer's own prices. */
+  buyingForReset?: { reason: CartBuyingForResetReason } | null;
+  /**
+   * Feature 027 — buyer-facing primary CTA derived from the two-axis state. Since
+   * `specs/170-organization-roles/` (FR-031, FR-057) `submit_for_approval` means the member's
+   * role lacks `carts.order_without_approval`; the cart page follows this field alone. Absent on
+   * a guest basket.
+   */
   primaryCta?:
     | 'checkout'
     | 'submit_for_approval'
@@ -88,12 +113,44 @@ export interface CartSummary {
   droppedLines?: Array<{
     productId: string;
     productName: string;
-    reason: 'not_purchasable' | 'out_of_stock' | 'no_price_in_customer_list' | 'removed_by_conversion';
+    reason:
+      | 'not_purchasable'
+      | 'out_of_stock'
+      | 'no_price_in_customer_list'
+      | 'removed_by_conversion'
+      /** Feature 155 — the line would leave its product below a minimum. */
+      | 'below_minimum';
+    /** Feature 155 — the minimum a `below_minimum` line missed. */
+    minimum?: number;
   }>;
   /** Feature 027 — set when GET silently dropped a previously-valid coupon. */
   couponDroppedThisRead?: { code: string; reason: string } | null;
   /** Feature 027 — surfaced for client-side activity-bookkeeping displays. */
   lastActivityAt?: string | null;
+  /**
+   * Issue #650 — the rejection of the buyer's previous basket on this channel.
+   * A rejection closes the basket, so the one read here is a new one and its
+   * own `approvalStatus` cannot say it; `null` once the buyer has sent a basket
+   * again or ordered since.
+   */
+  previousRejection?: CartPreviousRejection | null;
+  /**
+   * Issue #436 — the cart's VAT per rate and its gross totals, computed by the
+   * backend the way the order computes them. The storefront renders these and
+   * never derives a gross for the cart itself; `null` when the read had none.
+   */
+  vat?: CartVat | null;
+}
+
+/** Issue #650 — `CartSummary.previousRejection`. */
+export interface CartPreviousRejection {
+  cartId: string;
+  rejectedAt: string;
+  reason: string | null;
+  /** Issue #755 — the rejected basket's lines restored into this one; absent or `0` when none. */
+  restoredLineCount?: number;
+  /** Issue #755 — the rejected basket's lines the restore could not add, with the reason. */
+  skippedLines?: NonNullable<CartSummary['droppedLines']>;
 }
 
 export interface CartCookieJar {
@@ -119,8 +176,10 @@ export async function getCartItemCount(
   ctx?: RequestContext,
 ): Promise<number> {
   try {
-    const headers: Record<string, string> = { Accept: 'application/json' };
-    if (ctx?.salesChannelCode) headers['X-Sales-Channel'] = ctx.salesChannelCode;
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+      ...(await activeChannelHeaders(ctx)),
+    };
     if (ctx?.locale) headers['Accept-Language'] = ctx.locale;
     const cookie = combineCookies(jar);
     if (cookie) headers['Cookie'] = cookie;
@@ -158,8 +217,10 @@ export async function getCart(
 }
 
 async function fetchCart(jar: CartCookieJar, ctx?: RequestContext): Promise<CartResult> {
-  const headers: Record<string, string> = { Accept: 'application/json' };
-  if (ctx?.salesChannelCode) headers['X-Sales-Channel'] = ctx.salesChannelCode;
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...(await activeChannelHeaders(ctx)),
+  };
   if (ctx?.locale) headers['Accept-Language'] = ctx.locale;
   const cookie = combineCookies(jar);
   if (cookie) headers['Cookie'] = cookie;
@@ -368,6 +429,29 @@ export async function submitCartForApproval(
   });
 }
 
+/**
+ * `specs/182-related-payers/` FR-110, FR-113 — sets (or with `null` clears) the cart's *Buying
+ * for*; answers how many lines were repriced and how many have no price in the new context.
+ */
+export async function setCartBuyingFor(
+  jar: CartCookieJar,
+  payerOrganizationId: string | null,
+  ctx?: RequestContext,
+): Promise<{ repriced: number; unpriced: number }> {
+  const result = await apiMutate<{ repricing: CartRepricingSummary }>({
+    method: 'PUT',
+    path: '/api/v1/cart/buying-for',
+    body: { payerOrganizationId },
+    rawCookieHeader: combineCookies(jar) || null,
+    ...(ctx ? { ctx } : {}),
+  });
+  const lines = result.data?.repricing.lines ?? [];
+  return {
+    repriced: lines.filter((l) => !l.unpriced && l.before?.amount !== l.after?.amount).length,
+    unpriced: lines.filter((l) => l.unpriced).length,
+  };
+}
+
 export async function touchCart(jar: CartCookieJar, ctx?: RequestContext): Promise<void> {
   await apiMutate({
     method: 'POST',
@@ -394,8 +478,10 @@ export async function getCartUpsells(
   jar: CartCookieJar,
   ctx?: RequestContext,
 ): Promise<CartUpsellLine[]> {
-  const headers: Record<string, string> = { Accept: 'application/json' };
-  if (ctx?.salesChannelCode) headers['X-Sales-Channel'] = ctx.salesChannelCode;
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...(await activeChannelHeaders(ctx)),
+  };
   if (ctx?.locale) headers['Accept-Language'] = ctx.locale;
   const cookie = combineCookies(jar);
   if (cookie) headers['Cookie'] = cookie;
@@ -433,7 +519,12 @@ export async function saveCartItemToShoppingList(
 export interface OrgCartSummary {
   id: string;
   ownerCustomerAccountId: string;
+  /** The owner's name — the e-mail when the account has none (issue #751). */
   ownerDisplayName: string;
+  /** Shown beside the name; `null` when the account is gone (issue #751). */
+  ownerEmail: string | null;
+  /** The order a completed cart produced; `null` otherwise (issue #751). */
+  orderId: string | null;
   status: 'active' | 'abandoned' | 'completed' | 'rejected';
   approvalStatus: 'not_required' | 'pending' | 'approved' | 'rejected_by_org_admin';
   itemCount: number;
@@ -448,34 +539,9 @@ export interface OrgCartsListResponse {
 }
 
 /**
- * Feature 027 US4 — set the per-Organization `requires_cart_approval`
- * policy. Requires `organization_admin` role; on `false`, every pending/
- * approved cart in the Organization is reset to `not_required` server-
- * side.
- */
-export async function setCartApprovalPolicy(
-  jar: CartCookieJar,
-  requiresCartApproval: boolean,
-  ctx?: RequestContext,
-): Promise<{ organizationId: string; requiresCartApproval: boolean; updatedAt: string }> {
-  const result = await apiMutate<{
-    organizationId: string;
-    requiresCartApproval: boolean;
-    updatedAt: string;
-  }>({
-    method: 'PATCH',
-    path: '/api/v1/organization/policies/cart-approval',
-    body: { requiresCartApproval },
-    rawCookieHeader: combineCookies(jar) || null,
-    ...(ctx ? { ctx } : {}),
-  });
-  return result.data!;
-}
-
-/**
  * Feature 027 US4 — list every cart in the caller's Organization.
- * Requires the caller's CustomerAccount.role === 'organization_admin';
- * a 403 is returned otherwise.
+ * Requires the caller's role to hold `carts.approve` (`specs/170-organization-roles/`,
+ * FR-033); a 403 is returned otherwise.
  */
 export async function listOrganizationCarts(
   jar: CartCookieJar,
@@ -493,8 +559,10 @@ export async function listOrganizationCarts(
   if (filter?.approvalStatus?.length) params.set('approvalStatus', filter.approvalStatus.join(','));
   if (filter?.page) params.set('page', String(filter.page));
   const qs = params.toString();
-  const headers: Record<string, string> = { Accept: 'application/json' };
-  if (ctx?.salesChannelCode) headers['X-Sales-Channel'] = ctx.salesChannelCode;
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...(await activeChannelHeaders(ctx)),
+  };
   const cookie = combineCookies(jar);
   if (cookie) headers['Cookie'] = cookie;
   const res = await fetch(
@@ -505,6 +573,81 @@ export async function listOrganizationCarts(
     throw new Error(`organization/carts list failed with HTTP ${res.status}`);
   }
   return (await res.json()) as OrgCartsListResponse;
+}
+
+/** Issue #650 — one line of {@link OrgCartDetail}, at the price stored on it. */
+export interface OrgCartDetailLine {
+  id: string;
+  productId: string;
+  variantId: string | null;
+  displayName: string | null;
+  productSku: string | null;
+  quantity: number;
+  unitPrice: { amount: number; currency: string };
+  lineTotal: { amount: number; currency: string };
+}
+
+/** `GET /api/v1/organization/carts/:id` — `orgCartDetailViewSchema` in the contracts. */
+export interface OrgCartDetail extends Omit<OrgCartSummary, 'ownerCustomerAccountId'> {
+  ownerCustomerAccountId: string | null;
+  approvedAt: string | null;
+  rejectedAt: string | null;
+  rejectedReason: string | null;
+  items: OrgCartDetailLine[];
+}
+
+/**
+ * Issue #650 — one cart of the caller's Organization, for its administrator.
+ * `null` for a cart that does not exist or is another Organization's — the API
+ * answers both with the same 404. Any other refusal throws its
+ * `StorefrontApiError`.
+ */
+export async function getOrganizationCart(
+  jar: CartCookieJar,
+  cartId: string,
+  ctx?: RequestContext,
+): Promise<OrgCartDetail | null> {
+  try {
+    return await apiGetAuthed<OrgCartDetail>({
+      path: `/api/v1/organization/carts/${encodeURIComponent(cartId)}`,
+      sessionCookie: jar.session ?? '',
+      ...(ctx ? { ctx } : {}),
+    });
+  } catch (err) {
+    if (err instanceof StorefrontApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+/** Issue #650 — approve a pending cart of the caller's Organization. */
+export async function approveOrganizationCart(
+  jar: CartCookieJar,
+  cartId: string,
+  ctx?: RequestContext,
+): Promise<void> {
+  await apiMutate({
+    method: 'POST',
+    path: `/api/v1/organization/carts/${encodeURIComponent(cartId)}/approve`,
+    body: {},
+    rawCookieHeader: combineCookies(jar) || null,
+    ...(ctx ? { ctx } : {}),
+  });
+}
+
+/** Issue #650 — reject a pending cart of the caller's Organization; the reason is required. */
+export async function rejectOrganizationCart(
+  jar: CartCookieJar,
+  cartId: string,
+  reason: string,
+  ctx?: RequestContext,
+): Promise<void> {
+  await apiMutate({
+    method: 'POST',
+    path: `/api/v1/organization/carts/${encodeURIComponent(cartId)}/reject`,
+    body: { reason },
+    rawCookieHeader: combineCookies(jar) || null,
+    ...(ctx ? { ctx } : {}),
+  });
 }
 
 /**

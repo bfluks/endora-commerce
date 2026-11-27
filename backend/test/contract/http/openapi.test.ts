@@ -36,7 +36,14 @@ describe('GET /api/v1/_openapi.json — module coverage', () => {
 
   beforeAll(async () => {
     h = await setupBackendServer();
-    const res = await h.app.inject({ method: 'GET', url: '/api/v1/_openapi.json' });
+    // The document is served to an administrator holding
+    // `platform.api_description.read`; the platform administrator's wildcard
+    // role holds it (`api-description-access.test.ts` covers who else may).
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/_openapi.json',
+      cookies: { b2b_session: 'stub-admin-session' },
+    });
     expect(res.statusCode).toBe(200);
     doc = res.json() as OpenApi;
   });

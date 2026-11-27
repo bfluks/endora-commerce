@@ -25,10 +25,9 @@ describe('storefront CMS block-by-code contract (T052)', () => {
       defaultCurrency: 'PLN',
       active: true,
       systemDefault: false,
-      isPublic: true,
       status: 'active',
     });
-    await h.em().persistAndFlush(otherChannel);
+    await h.em().persist(otherChannel).flush();
   });
 
   afterAll(async () => {

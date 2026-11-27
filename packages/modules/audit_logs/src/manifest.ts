@@ -22,9 +22,9 @@ import type { ModuleContext } from '@endora-commerce/platform/kernel';
  */
 export const manifest = defineModuleManifest({
   id: 'audit_logs',
-  name: 'Audit Logs',
+  name: 'Audit logs',
   description:
-    'Append-only audit log for sensitive admin and customer actions.',
+    'Append-only audit log for sensitive admin and customer actions (values of anonymised subjects are erased in place).',
   version: '1.0.0',
   // `auth` owns the `requireAdmin` port both route files are gated by.
   dependencies: ['auth'],
@@ -70,7 +70,8 @@ export const manifest = defineModuleManifest({
       icon: 'ListChecks',
       targetRoute: '/audit-log',
       requiredPermission: 'audit_log:read',
-      keywords: ['audit', 'audyt', 'dziennik', 'log', 'history', 'historia', 'trail'],
+      keywords: ['audit', 'log', 'history', 'trail'],
+      keywordsKey: 'actions.openAuditLog.keywords',
       weight: 600,
     },
   ],

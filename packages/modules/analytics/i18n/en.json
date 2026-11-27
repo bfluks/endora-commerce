@@ -15,5 +15,12 @@
   "daily.title": "Daily breakdown",
   "column.eventType": "Event type",
   "column.count": "Count",
-  "column.day": "Day"
+  "column.day": "Day",
+  "settingGroups.analytics.name": "Analytics",
+  "settingLabels.analytics.reporting_time_zone.name": "Reporting time zone",
+  "settingLabels.analytics.reporting_time_zone.description": "IANA time zone for counting days and months, e.g. Europe/Warsaw. Default: UTC.",
+  "actions.openAnalytics.keywords": "analytics, events, report",
+  "settingLabels.analytics.enabled.name": "Analytics enabled",
+  "module.name": "Analytics",
+  "module.description": "Server-side analytics aggregation and dashboard data feeds."
 }

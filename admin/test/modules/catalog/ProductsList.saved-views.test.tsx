@@ -5,7 +5,10 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import type { SavedListView } from '@endora-commerce/contracts';
 import { renderWithI18n } from '../../helpers/render-with-i18n';
-import { adminSession, withSession } from '../../helpers/render-with-session';
+import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
+
+// Issue #1455 (CAT-02) — the list asks whether `import_export` is on before it offers Import / export.
+const PRESENCE = modulePresence({ present: ['catalog', 'import_export'] });
 import { installOffsetParentShim } from '../../helpers/layout-shim';
 import core from '../../../../packages/modules/_i18n/i18n/en.json';
 import catalog from '../../../../packages/modules/catalog/i18n/en.json';
@@ -13,9 +16,9 @@ import catalog from '../../../../packages/modules/catalog/i18n/en.json';
 /**
  * Feature 147 (T036, US2; FR-008 – FR-012) — saved views on the product list
  * (closes #289). The page owns only the mapping between its state and a
- * `SavedViewState`: a view stores status, type and search, nothing else; the
- * Stock, Category and Channel chips are not saved, and loading a view returns
- * Stock to *All*, the list to its first page and drops the row selection. The
+ * `SavedViewState`: a view stores status, type and search — the list's only
+ * filters since issue #1455 removed the Stock, Category and Channel chips — and
+ * loading a view returns the list to its first page and drops the row selection. The
  * control's own behaviour is `admin/test/components/SavedViewsControl*.test.tsx`.
  *
  * Both bundles are the real ones: the control is named by `core`'s
@@ -61,8 +64,8 @@ function view(id: string, name: string, filters: Record<string, unknown>): Saved
   return { id, name, shared: false, ownerAdminUserId: OWNER, ownedByCaller: true, canModify: true, filters };
 }
 
-const DRAFT_CHAIRS = view('11111111-1111-4111-8111-111111111111', 'Draft chairs', {
-  status: 'draft',
+const INACTIVE_CHAIRS = view('11111111-1111-4111-8111-111111111111', 'Inactive chairs', {
+  status: 'inactive',
   type: 'configurable',
   q: 'chair',
 });
@@ -73,7 +76,17 @@ const STALE = view('22222222-2222-4222-8222-222222222222', 'Stale', {
   colour: 'red',
 });
 
-const VIEWS = [DRAFT_CHAIRS, STALE];
+/**
+ * Feature 163 (FR-010, R30.4) — a view saved before `draft` was removed. It opens as
+ * *All*, as any value the page no longer offers does; owner decision P-2 → A
+ * (2026-10-26) keeps that rather than mapping it onto `inactive`, and the list says so
+ * once, when the view is applied.
+ */
+const LEGACY_DRAFT = view('44444444-4444-4444-8444-444444444444', 'Legacy drafts', { status: 'draft' });
+/** Feature 163 — the Archived tab is saved as its own key, never as a status. */
+const ARCHIVED = view('55555555-5555-4555-8555-555555555555', 'Archived', { archived: 'only' });
+
+const VIEWS = [INACTIVE_CHAIRS, STALE, LEGACY_DRAFT, ARCHIVED];
 
 function product(id: string, name: string): unknown {
   return {
@@ -82,7 +95,7 @@ function product(id: string, name: string): unknown {
     slug: name.toLowerCase().replace(/\s/g, '-'),
     type: 'simple',
     status: 'active',
-    name: { 'en-US': name },
+    name,
     visibility: 'public',
     attributeValues: {},
     updatedAt: '2026-05-15T10:00:00.000Z',
@@ -107,7 +120,7 @@ beforeEach(() => {
           product('00000000-0000-4000-8000-000000000c02', 'Pine desk'),
         ],
         pagination: { page: 0, pageSize: 20, total: 60 },
-        counts: { all: 60, active: 40, draft: 15, inactive: 5 },
+        counts: { all: 60, active: 40, inactive: 20, archived: 5 },
       };
     }
     return { data: [] };
@@ -139,14 +152,14 @@ async function renderList(): Promise<ReturnType<typeof userEvent.setup>> {
           <ProductsList />
         </MemoryRouter>,
         // US2-4: the list's own read code is all a saved view needs.
-        { session: adminSession({ permissions: ['catalog:read'] }) },
+        { presence: PRESENCE, session: adminSession({ permissions: ['catalog:read'] }) },
       )}
     </StrictMode>,
     { core: core as Record<string, string>, catalog: catalog as Record<string, string> },
   );
   await screen.findByText('Oak chair');
   // StrictMode requests the views twice; only the option proves they arrived.
-  await screen.findByRole('option', { name: DRAFT_CHAIRS.name });
+  await screen.findByRole('option', { name: INACTIVE_CHAIRS.name });
   return user;
 }
 
@@ -156,6 +169,10 @@ function savedViewsSelect(): HTMLSelectElement {
 
 function searchBox(): HTMLInputElement {
   return screen.getByPlaceholderText('Search SKU, slug, name…') as HTMLInputElement;
+}
+
+function typeSelect(): HTMLSelectElement {
+  return screen.getByRole('combobox', { name: 'Type' }) as HTMLSelectElement;
 }
 
 function tab(name: string): HTMLElement {
@@ -193,25 +210,22 @@ describe('ProductsList — saved views (feature 147, #289)', () => {
     const options = within(savedViewsSelect())
       .getAllByRole('option')
       .map((option) => option.textContent);
-    expect(options).toEqual(['— Select a view —', 'Draft chairs', 'Stale']);
+    expect(options).toEqual(['— Select a view —', 'Inactive chairs', 'Stale', 'Legacy drafts', 'Archived']);
     expect(screen.getByRole('button', { name: 'Save view' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Delete view' })).toBeDisabled();
   });
 
-  it('saves status, type and search, and nothing for stock', async () => {
+  it('saves status, type and search', async () => {
     const user = await renderList();
 
-    await user.click(tab('Draft'));
-    await user.click(screen.getByRole('button', { name: 'Type' }));
-    await user.click(screen.getByRole('button', { name: 'Type: simple' }));
+    await user.click(tab('Inactive'));
+    await user.selectOptions(typeSelect(), 'configurable');
     await user.type(searchBox(), '  chair ');
-    await user.click(screen.getByRole('button', { name: 'Stock' }));
-    expect(screen.getByRole('button', { name: 'Low stock' })).toBeInTheDocument();
 
     const body = (await saveAs(user, 'Mine')) as Record<string, unknown>;
     expect(body['name']).toBe('Mine');
     expect(body['shared']).toBe(false);
-    expect(body['filters']).toEqual({ status: 'draft', type: 'configurable', q: 'chair' });
+    expect(body['filters']).toEqual({ status: 'inactive', type: 'configurable', q: 'chair' });
     expect(api.patch).not.toHaveBeenCalled();
   });
 
@@ -221,7 +235,7 @@ describe('ProductsList — saved views (feature 147, #289)', () => {
     expect(body['filters']).toEqual({});
   });
 
-  it('loading a view replaces status, type and search, returns Stock to All and the list to its first page', async () => {
+  it('loading a view replaces status, type and search, and returns the list to its first page', async () => {
     const user = await renderList();
 
     await user.type(searchBox(), 'desk');
@@ -233,22 +247,17 @@ describe('ProductsList — saved views (feature 147, #289)', () => {
     await waitFor(() =>
       expect(listRequests().some((p) => p.includes('q=desk') && p.includes('page=1'))).toBe(true),
     );
-    await user.click(screen.getByRole('button', { name: 'Stock' }));
-    expect(screen.getByRole('button', { name: 'Low stock' })).toBeInTheDocument();
-
     const before = listRequests().length;
-    await user.selectOptions(savedViewsSelect(), DRAFT_CHAIRS.id);
+    await user.selectOptions(savedViewsSelect(), INACTIVE_CHAIRS.id);
 
-    expect(tab('Draft')).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('button', { name: 'Type: configurable' })).toBeInTheDocument();
+    expect(tab('Inactive')).toHaveAttribute('aria-selected', 'true');
+    expect(typeSelect().value).toBe('configurable');
     expect(searchBox().value).toBe('chair');
-    expect(screen.getByRole('button', { name: 'Stock' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Low stock' })).toBeNull();
 
     await waitFor(() => expect(listRequests().length).toBeGreaterThan(before));
     // FR-011: the very next list request already carries the first page.
     const next = new URLSearchParams(listRequests()[before]!.slice(LIST.length));
-    expect(next.get('status')).toBe('draft');
+    expect(next.get('status')).toBe('inactive');
     expect(next.get('type')).toBe('configurable');
     expect(next.get('q')).toBe('chair');
     expect(next.get('page')).toBe('0');
@@ -264,7 +273,7 @@ describe('ProductsList — saved views (feature 147, #289)', () => {
     await user.click(rowCheckbox);
     expect(await screen.findByTestId('selection-summary')).toBeInTheDocument();
 
-    await user.selectOptions(savedViewsSelect(), DRAFT_CHAIRS.id);
+    await user.selectOptions(savedViewsSelect(), INACTIVE_CHAIRS.id);
     await waitFor(() => expect(screen.queryByTestId('selection-summary')).toBeNull());
   });
 
@@ -272,7 +281,7 @@ describe('ProductsList — saved views (feature 147, #289)', () => {
     const user = await renderList();
 
     await user.click(tab('Active'));
-    await user.click(screen.getByRole('button', { name: 'Type' }));
+    await user.selectOptions(typeSelect(), 'simple');
     await user.type(searchBox(), 'desk');
     await waitForSearch('desk');
 
@@ -280,7 +289,7 @@ describe('ProductsList — saved views (feature 147, #289)', () => {
     await user.selectOptions(savedViewsSelect(), STALE.id);
 
     expect(tab('All')).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('button', { name: 'Type' })).toBeInTheDocument();
+    expect(typeSelect().value).toBe('');
     expect(searchBox().value).toBe('');
     await waitFor(() => expect(listRequests().length).toBeGreaterThan(before));
     const next = new URLSearchParams(listRequests()[before]!.slice(LIST.length));
@@ -292,5 +301,59 @@ describe('ProductsList — saved views (feature 147, #289)', () => {
     // Neither the stale values nor the unknown key survive into the next save.
     const body = (await saveAs(user, 'Copy')) as Record<string, unknown>;
     expect(body['filters']).toEqual({});
+  });
+
+  it('a view saved with the removed draft status opens as All and never sends draft (feature 163)', async () => {
+    const user = await renderList();
+    await user.click(tab('Active'));
+
+    const before = listRequests().length;
+    await user.selectOptions(savedViewsSelect(), LEGACY_DRAFT.id);
+
+    expect(tab('All')).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(listRequests().length).toBeGreaterThan(before));
+    for (const path of listRequests().slice(before)) {
+      const params = new URLSearchParams(path.slice(LIST.length));
+      expect(params.get('status')).toBeNull();
+      expect(params.get('archived')).toBeNull();
+    }
+    expect(screen.queryByText('Failed to load.')).toBeNull();
+  });
+
+  it('says once that a draft view now shows all products, until a tab is chosen or it is dismissed (P-2)', async () => {
+    const user = await renderList();
+    const note = (catalog as Record<string, string>)['productsList.savedView.draftRemoved']!;
+    expect(screen.queryByText(note)).toBeNull();
+
+    await user.selectOptions(savedViewsSelect(), LEGACY_DRAFT.id);
+    const shown = await screen.findByText(note);
+    expect(shown.closest('[role="status"]')).not.toBeNull();
+
+    await user.click(tab('Inactive'));
+    expect(screen.queryByText(note)).toBeNull();
+
+    await user.selectOptions(savedViewsSelect(), INACTIVE_CHAIRS.id);
+    expect(screen.queryByText(note)).toBeNull();
+    await user.selectOptions(savedViewsSelect(), LEGACY_DRAFT.id);
+    await screen.findByText(note);
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(note)).toBeNull();
+  });
+
+  it('saves the Archived tab as archived: only, and a view holding it opens the Archived tab (feature 163)', async () => {
+    const user = await renderList();
+
+    await user.click(tab('Archived'));
+    const body = (await saveAs(user, 'Gone')) as Record<string, unknown>;
+    expect(body['filters']).toEqual({ archived: 'only' });
+
+    await user.click(tab('All'));
+    const before = listRequests().length;
+    await user.selectOptions(savedViewsSelect(), ARCHIVED.id);
+    expect(tab('Archived')).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(listRequests().length).toBeGreaterThan(before));
+    const next = new URLSearchParams(listRequests()[before]!.slice(LIST.length));
+    expect(next.get('archived')).toBe('only');
+    expect(next.get('status')).toBeNull();
   });
 });

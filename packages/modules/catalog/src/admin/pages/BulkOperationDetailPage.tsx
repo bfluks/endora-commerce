@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useConfirmDialog } from '@endora-commerce/admin-kit/components';
 import { Link, useParams } from 'react-router-dom';
+import { ListChecks } from 'lucide-react';
 import {
   BULK_OPERATION_TYPES,
   type BulkOperation,
@@ -7,9 +9,12 @@ import {
   type BulkOperationStatus,
   type BulkOperationUndoResponse,
 } from '@endora-commerce/contracts';
-import { ApiError, apiClient, formatDateTime } from '@endora-commerce/admin-kit/lib';
-import { Alert, AlertDescription, Badge, Card, CardContent, CardHeader, CardTitle, PageHeader, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
-import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { ApiError, apiClient, cn, formatDateTime } from '@endora-commerce/admin-kit/lib';
+import { Alert, AlertDescription, Badge, Button, Card, CardContent, CardHeader, CardTitle, EmptyState, InlineStatus, PageHeader, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, useInlineStatus } from '@endora-commerce/admin-kit/ui';
+import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
+import { lookupProductLabels, type ProductLabel } from '../lib/product-labels.js';
+import { bulkOperationLogText } from '../lib/bulk-operation-log-text.js';
+import { isUnchangedResult } from '../lib/bulk-result-outcome.js';
 
 /**
  * Bulk operation detail view — feature: bulk-operations detail.
@@ -18,6 +23,13 @@ import { useTranslation } from '@endora-commerce/admin-kit/i18n';
  * processing summary, the operation's lifecycle log trail, and the per-element
  * outcome of the operation. Polls while the operation is still pending /
  * running so progress, logs, and results update live.
+ *
+ * On the kit's controls (issue #1492, UX audit slice S14): Undo is the page's
+ * one primary `Button`; the per-element filter is one labelled `Select` (four
+ * buttons, the chosen one filled, said which was on by colour alone); the
+ * per-element list's two empties are the kit's `EmptyState` — nothing
+ * recorded, or nothing for this outcome with *Clear filters* (DS-15). The table
+ * scrolls inside the card without a second bordered frame (DS-03).
  */
 
 const ACTIVE_STATUSES: BulkOperationStatus[] = ['pending', 'running'];
@@ -44,7 +56,7 @@ const OUTCOME_BADGE: Record<
 
 const LOG_LEVEL_CLASS: Record<BulkOperationLogEntry['level'], string> = {
   info: 'text-foreground',
-  warn: 'text-amber-600 dark:text-amber-500',
+  warn: 'text-amber-600',
   error: 'text-destructive',
 };
 
@@ -57,27 +69,29 @@ const KNOWN_OPERATION_TYPES = new Set<string>([
 ]);
 
 /** Resolved product info for the per-element Product column. */
-interface ProductInfo {
-  name: string;
-  sku: string;
-}
-
-/** Pick a display name from the multilingual product `name` record. */
-function resolveProductName(name: Record<string, string>): string {
-  return name['en-US'] ?? name['en'] ?? Object.values(name)[0] ?? '';
-}
+type ProductInfo = ProductLabel;
 
 export function BulkOperationDetailPage(): ReactNode {
+  const { language } = useTranslationContext();
   const t = useTranslation('catalog');
+  const { confirm, confirmDialog } = useConfirmDialog();
   const { id = '' } = useParams<{ id: string }>();
   const [op, setOp] = useState<BulkOperation | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [elementFilter, setElementFilter] = useState<ElementFilter>('all');
+  const elementFilterRef = useRef<HTMLSelectElement | null>(null);
   const [productInfo, setProductInfo] = useState<Record<string, ProductInfo>>({});
   const [undoing, setUndoing] = useState(false);
-  const [undoResult, setUndoResult] = useState<BulkOperationUndoResponse['data'] | null>(null);
+  // Issue #1499 (UX audit SALES-17, DEC-12 a) — the undo's result is said in the
+  // summary card's header where Undo was (the button is gone once the edit is
+  // undone), in a region mounted before it has text, not as a banner above the
+  // page. `undoneHere` keeps the record's own "already undone" note from
+  // repeating it.
+  const undoStatus = useInlineStatus();
+  const { show: showUndoStatus, clear: clearUndoStatus } = undoStatus;
+  const [undoneHere, setUndoneHere] = useState(false);
 
   const refresh = useCallback(async (): Promise<void> => {
     setError(null);
@@ -132,21 +146,7 @@ export function BulkOperationDetailPage(): ReactNode {
     }
     let cancelled = false;
     void (async (): Promise<void> => {
-      const map: Record<string, ProductInfo> = {};
-      const CHUNK = 500;
-      for (let i = 0; i < ids.length; i += CHUNK) {
-        const chunk = ids.slice(i, i + CHUNK);
-        try {
-          const res = await apiClient.post<{
-            data: Array<{ id: string; sku: string; name: Record<string, string> }>;
-          }>('/api/v1/admin/catalog/products/batch-by-id', { ids: chunk, pageSize: CHUNK });
-          for (const p of res.data) {
-            map[p.id] = { name: resolveProductName(p.name), sku: p.sku };
-          }
-        } catch {
-          /* fall back to the raw id for this chunk */
-        }
-      }
+      const map = await lookupProductLabels(ids);
       if (!cancelled) setProductInfo(map);
     })();
     return (): void => {
@@ -172,25 +172,37 @@ export function BulkOperationDetailPage(): ReactNode {
     !!op && op.status === 'completed' && op.reversible && op.undoStatus !== 'reverted';
   const handleUndo = useCallback(async (): Promise<void> => {
     if (!op) return;
-    if (!confirm(t('bulkOperations.undo.confirm', { count: op.succeeded }))) return;
+    const ok = await confirm({
+      message: t('bulkOperations.undo.confirm', { count: op.succeeded }),
+      confirmLabel: t('bulkOperations.undo.action'),
+    });
+    if (!ok) return;
     setUndoing(true);
     setError(null);
-    setUndoResult(null);
+    clearUndoStatus();
     try {
       const res = await apiClient.post<BulkOperationUndoResponse>(
         `/api/v1/admin/catalog/bulk-operations/${op.id}/undo`,
         {},
       );
-      setUndoResult(res.data);
+      setUndoneHere(true);
+      showUndoStatus(
+        t('bulkOperations.undo.result', {
+          reverted: res.data.reverted,
+          conflicts: res.data.conflicts.length,
+        }),
+        // Some products changed since the edit and were left as they are: a partial result.
+        res.data.conflicts.length > 0 ? 'warning' : 'success',
+      );
       await refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.envelope.error.message : t('bulkOperations.undo.error'));
     } finally {
       setUndoing(false);
     }
-  }, [op, refresh, t]);
+  }, [op, refresh, t, confirm, clearUndoStatus, showUndoStatus]);
 
-  const back = { label: t('bulkOperations.detail.back'), to: '/catalog/bulk-operations' };
+  const back = { label: t('bulkOperations.title'), to: '/catalog/bulk-operations' };
 
   if (loading && !op) {
     return (
@@ -213,6 +225,7 @@ export function BulkOperationDetailPage(): ReactNode {
   }
 
   const pct = op.total > 0 ? Math.round((op.processed / op.total) * 100) : 0;
+  const hasResults = (op.results?.length ?? 0) > 0;
 
   return (
     <>
@@ -239,36 +252,27 @@ export function BulkOperationDetailPage(): ReactNode {
         </Alert>
       ) : null}
 
-      {undoResult ? (
-        <Alert variant={undoResult.conflicts.length > 0 ? 'warning' : 'success'} className="mb-4">
-          <AlertDescription>
-            {t('bulkOperations.undo.result', {
-              reverted: undoResult.reverted,
-              conflicts: undoResult.conflicts.length,
-            })}
-          </AlertDescription>
-        </Alert>
-      ) : null}
-
-      {op.undoStatus === 'reverted' && !undoResult ? (
-        <Alert variant="success" className="mb-4">
-          <AlertDescription>{t('bulkOperations.undo.alreadyReverted')}</AlertDescription>
-        </Alert>
-      ) : null}
-
       <Card className="mb-4">
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
           <CardTitle>{t('bulkOperations.detail.summary')}</CardTitle>
-          {canUndo ? (
-            <button
-              type="button"
-              className="b2b-btn b2b-btn--sm b2b-btn--primary"
-              disabled={undoing}
-              onClick={(): void => void handleUndo()}
-            >
-              {undoing ? t('bulkOperations.undo.running') : t('bulkOperations.undo.action')}
-            </button>
-          ) : null}
+          <div className="flex flex-wrap items-center gap-3">
+            <InlineStatus {...undoStatus.props} />
+            {/* The record's state, not this visit's action: a plain note where Undo would be. */}
+            {op.undoStatus === 'reverted' && !undoneHere ? (
+              <p className="text-sm text-muted-foreground">{t('bulkOperations.undo.alreadyReverted')}</p>
+            ) : null}
+            {canUndo ? (
+              <Button
+                type="button"
+                size="sm"
+                disabled={undoing}
+                aria-busy={undoing || undefined}
+                onClick={(): void => void handleUndo()}
+              >
+                {undoing ? t('bulkOperations.undo.running') : t('bulkOperations.undo.action')}
+              </Button>
+            ) : null}
+          </div>
         </CardHeader>
         <CardContent>
           <dl className="grid grid-cols-1 gap-x-8 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -288,12 +292,12 @@ export function BulkOperationDetailPage(): ReactNode {
             <Field label={t('bulkOperations.detail.field.requestedBy')}>
               <span className="font-mono text-xs">{op.requestedByAdminUserId}</span>
             </Field>
-            <Field label={t('bulkOperations.column.created')}>{formatDateTime(op.createdAt)}</Field>
+            <Field label={t('bulkOperations.column.created')}>{formatDateTime(op.createdAt, language)}</Field>
             <Field label={t('bulkOperations.detail.field.started')}>
-              {op.startedAt ? formatDateTime(op.startedAt) : '—'}
+              {op.startedAt ? formatDateTime(op.startedAt, language) : '—'}
             </Field>
             <Field label={t('bulkOperations.detail.field.finished')}>
-              {op.finishedAt ? formatDateTime(op.finishedAt) : '—'}
+              {op.finishedAt ? formatDateTime(op.finishedAt, language) : '—'}
             </Field>
             <Field label={t('bulkOperations.detail.changedFields')}>
               {op.touchedFields.length > 0 ? op.touchedFields.join(', ') : '—'}
@@ -311,9 +315,9 @@ export function BulkOperationDetailPage(): ReactNode {
             <ul className="space-y-1 font-mono text-xs">
               {op.logs.map((entry, idx) => (
                 <li key={idx} className="flex flex-wrap gap-2">
-                  <span className="text-muted-foreground">{formatDateTime(entry.ts)}</span>
-                  <span className={`uppercase ${LOG_LEVEL_CLASS[entry.level]}`}>{entry.level}</span>
-                  <span className={LOG_LEVEL_CLASS[entry.level]}>{entry.message}</span>
+                  <span className="text-muted-foreground">{formatDateTime(entry.ts, language)}</span>
+                  <span className={cn('uppercase', LOG_LEVEL_CLASS[entry.level])}>{entry.level}</span>
+                  <span className={LOG_LEVEL_CLASS[entry.level]}>{bulkOperationLogText(t, entry)}</span>
                 </li>
               ))}
             </ul>
@@ -326,26 +330,35 @@ export function BulkOperationDetailPage(): ReactNode {
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
           <CardTitle>{t('bulkOperations.detail.elements')}</CardTitle>
-          <div className="flex flex-wrap gap-1">
-            {ELEMENT_FILTERS.map((f) => (
-              <button
-                key={f}
-                type="button"
-                className={`b2b-btn b2b-btn--sm ${elementFilter === f ? 'b2b-btn--primary' : 'b2b-btn--ghost'}`}
-                onClick={(): void => setElementFilter(f)}
-              >
-                {f === 'all' ? t('bulkOperations.filter.all') : t(`bulkOperations.outcome.${f}`)}
-              </button>
-            ))}
-          </div>
+          {/* Nothing to filter until there are results. */}
+          {hasResults ? (
+            <Select
+              ref={elementFilterRef}
+              aria-label={t('bulkOperations.detail.outcome')}
+              className="w-auto"
+              value={elementFilter}
+              onChange={(e): void => setElementFilter(e.target.value as ElementFilter)}
+            >
+              {ELEMENT_FILTERS.map((f) => (
+                <option key={f} value={f}>
+                  {f === 'all' ? t('bulkOperations.filter.all') : t(`bulkOperations.outcome.${f}`)}
+                </option>
+              ))}
+            </Select>
+          ) : null}
         </CardHeader>
         <CardContent>
-          {!op.results || op.results.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{t('bulkOperations.detail.noResults')}</p>
+          {!hasResults ? (
+            <EmptyState icon={<ListChecks size={20} />} title={t('bulkOperations.detail.noResults')} />
           ) : filteredResults.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{t('bulkOperations.detail.noElementsForFilter')}</p>
+            <EmptyState
+              variant="no-results"
+              title={t('bulkOperations.detail.noElementsForFilter')}
+              onClearFilters={(): void => setElementFilter('all')}
+              focusAfterClear={elementFilterRef}
+            />
           ) : (
-            <div className="max-h-[32rem] overflow-auto rounded-md border">
+            <div className="max-h-[32rem] overflow-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -375,9 +388,14 @@ export function BulkOperationDetailPage(): ReactNode {
                         })()}
                       </TableCell>
                       <TableCell>
-                        <Badge variant={OUTCOME_BADGE[r.status]}>
-                          {t(`bulkOperations.outcome.${r.status}`)}
-                        </Badge>
+                        {/* Succeeded with nothing changed — already in the requested state (issue #501). */}
+                        {isUnchangedResult(r) ? (
+                          <Badge variant="secondary">{t('bulkOperations.outcome.unchanged')}</Badge>
+                        ) : (
+                          <Badge variant={OUTCOME_BADGE[r.status]}>
+                            {t(`bulkOperations.outcome.${r.status}`)}
+                          </Badge>
+                        )}
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {r.reason ?? r.details?.message ?? '—'}
@@ -395,6 +413,7 @@ export function BulkOperationDetailPage(): ReactNode {
           )}
         </CardContent>
       </Card>
+      {confirmDialog}
     </>
   );
 }

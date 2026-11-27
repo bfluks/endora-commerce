@@ -17,7 +17,9 @@ danych — izolacja działa więc nawet wtedy, gdy usługa zapomni o jawnym filt
   żądania, parametrów zapytania ani nagłówków.
   - Klient → `single-org` (jego organizacja i konto klienta).
   - Administrator platformy → `all` (bez ograniczeń).
-  - Administrator-handlowiec z ograniczonym zakresem → `allowed-set` (przypisane mu organizacje).
+  - Administrator-handlowiec → `excluded-set`: każda organizacja **oprócz** prowadzonych przez
+    innego handlowca (zob. *Tryb `excluded-set`* poniżej).
+  - Klient z włączonym roll-upem → `allowed-set` (wskazane poddrzewo).
   - Worker, migracja, jawne obejście → `system`.
   - Klucz API powiązany z organizacją → `single-org` (jego organizacja i konto serwisowe);
     klucz niepowiązany i ruch anonimowy → `system`.
@@ -40,8 +42,8 @@ danych — izolacja działa więc nawet wtedy, gdy usługa zapomni o jawnym filt
   kodem 403 `ADMIN_ROLE_REQUIRED` — brak roli nigdy nie oznacza „wszystkie organizacje”.
   `ComposeAppOptions.buildTenantContext` zastępuje mapowanie we wdrożeniu, które tego potrzebuje,
   a zamiennik jest odrzucany — żądanie kończy się błędem — gdy na żądanie klienta lub klucza API
-  powiązanego z organizacją odpowiada kontekstem `system` albo `all`, a na żądanie administratora
-  kontekstem `system`.
+  powiązanego z organizacją odpowiada kontekstem `system`, `all` albo `excluded-set`, a na żądanie
+  administratora kontekstem `system`.
 
   **O tym, czyje jest żądanie, decyduje trasa, a nie to, jakie ciasteczka są obecne.** Jedna
   przeglądarka może mieć jednocześnie sesję administratora i sesję klienta — operator zalogowany
@@ -69,6 +71,57 @@ danych — izolacja działa więc nawet wtedy, gdy usługa zapomni o jawnym filt
   **bez** kontekstu rzuca `MissingTenantContextError`. Zapomniany kontekst to głośny błąd, a
   nigdy cichy odczyt danych innego tenanta.
 
+
+## Tryb `excluded-set`
+
+Handlowiec ma dostęp do każdej organizacji, której nie prowadzi inny handlowiec (zgłoszenie #305):
+do organizacji przypisanych jemu (z uprawnieniem `organizations:rollup` — do ich poddrzew, przy czym
+wygrywa najbliższe przypisanie) i do każdej organizacji, do której nikt nie jest przypisany — łącznie
+z organizacjami osobistymi (B2C), do których nie można nikogo przypisać. Moduł `organizations`
+zwraca ten zakres przez `adminTenantScopePort` jako `{ reach: 'excluding', excludedOrganizationsQuery,
+loadReach }`, a zabezpieczenie filtruje według zapytania (rozstrzygnięcie właściciela z 2026-11-10,
+które zmienia rozstrzygnięcie exit (a′) z 2026-08-24, dopuszczając je). Listy wykluczonych i przypisanych
+organizacji nie są wyznaczane przy ustalaniu zakresu: `loadReach` wczytuje je na żądanie, najwyżej raz na
+żądanie, dla funkcji pomocniczych dotyczących pojedynczej organizacji i dla kolejności wyników.
+Zakres jest odczytywany z tabeli `organization_reach_governor` — dla każdej organizacji najbliższy
+przodek (lub ona sama) z przypisanym handlowcem — którą wyzwalacze na poziomie instrukcji utrzymują
+aktualną w transakcji każdego zapisu, który może ją zmienić (issue #955). Nic nie jest buforowane.
+
+- **Dlaczego dopełnienie.** Zbiór dostępnych organizacji obejmuje każdą nieprzypisaną, a więc
+  każdą osobistą: rośnie razem z bazą klientów, a jako lista `IN (…)` obciążałby każde żądanie
+  panelu. Zbiór wykluczony zawiera tylko organizacje z przypisaniem oraz — przy roll-upie — ich
+  poddrzewa, więc jest ograniczony wielkością portfela B2B. Predykat to
+  `organization_id NOT IN (<excludedOrganizationsQuery>)` na własnej kolumnie filtrowanego wiersza:
+  nieskorelowane podzapytanie należące do modułu `organizations`, które platforma wstawia, nie
+  nazywając tego, co ono czyta; bez złączenia. Przesyłanie samej listy kosztowało każde zapytanie
+  objęte izolacją literał wielkości tej listy; podzapytanie to haszowany SubPlan na tabeli
+  `organization_reach_governor` (rozstrzygnięcie architekta w #955 z 2026-11-09, które wąsko zmienia
+  dawną regułę „bez podzapytania”: nieskorelowane podzapytanie na własnej kolumnie wiersza jest
+  dozwolone, skorelowane ani złączenie — nie).
+- **Brak organizacji nigdy nie pasuje.** Predykat zawiera też jawne `organization_id IS NOT NULL`,
+  ponieważ `NULL NOT IN (<pusty zbiór>)` jest prawdą: dzięki temu pusty zbiór wykluczony nie zamienia
+  się w „wszystkie wiersze”, łącznie z tymi bez organizacji.
+- **Odmowa przy błędzie.** Zbiór jest wyznaczany po stronie serwera z tabel modułu
+  `organizations`, nigdy z żądania. Jeśli jego zapytanie się nie powiedzie, żądanie kończy się
+  błędem. Organizacja prowadząca, której zapisanej pozycji w drzewie nie da się przy roll-upie
+  odczytać, nie powoduje odrzucenia zakresu: rozstrzyga ją reguła dla pojedynczego identyfikatora —
+  prowadzi samą siebie, a jej potomków wskazują ich własne ścieżki — a żądanie zapisuje jedno
+  ostrzeżenie (`warn`) z jej identyfikatorem (rozstrzygnięcie Q1 w PR #954). Pusty
+  zbiór wykluczony jest prawdziwą odpowiedzią — nikt inny nie ma przypisań — i nigdy nie powstaje
+  w wyniku błędu.
+- **Zapisy przechodzą przez tę samą gałąź.** Zabezpieczenie zapisu i `orgInScope` odrzucają zapis
+  z wykluczoną organizacją, więc handlowiec zapisuje tylko tam, gdzie może czytać.
+- **Moduły nigdy nie czytają identyfikatorów.** Moduł odczytuje swój zakres przez funkcje
+  pomocnicze zakresu pochodnego — `orgScopeWhere`, `orgScopeSql` (dla surowego SQL: to samo
+  podzapytanie, z parametrami dołączonymi do parametrów wywołującego), `reachesNoOrganization` oraz
+  asynchroniczne `orgInScope`, `ruleInScope`, `orgScopeTest` (predykat synchroniczny pobierany raz) i
+  `assignedOrganizationIdsForRanking` (wyłącznie do kolejności i filtrów „moje”). Synchroniczne
+  `isOrgInScope` i `ruleVisibleForScope` usunięto, zamiast uczynić je asynchronicznymi, ponieważ
+  obietnica w `if` jest zawsze prawdziwa; każdego pliku TypeScript w repozytorium pilnują reguły
+  `no-floating-promises` i `no-misused-promises` (issues #955 i #1027). `OrgConstraint`
+  ma gałęzie `all`, `single`, `allowed` i `excluded`; dawna gałąź `set` została usunięta, a nie
+  pozostawiona obok, aby żaden konsument nie odczytał zakresu handlowca jako „bez ograniczeń”.
+
 ## Klasyfikacja encji
 
 Do każdego pliku `*.entity.ts` dodaj **dokładnie jeden** dekorator klasyfikacji (w przeciwnym razie
@@ -79,7 +132,7 @@ kontrola CI `check-entity-tenant-classification.ts` przerwie build):
 | `@OrgScoped()` | ma kolumnę `organizationId` |
 | `@CustomerScoped()` | ma kolumnę `customerAccountId`, a nie ma kolumny organizacji |
 | `@TransitivelyScoped('Parent', 'fk')` | należy do organizacji przez agregat nadrzędny (np. `Invoice` → `Order`) |
-| `@RuleScoped()` | wskazuje organizacje przez regułę lub JSONB, a nie kolumnę (np. `price_lists.applicationRule`) |
+| `@RuleScoped()` | wskazuje organizacje jako współrzędną biznesową, a nie kolumnę właściciela (np. cenniki modułu `price_lists`, których odbiorcy wskazują organizacje w `price_list_audience_members`; każdy odczyt cen zawęża tych odbiorców do łańcucha organizacji i grupy samego kupującego) |
 | `@GlobalEntity()` | jest globalna dla platformy albo jest konfiguracją (bez tenanta) |
 
 `@OrgScoped` i `@CustomerScoped` podpinają filtr; pozostałe dekoratory to wyłącznie metadane — ich
@@ -147,7 +200,7 @@ punkt wejścia, aktora i impersonację. Wiersz liczy każde wystąpienie:
 | `actor_admin_user_id`, `impersonated_customer_account_id` | administrator, który spowodował dostęp, i klient, w którego imieniu działał, jeśli taki jest |
 | `request_id`, `ip_address`, `user_agent` | ustawiane, gdy wszystkie wystąpienia w wierszu pochodzą z jednego żądania |
 | `acted_at` | pierwsze wystąpienie |
-| `state_after` | `scope`, `reason`, `organizationId`, `module`, `entryPoint`, `occurrences`, `firstAt`, `lastAt`, do 20 identyfikatorów `requestIds` oraz `actor`: rodzaj i identyfikator aktora, a także `context`, czyli uzasadnienie zakresu, w którym wywołujący już działał, na przykład `actor:anonymous` dla anonimowego żądania sklepu |
+| `state_after` | `scope`, `reason`, `organizationId`, `module`, `entryPoint`, `occurrences`, `firstAt`, `lastAt`, do 20 identyfikatorów `requestIds` oraz `actor`: rodzaj i identyfikator aktora, a także `context`, czyli uzasadnienie zakresu, w którym wywołujący już działał, na przykład `actor:anonymous` dla anonimowego żądania sklepu. Wiersz startu procesu zawiera dodatkowo `breakdown` (zob. niżej) |
 
 Agregacja ma znaczenie, bo dwa dostępy odbywają się przy każdym uwierzytelnionym żądaniu sklepu:
 `auth: resolve customer org` i `tenant: resolve customer roll-up flag`. Pole `module` jest
@@ -237,7 +290,15 @@ ominięcie audytu:
    pytanie, żeby zapytać. Jeśli przebieg wybiera wiersze przez ORM i nie może współdzielić
    zapytania, zostaw dwa i pokryj każdą gałąź testem, w którym tylko ta gałąź sprawia, że takt
    wykonuje swoją pracę. Jeśli dokładny warunek wymaga czegoś, co należy do zakresu — ustawienia
-   albo portu innego modułu — zadaj szersze pytanie, które może się mylić tylko w stronę `true`.
+   rozstrzyganego per kanał lub per organizacja albo portu innego modułu — zadaj szersze pytanie,
+   które może się mylić tylko w stronę `true`. Ustawienie **ogólnoplatformowe** (odczytywane
+   z kanałem `null`) nie należy do zakresu: `Setting` i `SettingValue` są encjami globalnymi, więc
+   taki odczyt nie dotyka danych żadnej organizacji. Takt odczytuje je przed otwarciem zakresu,
+   a odczyt zakończony błędem otwiera zakres, zgodnie z regułą 4. Tak działa cykliczne sprawdzanie
+   reindeksacji w module `search`: najpierw odczytuje `search.reindex_interval_minutes`, a zakres
+   otwiera tylko wtedy, gdy przebieg jest należny albo jednorazowe w procesie sprawdzenie
+   ustawień indeksów jeszcze się nie odbyło
+   (`backend/test/unit/search/reindex-scheduler-gating.test.ts`).
 3. **Jego odpowiedź nigdy nie trafia do przebiegu.** Praca odczytuje wszystko ponownie wewnątrz
    zakresu. Pytanie rozstrzyga, *czy* zakres zostanie otwarty, nigdy *co* się w nim wykona.
 4. **Pytanie zakończone błędem liczy się jako `true`.** Takt działa wtedy dokładnie tak jak
@@ -257,8 +318,44 @@ generowania feedu, sprawdzenia taksonomii. Przed nimi nie umieszczaj pytania. Je
 uczciwie zadać pytania bez zakresu, zostaw zakres tam, gdzie jest, i zaakceptuj wiersz: nadmiarowy
 wiersz audytu to szum, a brakujący to luka.
 
-Ta reguła dotyczy wyłącznie taktów zadań cyklicznych. Wejścia do zakresu wykonywane przy starcie
-procesu (`boot: …`) nadal są zapisywane po jednym wierszu każde.
+Ta reguła dotyczy wyłącznie taktów zadań cyklicznych. Start procesu jest obsługiwany inaczej,
+jak opisano niżej.
+
+### Start procesu to jeden wiersz
+
+Każdy proces, który składa aplikację, otwiera zakres systemowy raz dla każdego kroku startu i raz
+dla każdego haka startowego modułu: około pięćdziesięciu wejść z mniej więcej dwudziestoma pięcioma
+uzasadnieniami (`boot: load module presence`, `boot: inventory`, …). Przy jednym wierszu na
+uzasadnienie każdy start serwera i każde składające aplikację polecenie CLI zapisywało ponad
+dwadzieścia wierszy, zanim wykonało jakąkolwiek pracę.
+
+Dlatego `composeApp` obejmuje swój start klamrą. Otwiera ją przy podłączeniu zapisu audytu
+i zamyka po wykonaniu haków startowych modułów. Każdy rekord wewnątrz klamry, którego uzasadnienie
+zaczyna się od `boot: `, trafia do **jednego** wiersza:
+
+| Pole | Wartość |
+|---|---|
+| `state_after.scope` | `system` |
+| `state_after.entryPoint` | `boot` |
+| `state_after.reason` | `boot: process start` |
+| `state_after.module` | `platform` |
+| `state_after.occurrences` | liczba wejść przy starcie, równa sumie z `breakdown` |
+| `state_after.breakdown` | jeden wpis `{ module, reason, occurrences }` na krok startu lub hak, w kolejności startu |
+
+Nic nie ginie: każde wejście jest nadal policzone w jednym wierszu. Agregat czeka na zamknięcie
+klamry, więc zapis w trakcie długiego startu nie zapisze jego połowy. Kompozycja zamknięta przed
+końcem startu nadal zapisuje ten wiersz.
+
+Wszystko inne jest zapisywane dokładnie tak jak dotąd:
+
+- własne wejście operatora w poleceniu CLI (`cli: …`), które następuje po starcie. Składające
+  aplikację polecenie zapisuje więc jeden wiersz startu i jeden wiersz `cli:`;
+- rekord wewnątrz klamry z innym uzasadnieniem, na przykład takt workera, który ruszył w trakcie
+  startu, albo poszerzenie zakresu, które hak startowy wykonuje z własnym uzasadnieniem;
+- rekord `boot: …` poza klamrą.
+
+Polecenia operatorskie `module:*` nie składają aplikacji, więc nie mają startu, który można by
+objąć klamrą.
 
 ## Testy
 

@@ -1,6 +1,4 @@
-import { Fragment, type ReactNode } from 'react';
-import Link from 'next/link';
-import { redirect } from 'next/navigation';
+import type { ReactNode } from 'react';
 import { revalidatePath } from 'next/cache';
 import {
   clearShoppingListItems,
@@ -8,15 +6,35 @@ import {
   convertShoppingListToRfq,
   getShoppingList,
   removeShoppingListItem,
-  renameShoppingList,
-  updateShoppingListItem,
+  updateShoppingList,
 } from '../../../../lib/api/shopping-lists';
 import { getSessionCookie } from '../../../../lib/session';
+import { getCommerceAbilitiesAction } from '../../../../lib/actions/cart';
 import { StorefrontApiError } from '../../../../lib/api/client';
+import { isRecordId } from '../../../../lib/record-id';
 import { getServerContext } from '../../../../lib/server-context';
 import { getProductBySlug } from '../../../../lib/api/catalog';
 import { ClearListButton } from '../../../../components/shopping-lists/ClearListButton';
+import {
+  type CarriedConversionSkip,
+  type CarriedReport,
+  decodeConversionSkips,
+  encodeConversionSkips,
+  reportMoreText,
+  shoppingListSkipLabel,
+} from '../../../../lib/batchReport';
+import { tForLocale } from '../../../../lib/i18n/messages';
+import { shoppingListDisplayName } from '../../../../lib/shopping-list-name';
+import { format } from '../../../../lib/i18n/format';
+import { formatCount } from '../../../../lib/orderMinimum';
+import { pluralKey, richText } from '../../../../lib/account/labels';
+import { readShoppingListEdits, shoppingListEditorKey } from '../../../../lib/account/shopping-list-edits';
+import { ShoppingListEditor } from '../../../../components/shopping-lists/ShoppingListEditor';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../../lib/i18n/navigation';
+import { SHOPPING_LIST_ERRORS } from '../../../../lib/account/shopping-list-errors';
+import { rfqConversionRedirect } from '../../../../lib/account/shopping-list-conversion';
+import { LocalizedLink } from '../../../../lib/i18n/localized-link';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -33,11 +51,18 @@ interface ResolvedProduct {
 }
 
 /**
- * Shopping list detail (T205). Items can be edited inline; "Convert all
- * to cart" / "Convert all to RFQ" run the bulk conversion. Per-item
- * checkboxes feed an `itemIds` array to the server actions for the
- * "Convert selected" variant; archived skips are surfaced via a banner
- * after conversion.
+ * Shopping list detail (T205). The list's name and every line quantity are
+ * edited in one form with one *Save changes* (issue #1251); "Convert all to
+ * cart" / "Convert all to RFQ" run the bulk conversion, and per-item
+ * checkboxes feed an `itemIds` array to the "Convert selected" variants. The
+ * conversions submit the same form, so what the buyer typed is saved first
+ * and converted as typed. Archived skips are surfaced via a banner after
+ * conversion.
+ *
+ * `specs/170-organization-roles/` (FR-047, FR-048): renaming and editing the
+ * list need `shopping_lists.create`; each conversion needs
+ * `shopping_lists.convert` plus its target's create code. What the member's
+ * role does not allow is not offered, and a read-only list says so.
  */
 
 export default async function ShoppingListDetailPage({
@@ -49,27 +74,41 @@ export default async function ShoppingListDetailPage({
     error?: string;
     cartAdded?: string;
     cartSkipped?: string;
+    /** Feature 155 — the conversion's `skipped[]`, carried across the redirect (base64url JSON). */
+    cartSkips?: string;
     rfqId?: string;
     rfqAdded?: string;
     rfqSkipped?: string;
+    /** Issue #1161 — the quote-request conversion's `skipped[]`, carried as `cartSkips` is. */
+    rfqSkips?: string;
+    /** U4 — the row whose quantity edit was refused; the page words why beside its input. */
+    qtyError?: string;
+    /** Issue #1251 — `saved` after *Save changes* wrote something. */
+    status?: string;
   }>;
 }): Promise<ReactNode> {
   const session = await getSessionCookie();
   const { id } = await params;
-  if (!session) redirect(`/login?next=/account/shopping-lists/${id}`);
+  if (!session) return await localeRedirect(`/login?next=/account/shopping-lists/${id}`);
   const sp = await searchParams;
+  const { ctx, locale } = await getServerContext();
+  const t = tForLocale(locale);
+  const abilities = await getCommerceAbilitiesAction();
+  const canEdit = abilities.editShoppingLists;
+  const notFound = (
+    <div>
+      <h2>{t('account.shoppingList.notFound.heading')}</h2>
+      <p className="b2b-auth__error">{t('account.shoppingList.notFound.body')}</p>
+    </div>
+  );
+  // Issue #749 — an id that cannot name a list is not asked for: the API answers it 500.
+  if (!isRecordId(id)) return notFound;
+
   let list;
   try {
     list = await getShoppingList(session, id);
   } catch (err) {
-    if (err instanceof StorefrontApiError && err.status === 404) {
-      return (
-        <div>
-          <h2>Shopping list not found</h2>
-          <p className="b2b-auth__error">We couldn&apos;t find that list.</p>
-        </div>
-      );
-    }
+    if (err instanceof StorefrontApiError && err.status === 404) return notFound;
     throw err;
   }
 
@@ -77,7 +116,16 @@ export default async function ShoppingListDetailPage({
   // the product card (the item row only carries the product UUID). The detail
   // endpoint accepts an id or a slug; failures (archived / removed) fall back
   // to the raw id so the row still renders.
-  const { ctx } = await getServerContext();
+  /** A counted sentence of this page — "Added 3 items to your cart." — in the page's language. */
+  const counted = (base: string, raw: string | undefined): string => {
+    const count = Number(raw ?? 0);
+    return format(t(pluralKey(base, count, locale)), { count: formatCount(count, locale) });
+  };
+  // Feature 155 (FR-011) — which rows the conversion left out, and why (a minimum included).
+  // Carried capped (the first rows plus a count), so the URL stays bounded.
+  const cartSkipReport = sp.cartAdded !== undefined ? decodeConversionSkips(sp.cartSkips) : { lines: [], more: 0 };
+  // Issue #1161 — the quote-request conversion names its skipped rows the same way, each with its reason.
+  const rfqSkipReport = sp.rfqAdded !== undefined ? decodeConversionSkips(sp.rfqSkips) : { lines: [], more: 0 };
   const uniqueProductIds = [...new Set(list.items.map((it) => it.productId))];
   const resolvedEntries = await Promise.all(
     uniqueProductIds.map(async (pid): Promise<[string, ResolvedProduct | null]> => {
@@ -93,331 +141,345 @@ export default async function ShoppingListDetailPage({
 
   return (
     <>
-      <h2>{list.name}</h2>
+      <h2>{shoppingListDisplayName(list, t)}</h2>
       <p>
-        <Link href="/shopping-lists">← All lists</Link>
+        <LocalizedLink href="/shopping-lists" className="b2b-account__link b2b-account__link--standalone">{t('account.shoppingList.backToLists')}</LocalizedLink>
       </p>
-      {sp.error ? <p className="b2b-auth__error">{sp.error}</p> : null}
+      {/* Issue #745 — `?error=` is a code; one this page does not know reads as its generic failure. */}
+      {sp.error ? <p className="b2b-auth__error">{t(SHOPPING_LIST_ERRORS.errorKey(sp.error)!)}</p> : null}
       {sp.cartAdded ? (
         <p className="b2b-auth__success">
-          Added {sp.cartAdded} item(s) to your cart
+          {counted('account.shoppingList.cartAdded', sp.cartAdded)}
           {sp.cartSkipped && Number(sp.cartSkipped) > 0
-            ? `, skipped ${sp.cartSkipped} archived row(s)`
+            ? ` ${counted('account.shoppingList.cartSkipped', sp.cartSkipped)}`
             : ''}
-          .
         </p>
       ) : null}
-      {sp.rfqAdded ? (
+      <ConversionSkipReport
+        id="list-cart-skips"
+        heading={t('shoppingList.skip.heading')}
+        report={cartSkipReport}
+        productName={(productId) => productsById.get(productId)?.name ?? t('cart.line.unknownProduct')}
+        locale={locale}
+      />
+      {sp.rfqAdded !== undefined && Number(sp.rfqAdded) > 0 ? (
         <p className="b2b-auth__success">
-          Added {sp.rfqAdded} item(s) to your draft RFQ
+          {counted('account.shoppingList.rfqAdded', sp.rfqAdded)}
           {sp.rfqSkipped && Number(sp.rfqSkipped) > 0
-            ? `, skipped ${sp.rfqSkipped} archived row(s)`
+            ? ` ${counted('account.shoppingList.rfqSkipped', sp.rfqSkipped)}`
             : ''}
-          . <Link href={`/quote-requests/${sp.rfqId}`}>Open the RFQ</Link>.
+          {/* Issue #1159 — a link only to a quote request that exists and received something. */}
+          {sp.rfqId ? (
+            <>
+              {' '}
+              <LocalizedLink href={`/quote-requests/${sp.rfqId}`} className="b2b-account__link">{t('account.shoppingList.openRfq')}</LocalizedLink>
+            </>
+          ) : null}
+        </p>
+      ) : sp.rfqAdded !== undefined ? (
+        // Issue #1159 — nothing converted, so no quote request was created: said neutrally, not as a success.
+        <p className="b2b-auth__hint" role="status">
+          {t('account.shoppingList.rfqNothingAdded')}
+          {sp.rfqSkipped && Number(sp.rfqSkipped) > 0
+            ? ` ${counted('account.shoppingList.rfqSkipped', sp.rfqSkipped)}`
+            : ''}
+        </p>
+      ) : null}
+      <ConversionSkipReport
+        id="list-rfq-skips"
+        heading={t('shoppingList.skip.rfqHeading')}
+        report={rfqSkipReport}
+        productName={(productId) => productsById.get(productId)?.name ?? t('cart.line.unknownProduct')}
+        locale={locale}
+      />
+
+      {!canEdit ? (
+        <p className="b2b-auth__hint" role="note">
+          {t('commerce.shoppingLists.readOnlyNote')}
         </p>
       ) : null}
 
-      <form action={renameAction} className="flex items-end gap-2">
-        <input type="hidden" name="listId" value={list.id} />
-        <div className="flex flex-1 flex-col gap-1">
-          <label htmlFor="rename" className="text-sm text-fg-soft">
-            Rename list
-          </label>
-          <input
-            id="rename"
-            name="name"
-            defaultValue={list.name}
-            required
-            maxLength={160}
-            className="w-full rounded-md border border-line px-3 py-2 text-sm"
-          />
-        </div>
-        <button type="submit" className="btn btn--outline">
-          Rename
-        </button>
-      </form>
-
-      <h3 className="mt-10 mb-4">Items</h3>
-      {list.items.length === 0 ? (
-        <p className="muted">
-          No items yet. Find a product on the <Link href="/catalog">catalog</Link> and add it from
-          its detail page (coming next).
+      {sp.status === 'saved' ? (
+        <p className="b2b-auth__success" role="status">
+          {t('account.shoppingList.saved')}
         </p>
-      ) : (
-        <>
-        {/*
-          The per-row "Save" / "Remove" controls and the "Convert" buttons each
-          need their own form, but a table can't host nested forms (the browser
-          drops the inner ones, which is why Remove appeared to do nothing).
-          Instead we declare every form once here as a sibling of the table and
-          wire the in-cell controls to them via the HTML `form` attribute.
-        */}
-        <form id="sl-convert" action={convertSelectedToCartAction}>
-          <input type="hidden" name="listId" value={list.id} />
-        </form>
-        {list.items.map((it) => (
-          <Fragment key={`forms-${it.id}`}>
-            <form id={`sl-qty-${it.id}`} action={updateQtyAction}>
-              <input type="hidden" name="listId" value={list.id} />
-              <input type="hidden" name="itemId" value={it.id} />
-            </form>
-            <form id={`sl-remove-${it.id}`} action={removeAction}>
-              <input type="hidden" name="listId" value={list.id} />
-              <input type="hidden" name="itemId" value={it.id} />
-            </form>
-          </Fragment>
-        ))}
-        <table className="b2b-account__table">
-            <thead>
-              <tr>
-                <th></th>
-                <th>Product</th>
-                <th>Qty</th>
-                <th>Note</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {list.items.map((it) => (
-                <tr key={it.id}>
-                  <td>
-                    <input type="checkbox" name="itemIds" value={it.id} form="sl-convert" />
-                  </td>
-                  <td>
-                    {(() => {
-                      const product = productsById.get(it.productId);
-                      if (!product) {
-                        return (
-                          <span className="text-fg-soft">
-                            {it.productId.slice(0, 8)}
-                          </span>
-                        );
-                      }
-                      return (
-                        <Link href={`/p/${product.slug}`} className="flex flex-col">
-                          <span className="font-medium text-fg">{product.name}</span>
-                          <span className="text-xs text-fg-soft">SKU: {product.sku}</span>
-                        </Link>
-                      );
-                    })()}
-                    {it.variantId ? (
-                      <span className="text-xs text-fg-soft"> · variant {it.variantId.slice(0, 8)}</span>
-                    ) : null}
-                  </td>
-                  <td>
-                    <UpdateQtyForm itemId={it.id} qty={it.quantity} />
-                  </td>
-                  <td>{it.note ?? ''}</td>
-                  <td>
-                    <RemoveItemForm itemId={it.id} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="mt-6 mb-10 flex flex-wrap gap-2">
-            <button type="submit" form="sl-convert" formAction={convertAllToCartAction} className="btn btn--primary">
-              Convert all to cart
-            </button>
-            <button type="submit" form="sl-convert" className="btn btn--outline">
-              Convert selected to cart
-            </button>
-            <button type="submit" form="sl-convert" formAction={convertAllToRfqAction} className="btn btn--outline">
-              Convert all to RFQ
-            </button>
-            <button type="submit" form="sl-convert" formAction={convertSelectedToRfqAction} className="btn btn--outline">
-              Convert selected to RFQ
-            </button>
-          </div>
+      ) : null}
+
+      {/* Keyed by the list alone: a Remove re-renders it with the remaining lines and keeps what was typed. */}
+      <ShoppingListEditor
+        key={shoppingListEditorKey(list)}
+        listId={list.id}
+        locale={locale}
+        name={shoppingListDisplayName(list, t)}
+        canEdit={canEdit}
+        canConvertToCart={abilities.convertListToCart}
+        canConvertToQuote={abilities.convertListToQuote}
+        qtyErrorItemId={sp.qtyError ?? null}
+        nameError={sp.error === 'NAME_REQUIRED'}
+        heading={<h3 className="mt-10 mb-4">{t('account.common.items')}</h3>}
+        empty={
+          <p className="muted">
+            {richText(t('account.shoppingList.empty'), {
+              catalog: <LocalizedLink href="/catalog" className="b2b-account__link">{t('account.shoppingList.emptyCatalogLink')}</LocalizedLink>,
+            })}
+          </p>
+        }
+        rows={list.items.map((it) => ({
+          id: it.id,
+          quantity: it.quantity,
+          note: it.note ?? null,
+          product: <ProductCell product={productsById.get(it.productId) ?? null} productId={it.productId} variantId={it.variantId} t={t} />,
+        }))}
+        saveListAction={saveListAction}
+        removeAction={removeAction}
+        convertAllToCartAction={convertAllToCartAction}
+        convertSelectedToCartAction={convertSelectedToCartAction}
+        convertAllToRfqAction={convertAllToRfqAction}
+        convertSelectedToRfqAction={convertSelectedToRfqAction}
+      />
+      {canEdit && list.items.length > 0 ? (
         <div className="mb-10 flex flex-wrap gap-2 border-t border-line pt-6">
-          <ClearListButton listId={list.id} clearAction={clearListAction} />
+          <ClearListButton listId={list.id} locale={locale} clearAction={clearListAction} />
         </div>
-        </>
+      ) : null}
+    </>
+  );
+}
+
+/** A line's product: its name and SKU linking to its page, or the id of one that no longer resolves. */
+function ProductCell({
+  product,
+  productId,
+  variantId,
+  t,
+}: {
+  product: ResolvedProduct | null;
+  productId: string;
+  variantId: string | null;
+  t: ReturnType<typeof tForLocale>;
+}): ReactNode {
+  return (
+    <>
+      {product ? (
+        <LocalizedLink href={`/p/${product.slug}`} className="b2b-account__link b2b-account__link--stacked">
+          <span className="font-medium">{product.name}</span>
+          <span className="text-xs text-fg-soft">{format(t('account.common.sku'), { sku: product.sku })}</span>
+        </LocalizedLink>
+      ) : (
+        <span className="text-fg-soft">{productId.slice(0, 8)}</span>
       )}
+      {variantId ? (
+        <span className="text-xs text-fg-soft">
+          {' · '}
+          {format(t('account.shoppingList.variant'), { id: variantId.slice(0, 8) })}
+        </span>
+      ) : null}
     </>
   );
 }
 
 /**
- * Per-row quantity editor. The control lives inside a table cell but is wired
- * to the standalone `sl-qty-<itemId>` form (declared as a table sibling) via
- * the HTML `form` attribute, so it submits independently of the convert form.
+ * Feature 155 (FR-011) / issue #1161 — the rows a conversion left out, each with its product and
+ * the reason it was skipped, below the conversion's counted sentence. Renders nothing for an
+ * empty report, which is also what a hand-made or malformed carried value decodes to.
  */
-function UpdateQtyForm({ itemId, qty }: { itemId: string; qty: number }): ReactNode {
-  const formId = `sl-qty-${itemId}`;
+function ConversionSkipReport({
+  id,
+  heading,
+  report,
+  productName,
+  locale,
+}: {
+  id: string;
+  /** The section's heading, in the page's language. */
+  heading: string;
+  report: CarriedReport<CarriedConversionSkip>;
+  productName: (productId: string) => string;
+  locale: string;
+}): ReactNode {
+  if (report.lines.length === 0) return null;
   return (
-    <span style={{ display: 'inline-flex', gap: '0.25rem' }}>
-      <input
-        type="number"
-        name="quantity"
-        form={formId}
-        min={1}
-        max={9999}
-        defaultValue={qty}
-        className="rounded-md border border-line px-2 py-1 text-sm"
-        style={{ width: '4rem' }}
-      />
-      <button type="submit" form={formId} className="btn btn--outline btn--sm">
-        Save
-      </button>
-    </span>
+    <section
+      aria-labelledby={id}
+      className="b2b-auth__warning my-[12px] rounded-md px-[16px] py-[12px] text-[14px]"
+    >
+      <h3 id={id} className="m-0 mb-1 text-[14px] font-semibold">
+        {heading}
+      </h3>
+      <ul className="m-0 pl-5 text-[13px]">
+        {report.lines.map((skip) => (
+          <li key={skip.itemId}>
+            <strong>{productName(skip.productId)}</strong>
+            {' — '}
+            {shoppingListSkipLabel(skip, locale)}
+          </li>
+        ))}
+        {report.more > 0 ? <li>{reportMoreText(report.more, locale)}</li> : null}
+      </ul>
+    </section>
   );
 }
 
-/** Per-row remove button, wired to the standalone `sl-remove-<itemId>` form. */
-function RemoveItemForm({ itemId }: { itemId: string }): ReactNode {
-  return (
-    <button type="submit" form={`sl-remove-${itemId}`} className="btn btn--outline btn--sm">
-      Remove
-    </button>
-  );
+/**
+ * Issue #1251 — writes what the buyer changed on the list form, the name and the edited
+ * quantities together, in one request. `{ saved }` says whether anything was written;
+ * `{ refusal }` is where to send the buyer instead: the refused field, or the refusal's
+ * code. Every conversion runs it first, so a conversion converts the quantities the buyer
+ * typed, and does not run when the save is refused.
+ */
+async function saveTypedEdits(session: string, listId: string, formData: FormData): Promise<{ refusal: string } | { saved: boolean }> {
+  const reading = readShoppingListEdits(formData);
+  if (reading.kind === 'nameRequired') return { refusal: `/shopping-lists/${listId}?error=NAME_REQUIRED` };
+  if (reading.kind === 'invalidQuantity') {
+    return { refusal: `/shopping-lists/${listId}?qtyError=${encodeURIComponent(reading.itemId)}` };
+  }
+  if (reading.edits === null) return { saved: false };
+  try {
+    await updateShoppingList(session, listId, reading.edits);
+  } catch (err) {
+    return { refusal: `/shopping-lists/${listId}?error=${SHOPPING_LIST_ERRORS.failureCode(err, 'SAVE_FAILED')}` };
+  }
+  return { saved: true };
 }
 
-async function renameAction(formData: FormData): Promise<void> {
+async function saveListAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const listId = (formData.get('listId') as string) ?? '';
-  const name = ((formData.get('name') as string) ?? '').trim();
-  try {
-    await renameShoppingList(session, listId, name);
-  } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Rename failed.';
-    redirect(`/shopping-lists/${listId}?error=${encodeURIComponent(message)}`);
-  }
-  redirect(`/shopping-lists/${listId}`);
-}
-
-async function updateQtyAction(formData: FormData): Promise<void> {
-  'use server';
-  const session = await getSessionCookie();
-  if (!session) redirect('/login');
-  const listId = (formData.get('listId') as string) ?? '';
-  const itemId = (formData.get('itemId') as string) ?? '';
-  const quantity = Number(formData.get('quantity') ?? '1');
-  try {
-    await updateShoppingListItem(session, listId, itemId, { quantity });
-  } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Update failed.';
-    redirect(`/shopping-lists/${listId}?error=${encodeURIComponent(message)}`);
-  }
-  redirect(`/shopping-lists/${listId}`);
+  const outcome = await saveTypedEdits(session, listId, formData);
+  if ('refusal' in outcome) return await localeRedirect(outcome.refusal);
+  return await localeRedirect(outcome.saved ? `/shopping-lists/${listId}?status=saved` : `/shopping-lists/${listId}`);
 }
 
 async function removeAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const listId = (formData.get('listId') as string) ?? '';
   const itemId = (formData.get('itemId') as string) ?? '';
   try {
     await removeShoppingListItem(session, listId, itemId);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Remove failed.';
-    redirect(`/shopping-lists/${listId}?error=${encodeURIComponent(message)}`);
+    return await localeRedirect(`/shopping-lists/${listId}?error=${SHOPPING_LIST_ERRORS.failureCode(err, 'REMOVE_FAILED')}`);
   }
-  redirect(`/shopping-lists/${listId}`);
+  return await localeRedirect(`/shopping-lists/${listId}`);
 }
 
 async function clearListAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const listId = (formData.get('listId') as string) ?? '';
   try {
     await clearShoppingListItems(session, listId);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Clear failed.';
-    redirect(`/shopping-lists/${listId}?error=${encodeURIComponent(message)}`);
+    return await localeRedirect(`/shopping-lists/${listId}?error=${SHOPPING_LIST_ERRORS.failureCode(err, 'CLEAR_FAILED')}`);
   }
-  redirect(`/shopping-lists/${listId}`);
+  return await localeRedirect(`/shopping-lists/${listId}`);
 }
 
 async function convertAllToCartAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const listId = (formData.get('listId') as string) ?? '';
+  // Issue #1251 — what the buyer typed is saved first, so the conversion converts it.
+  const saved = await saveTypedEdits(session, listId, formData);
+  if ('refusal' in saved) return await localeRedirect(saved.refusal);
   // The success redirect must live OUTSIDE the try: Next's `redirect()` signals
   // by throwing `NEXT_REDIRECT`, which a surrounding catch would swallow and
-  // mis-report as "Convert failed." (the bug this fixes). Only the API call is
+  // mis-report as a failed conversion (the bug this fixes). Only the API call is
   // guarded; the redirect runs after, matching removeAction/clearListAction.
   let result: Awaited<ReturnType<typeof convertShoppingListToCart>>;
   try {
     result = await convertShoppingListToCart(session, listId);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Convert failed.';
-    redirect(`/shopping-lists/${listId}?error=${encodeURIComponent(message)}`);
+    return await localeRedirect(`/shopping-lists/${listId}?error=${SHOPPING_LIST_ERRORS.failureCode(err, 'CONVERT_FAILED')}`);
   }
   // Flush the cart route's Router Cache so the newly added lines show on the
   // next visit instead of a stale (empty) cached page.
   revalidatePath('/cart');
-  redirect(
-    `/shopping-lists/${listId}?cartAdded=${result.added}&cartSkipped=${result.skipped.length}`,
-  );
+  return await localeRedirect(cartConversionRedirect(listId, result));
 }
 
 async function convertSelectedToCartAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const listId = (formData.get('listId') as string) ?? '';
   const itemIds = (formData.getAll('itemIds') as string[]).filter(Boolean);
   if (itemIds.length === 0) {
-    redirect(`/shopping-lists/${listId}?error=Select+at+least+one+item.`);
+    return await localeRedirect(`/shopping-lists/${listId}?error=SELECT_AT_LEAST_ONE`);
   }
+  // Issue #1251 — what the buyer typed is saved first, so the conversion converts it.
+  const saved = await saveTypedEdits(session, listId, formData);
+  if ('refusal' in saved) return await localeRedirect(saved.refusal);
   let result: Awaited<ReturnType<typeof convertShoppingListToCart>>;
   try {
     result = await convertShoppingListToCart(session, listId, itemIds);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Convert failed.';
-    redirect(`/shopping-lists/${listId}?error=${encodeURIComponent(message)}`);
+    return await localeRedirect(`/shopping-lists/${listId}?error=${SHOPPING_LIST_ERRORS.failureCode(err, 'CONVERT_FAILED')}`);
   }
   revalidatePath('/cart');
-  redirect(
-    `/shopping-lists/${listId}?cartAdded=${result.added}&cartSkipped=${result.skipped.length}`,
-  );
+  return await localeRedirect(cartConversionRedirect(listId, result));
 }
 
 async function convertAllToRfqAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const listId = (formData.get('listId') as string) ?? '';
+  // Issue #1251 — what the buyer typed is saved first, so the conversion converts it.
+  const saved = await saveTypedEdits(session, listId, formData);
+  if ('refusal' in saved) return await localeRedirect(saved.refusal);
   let result: Awaited<ReturnType<typeof convertShoppingListToRfq>>;
   try {
     result = await convertShoppingListToRfq(session, listId);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Convert failed.';
-    redirect(`/shopping-lists/${listId}?error=${encodeURIComponent(message)}`);
+    return await localeRedirect(`/shopping-lists/${listId}?error=${SHOPPING_LIST_ERRORS.failureCode(err, 'CONVERT_FAILED')}`);
   }
   // Without this, Next's Router Cache keeps serving the previously cached
   // (often empty) quote-requests list, so the freshly created RFQ looks like
   // it was never created even though the API persisted it.
   revalidatePath('/quote-requests');
-  redirect(
-    `/shopping-lists/${listId}?rfqId=${result.rfqId}&rfqAdded=${result.added}&rfqSkipped=${result.skipped.length}`,
-  );
+  return await localeRedirect(rfqConversionRedirect(listId, result));
 }
 
 async function convertSelectedToRfqAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const listId = (formData.get('listId') as string) ?? '';
   const itemIds = (formData.getAll('itemIds') as string[]).filter(Boolean);
   if (itemIds.length === 0) {
-    redirect(`/shopping-lists/${listId}?error=Select+at+least+one+item.`);
+    return await localeRedirect(`/shopping-lists/${listId}?error=SELECT_AT_LEAST_ONE`);
   }
+  // Issue #1251 — what the buyer typed is saved first, so the conversion converts it.
+  const saved = await saveTypedEdits(session, listId, formData);
+  if ('refusal' in saved) return await localeRedirect(saved.refusal);
   let result: Awaited<ReturnType<typeof convertShoppingListToRfq>>;
   try {
     result = await convertShoppingListToRfq(session, listId, itemIds);
   } catch (err) {
-    const message = err instanceof StorefrontApiError ? err.message : 'Convert failed.';
-    redirect(`/shopping-lists/${listId}?error=${encodeURIComponent(message)}`);
+    return await localeRedirect(`/shopping-lists/${listId}?error=${SHOPPING_LIST_ERRORS.failureCode(err, 'CONVERT_FAILED')}`);
   }
   revalidatePath('/quote-requests');
-  redirect(
-    `/shopping-lists/${listId}?rfqId=${result.rfqId}&rfqAdded=${result.added}&rfqSkipped=${result.skipped.length}`,
-  );
+  return await localeRedirect(rfqConversionRedirect(listId, result));
+}
+
+/**
+ * Feature 155 (FR-011) — where a list → cart conversion lands: the counts, and the skipped
+ * rows themselves so the page can name each with its reason and minimum.
+ */
+function cartConversionRedirect(
+  listId: string,
+  result: { added: number; skipped: ReadonlyArray<unknown> },
+): string {
+  const params = new URLSearchParams({
+    cartAdded: String(result.added),
+    cartSkipped: String(result.skipped.length),
+  });
+  if (result.skipped.length > 0) params.set('cartSkips', encodeConversionSkips(result.skipped));
+  return `/shopping-lists/${listId}?${params.toString()}`;
 }

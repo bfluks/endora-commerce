@@ -10,7 +10,7 @@ import { defineModuleManifest } from '@endora-commerce/contracts';
  */
 export const manifest = defineModuleManifest({
   id: 'import_export',
-  name: 'Import / Export',
+  name: 'Import / export',
   description: 'Bulk product import and export wizard.',
   version: '1.0.0',
   // `auth` owns the `requireAdmin` port the routes are gated by; feature 072
@@ -39,6 +39,14 @@ export const manifest = defineModuleManifest({
    */
   nonBindingDependencies: [
     {
+      moduleId: 'product_visibility_rules',
+      name: 'adminProductVisibilityPort',
+      kind: 'degrades-without',
+      whenAbsent: 'every administrator who may export or import products does so, as before the feature',
+      reason:
+        'Spec 193 (FR-085). A products file is the whole catalogue, so an administrator whose product visibility is narrowed is refused it. The module is deactivatable and off by default: presence is probed in front of the port, and a call made while present is never caught.',
+    },
+    {
       moduleId: 'catalog',
       name: 'catalogProductReadPort',
       kind: 'degrades-without',
@@ -64,6 +72,24 @@ export const manifest = defineModuleManifest({
         'The import/export centre stops offering the Products and Categories imports; every other entity is unaffected.',
       reason:
         'A catalogue import is `catalog`\'s transaction and `catalog`\'s audit row (D-74). With the module off the entity is not offered, so the operator never reaches the gate.',
+    },
+    {
+      moduleId: 'catalog',
+      name: 'catalogAttributeReadPort',
+      kind: 'degrades-without',
+      whenAbsent:
+        'The import/export centre stops offering the Products import; every other entity is unaffected.',
+      reason:
+        'Feature 174 — a products header names attributes (`attribute:<key>`); their value type and scope set decide how a cell reads and where it may be written.',
+    },
+    {
+      moduleId: 'catalog',
+      name: 'catalogProductAvailabilityPort',
+      kind: 'degrades-without',
+      whenAbsent:
+        'The import/export centre stops offering the Products import; every other entity is unaffected.',
+      reason:
+        'Feature 174 (FR-042) — a mapped locale column writes only the channels a product belongs to; membership is `catalog`\'s answer, so a target the product is not in is reported for that row.',
     },
     {
       moduleId: 'inventory',
@@ -110,6 +136,15 @@ export const manifest = defineModuleManifest({
       reason:
         'The customers sheet names each account\'s organisation, so that one entity needs both owners present. No other entity reads this port.',
     },
+    {
+      moduleId: 'organizations',
+      name: 'organizationRoleReadPort',
+      kind: 'degrades-without',
+      whenAbsent:
+        'The import/export centre stops offering the Customers export; every other entity is unaffected.',
+      reason:
+        'The customers sheet names the role each account holds, its name and kind (`specs/170-organization-roles/`), and roles are `organizations`\' rows. Read only by that one entity, which is offered only while `organizations` is present.',
+    },
   ],
   settings: {
     moduleCode: 'import_export',
@@ -120,7 +155,7 @@ export const manifest = defineModuleManifest({
         code: 'import_export.enabled',
         name: 'Import / export enabled',
         description:
-          'Switches the CSV import and export endpoints on or off. The module holds no data of its own, so nothing is dropped — the catalog it reads and writes is untouched either way.',
+          'Switches the CSV import and export endpoints on or off. Nothing is dropped: the import profiles are kept while it is off and come back when it is switched on again, and the catalog it reads and writes is untouched either way.',
         groupCode: 'import_export',
         valueType: 'boolean',
         defaultValue: true,
@@ -129,6 +164,15 @@ export const manifest = defineModuleManifest({
   },
   i18n: { bundlesDir: 'i18n' },
   docs: { dir: 'docs' },
+  /** Feature 174 (`contracts/error-codes.md`) — the import profile refusals this module mints. */
+  errorCodes: [
+    // Issue #644 — an import of an export-only entity. No token: one refusal,
+    // and the slug travels as `details.entity`, never in the sentence.
+    { code: 'IMPORT_NOT_SUPPORTED' },
+    { code: 'IMPORT_PROFILE_NAME_TAKEN' },
+    { code: 'IMPORT_PROFILE_NOT_FOUND' },
+    { code: 'IMPORT_PROFILE_REQUIRED' },
+  ],
   actions: [
     {
       id: 'import-products',
@@ -137,7 +181,11 @@ export const manifest = defineModuleManifest({
       icon: 'Upload',
       targetRoute: '/import-export',
       requiredPermission: 'catalog:write',
-      keywords: ['import', 'csv', 'excel', 'upload', 'wgraj'],
+      // Issue #1088 — the screen opens on the entity list; `profiles` sits beside
+      // it at the same depth behind another gate, so the walk cannot pick alone.
+      entryApiRoute: '/api/v1/admin/import-export/entities',
+      keywords: ['import', 'csv', 'excel', 'upload'],
+      keywordsKey: 'actions.importProducts.keywords',
       weight: 110,
     },
     {
@@ -147,7 +195,10 @@ export const manifest = defineModuleManifest({
       icon: 'FileUp',
       targetRoute: '/import-export',
       requiredPermission: 'catalog:write',
-      keywords: ['import', 'export', 'center', 'centrum'],
+      entryApiRoute: '/api/v1/admin/import-export/entities',
+      // Feature 174 — the Import profiles section lives on this screen (no route of its own).
+      keywords: ['import', 'export', 'center', 'profile', 'mapping'],
+      keywordsKey: 'actions.openCenter.keywords',
       weight: 220,
     },
   ],

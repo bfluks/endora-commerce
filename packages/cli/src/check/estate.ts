@@ -449,6 +449,31 @@ export const ESTATE: readonly EstateEntry[] = [
     tier: 'A',
   },
   {
+    id: 'check:custom-field-writes',
+    script: 'backend/scripts/check-custom-field-writes.ts',
+    scope: 'package',
+    // Feature 175 (`specs/175-buyer-input-custom-fields/` research R-11). A module
+    // package can be judged on its own declarations — the routes it registers,
+    // the bodies they validate with, the test its buyer surface names — and the
+    // analysis takes every input as an argument. What a package host still needs
+    // is two inputs it does not have on its own: the custom-field registry's
+    // input surfaces (`custom_fields`' source, a peer's) and the whole installed
+    // set, without which `entity-type-undeclared` would report every type the
+    // package does not host.
+    host: pending(
+      'a package-scope host reading the registry and the installed set over the peers, ' +
+        'the input `check:action-route-permissions` waits on as well',
+    ),
+    subjectDeclaration: {
+      kind: 'manifest-block',
+      declaration: 'a `customFieldWrites` export beside the module manifest',
+    },
+    // The declarations are read as source text; the body schemas out of the
+    // built contracts.
+    readsArtefact: true,
+    tier: 'B',
+  },
+  {
     id: 'check:default-language-prose',
     script: 'backend/scripts/check-default-language-prose.ts',
     scope: 'package',
@@ -559,6 +584,18 @@ export const ESTATE: readonly EstateEntry[] = [
     subjectDeclaration: null,
     readsArtefact: true,
     tier: 'C',
+  },
+  {
+    id: 'check:entity-decorators',
+    script: 'backend/scripts/check-entity-decorators.ts',
+    scope: 'package',
+    host: 'built',
+    subjectDeclaration: {
+      kind: 'exports-subpath',
+      declaration: '`exports` subpath publishing backend sources',
+    },
+    readsArtefact: false,
+    tier: 'A',
   },
   {
     id: 'check:entry-presence',
@@ -674,6 +711,37 @@ export const ESTATE: readonly EstateEntry[] = [
     subjectDeclaration: {
       kind: 'manifest-block',
       declaration: '`i18n.bundlesDir` in the module manifest',
+    },
+    readsArtefact: false,
+    tier: 'A',
+  },
+  {
+    id: 'check:extensible-tables',
+    script: 'backend/scripts/check-extensible-tables.ts',
+    scope: 'package',
+    /**
+     * `specs/178-extensible-columns/` FR-072. The subject is an extensible table
+     * the package's module owns — derived from the custom-field bindings
+     * `@endora-commerce/contracts` publishes, never declared by the package — and
+     * the population is that module's own migration sources. A third-party
+     * package owns no extensible table, so for it the verdict is the auditable
+     * `not-applicable`; a first-party module package that owns one is judged.
+     */
+    host: 'built',
+    partial: [
+      {
+        signal: 'binding-owner-mismatch',
+        reason:
+          'whether a binding names its table\'s real owner is a question about the entity ' +
+          'owner map over every installed module, which one package does not hold; the ' +
+          'repository host reconciles it over the whole tree',
+      },
+    ],
+    subjectDeclaration: {
+      kind: 'manifest-block',
+      declaration:
+        'extensible table owned by this module — a `CUSTOM_FIELD_HOST_BINDINGS` entry in ' +
+        '`@endora-commerce/contracts` naming its id',
     },
     readsArtefact: false,
     tier: 'A',
@@ -890,6 +958,13 @@ export const ESTATE: readonly EstateEntry[] = [
         reason:
           'an installed module package has no application tree, so the application-reach ' +
           'half has no subject here; declared vacuous rather than counted zero',
+      },
+      {
+        signal: 'shared-published-name',
+        reason:
+          'issue #84’s half compares the platform’s published barrels with the workspace ' +
+          'packages the platform depends on; an installed module package is neither, so the ' +
+          'half has no subject here and is declared vacuous rather than counted zero',
       },
     ],
     subjectDeclaration: {
@@ -1185,6 +1260,34 @@ export const ESTATE: readonly EstateEntry[] = [
     // specifier. A rule that read only relative paths would classify that half
     // as platform-owned, which is the fail-open direction.
     tier: 'B',
+  },
+  {
+    id: 'check:text-budget',
+    script: 'backend/scripts/check-text-budget.ts',
+    scope: 'package',
+    /**
+     * Issue #1451 (UX audit DS-23). **Not `repository-only`**: the rule walks
+     * the module tree (`residueGuard: 'derived-population'`), and one package's
+     * English bundle is exactly the subject it judges — a module author can ask
+     * it about their own copy.
+     *
+     * The host is pending for a reason that is the rule's, not the package's:
+     * it landed as a ratchet whose ledger records **this repository's** copy as
+     * it stood (DEC-01, *"the check after the first text pass"*), and the
+     * analysis has not been relocated into `@endora-commerce/cli/rules`. A
+     * package host judges a package against an empty ledger, which is the right
+     * verdict for new copy and needs only that relocation.
+     */
+    host: pending(
+      'the relocation of the analysis into `@endora-commerce/cli/rules`; a lone package is judged against an empty ledger',
+    ),
+    subjectDeclaration: {
+      kind: 'manifest-block',
+      declaration: '`i18n.bundlesDir` in the module manifest',
+    },
+    // `bundlesDir` is read off the imported manifest, as `check:bundle-pairing` does.
+    readsArtefact: true,
+    tier: 'A',
   },
   {
     id: 'check:transaction-context',

@@ -35,8 +35,8 @@ describe('CatalogProductReadService.listProductIdsByAttributeValue', () => {
         slug: `pm148-${label.toLowerCase()}-${stamp}`,
         type: 'simple',
         status: 'active',
-        name: { 'en-US': label },
-        description: { 'en-US': 'x' },
+        name: label,
+        description: 'x',
         visibility: 'public',
         attributeValues: value === undefined ? {} : { [key]: value },
         ...extra,
@@ -52,7 +52,7 @@ describe('CatalogProductReadService.listProductIdsByAttributeValue', () => {
       deleted: make('DELETED', 'steel', { deletedAt: new Date() }),
       inactive: make('INACTIVE', 'steel', { status: 'inactive' }),
     };
-    await em.persistAndFlush(Object.values(rows));
+    await em.persist(Object.values(rows)).flush();
     for (const [name, row] of Object.entries(rows)) ids[name] = row.id;
   }, 120_000);
 

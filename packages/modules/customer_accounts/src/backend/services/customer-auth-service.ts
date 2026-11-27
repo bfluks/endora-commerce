@@ -11,7 +11,7 @@ import { HttpError } from '@endora-commerce/platform/http';
 import { hashPassword, verifyPassword, verifyPasswordOrDummy } from '@endora-commerce/platform/kernel';
 import { CustomerAccount } from '../entities/customer-account.entity.js';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { AuditPort, SalesChannelAccessPort } from '@endora-commerce/platform/kernel';
 import {
   ownCustomerSessionId,
   retireResetTokens,
@@ -60,6 +60,17 @@ export type CustomerLoginOutcome =
   | { status: 'mfaRequired'; challengeId: string }
   | { status: 'mfaSetupRequired'; setupTicket: string };
 
+/**
+ * Issue #652 (D-292) — how a sign-in fills an account's unknown preferred
+ * language: `captureIfUnset` is `customerAccountPreferencePort`'s, and
+ * `onFailure` is told about a capture that threw. A capture never fails the
+ * sign-in it rides on.
+ */
+export interface SignInLanguageCapture {
+  captureIfUnset(customerAccountId: string, preferredLanguage: string): Promise<void>;
+  onFailure(err: unknown, customerAccountId: string): void;
+}
+
 export class CustomerAuthService {
   constructor(
     private readonly emFactory: () => EntityManager,
@@ -74,6 +85,19 @@ export class CustomerAuthService {
      * `CUSTOMER_AUTHENTICATION_THROTTLED` before anything is looked up.
      */
     private readonly throttle?: CustomerAuthenticationThrottlePort,
+    /**
+     * Feature 154 — the kernel's sales-channel access rule. The sign-in route
+     * is open to the access step (a visitor of a closed store has to be able
+     * to sign in), so the rule is decided here: after the password and the
+     * blocked check, before a second factor is started or a session issued.
+     * Optional so a unit composition without it keeps working.
+     */
+    private readonly channelAccess?: Pick<SalesChannelAccessPort, 'assertCustomerMayUse'>,
+    /**
+     * Issue #652 (D-292) — the preferred-language capture. Optional so a unit
+     * composition without it keeps working; absent, nothing is captured.
+     */
+    private readonly languageCapture?: SignInLanguageCapture,
   ) {}
 
   async login(input: {
@@ -83,6 +107,7 @@ export class CustomerAuthService {
     userAgent?: string;
     salesChannelId?: string | null;
     knownDevice?: string;
+    language?: string | null;
   }): Promise<CustomerLoginOutcome> {
     const em = this.emFactory();
     // Folded, because the row is. `=` on `text` is case-sensitive in Postgres,
@@ -131,6 +156,33 @@ export class CustomerAuthService {
       );
     }
 
+    // Feature 154 — the account may only sign in on a sales channel its
+    // Organization is assigned to. Decided after the password, so somebody
+    // without it learns nothing about assignments, and before anything is
+    // issued: a refused sign-in starts no second factor, creates no session and
+    // leaves `lastLoginAt` alone. No channel (a caller outside a request) is
+    // refused rather than waved through.
+    if (this.channelAccess) {
+      if (!input.salesChannelId) {
+        throw new HttpError(
+          403,
+          ERROR_CODES.SALES_CHANNEL_NOT_PERMITTED,
+          'This account does not have access to this store.',
+        );
+      }
+      await this.channelAccess.assertCustomerMayUse(
+        customer.organizationId ?? null,
+        input.salesChannelId,
+      );
+    }
+
+    // Issue #652 (D-292) — an account that has no preferred language yet takes
+    // the sign-in's. Here, after every refusal above and before the second
+    // factor, so a sign-in that goes on to a code captures too and a refused
+    // one captures nothing. A known language is never overwritten: only the
+    // owner's explicit choice does that.
+    await this.capturePreferredLanguage(customer, input.language);
+
     // Second factor (feature 042). No session is issued until it succeeds.
     const mfaPort = this.getMfaLoginPort?.();
     if (mfaPort) {
@@ -171,6 +223,19 @@ export class CustomerAuthService {
       // this device is now one the account has been used from.
       knownDevice: this.throttle ? await this.throttle.issueKnownDevice(customer.id) : null,
     };
+  }
+
+  private async capturePreferredLanguage(
+    customer: CustomerAccount,
+    language: string | null | undefined,
+  ): Promise<void> {
+    const capture = this.languageCapture;
+    if (!capture || !language || customer.preferredLanguage != null) return;
+    try {
+      await capture.captureIfUnset(customer.id, language);
+    } catch (err) {
+      capture.onFailure(err, customer.id);
+    }
   }
 
   async changePassword(

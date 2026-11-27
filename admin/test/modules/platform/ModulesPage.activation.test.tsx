@@ -3,8 +3,10 @@ import { screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import type { ModuleListItem, ModulePresence } from '@endora-commerce/contracts';
-import { ApiError } from '../../../../packages/admin-shell/src/lib/api-client';
+import { ApiError } from '@endora-commerce/admin-kit/lib';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
+import { answerConfirm } from '../../helpers/confirm-dialog';
+import { AdminRegistryProvider } from '../../../../packages/admin-shell/src/lib/module-registry/index';
 
 /**
  * D-36a item 1 — the activation control renders on `/platform/modules`.
@@ -18,10 +20,15 @@ import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18
 
 let listed: ModuleListItem[] = [];
 let presence: ModulePresence[] = [];
-const setModuleActivation = vi.fn(async () => ({}));
-const refresh = vi.fn(async () => {});
+// Hoisted: `ApiError` is imported statically from the mocked barrel, so the
+// factory runs before this file's own top-level statements do.
+const { setModuleActivation, refresh } = vi.hoisted(() => ({
+  setModuleActivation: vi.fn(async () => ({})),
+  refresh: vi.fn(async () => {}),
+}));
 
-vi.mock('../../../../packages/admin-shell/src/lib/module-presence', () => ({
+vi.mock('@endora-commerce/admin-kit/lib', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@endora-commerce/admin-kit/lib')>()),
   useModulePresence: () => ({
     modules: presence,
     isPresent: (id: string) => presence.find((m) => m.id === id)?.present ?? false,
@@ -43,15 +50,13 @@ const { ModulesPage } = await import('../../../../packages/admin-shell/src/modul
 
 const bundle = passthroughBundle('core', [
   'platform.modules.title',
-  'platform.modules.description',
-  'platform.modules.cliHint',
+  'platform.modules.help',
   'platform.modules.empty',
   'platform.modules.column.module',
   'platform.modules.column.platform',
   'platform.modules.column.activation',
   'platform.modules.column.version',
   'platform.modules.column.flags',
-  'platform.modules.column.actions',
   'platform.modules.state.installed',
   'platform.modules.state.notInstalled',
   'platform.modules.activation.on',
@@ -59,7 +64,7 @@ const bundle = passthroughBundle('core', [
   'platform.modules.activation.alwaysOn',
   'platform.modules.activation.alwaysOnReason',
   'platform.modules.activation.locked',
-  'platform.modules.action.enable',
+  'platform.modules.activation.switchLabel',
   'platform.modules.action.disable',
   'platform.modules.action.confirmDisable',
 ]);
@@ -103,7 +108,9 @@ function presenceItem(patch: Partial<ModulePresence> & { id: string }): ModulePr
 async function renderPage(): Promise<void> {
   renderWithI18n(
     <MemoryRouter>
-      <ModulesPage />
+      <AdminRegistryProvider entries={[]}>
+        <ModulesPage />
+      </AdminRegistryProvider>
     </MemoryRouter>,
     bundle,
   );
@@ -121,7 +128,6 @@ beforeEach(() => {
   presence = [];
   setModuleActivation.mockClear();
   refresh.mockClear();
-  vi.spyOn(window, 'confirm').mockReturnValue(true);
 });
 
 describe('ModulesPage — the activation control lives here now (D-36a)', () => {
@@ -131,10 +137,11 @@ describe('ModulesPage — the activation control lives here now (D-36a)', () => 
     await renderPage();
 
     await userEvent.click(
-      within(row('blog')).getByRole('button', { name: /platform.modules.action.disable/ }),
+      within(row('blog')).getByRole('switch', { name: /platform.modules.activation.switchLabel/ }),
     );
+    await answerConfirm(true);
 
-    expect(setModuleActivation).toHaveBeenCalledWith('blog', false);
+    await waitFor(() => expect(setModuleActivation).toHaveBeenCalledWith('blog', false));
     await waitFor(() => expect(refresh).toHaveBeenCalled());
   });
 
@@ -144,21 +151,22 @@ describe('ModulesPage — the activation control lives here now (D-36a)', () => 
     await renderPage();
 
     await userEvent.click(
-      within(row('blog')).getByRole('button', { name: /platform.modules.action.enable/ }),
+      within(row('blog')).getByRole('switch', { name: /platform.modules.activation.switchLabel/ }),
     );
 
     expect(setModuleActivation).toHaveBeenCalledWith('blog', true);
   });
 
   it('confirms before switching off, and abandons the flip when the operator declines', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
     listed = [moduleItem({ id: 'blog', name: 'Blog' })];
     presence = [presenceItem({ id: 'blog' })];
     await renderPage();
 
     await userEvent.click(
-      within(row('blog')).getByRole('button', { name: /platform.modules.action.disable/ }),
+      within(row('blog')).getByRole('switch', { name: /platform.modules.activation.switchLabel/ }),
     );
+    const dialog = await answerConfirm(false);
+    expect(dialog).toHaveTextContent('platform.modules.action.confirmDisable');
 
     expect(setModuleActivation).not.toHaveBeenCalled();
   });
@@ -169,8 +177,9 @@ describe('ModulesPage — the activation control lives here now (D-36a)', () => 
     await renderPage();
 
     // That axis belongs to whoever operates the deployment and is changed with
-    // the CLI; a button here would be a promise this screen cannot keep.
+    // the CLI; a control here would be a promise this screen cannot keep.
     expect(within(row('ksef')).queryByRole('button')).toBeNull();
+    expect(within(row('ksef')).queryByRole('switch')).toBeNull();
   });
 
   it('renders a non-deactivatable module locked, with the reason the module itself declared', async () => {
@@ -187,13 +196,17 @@ describe('ModulesPage — the activation control lives here now (D-36a)', () => 
     ];
     await renderPage();
 
-    const control = within(row('load_bearing_thing')).getByRole('button', {
-      name: /platform.modules.activation.locked/,
-    });
-    expect(control).toBeDisabled();
+    // Issue #1520: a switch that reads on, stays focusable (a natively disabled
+    // control drops out of the tab order and its reason is never heard), and
+    // carries the module's own reason as its description and tooltip — said
+    // once, not as a tooltip *and* a paragraph under it.
+    const control = within(row('load_bearing_thing')).getByRole('switch');
+    expect(control).toHaveAttribute('aria-checked', 'true');
+    expect(control).toHaveAttribute('aria-disabled', 'true');
     expect(control.getAttribute('title')).toBe('Nobody could sign in to switch it back on.');
+    expect(control).toHaveAccessibleDescription('Nobody could sign in to switch it back on.');
     expect(
-      within(row('load_bearing_thing')).getByText('Nobody could sign in to switch it back on.'),
+      within(row('load_bearing_thing')).getByText('platform.modules.activation.locked'),
     ).toBeInTheDocument();
 
     await userEvent.click(control);
@@ -219,8 +232,9 @@ describe('ModulesPage — the activation control lives here now (D-36a)', () => 
     await renderPage();
 
     await userEvent.click(
-      within(row('settings')).getByRole('button', { name: /platform.modules.action.disable/ }),
+      within(row('settings')).getByRole('switch', { name: /platform.modules.activation.switchLabel/ }),
     );
+    await answerConfirm(true);
 
     expect(await screen.findByText('blocked: Settings needs organizations')).toBeInTheDocument();
   });
@@ -241,7 +255,7 @@ describe('ModulesPage — the activation control lives here now (D-36a)', () => 
     await renderPage();
 
     await userEvent.click(
-      within(row('comarch_xl')).getByRole('button', { name: /platform.modules.action.enable/ }),
+      within(row('comarch_xl')).getByRole('switch', { name: /platform.modules.activation.switchLabel/ }),
     );
 
     expect(
@@ -265,7 +279,7 @@ describe('ModulesPage — the activation control lives here now (D-36a)', () => 
     await renderPage();
 
     await userEvent.click(
-      within(row('pim_unopim')).getByRole('button', { name: /platform.modules.action.enable/ }),
+      within(row('pim_unopim')).getByRole('switch', { name: /platform.modules.activation.switchLabel/ }),
     );
 
     expect(
@@ -291,10 +305,11 @@ describe('ModulesPage — the activation control lives here now (D-36a)', () => 
     await renderPage();
 
     await userEvent.click(
-      within(row('organizations')).getByRole('button', {
-        name: /platform.modules.action.disable/,
+      within(row('organizations')).getByRole('switch', {
+        name: /platform.modules.activation.switchLabel/,
       }),
     );
+    await answerConfirm(true);
 
     expect(await screen.findByText('The single unit of tenancy.')).toBeInTheDocument();
   });
@@ -302,14 +317,14 @@ describe('ModulesPage — the activation control lives here now (D-36a)', () => 
   it('offers no *actionable* control for a module that declares no activation setting', async () => {
     // Feature 074 changed the rendering, not the guarantee. The cell used to be
     // the "No switch yet" label with nothing in it; it is now the locked
-    // affordance with its own sentence, so the button exists and is disabled.
+    // affordance with its own sentence, so the switch exists and is inert.
     // What must not exist is anything that writes.
     listed = [moduleItem({ id: 'unclassified_module', name: 'Unclassified' })];
     presence = [presenceItem({ id: 'unclassified_module', deactivatable: false })];
     await renderPage();
 
-    const control = within(row('unclassified_module')).getByRole('button');
-    expect(control).toBeDisabled();
+    const control = within(row('unclassified_module')).getByRole('switch');
+    expect(control).toHaveAttribute('aria-disabled', 'true');
     await userEvent.click(control);
     expect(setModuleActivation).not.toHaveBeenCalled();
   });

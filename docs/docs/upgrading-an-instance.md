@@ -101,8 +101,9 @@ names and run `pnpm install`.
 ### Adding a module that is new in a release {#adding-a-new-module}
 
 The upgrade moves the packages your instance already declares. A module that first appears in the
-release is not among them, so after the upgrade it is neither installed nor listed on **Modules**.
-To have it, declare its package in the root `package.json` and run `setup`, in the root of the
+release is not among them, so after the upgrade it is neither installed nor listed on **Modules** —
+unless a module the instance installed requires it: `setup`'s first step, `endora generate`,
+declares and installs such a module itself. To have any other one, declare its package in the root `package.json` and run `setup`, in the root of the
 instance:
 
 ```bash
@@ -518,13 +519,13 @@ The numbers are fixed in the module and are not Settings. See
 **A credential change ends the sessions obtained before it.** Expect administrators and customers
 to be signed out on their other devices where they were not before:
 
-- an administrator changing their own password, or switching their own two-factor authentication
+- an administrator changing their own password, or switching their own two-step verification
   off, ends every other session of the account and keeps the one the change was made from;
 - deactivating or deleting an administrator ends every session of the account, and a session of
   an account that is not active is refused whether or not anything revoked it;
 - `pnpm run admin:create` run again for an account that already exists replaces its password, as
   before, and now also ends every session of that account;
-- a customer changing their password, or switching their two-factor authentication off, ends
+- a customer changing their password, or switching their two-step verification off, ends
   every other session of the account; redeeming a password-reset link ends all of them, and so
   does an administrator's reset of a customer's second factor.
 
@@ -1586,6 +1587,4032 @@ platform migration, the contracts, the reference storefront's files and the ngin
 instance had been upgraded from `0.105.0` with `pnpm run upgrade 0.106.0`, and no storefront
 created by an earlier release had the three groups of files above applied to it, when this
 section was written; the order of the steps, the proxy line and the storefront edits are untried.
+
+### After upgrading to 0.107.0 {#after-0-107-0}
+
+`pnpm run upgrade 0.107.0` moves the packages of the release from `0.106.0` and applies its
+migrations — fifteen, one of them the new document templates module's. The release brings three
+packages that did not exist before —
+`@endora-commerce/mod-document-templates`, `@endora-commerce/mod-admin-search` and
+`@endora-commerce/llm-client` — and **one of them is not optional**: an instance that declares
+`@endora-commerce/mod-invoices` needs `@endora-commerce/mod-document-templates` as well, and the
+upgrade's `setup` step declares and installs it. It adds no environment variable. It adds five
+permissions (`platform.api_description.read`, `document_templates:read`,
+`document_templates:write`, `admin_search:configure` and `cms.translate`), and it moves the
+permissions of import and export onto the modules that own the rows.
+
+What the release changes most is who may use a sales channel. Every channel now has an *Open to
+anonymous visitors* switch, which is on after the upgrade, and a signed-in customer is served on a
+channel only when the customer's Organization is assigned to it. A data migration makes those
+assignments for the Organizations that exist, so nothing changes for a customer who has ordered
+where they shop — but the assignments are worth reading before the instance takes traffic again.
+Baskets belong to the channel they were filled on, order placement checks the prices of a basket,
+the API description is no longer public, and several screens and answers change. This section
+says what to do, in order, and then what behaves differently for each reader:
+[operators](#after-0-107-0-operators), [API clients and integrators](#after-0-107-0-api),
+[module and overlay authors](#after-0-107-0-authors) and the owner of
+[an existing storefront](#after-0-107-0-storefront).
+
+#### What to do, in order {#after-0-107-0-steps}
+
+Before the upgrade:
+
+1. **If you designed invoice templates, write down what they hold.** Invoice templates moved into
+   the new *Document templates* module, and nothing is carried over:
+   `Migration20261017T075839InvoicesDropInvoiceTemplates` drops the `invoice_templates` table, and
+   invoice PDFs — downloads and e-mail attachments alike — use the invoice document type's built-in
+   layout (the former generic template) until an operator sets an invoice template as the default
+   in **Document templates**. Reverting the migration recreates an empty table, not its rows; a
+   database backup is the only copy.
+2. **Read `assets.soft_delete_retention_days`** — *Soft-delete retention before hard-delete
+   (days)* in the *Storage* group of **Settings**, 30 by default. From
+   this release, assets moved to the trash are deleted for good by an hourly sweep once that many
+   days have passed since their deletion, and **its first runs after the upgrade delete every asset
+   that has been in the trash for longer than that**, up to 500 per run. Lengthen the setting
+   before upgrading if you want to keep those assets. A value below one is read as one day.
+3. **On an instance with more than one sales channel, read `quote_requests.expiry_days`** —
+   *Auto-expire pending after (days)* on the Quote Requests tab of **Settings** — for each channel
+   that has a value of its own. The expiry sweep now holds every quote request to the value of its
+   own channel, where it used to apply the default channel's value to all of them: on its first
+   runs a channel with a lower value than the default expires its backlog of requests that have
+   been quiet that long, and a channel set to `0` stops expiring.
+
+The upgrade itself:
+
+4. **Run `pnpm run upgrade 0.107.0`.** `invoices` now lists `document_templates` among its
+   manifest `dependencies`, and **if the instance declares `@endora-commerce/mod-invoices`** the
+   upgrade's `setup` step adds `@endora-commerce/mod-document-templates` to the root
+   `package.json`, at the version the platform is declared at, and installs it before anything
+   else. Its first step, `endora generate`, comes from the release just installed, and it prints
+   the line:
+
+   ```text
+   declared @endora-commerce/mod-document-templates 0.107.0 in package.json — invoices needs document_templates (dependencies)
+   ```
+
+   Commit the changed `package.json` and `pnpm-lock.yaml` with the rest of the upgrade. If the
+   `setup` step did not finish, run `pnpm run setup` again: it continues from there. Only an
+   instance whose `setup` was skipped, or that runs no `generate`, has to declare it by hand:
+
+   ```bash
+   pnpm add -w -E @endora-commerce/mod-document-templates@0.107.0
+   pnpm run setup
+   ```
+
+   Without the module a deployment that composes `invoices` refuses to start, naming it:
+
+   ```text
+   This deployment will not boot: it composes modules whose declarations it does not satisfy.
+
+     document_templates — not shipped by this deployment, and it is needed:
+         invoices — dependencies
+   ```
+
+   The rest of [Adding a module that is new in a release](#adding-a-new-module) applies — the
+   flags, and what to restart. *Document templates* comes up switched on, and it cannot be switched
+   off while `invoices` is on. The other dependencies the release adds — `quote_requests` on
+   `price_lists` and `transactional_emails`, `invoices` and `api_keys` on `admin_roles`,
+   `assets_library` on `admin_users` — name modules that cannot be switched off and that every
+   instance already declares, so they need nothing.
+
+   The migrations `setup` applies, in the order of their stamps:
+
+   | Migration | Module | What it does |
+   | --- | --- | --- |
+   | `Migration20261014T115049QuoteRequestsItemReferencePrice` | `quote_requests` | Three nullable columns on `quote_request_items` for the reference price |
+   | `Migration20261014T115053QuoteRequestsNegotiationPolicies` | `quote_requests` | Two tables, `quote_request_org_policies` and `quote_request_account_policies` |
+   | `Migration20261014T170531CatalogProductListSavedViews` | `catalog` | Table `product_list_saved_views` |
+   | `Migration20261014T173236QuoteRequestsQuoteRequestListSavedViews` | `quote_requests` | Table `quote_request_list_saved_views` |
+   | `Migration20261016T131148PriceListsPriceMatrixEntries` | `price_lists` | Table `price_list_matrix_entries` |
+   | `Migration20261016T172243PwaPushNotificationPreferences` | `pwa` | Table `push_notification_preferences` |
+   | `Migration20261017T071754DocumentTemplatesInit` | `document_templates` | Table `document_templates`, once the module is declared |
+   | `Migration20261017T075839InvoicesDropInvoiceTemplates` | `invoices` | Drops `invoice_templates` — see step 1 |
+   | `Migration20261017T142116QuoteRequestsQuoteRequestDocumentTemplate` | `quote_requests` | Nullable `quote_requests.document_template_id` |
+   | `Migration20261017T142121QuoteRequestsQuoteRequestEventPdfSent` | `quote_requests` | Admits the `pdf-sent` event type |
+   | `Migration20261018T074021CartsCartItemAgreedPrice` | `carts` | Three nullable `cart_items` columns for a quote's agreed quantity and price |
+   | `Migration20261018T101912CoreSalesChannelsAnonymousAccess` | platform | `sales_channels.anonymous_access boolean not null default true` |
+   | `Migration20261018T104644OrganizationsChannelAccessBackfill` | `organizations` | Assigns every Organization its sales channels — see step 7 |
+   | `Migration20261018T141739AssetsLibraryAssetVersionsPermalinks` | `assets_library` | Eleven columns on `assets`, two tables for permalinks and storage clean-up |
+   | `Migration20261019T043854CartsChannelBackfill` | `carts` | Records a basket with no channel on the system-default channel |
+
+   An instance that declares `@endora-commerce/mod-admin-search` applies no migration for it: the
+   module owns no table.
+
+After the upgrade, before the instance takes traffic again:
+
+5. **Re-grant import and export.** Each entity on the Import / Export screen now asks for the
+   permission that guards the same rows in the module that owns them, where every entity used to ask
+   for `catalog:write`:
+
+   | Entity | Export | Import |
+   | --- | --- | --- |
+   | `products`, `categories` | `catalog:read` | `catalog:write` |
+   | `stock` | `inventory:read` | `inventory:write` |
+   | `customers` | `customers:read` | — |
+   | `orders` | `orders:read` | — |
+
+   A role that exported customers, orders or stock, or imported stock, on the strength of
+   `catalog:write` needs `customers:read`, `orders:read`, `inventory:read` or `inventory:write`
+   granted on **Admin roles** (`/admin-roles`). A role holding `catalog:read` can now export
+   products and categories. The screen and its sidebar entry open for a role holding any of the
+   codes in the table, and each entity card shows only the controls the role permits.
+6. **Grant `platform.api_description.read` to whoever reads the API description.**
+   `GET /api/v1/_openapi.json` and `GET /api/v1/_docs` answer only an administrator whose role
+   holds the code, or an API key issued with it among its scopes; anybody else gets `401` (no
+   administrator session or key) or `403` (a session or key without the code). The platform
+   administrator's role holds every permission and needs nothing. A script or a build that fetches
+   the document — a client generator, a contract test — needs an API key with the
+   `platform.api_description.read` scope, issued by an administrator who holds the code, and sends
+   it as it sends any key. In the Admin UI the document is on the new **System → API description**
+   screen.
+7. **Read the sales-channel assignments of your Organizations, and keep every channel open until
+   the storefront is updated.** After the upgrade, every channel is open to anonymous visitors, as
+   every channel was before, and a signed-in customer is served on a channel only when the
+   customer's Organization is assigned to it. The migration
+   `Migration20261018T104644OrganizationsChannelAccessBackfill` assigned each Organization the
+   system-default channel and every channel it has at least one order on. On an instance with one
+   sales channel that is everybody, and nothing changes. On an instance with more than one, **an
+   Organization whose customers use another channel without having ordered there** — one that
+   registered on a second store and has not ordered yet, or one that only sent quote requests there
+   — is now refused on that channel at sign-in, with *"This account does not have access to this
+   store."* Open each such Organization in the admin and tick the channel in its **Sales channels**
+   panel. Then decide, per channel, whether it stays open to anonymous visitors —
+   [Sales channels and who may use them](#after-0-107-0-channel-access) says what each choice does —
+   but **switch *Open to anonymous visitors* off only once the storefront has the files under
+   [In an existing storefront](#after-0-107-0-storefront)**, and on the system-default channel only
+   once you know how the payment and carrier callbacks of modules from outside the release arrive.
+8. **On a storefront that serves more than one sales channel through the `X-Sales-Channel` header**
+   rather than `SALES_CHANNEL_HOST_MAP`, update the storefront before customers fill baskets again.
+   A basket now belongs to the channel it is filled on, and a storefront created by an earlier
+   release names the channel only on the backend calls that pass it explicitly; every other call is
+   resolved by the backend itself — the host map, else the system-default channel. Until this
+   release that made no difference to the basket, which lived on the default channel whatever store
+   it was used on. From now on the default channel's basket and the store's basket are two baskets.
+9. **Check who may hand out which permission.** An administrator now grants only permissions their
+   own role holds — in a role, in an administrator account's role, in an API key's scopes — and a
+   role the platform or a module seeds, `platform_admin` included, is changed only by a holder of
+   the wildcard `*`. If a delegated administrator manages roles, users or API keys for others, give
+   their role the permissions they hand out, or leave those changes to a holder of `*`.
+
+Whenever it suits you:
+
+10. **Decide about the quote push notifications.** On a shop with push notifications enabled, quote
+    requests now send them: when an administrator creates a request for a customer, modifies,
+    approves or cancels one, and when one expires. They never did, although the switch existed.
+    Turn the category off with `pwa.push_quote_status_enabled` on the PWA screen if you do not want
+    it.
+11. **Install `@endora-commerce/mod-admin-search` if you want the command palette to find
+    records** — orders, quote requests, opportunities, organizations, customers, products and
+    categories. It is optional; without it the palette finds screens and actions as before. Declare
+    it as [Adding a module that is new in a release](#adding-a-new-module) describes; it comes up
+    switched on.
+12. **Rebuild your own modules against this release.** Source that implements or constructs one of
+    the ports and shapes listed under [For module and overlay authors](#after-0-107-0-authors) does
+    not compile until it is changed, and a module that receives a provider's callback has a
+    declaration to add.
+13. **Update the storefront**, as [In an existing storefront](#after-0-107-0-storefront) describes.
+    The checkout, the product page and the sign-in work as before without it; closed stores, the
+    no-access screen, push choices, the price-negotiation lock and the comparison PDF's language do
+    not.
+
+#### For operators {#after-0-107-0-operators}
+
+##### Sales channels and who may use them {#after-0-107-0-channel-access}
+
+**Each sales channel has an *Open to anonymous visitors* switch**, on the channel form under
+**Sales channels**. It is on for every existing channel and for a new one.
+
+- **On** — anyone may browse the store; a signed-in customer may use it when their Organization is
+  assigned to the channel.
+- **Off** — the store serves signed-in customers only. An updated storefront takes a visitor who is
+  not signed in to the sign-in page from every page, with a notice that the store is for signed-in
+  business customers; nothing of the catalogue, the prices or the content is served to them, its
+  sitemap is empty, its `robots.txt` disallows everything and names no sitemap, and its `llms.txt`
+  names the store and says its content is for signed-in customers only. Business registration stays
+  on the sign-in page, and an Organization registered there is assigned the channel — so with
+  automatic moderation anyone who registers a business gets in, and with manual moderation nobody
+  does until an operator approves the Organization. Individual (B2C) self-registration is not
+  offered, and a federated sign-in (Google, Microsoft) creates no new account there. The list of
+  channels marks a closed channel with a *Sign-in required* badge. Showing prices to anonymous
+  visitors is a separate setting and only matters on an open store.
+
+The backend applies the rule to every request outside `/api/v1/admin/` once its channel is resolved:
+an anonymous request on a closed channel is answered `403 SALES_CHANNEL_SIGN_IN_REQUIRED`, and a
+customer request — an administrator acting as the customer included — on a channel its
+Organization is not assigned to `403 SALES_CHANNEL_NOT_PERMITTED`. Administrators and API keys are
+not subject to it. A few routes are reachable on every active channel because their caller has to
+reach them to become a shopper, or is not one: sign-in and sign-out, the second factor and
+federated sign-in, password reset, e-mail verification, business registration, invitations, the
+channel's identity, the language configuration, the dictionaries the registration form reads, the
+robots policy and crawler files, product-feed downloads and the newsletter links in e-mails.
+
+**Which Organizations may use a channel is set on the Organization**, in the new **Sales channels**
+panel of its page: read with `customers:read` or `customers:manage`, changed with
+`customers:manage`. An Organization keeps at least one channel. Each channel added or removed is
+one row in the audit log, and a change applies at once on the server that made it and on every
+other within 30 seconds. A customer whose Organization is not assigned is refused at sign-in —
+password, second factor or federated sign-in — before a session is created; one whose assignment is
+removed while signed in sees, on an updated storefront, a *No access to this store* screen listing
+the stores they may use, each linked when the channel's **Storefront URL** setting is filled in.
+
+**Which channel a new Organization gets.** A business registered on a store gets that store's
+channel; a personal Organization created for an individual registration or a federated sign-in gets
+the channel the visitor registered on; an Organization created in the admin gets the channels chosen
+on its form; any other creation path gets the system-default channel. Accepting an invitation
+changes no assignment. **New organization** (`/organizations/new`, a button on the roster and the
+palette action `new-organization`, `customers:manage`) creates an Organization in the admin — a
+duplicate tax id is refused, as in registration.
+
+**Before closing the system-default channel**, know where your provider callbacks arrive. A payment
+gateway's notification, a carrier's webhook or a provider's return URL arrives without a session and
+usually without a channel, so it is an anonymous request on the system-default channel: unless the
+module that receives it declares the route open, it is refused with `403` once that channel is
+closed, and the provider's notifications stop arriving. `POST /api/v1/payments/receive` and
+`POST /api/v1/shipments/receive` are called with an administrator's session or an API key, which the
+rule does not apply to; a gateway or carrier module that receives the provider's own request must
+declare that route, as [For module and overlay authors](#after-0-107-0-authors) describes.
+
+See [Opening and closing a store to anonymous visitors](./modules/sales_channels/admin-usage.md#anonymous-access)
+and [Sales channels](./modules/organizations.md#sales-channels) on the Organizations page.
+
+##### Baskets, prices and order placement
+
+**A basket belongs to the store it is filled on.** A customer holds one active basket per sales
+channel, priced, promoted and checked for "sold on request only" on that channel, where every basket
+used to be created and priced on the system-default channel. An anonymous visitor's basket token
+names a basket on one store only, and filling a basket on another store starts a new one. Merging
+at sign-in merges only the anonymous basket of the store signed in on. Placing an order with a
+basket of another channel is refused with `422 ORDER_SALES_CHANNEL_MISMATCH` before anything is
+reserved or written, and the basket is kept. The migration
+`Migration20261019T043854CartsChannelBackfill` recorded every basket that had no channel on the
+system-default one; where a customer already had an active basket there, the channel-less one is
+left as it was and is no longer reached. See
+[One basket per store](./modules/carts.md#one-basket-per-store).
+
+**A basket line's price is always the price for its current quantity**, and order placement checks
+it:
+
+- adding more of a product, changing a quantity, merging a basket at sign-in and reordering store
+  the price for the resulting quantity, so a quantity bracket applies to the quantity ordered, and
+  a reorder is priced at today's prices;
+- a product that no price list and no price of its own prices is refused with
+  `422 CART_PRODUCT_UNPRICED`, where it used to be added at `0.00`; a product sold on request only
+  is refused with `400 CART_PRODUCT_QUOTE_ONLY` whether or not a price list holds it;
+- a line seeded from an accepted quote request keeps the agreed price only at the agreed quantity,
+  and is priced from the list at any other. A basket converted from a quote **before** this release
+  carries no agreed quantity, so its lines are priced from the list at placement; converting the
+  quote again restores the agreed prices;
+- at placement, a line whose stored price is no longer the price it may be ordered at answers
+  `409 CART_PRICE_CHANGED`. Nothing is written, the basket is brought up to date, and the buyer
+  places the order again after reviewing it. An existing storefront shows the refusal on its
+  checkout failure page with the error code in front of the sentence; an updated one shows the
+  sentence alone.
+
+See [Line prices](./modules/carts.md#line-prices).
+
+**Create order in the admin uses the channel you choose.** `POST /api/v1/admin/orders` checks the
+products against the assortment of the order's channel, not the admin request's, and refuses a
+sales channel that does not exist with `404`, where it used to place the order on the system-default
+channel. The **Create order** screen shows *Items* and the summary once the customer and the channel
+are chosen, adds products through the shared product browser (up to 200 at once) or a quick search,
+and says per line why a product cannot be ordered: the customer may not see it, or it is not in the
+channel's assortment. The order preview likewise refuses an unknown channel with `404`.
+
+##### Permissions and who may grant them
+
+- **Import and export** follow the owning modules' permissions — step 5 has the table.
+- **The API description** is read with `platform.api_description.read` — step 6. The new screen
+  **System → API description** (`/api-description`, also in the command palette) shows the
+  document's title, version and number of endpoints, downloads it as JSON, and opens the
+  interactive reference on the API's own address. The reference page loads a pinned
+  `swagger-ui-dist` release, `5.33.3`, from jsDelivr, with an integrity digest on each file, where
+  it used to load whichever release was current.
+- **An administrator grants only what their role holds.** Saving a role that holds a permission the
+  actor lacks, or changing a role that already does, answers `403 ADMIN_ROLE_GRANT_EXCEEDED`, naming
+  the codes; a seeded role is changed only by a holder of `*` (`409 ADMIN_ROLE_PROTECTED`
+  otherwise). Assigning a role answers `403 ADMIN_ROLE_GRANT_EXCEEDED` unless the actor holds every
+  permission it grants, and an administrator whose role holds something the actor lacks is not
+  edited, given a password, deactivated or deleted by them (`403 ADMIN_USER_OUTRANKS_ACTOR`). An
+  API key is issued only with scopes the issuing administrator's role holds
+  (`403 API_KEY_SCOPE_NOT_HELD`).
+- **New permissions.** `document_templates:read` and `document_templates:write` (a one-time step at
+  the first start gives every role holding `invoices:read` the first, and every role holding
+  `invoices:write` the second as well, and records it in the audit log), `admin_search:configure`
+  (which fields global search reads, when that module is installed), `cms.translate` (the Page
+  Builder's *Translate* action) and `platform.api_description.read`. `invoices:write` is now
+  labelled *Issue/correct invoices and configure invoicing*.
+
+##### Sign-in and accounts
+
+- **The `mfa` module cannot be switched off while administrators are required to use a second
+  factor.** Switching it off on **Modules** answers `409 MFA_DEACTIVATION_BLOCKED` while
+  `mfa.admin.totp_enforced` is on, and changes nothing; turn the requirement off first. Switching
+  `mfa` back on is never refused.
+- **Changing where a stored credential sends its secrets requires entering the secrets again.**
+  Saving a credential whose endpoint field changed — an LLM's *Base URL*, an SMTP host — answers
+  `422 CREDENTIAL_SECRET_REENTRY_REQUIRED` unless every stored secret of the record is entered again
+  in the same save; the form marks those fields as soon as the endpoint is edited. A credential
+  saved without changing its endpoint keeps its secrets as before.
+- **Customer sign-in, the customer second factor and password-reset requests are limited per
+  account**, as administrator sign-in already was: 50 wrong passwords in 30 minutes from a device
+  the account has not signed in on, 10 from one it has; 20 wrong second-factor codes in 30 minutes,
+  10 from a known device; 5 reset requests an hour. Beyond the limit the answer is
+  `429 CUSTOMER_AUTHENTICATION_THROTTLED` with `Retry-After`. A completed sign-in sets the
+  `b2b_customer_device` cookie that marks a known device — an existing storefront does not forward
+  it, so its shoppers are counted on the first budget until the storefront is updated. Asking for a
+  new reset link retires the earlier unused ones.
+- **Federated sign-in follows the password sign-in's rules**, in the storefront and the Admin UI:
+  it completes only in the browser that started it, an account with a second factor is handed to
+  the second-step screen instead of being signed in, and a blocked customer account is refused with
+  the password sign-in's sentence. A customer session whose account is blocked, deleted or gone is
+  treated as signed out.
+- **A wrong code or password on the signed-in two-step verification screens no longer signs the administrator
+  out.** Confirming the set-up, switching the second factor off and regenerating recovery codes
+  answer a wrong code with `403 MFA_INVALID_CODE` and a wrong password with
+  `403 CURRENT_PASSWORD_INVALID`; they answered `401`, which the Admin UI treats as an expired
+  session.
+
+##### Media library
+
+- **HTML, XHTML, XML (XSL included) and JavaScript files cannot be uploaded**, whatever
+  `assets.allowed_file_types` says: `415 ASSET_UPLOAD_TYPE_NOT_ALLOWED`, judged by the declared type
+  and by the extension. SVG is still accepted, and is stored as `image/svg+xml`. A file of these
+  types uploaded earlier stays in the library and is served as a download.
+- **Files are served with a fixed content policy header** and `X-Content-Type-Options: nosniff`;
+  raster images, SVG, video, audio, PDF and plain text are shown in the browser, every other type
+  is downloaded. A private asset on S3 or GCS is redirected to its storage only with a valid signed
+  link, as a local one already was (`403 ASSET_ACCESS_DENIED` otherwise).
+- **An asset's file can be replaced in place**, keeping its id, folder, label, visibility, every
+  reference and every URL already handed out; the replaced file stays restorable as the previous
+  version for `assets.soft_delete_retention_days`. An asset can have a **permalink**, served at
+  `/assets/file/<permalink>`. Both are in the asset's drawer, behind `assets.write`; the library is
+  also in the command palette as *Assets library*.
+- **Embedded asset URLs carry `?v=<content version>`**, so a replaced file is picked up and the
+  embed can be cached for a year; `GET /assets/file/<id>` is now sent `Cache-Control: public,
+  no-cache`. A CMS page cached before a replace can serve the previous version for up to five
+  minutes.
+- **Assets in the trash are deleted for good** after `assets.soft_delete_retention_days` — step 2.
+  Each run of the sweep writes one `assets_library.retention.sweep` log line.
+
+See [Which URLs are stable](./modules/assets-library/index.md#which-urls-are-stable) and
+[Retention and purge](./modules/assets-library/index.md#retention-and-purge).
+
+##### Documents and PDFs
+
+- **Document templates** (`document_templates`) is where PDF layouts are designed, in the Page
+  Builder, per document type and per sales channel, one layout per language. It serves the invoice,
+  the product comparison and the quote request. The invoice template screens moved there:
+  `/invoices/templates` redirects to it, and the e-mailed invoice PDF is now rendered exactly like
+  the download. See [Document templates](./modules/document-templates.md).
+- **The quote request screen offers *Export PDF* and *Send PDF to customer*** in every state while
+  document templates are switched on. A send e-mails the PDF to up to five addresses through the new
+  transactional e-mail `quote_request_pdf`, editable and switchable like every other, and appears on
+  the quote's history.
+- **The comparison PDF** follows the template, in the language the buyer browses in when the
+  channel offers it: a buyer browsing in Polish now gets a Polish PDF.
+
+##### Quote requests
+
+- **Every quote line records a reference price** — what the customer would pay on a normal order on
+  the request's channel — shown in the admin beside the customer's proposal and the agreed price.
+  A cart converted into a quote request no longer records the cart's prices as the customer's
+  proposal.
+- **A price negotiation lock per customer.** On the organization (allowed by default) and, as an
+  override, on the customer account, an administrator decides whether customers may propose prices.
+  A create or draft edit that proposes a price while the request owner may not is refused with
+  `422 RFQ_PRICE_PROPOSAL_NOT_ALLOWED`. The panels need `customers:read` to be seen and
+  `customers:manage` to be changed.
+- **A readable history** on the quote request screen, merging the records of one decision and
+  naming who acted.
+- **A sales representative outside a request's organization gets `404`**, as for a request that
+  does not exist, where it got `403`.
+- **At most 200 lines** on a customer create or draft edit (`400` beyond). A customer may edit a
+  pending draft repeatedly until an administrator modifies it, up to 30 edits a minute per request.
+
+##### Pricing, catalogue and lists
+
+- **Price lists gain a price matrix** (*Price matrix* tab on a price list): one entry prices a
+  product, a category, an attribute value, a category and an attribute value, or every product,
+  for an optional organization and a quantity window, at a fixed price or a percentage. Attribute
+  selections use attributes flagged *Price list rules*. See [Price lists](./modules/price_lists.md).
+- **Adding products to a price list** opens the shared product browser and adds up to 200 products
+  in one step. The system *Default* price list still takes no products this way.
+- **Storefront catalogue reads can be priced in the shopper's currency** when the channel lists it.
+  In another currency than the channel's default, a product that no price list prices has no listing
+  price, rather than its own price quoted in the wrong currency.
+- **Saved views** on the product list and the quote request list, and on the order list a save and
+  delete through dialogs instead of browser prompts. Two of one administrator's views on one list
+  may not differ only in letter case.
+- **A newly created product is searchable at once**, without a first edit.
+- **The CMS lists** — Pages, Blocks, Templates, Hooks — are in the command palette.
+
+##### Notifications, newsletter and AI
+
+- **Status push notifications.** Two settings, `pwa.push_order_status_enabled` and
+  `pwa.push_quote_status_enabled` (on by default, global and per channel), switch the two
+  categories; a customer chooses for their own account on an updated storefront. Order pushes are in
+  the channel's language, name the status as the shop does and open the order. Quote pushes start —
+  step 10.
+- **Newsletter open and click tracking** is switched by two new settings,
+  `newsletter.tracking.opens_enabled` and `newsletter.tracking.clicks_enabled`, both off by default.
+  With them off, campaigns are sent untracked, as before.
+- **The Page Builder can translate** the canvas of a language tab, or a selection, with the LLM
+  configured under *Settings → Page Builder* (`cms.page_builder.translation.enabled`, off by
+  default), behind `cms.translate`. Every request is recorded in the audit log.
+- **LLM configurations reach DeepSeek and any OpenAI-compatible endpoint**, through the new provider
+  *OpenAI-compatible (custom endpoint)*; every LLM *Base URL* must be an absolute `http://` or
+  `https://` URL.
+
+##### Everything else an operator can see
+
+- **Admin global search**, when `@endora-commerce/mod-admin-search` is installed (step 11): the
+  palette searches records after the minimum length (`admin_search.minimum_query_length`, 3 by
+  default), each type following the visibility of its own admin list; `/global-search` shows the
+  full results. See [Admin search](./modules/admin-search.md).
+- **The Settings screen** no longer shows one sales channel's values under another channel's heading
+  when the list was still loading as "Editing for" changed.
+- **The sidebar** shows the release number in a section of its own, under the logo.
+- **E-mail previews** in the e-mail editor and the newsletter campaign preview are drawn in frames
+  that run no scripts.
+- **`order.cancelled.v1` is emitted** when an order is cancelled, so a subscriber written against it
+  now runs.
+
+#### For API clients and integrators {#after-0-107-0-api}
+
+- **The API description is gated.** `GET /api/v1/_openapi.json` and `GET /api/v1/_docs` need an
+  administrator session whose role holds `platform.api_description.read` or an API key with that
+  scope: `401 UNAUTHORIZED` without either, a customer session included, `403 FORBIDDEN` without the
+  code. Both answers carry `Cache-Control: private, no-store`. `GET /api/v1/admin/api-description`
+  serves the same document on the admin namespace. `apiKeyScopeSchema` accepts the new scope.
+- **Sales-channel access.** Every storefront request is decided after its channel is resolved:
+  `403 SALES_CHANNEL_SIGN_IN_REQUIRED` for an anonymous request on a closed channel,
+  `403 SALES_CHANNEL_NOT_PERMITTED` for a customer whose Organization is not assigned, both with
+  `details.channelCode`. `POST /api/v1/auth/customer/login` answers the second after a correct
+  password (a wrong one is still `401` first) and sets no cookie.
+  `GET /api/v1/storefront/sales-channel`
+  carries `anonymousAccess`, and the new `GET /api/v1/storefront/sales-channel/access` tells the
+  caller whether it may use the store and, for a refused customer, which stores it may use; it never
+  refuses. Admin: `GET`/`PUT /api/v1/admin/organizations/:id/sales-channels`,
+  `GET /api/v1/admin/organizations/sales-channel-options`, `POST /api/v1/admin/organizations`;
+  `anonymousAccess` on the sales channel admin shapes (`true` by default on create).
+  `GET /api/v1/storefront/seo/crawler-files` carries an optional `anonymousAccess` — read its
+  absence as `true`.
+- **Baskets per channel.** Every storefront cart route addresses the basket of the request's channel;
+  a line of another channel's basket answers `404`. Order placement with a basket of another channel
+  answers `422 ORDER_SALES_CHANNEL_MISMATCH`.
+- **Order placement checks prices.** `409 CART_PRICE_CHANGED` with `details.lines` — `productId`,
+  `variantId`, `quantity`, `previousUnitPrice`, `currentUnitPrice` (`null` when the line may no
+  longer be ordered) and `currency`. Re-read the basket and place again. Adding a product with no
+  price answers `422 CART_PRODUCT_UNPRICED`.
+- **Admin orders.** `POST /api/v1/admin/orders` and `POST /api/v1/admin/orders/preview` answer an
+  unknown `salesChannelId` with `404 NOT_FOUND`. The preview reports two more reasons a line is
+  unavailable, `PRODUCT_NOT_VISIBLE_TO_CUSTOMER` and `PRODUCT_NOT_IN_SALES_CHANNEL`, one per line in
+  the order `ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE` gives; `messages[].code` stays a string, so map
+  a code you do not know to a generic "unavailable".
+- **Import and export.** `GET /api/v1/admin/import-export/entities` lists only what the caller may
+  export or import, each entry with `canExport` and `canImport`; the export and import routes answer
+  `403` without the entity's own permission, and `405` for an import of an export-only entity the
+  caller may export.
+- **Changed status codes.**
+  - The two-step verification self-service routes (`…/activate`, `…/disable`, `…/recovery-codes/regenerate`
+    under `/api/v1/admin/account/mfa` and `/api/v1/account/mfa`) answer `403 MFA_INVALID_CODE` and
+    `403 CURRENT_PASSWORD_INVALID`, where they answered `401`. Sign-in challenges keep their `401`.
+  - A sales representative outside a quote request's organization gets `404` on every admin quote
+    request route.
+  - A rate-limited request answers `429 RATE_LIMITED` in the standard error envelope, with
+    `Retry-After`, where it answered `500 INTERNAL`.
+  - A body the server cannot parse answers `400` (empty with `Content-Type: application/json`, or
+    malformed), `413` (over the body limit) or `415` (no parser for the type), each with
+    `VALIDATION_FAILED`, where it answered `500`.
+  - `PATCH /api/v1/admin/cms/hooks/:id/attachments/:blockId` for a block not attached answers
+    `404 CMS_BLOCK_NOT_FOUND`.
+  - `POST /api/v1/admin/assets` with two file parts answers `201` for the first one.
+- **New refusals.** `415 ASSET_UPLOAD_TYPE_NOT_ALLOWED` for an HTML, XHTML, XML or JavaScript
+  upload; `409 MFA_DEACTIVATION_BLOCKED` on switching `mfa` off while admin TOTP is enforced;
+  `422 CREDENTIAL_SECRET_REENTRY_REQUIRED` (`details.fields`) on changing a credential's endpoint
+  without its secrets; `403 ADMIN_ROLE_GRANT_EXCEEDED`, `409 ADMIN_ROLE_PROTECTED`,
+  `403 ADMIN_USER_OUTRANKS_ACTOR` and `403 API_KEY_SCOPE_NOT_HELD` from the grant rule;
+  `429 CUSTOMER_AUTHENTICATION_THROTTLED` and `503 CUSTOMER_AUTHENTICATION_UNAVAILABLE` on customer
+  sign-in; `422 RFQ_PRICE_PROPOSAL_NOT_ALLOWED`; and `400` for more than 200 lines on a customer
+  quote request create or draft edit.
+- **Analytics ingest.** `POST /api/v1/analytics/events` stores the identity the server resolved —
+  the signed-in customer, the request's channel — and ignores `customerAccountId`, `organizationId`
+  and `salesChannelId` in the body, which still validate. It is limited to 60 batches a minute per
+  client address.
+- **Newsletter tracking links** are `GET /api/v1/newsletter/open.gif?token=…` and
+  `GET /api/v1/newsletter/click?token=…&u=…`. The former path forms, which a signed token was too
+  long to reach, are gone.
+- **Asset URLs.** `url` and `storageUrl` of a public asset carry `?v=<contentVersion>`; the stable
+  form is the new `fileUrl`. Summaries and details gain `fileUrl`, `permalink`, `permalinkUrl` and
+  `contentVersion`; details gain `previousVersion`, `retentionDays` and `replaceable`. New routes:
+  `POST /api/v1/admin/assets/:id/replace`, `POST …/previous-version/restore`,
+  `PUT`/`DELETE …/permalink`, `GET /api/v1/admin/assets/folders/:folderId/permalink-count`.
+- **Removed: the invoice template API.** `/api/v1/admin/invoice-templates` and its routes are gone;
+  use `/api/v1/admin/document-templates` with `documentType: 'invoices.invoice'`.
+- **New in this release**, all additive: the quote request history
+  (`GET /api/v1/admin/quote-requests/:id/history`), price negotiation
+  (`…/organizations/:id/quote-price-negotiation`, `…/customers/:id/quote-price-negotiation`,
+  `GET /api/v1/quote-requests/price-negotiation`), the quote request PDF
+  (`/api/v1/admin/quote-requests/:id/pdf`, `…/pdf/send`, `…/document-templates`,
+  `…/document-template`), the price matrix (`/api/v1/admin/price-lists-engine/:id/matrix`) and bulk
+  add (`…/:id/products/bulk-add`), saved views (`/api/v1/admin/catalog/products/list-views`,
+  `/api/v1/admin/quote-requests/list-views`), push preferences
+  (`GET`/`PUT /api/v1/storefront/pwa/preferences`), global search
+  (`/api/v1/admin/global-search…`), Page Builder translation
+  (`/api/v1/admin/cms/page-builder/translat…`), `?currency=` on the catalogue reads, and
+  `salesChannelId` on `GET /api/v1/admin/products/:id/resolved-price`, which now answers `404` for a
+  buyer that does not exist or that a sales representative may not see.
+- **Order saved views.** Items carry `ownedByCaller` and `canModify`; a name taken by another of the
+  owner's views answers `409 ORDER_SAVED_VIEW_NAME_TAKEN`; a `PATCH` that changes nothing writes
+  nothing; a non-UUID id answers `404`; no admin session answers `401`.
+
+#### For module and overlay authors {#after-0-107-0-authors}
+
+**Declare every route a visitor reaches before signing in, or that arrives with no storefront
+channel, open to the sales-channel access rule.** That covers sign-in, registration and recovery
+routes, links in e-mails, feed downloads and — the case easiest to miss — **payment-provider and
+carrier callbacks and provider return URLs**:
+
+```ts
+app.post(
+  '/api/v1/payments/acme/notify',
+  { config: { salesChannelAccess: 'open' } },
+  async (request, reply) => {
+    // Still resolved to a channel, and still behind this route's own guards.
+  },
+);
+```
+
+Without it the route is refused with `403` the moment an operator closes the channel it resolves
+to — for a callback, the system-default channel. The option is typed on Fastify's
+`FastifyContextConfig` through the platform's `./http` barrel. It skips the access step only: the
+route is still resolved to a channel and keeps its own guards. Do not declare it on anything that
+shows or changes a store's catalogue, prices, basket or orders. `SalesChannelAccessPort`
+(`salesChannelAccessPort`, `./kernel`) decides the rule for a path that has no session yet. See
+[Channel access: routes that must stay open](./modules/sales_channels/developer-guide.md#channel-access-routes-that-must-stay-open).
+
+**Changes that stop code compiling or composing.** Source that implements, constructs or calls one
+of these has to change:
+
+| What | Change |
+| --- | --- |
+| `CartCustomerContext` (`@endora-commerce/contracts`) | `salesChannelId` is **required**: every caller of `CartReadPort` / `CartWritePort` names the channel whose basket it means |
+| `PersonalOrganizationProvisionInput` (`@endora-commerce/mod-organizations/ports`) | required `salesChannelId: string \| null` |
+| `CatalogProductReadPort` | new required `listProductIdsByAttributeValue({ key, value, match })` |
+| `OrderReadPort` | new required `findStatusDefinition(code)` |
+| `DocumentRenderPort` | new required `listChoices({ documentType, salesChannelId })` |
+| `CartPlacementApplyPort` (`@endora-commerce/mod-carts/ports`) | new `findPriceDrift` and `refreshLinePrices` |
+| `CartService` | new required `ProductDisplayModePort` constructor argument after `channelMembership`; `getOrCreateForAnon(em, token, salesChannelId)` returns `Cart \| null` |
+| `CartsDeps` | `cartCouponService`, `cartConversionService`, `pushLineToShoppingList` and `appendShoppingListToCart` are required |
+| `PriceListTargetReads` | required `catalogAttributeRead` — for a hand-built `PriceListService` or `PricingService` |
+| `MfaModuleOptions` | required `customerChannelAccess` |
+| `AnalyticsIngestService.ingest` | required `context` (`IngestContext`) |
+| `customerOrgResolver` (`mod-customer-accounts`) | answers `{ organizationId, active }` or `null`; upgrade `mod-auth` with it |
+| `customerSocialLoginPort` | `resolveByEmail` answers `{ id, organizationId, blocked }`, `autoCreate(email, { salesChannelId })` answers `{ id, organizationId }` |
+| `AssetSummary`, `AssetDetail`, `AssetRecord` | new required members (`fileUrl`, `permalink`, `permalinkUrl`, `contentVersion`; `retentionDays`, `replaceable`) for code that builds one |
+| `OrderSavedView` | required `ownedByCaller` and `canModify` for code that builds one |
+| `buildServer` | no longer mounts the API description routes; read `app.apiDescription()` in-process, and `registerOpenApiRoutes` is gone |
+
+**New ports and seams.** `BuyerLinePricePort` (`buyerLinePricePort`, from `price_lists`) — the
+net unit price a buyer would pay per line on a channel; `ProductDisplayModePort`
+(`productDisplayModePort`); `MfaDeactivationGuardPort`; `CustomerAuthenticationThrottlePort` and,
+on `./kernel`, `AuthenticationAttemptThrottle`; `AdminSearchProviderRegistryPort`
+(`adminSearchProviderRegistry`) — push a provider from a contribution-only boot hook to make a
+module's records findable; `DocumentTypeRegistryPort` (`documentTypeRegistry`) and
+`DocumentRenderPort` (`documentRenderPort`) — register a document type and render it;
+`AdminRolePort.upsertByCode(input, { grantor })` — pass the grantor for a write made on an
+administrator's behalf; `@endora-commerce/llm-client`'s `createLlmAdapter`, moved out of
+`mod-prompt-actions`. `BlockDefinition` gains optional `translatable` paths, and a block without
+them is never sent to a model. A credential field that names where secrets are sent declares
+`endpoint: true` unless it is a `format: 'url'` field, which counts by default.
+
+**`order.cancelled.v1` is emitted**, with a payload grown from `{ orderId }` to `orderId`,
+`organizationId`, `salesChannelId`, `from`, `actor`, `reason` and `businessId`. It stays on the
+in-process bus; outbound webhooks keep delivering a cancellation as `order.status_changed.v1`.
+
+**Admin kit.** `ProductBrowserDialog`, `ProductBrowserTrigger` and `productSelectability`;
+`ModalDialog` and `SavedViewsControl`; `AssetUploader` gains `upload` and `accept`. Their strings
+are in the `core` bundle of `@endora-commerce/mod-i18n` at this release.
+
+**Peer dependencies.** `mod-quote-requests` declares `@fastify/rate-limit` (`^10`), which the
+platform host already registers; `mod-cms` and `mod-prompt-actions` declare
+`@endora-commerce/llm-client`, which pnpm installs with them as it does the other peers.
+
+#### In an existing storefront {#after-0-107-0-storefront}
+
+**An existing storefront is not changed by upgrading.** `endora new storefront` copies the
+reference once and the project owns it afterwards; the upgrade moves its packages, which the files
+below need at `0.107.0`. Until its files are updated it keeps working against the upgraded backend
+on a store open to anonymous visitors: catalogue, basket, checkout and sign-in behave as before,
+within the limits named in each group. What it does not do is listed per group. Create a storefront
+to copy from the way [Module blocks in an existing storefront](#storefront-block-renderers) does,
+and take the groups in this order. Where you have edited a file, apply its difference by hand;
+`diff -ru` between your storefront and the new one shows each difference beside your own changes.
+Several files belong to more than one group — take the new version once.
+
+**1. Sales-channel access — required before any channel is closed to anonymous visitors, and on a
+storefront that serves several channels through `X-Sales-Channel`.** The storefront names its
+channel on every backend call, sends a visitor of a closed store to the sign-in page, shows a
+refused sign-in and the no-access screen, and stops offering individual registration on a closed
+store. Without it a closed store answers the storefront's pages with `403` and a refused customer
+has no screen that says why.
+
+- **new**: `components/ChannelAccessDenied.tsx`, `lib/api/channel-headers.ts`,
+  `lib/auth/sign-in-errors.ts`, `lib/channel/channel-header.ts`, `lib/channel/channel-identity.ts`,
+  `lib/channel/closed-store.ts`, `lib/actions/sign-out.ts`, `lib/dictionary/browser.ts`,
+  `lib/dictionary/types.ts`, `components/account/SignOutButton.tsx`, `lib/cart-action-failure.ts`;
+- **changed**: `middleware.ts` — it stamps `x-sales-channel` with the channel the backend resolves
+  for this storefront when no proxy did, and sends a visitor of a closed store to sign in;
+  `app/layout.tsx`, `app/page.tsx`, `app/sitemap.ts`, `app/globals.css`;
+  `app/(auth)/login/page.tsx`, `app/(auth)/login/mfa/page.tsx`,
+  `app/(auth)/register-customer/page.tsx`; `app/(catalog)/c/[slug]/page.tsx`,
+  `app/(catalog)/catalog/page.tsx`, `app/(catalog)/p/[slug]/page.tsx`,
+  `app/(catalog)/search/page.tsx`; `app/compare/page.tsx`, `app/compare/share/[token]/page.tsx`;
+  `app/pwa/subscriptions/route.ts`; the components `CompareToggle`, `ComparisonTable`, `Header`,
+  `MfaCodeForm`, `ProductCard`, `ProductCardActions`, `ProductGrid`, `SearchAutocomplete`,
+  `SharedComparisonTable`, `SocialLoginButtons`, `analytics/AnalyticsProvider`,
+  `analytics/GtmProvider`, `inventory/NotifyWhenAvailableDialog` and
+  `mobile/MobileSearchOverlay`; and under `lib/`: `analytics/gtag.ts`, `analytics/gtm/dataLayer.ts`,
+  `api/cart.ts`, `api/client.ts`, `api/comparisons.ts`, `api/mutations.ts`, `api/newsletter.ts`,
+  `api/pwa-server.ts`, `api/rfq.ts`, `api/sales-channel.ts`, `api/search.ts`,
+  `api/speculation-rules.ts`, `dictionary/DictionaryProvider.tsx`, `dictionary/client.ts`,
+  `i18n/messages.ts` and `server-context.ts`. The same change touches `lib/seo/crawler-policy.ts`
+  and `lib/seo/crawler-file-response.ts`, which exist only in a storefront that took the SEO groups
+  of 0.106.0; group 2 replaces them.
+
+The reference holds every backend call to a channel helper with a static test; copy the
+storefront's tests under `test/` with the files if you keep them.
+
+**2. Crawler files on a closed store — assumes the three SEO groups of
+[0.106.0](#after-0-106-0-storefront) and group 1 above.** Replace `lib/seo/crawler-policy.ts`,
+`lib/seo/crawler-file-response.ts`, `lib/seo/robots-txt.ts`, `lib/seo/llms-txt.ts` and
+`lib/seo/llms-txt-base.ts`, and add the new function `renderClosedStoreRobotsTxt` to
+`lib/seo/robots-system-rules.ts` — the rest of that file, `ROBOTS_SYSTEM_RULES` with any rules of
+your own, does not change. On a closed store `robots.txt` then disallows everything and names no
+sitemap, and `llms.txt` names the store and says its content is for signed-in customers only; the
+operator's custom instructions and additional content are kept and come back when the store is
+opened. An open store's files do not change.
+
+**3. Customer sign-in limits.** `lib/session.ts`, `lib/api/auth.ts`, `lib/api/mfa.ts` and
+`app/(auth)/password-reset/request/page.tsx`: the storefront forwards the `b2b_customer_device`
+cookie with the sign-in, the second step and the reset request, and keeps the one the backend sets.
+Without them every attempt is counted on the budget of a device the account has not signed in on.
+
+**4. Push notification choices and sign-out.** `app/(account)/account/page.tsx`,
+`app/(account)/layout.tsx`, `components/account/SignOutButton.tsx`,
+`components/pwa/PushNotificationsToggle.tsx` (new), `components/pwa/PushPreferencesForm.tsx` (new),
+`components/pwa/PushOptIn.tsx`, `lib/api/pwa.ts` and `lib/api/pwa-server.ts`. The account profile
+gains the order and quote push choices and a switch to turn pushes off; signing out releases the
+browser's push subscription. Without them a customer receives both categories the operator offers.
+
+**5. Price-negotiation lock on the quote request draft.** `app/(commerce)/quote-request/actions.ts`,
+`app/(commerce)/quote-request/page.tsx`, `components/rfq/RfqDraftView.tsx` and `lib/api/rfq.ts`.
+Without them a customer whose proposals are locked is shown the proposal field and is refused with
+`422` on sending one.
+
+**6. Smaller fixes.** `app/(commerce)/checkout/page.tsx` — the failure page shows the backend's
+sentence, `CART_PRICE_CHANGED` included, without the code in front; `app/(catalog)/p/[slug]/page.tsx`,
+`lib/cart-action-failure.ts` and `lib/i18n/messages.ts` — the product page words its basket failures
+in the shopper's language; `app/compare/page.tsx`, `components/ComparisonTable.tsx` and
+`lib/api/comparisons.ts` — the comparison PDF is asked for in the shown language and rows;
+`lib/api/catalog.ts` — catalogue reads in the selected currency; `components/Breadcrumbs.tsx` and
+`app/(catalog)/p/[slug]/page.tsx` — the product and breadcrumb structured data rendered through
+`JsonLd`.
+
+Then run `pnpm run typecheck`, `pnpm test` and `pnpm run build`, and delete the directory you copied
+from. **A custom storefront** that is not derived from the reference has three things to do to
+work with a closed store: name its channel on every backend call, browser calls included; send a
+visitor to sign in on `403 SALES_CHANNEL_SIGN_IN_REQUIRED`; and show
+`403 SALES_CHANNEL_NOT_PERMITTED`, reading `GET /api/v1/storefront/sales-channel/access` for the
+stores the customer may use.
+
+How far this has been exercised: what this section says is what the release's changesets state,
+read against the source of the release — the manifests, the migrations, the routes and the
+reference storefront's history between `v0.106.0` and `0.107.0`. No instance had been upgraded from
+`0.106.0` with `pnpm run upgrade 0.107.0`, no instance declaring `mod-invoices` had had
+`mod-document-templates` added after it, and no storefront created by an earlier release had the
+groups of files above applied to it, when this section was written; the order of the steps and the
+storefront edits are untried.
+
+### After upgrading to 0.108.0 {#after-0-108-0}
+
+`pnpm run upgrade 0.108.0` moves the packages of the release from `0.107.0` and applies its
+migrations — twenty-eight, twelve of them for the new pricing model and its editor, three that
+widen unit prices to four decimal places and three that record how VAT and a discount were applied.
+**The release
+replaces how prices are stored and resolved, in one step and with no compatibility period**: the
+price lists of earlier releases, with their Application rules, rosters and quantity brackets, become
+**price books**, and a product no longer carries a price of its own. The base prices an instance
+charged from the *Default* price list are kept; **every other price list is deleted** by the
+upgrade, and nothing converts it — the one exception being a list a product feed is pinned to,
+which is kept as an empty, expired book (step 3). Read the steps below before you run the command.
+The other changes of the release follow the pricing one in each part of this section: minimum
+order quantities and returnable products, groups of lines on quote requests and orders, custom-field
+list filters and the carrying of custom-field values between records, unit prices kept at four
+decimal places from the price book to the invoice, inline editing of sales
+opportunities, per-channel product texts on the storefront, an operator action that prepares a
+customer's basket from a quote, and a new module, `admin_feedback`. This section says what to do, in
+order, and then what behaves differently for [operators](#after-0-108-0-operators),
+[API clients and integrators](#after-0-108-0-api),
+[module and overlay authors](#after-0-108-0-authors) and the owner of
+[an existing storefront](#after-0-108-0-storefront). The model itself is described on the
+[Price books](./modules/price_lists.md) page, and the full list of what was removed with its
+replacement in the developer guide's
+[migration note](./modules/price_lists/developer-guide.md#upgrading-from-the-old-model-migration-note).
+
+#### What to do, in order {#after-0-108-0-steps}
+
+Before the upgrade:
+
+1. **Write down every price list other than *Default*: its prices, who it priced and on which
+   channels.** `Migration20261022T111815PriceListsPriceBooksConversion` deletes every price list
+   that carries an Application rule — customer-group and organization contracts, sales, catalogue
+   lists — with its roster, brackets, rule and price-matrix entries, and drops the old tables. A
+   list a product feed is pinned to is retired instead (step 3), but it is kept empty, so its prices
+   are lost all the same. What they priced has to be entered again as price books after the
+   upgrade; the database backup of [Before you start](#before-you-start) is the only copy of the
+   rows.
+2. **Write down the price of every product that has a *Default unit price* but no row on the
+   *Default* list.** `Migration20261022T111811CatalogPriceFieldsRemoved` strips `defaultPrice` and
+   `price` from every product's attribute values and drops `product_variants.price_override`;
+   neither is converted. A product that was priced only by its *Default unit price* has **no price**
+   after the upgrade — the basket refuses it with `422 CART_PRODUCT_UNPRICED` — until a base price
+   is entered for it. A variant's *Price override* was never charged, so dropping it changes no
+   price.
+3. **A product feed pinned to a price list other than *Default*: no action is needed.** A product
+   feed pinned to a price list the upgrade removes is kept pinned to a retired copy of that list: an
+   empty, expired book for everyone, with no sales channel and the list's id, named
+   `<name> (removed by the 0.108.0 upgrade)` (the old name is cut so the whole fits 200
+   characters). The feed page warns that its price book is not active, and the feed's next
+   generation run withdraws its published file, so its link answers as if the feed had never been
+   generated, until you pin the feed to a price book that applies, or unpin it (step 9). You can
+   delete the retired book once you no longer need it; a feed still pinned to it then warns that
+   its price book no longer exists.
+4. **If an integration of yours writes prices through `priceListAdminPort`** — a PIM connector's
+   price import, typically — have its new version ready: the port is removed, and
+   `priceBookWritePort` replaces it. A connector built against the old port cannot write prices on
+   this release. The method-by-method mapping is in the developer guide's
+   [migration note](./modules/price_lists/developer-guide.md#upgrading-from-the-old-model-migration-note).
+
+The upgrade itself:
+
+5. **Run `pnpm run upgrade 0.108.0`.** `setup` applies the migrations module by module, in the
+   order of the modules' dependencies, and each module's own in the order of their stamps — so
+   every `catalog` migration, the removal of the price fields included, runs before the
+   conversion. Grouped by module:
+
+   | Migration | Module | What it does |
+   | --- | --- | --- |
+   | `Migration20261016T082008CatalogOrderRules` | `catalog` | `products.min_order_quantity`, `products.returnable`, `product_packaging_units.min_order_units` |
+   | `Migration20261022T111811CatalogPriceFieldsRemoved` | `catalog` | Drops `product_variants.price_override`, strips `defaultPrice` and `price` — see step 2 |
+   | `Migration20261022T182523CatalogAdminNameKeys` | `catalog` | Stored, indexed admin name and search keys on `products`, and the `pg_trgm` extension |
+   | `Migration20261019T103522CustomFieldsDefinitionListFilter` | `custom_fields` | `custom_field_definitions.list_filter`, `false` for every existing field |
+   | `Migration20261020T110920CustomFieldsDefinitionCarryTo` | `custom_fields` | `custom_field_definitions.carry_to`, empty for every existing field |
+   | `Migration20261016T082022OrdersOrderItemReturnableAtPurchase` | `orders` | Nullable `order_items.returnable_at_purchase` |
+   | `Migration20261020T172007OrdersOrderItemGroups` | `orders` | Table `order_item_groups`, `order_items.group_id` and `position` |
+   | `Migration20261021T164807OrdersOrderCommentSystemNote` | `orders` | Nullable `order_comments.system_note` |
+   | `Migration20261021T165247OrdersOrderItemsPriceSource` | `orders` | Nullable `order_items.price_source` |
+   | `Migration20261024T145147OrdersVatMethod` | `orders` | Nullable `orders.vat_method`, `per_rate` for an order placed on this release; nothing is backfilled |
+   | `Migration20261025T031732OrdersUnitPriceFourPlaces` | `orders` | Widens `order_items.unit_price` to `numeric(14,4)` |
+   | `Migration20261018T122118QuoteRequestsItemPackagingUnitId` | `quote_requests` | Nullable `quote_request_items.packaging_unit_id` |
+   | `Migration20261020T171341QuoteRequestsQuoteRequestItemGroups` | `quote_requests` | Table `quote_request_item_groups`, `quote_request_items.group_id` and `position` |
+   | `Migration20261021T164808QuoteRequestsQuoteRequestEventCarrySkipped` | `quote_requests` | Admits the `custom-field-carry-skipped` event type |
+   | `Migration20261025T031736QuoteRequestsUnitPriceFourPlaces` | `quote_requests` | Widens `quote_request_items.desired_unit_price`, `agreed_unit_price` and `reference_unit_price` to `numeric(14,4)` |
+   | `Migration20261020T131018PwaPreferencesOrganizationAttributionCheck` | `pwa` | A `CHECK` on `push_notification_preferences` |
+   | `Migration20261021T165244CartsCartItemsPriceSource` | `carts` | Nullable `cart_items.price_source` |
+   | `Migration20261025T031727CartsUnitPriceFourPlaces` | `carts` | Widens `cart_items.unit_price`, `recomputed_unit_price` and `agreed_unit_price` to `numeric(14,4)` |
+   | `Migration20261024T145631InvoicesVatSummary` | `invoices` | Nullable `invoices.vat_summary`, the per-rate summary a document is issued with; nothing is backfilled |
+   | `Migration20261024T174052ReturnsCaseItemDiscount` | `returns` | `return_case_items.default_discount_amount`, `0` for every existing line |
+   | `Migration20261023T195611ProductFeedsRunWithdrawalReason` | `product_feeds` | Nullable `product_feed_runs.withdrawal_reason`, for a run that withdrew the published file |
+   | `Migration20261023T234605ProductFeedsPriceListFkDropped` | `product_feeds` | Drops `product_feeds_price_list_fk`, so a retired book can be deleted later; runs after the conversion |
+   | `Migration20261021T165239PriceListsPriceBooksExpand` | `price_lists` | The price-book header, audience and channel sets, the evolved rows, precedence version 1, the price-surface tables |
+   | `Migration20261021T232310PriceListsPriceBooksVersion` | `price_lists` | `price_lists.version` and `ever_activated` |
+   | `Migration20261022T012134PriceListsPriceSurfaceGenerations` | `price_lists` | Generations of the price surface |
+   | `Migration20261022T111815PriceListsPriceBooksConversion` | `price_lists` | The conversion — see step 1 and below |
+   | `Migration20261022T182527PriceListsProductLines` | `price_lists` | Table `price_list_product_lines`, backfilled from the stored rows |
+   | `Migration20261023T152351PriceListsPriceSurfaceTargetedMarks` | `price_lists` | Table `price_profile_stale_products` and `price_profiles.revision`, for the targeted refresh of the price surface |
+
+   The conversion runs in one transaction: it creates one **base price book** per currency a
+   *Default*-list bracket uses, plus the platform's default currency; makes every *Default* bracket
+   a fixed row of its currency's base book; deletes every other price list, except one another
+   table still refers to — a feed pinned to it — which it retires as an empty, expired book that
+   keeps its id (step 3); and drops the old tables and columns. `Migration20261022T182523CatalogAdminNameKeys` adds four generated columns
+   to `products`, and each rewrites the table under an exclusive lock — 3.5–7 s per column at
+   50 000 products in the platform's measurement — which is one more reason to keep the API stopped.
+
+After the upgrade, before the instance takes traffic again:
+
+6. **Make sure a queue consumer runs.** Price-sorted and price-filtered listings are ordered from
+   prices the `price_lists.surface` worker precomputes; it runs in a process that consumes queues
+   (`BACKEND_ROLE` unset, `all` or `worker`) with a queue Redis connection —
+   [Queue consumers](./operations/queue-consumers.md). The upgrade builds nothing: the first
+   price-sorted request on each sales channel and currency registers what it needs and asks the
+   worker for it, and is served in the catalogue's default order — product cards correctly priced —
+   until the worker has built it. Without a consumer, price sorting never orders by price.
+7. **Check the base prices.** Open a few products' *Pricing* tab: the prices that came from the
+   *Default* list are there, per currency. Enter a base price for each product of step 2.
+8. **Recreate the price books** that replace the lists of step 1, on **Price books**
+   (`/price-lists`, or ⌘K / CTRL+K → *Price books*). A book has one currency, a set of sales
+   channels, an audience — everyone, chosen customer groups or chosen organizations — and lines;
+   it prices nothing until it is activated. *Why this price?* (`/price-lists/explain`) shows, for a
+   buyer and a product, which line decided the price.
+9. **Pin the feeds of step 3 again, or unpin them**, through the product feeds API
+   (`PATCH /api/v1/admin/product-feeds/:id` with `priceListId` — the book's id, or `null`); there is
+   no admin control for it yet (issue #414). Pin each to a price book that applies to anyone on the
+   feed's channel: *Active* or *Scheduled* within its dates, assigned to the feed's channel and for
+   everyone. A feed pinned to any other book publishes no prices from it — the feed's page says
+   why — and its next run ends *Withdrawn* and withdraws the published file, so the link answers as
+   for a feed that has never been generated until the book applies again. A withdrawn run is not a
+   failure: it raises no notification and delivers nothing.
+10. **Mark the products buyers may return.** `Migration20261016T082008CatalogOrderRules` adds a
+    **Returnable** flag to every product, off: the line of an order placed after the upgrade is
+    returnable only if its product was returnable when the order was placed, and a return
+    (`kind: 'return'`) naming any other line is refused with `422 RETURN_LINE_NOT_RETURNABLE`.
+    Orders placed before the upgrade are unaffected — their lines record no value and stay
+    returnable — and complaints are never restricted. Select the products on the product list and
+    use **Bulk edit → Returnable → Yes — returnable**; one product's flag is in the **Order rules**
+    card on its *Inventory* tab.
+
+Whenever it suits you:
+
+11. **Give `catalog:read` to every role that holds `price_lists:write`.** Adding product lines to a
+    price book uses the catalogue's product browser, which `catalog:read` guards; the role editor on
+    *Admin roles* (`/admin-roles`) shows the shortfall for a role that lacks it, with a one-click
+    add. The two price-list permission codes are unchanged; their
+    labels now read *View price books and display modes* and *Edit price books, base prices and
+    display modes*.
+12. **In an instance seeded with the demo shop**, run `pnpm run cli demo reset` and then
+    `pnpm run cli demo seed`: the conversion removed the demo's old price lists, and the seed brings
+    back its base prices and the price books of the worked examples on the
+    [Price books](./modules/price_lists.md) page.
+13. **Decide whether to add `admin_feedback`.** The release brings a new package,
+    `@endora-commerce/mod-admin-feedback`, which lets an administrator send feedback to the makers
+    of Endora Commerce from a *Send feedback* link in the Admin UI sidebar. No module depends on
+    it, so the upgrade does not declare it; [Adding a module that is new in a
+    release](#adding-a-new-module) says how. Once declared it is **switched on and sends to
+    Endora** (`admin_feedback.relay_url`, by default
+    `https://commerce.endora.software/api/platform-feedback/`): each message carries the words
+    typed, the sender's e-mail and optional phone, the Admin UI's language and address, the release
+    the instance runs, its configured public API address and the sending administrator's name and
+    id. Switch it off under
+    **Settings → Feedback** (`admin_feedback.module_enabled`), or empty the relay address, if the
+    instance must not send data to Endora. Nothing is stored on the instance.
+14. **Mark the custom fields the admin lists should filter on.** The Orders, Quote Requests and
+    Opportunities lists offer a filter for each Order, Quote Request or Opportunity custom field
+    whose new *Use as list filter* option is on, and every existing field has it off. Turn it on in
+    the field's editor on `/custom-fields`, which now edits existing fields.
+15. **Raise `vite` and `nodemailer` in your own manifests.** The admin shell's optional peer range
+    for `vite` is now `^7.3.7`; an instance whose admin member still resolves an earlier `vite` 7
+    gets an *unmet peer* warning ([After it finishes](#after-it-finishes)) — raise `vite` in
+    `admin/package.json` to `^7.3.7`. `mod-email` and `mod-newsletter` still accept any
+    `nodemailer` 10, so an instance keeps the one it resolved; the platform now builds against
+    `^10.1.4` (10.2.1 in its lockfile), which tightens address parsing, strips credentials from a
+    cross-origin redirect and caps the work one message can cause. Raise `nodemailer` where the
+    instance declares it to `^10.1.4` to have those fixes, then run `pnpm install`.
+
+#### For operators {#after-0-108-0-operators}
+
+##### Pricing
+
+- **Price lists are price books.** The sidebar entry *Price books* opens the list of books; the
+  product editor's *Default unit price* field, the variant table's *Price override* column and the
+  product's *Linked price lists* zone are gone, and a product's base prices are on its *Pricing*
+  tab. *Pricing settings* (⌘K / CTRL+K) holds the display modes, the *Show list price beside the
+  buyer's price* switch (`pricing.show_list_price`, off by default) and the precedence, read-only.
+- **How a price is decided** — the base price, a catalogue price for everyone on a channel, a
+  buyer's contract price, and a sale charged only when it is lower — is on the
+  [Price books](./modules/price_lists.md) page, with worked examples.
+- **A price change shows in a price-sorted listing within about half a second** in the platform's
+  measurements; a change that reaches the whole catalogue — a line for all products or for an
+  attribute value alone, more than 10 000 products at once, a sales-channel change — takes under
+  about a minute and a half with some 200 groups of buyers with their own books (measured 85 s at 202,
+  on 50 000 products, where it took about 4.5 minutes before issue #416). Prices on product cards
+  never lag.
+- **The products import refuses a file with a price column** — `default_price`, `defaultPrice`,
+  `price`, `price_override` or `priceOverride` — with `400 PRICE_SET_IN_PRICE_BOOKS`, and imports
+  nothing. Prices are imported through the price books' CSV import, or by a PIM connector through
+  `priceBookWritePort`.
+- **A signed-in customer is priced on their own customer group** wherever their account has one
+  that differs from their Organization's — listings, the product page, search and its
+  suggestions, comparisons, the basket and placement. The basket also shows the price placement
+  will charge: a line from an accepted quote shows its agreed price at the agreed quantity, and a
+  line placement would refuse reads as unavailable.
+- **A reorder leaves out the lines nothing prices any more** for the buyer, or that are sold on
+  request only, and reports them; such a line used to be seeded at the old order's price and the
+  basket then refused at placement.
+
+##### Amounts, VAT and invoices
+
+- **VAT is computed one way on every document**: per rate, on the sum of the net amounts at that
+  rate, rounded half-up once, and the gross is the net plus that VAT (art. 106e ust. 1 pkt 13–14 of
+  the Polish VAT Act). The checkout, the order, the payment and proforma it opens, the invoice, a
+  correction and a refund show the same figures. A basket whose lines carry two VAT rates can come
+  to a cent more or less than before the upgrade: 29.50 at 23 % with 4.30 at 5 % was 40.80 gross
+  and is 40.81, which is also what its invoice says. A line's gross on an order, its confirmation,
+  an invoice and the order screens is **the line's own rounding** — 29.50 at 23 % shows 36.29 —
+  shown for information; the VAT and the totals are the per-rate figures, so a document's line
+  grosses may add up to a cent more or less than its total.
+- **Invoices issued before the upgrade for orders of VAT payers overstated their net, VAT and
+  gross.** Issuance read each order line's gross amount as its net amount and taxed it again: a line
+  of 100.00 net at 23 % was invoiced as 123.00 net and 151.29 gross. The upgrade changes how
+  invoices are issued from now on. **It does not correct the invoices already issued, and the
+  platform does not issue corrections for them**; they keep the amounts they were issued with, and
+  their per-rate summary is shown as they were issued.
+- **An order placed before the upgrade keeps what it charged.** Its returns refund what it stored
+  and was paid. An invoice issued for it after the upgrade takes VAT per rate and can be a cent
+  above what was paid — 40.81 for an order that charged 40.80 — and records as paid only what was
+  paid, so it shows the cent as still due (*Do zapłaty: 0.01*) rather than as paid.
+- **Returns refund by default what was paid, across all of an order's returns.** Each return refunds
+  what everything returned so far is worth, minus what earlier returns already refunded, so no
+  sequence of returns refunds more than the order charged and a complete return refunds exactly
+  that: two returns of one of two items at 29.50 + 23 % refund 36.29 and then 36.28 (72.57 paid),
+  where each used to refund 36.29. A complaint about a line that cannot be returned counts in the same
+  total, and an order-level discount is taken off what the goods refund — the order charged the goods
+  less the discount, so a full return refunds that, never the goods' full price. A correction credits
+  the same way: the goods' VAT as the invoice charged it, and the discount back on a line of its own,
+  so all corrections of an invoice together credit exactly what it charged. For an order placed
+  before the upgrade, the refund is what the order charged and the correction credits exactly that.
+- **A settlement checks its correction before it moves any money.** A refusal — a case line named
+  twice, an invoice line the correction cannot match, `invoices` switched off — leaves the case
+  unsettled with nothing refunded or credited. A settlement refunds every line of the case: a line
+  the request leaves out is refunded and credited at its stored approved amount, so the refund and
+  the correction always agree. Two returns of one order are settled one after the other.
+- **An order refunded in full before it is invoiced is not invoiced.** Issuing its VAT invoice is
+  refused — *This order's payments were refunded in full before it was invoiced, so there is no sale
+  left to invoice.* — and draws no number, and automatic issuance on an order status skips it. An
+  order refunded in part is invoiced, with only what was kept as paid.
+- **An amount with more than two decimal places is refused, not rounded** — a delivery cost, a
+  payment method's surcharge, an approved refund, a return cost, a credit limit, an opportunity's
+  value, and a promotion's fixed amount, step or minimum spend. The screen answers *An amount may
+  have at most two decimal places.* A unit price is not an amount: see the next section.
+
+##### Unit prices at four decimal places
+
+- **Unit prices are no longer rounded to grosze at the cart.** A price book has always stored four
+  decimal places, but until this release the basket rounded the price to two as it took it in: a
+  screw priced 0.0125 PLN was charged 0.01 PLN, so 10 000 of them cost 100.00 PLN instead of
+  125.00 PLN, and one priced 0.0150 PLN was charged 0.02 PLN — a third too much. A unit price now keeps
+  its four places, unrounded, on the basket line, the order line, the quote request's lines and
+  the invoice line.
+- **The line value is the rounding point.** A line's net value is the unit price × the quantity,
+  rounded half-up to the grosz once: 0.0125 × 10 000 = 125.00, and 0.0150 × 3 = 0.045, so 0.05.
+  VAT stays as described above — per rate, on the sum of the line values. Refunds and corrections
+  work from what the order stored and charged, as before.
+- **The columns were widened**: `cart_items.unit_price`, `recomputed_unit_price` and
+  `agreed_unit_price`, `order_items.unit_price`, and `quote_request_items.desired_unit_price`,
+  `agreed_unit_price` and `reference_unit_price` are now `numeric(14,4)`, like the price books and
+  `invoice_lines.unit_net_price`. Widening is lossless: no stored value changes, and orders placed
+  before the upgrade keep the two-place prices they were placed at.
+- **A unit price shows its significant places, up to four**: `0,0125 zł`, `1,505 zł` — and two
+  places when the third and fourth are zero (`1,50 zł`). Line values and totals always show two. This holds
+  in the Admin UI, the storefront, the invoice PDF's *Cena netto* column, the quote PDF and the
+  e-mails. A product feed still publishes two places.
+- **A quote's agreed or proposed unit price may be typed with up to four decimal places**; a fifth
+  is refused with *A unit price may have at most four decimal places.*
+- **A basket line added before the upgrade** carries its two-place price. If the product's price
+  has a third or fourth decimal place, that is no longer the current price, and the basket reprices
+  the line before the order is placed — at 0.0125 instead of 0.01, for example.
+
+##### Minimum order quantities and returnable products
+
+- **A product can have a minimum order quantity** (pieces, on simple and configurable products)
+  and a packaging unit a minimum number of units — the **Order rules** card on the product's
+  *Inventory* tab and the **Minimum (units)** column of its packaging units. Existing products have
+  none, so nothing changes until one is set. A minimum is judged on the product's total over every
+  line and variant of a basket.
+- **Where it is enforced.** The basket refuses an add or a change that would leave a product below
+  its minimum, and *Submit for approval*, checkout, one-click buy, reorder, admin *Create order*
+  and the external order API refuse a basket below one. A line from an accepted quote request is
+  exempt at the quote's agreed quantity while that quote is still valid. A buyer's quote request
+  is refused below a minimum; one an operator creates or modifies is saved, with a *Below minimum*
+  badge on the line. The operator's quick-order import marks such rows as warnings; the buyer's
+  rejects them. One-click buy orders the product's minimum instead of 1.
+- **Returns follow the Returnable flag** (step 10): a return of a line that was not returnable at
+  purchase is refused; a complaint about such a line is accepted, with an approved refund of `0`
+  pre-filled, and the case marks it *Not returnable at purchase*.
+- **Limits.** Admin *Create order*, the external order API and quick-order builds take at most
+  200 lines; `quick_order.import_max_rows` is held to 1–10 000 whatever its stored value.
+
+##### Groups of lines on quote requests and orders
+
+- **A quote request's lines can be arranged in named, ordered groups**, on its *Modify* tab and
+  on the create screen, with a per-group summary; *Split line* puts part of a line's quantity on
+  a new line, and one product may sit on several lines. An order placed from an accepted quote
+  takes the quote's groups, and admin *Create order* has the same editor. An order's groups cannot
+  be changed after placement. The quote PDF prints the groups as sections, and so does every
+  document template whose line-items table has no grouping chosen, templates saved before the
+  upgrade included — its default is now *Document's groups*. A document with no group prints as
+  before; choose *No grouping* in the template editor to keep a table flat whatever the document
+  says.
+
+##### Custom fields
+
+- **List filters** (step 14) on the Orders, Quote Requests and Opportunities lists: kept in the
+  address, in saved views and, on Orders, in the CSV export.
+- **Existing definitions can be edited** on `/custom-fields`: labels, *Required*, *Use as list
+  filter*, and the options of a select field; the key and the value type stay fixed.
+- **Values can be carried between records.** A definition's *Carry value to …* options carry its
+  values from a Quote Request to the Order placed from it and to its Sales Opportunity, from an
+  Order to its Opportunity, and from an Opportunity to the Quote Request or Order an administrator
+  creates from it — into empty fields only. A value that cannot be carried is named in an internal
+  system note on the Order, or in the Quote Request's history. Every existing definition carries
+  nothing.
+- **Quote Request custom fields follow the `quote_requests` module**: while it is switched off
+  they are neither listed nor writable on `/custom-fields`, and they return unchanged with it.
+- **An Opportunity's change history shows custom-field values only to a role holding
+  `custom_fields:read`.**
+
+##### Sales opportunities
+
+- **The Opportunity screen is edited in place** — title, description, expected close date,
+  contact, sales channel and typed values each where they are shown — and descriptions, notes,
+  messages and event descriptions are written in a formatted-text editor. An Order reference shows
+  the Order's status, total, date and customer.
+
+##### Quote requests
+
+- **An approved quote request's *Prepare the customer's basket*** puts its lines into the basket of
+  the customer who owns it, at the agreed prices, replacing what that basket held, for the customer
+  to complete at checkout. The earlier *Place order* button signed the administrator out.
+
+##### Storefront product texts
+
+- **A product's per-sales-channel texts reach the storefront.** The name, description, SEO fields
+  and attribute values written for a sales channel in the product's scope editor are what the
+  storefront's product page shows on that channel, and the name written there is what its listing
+  cards, search results and suggestions show.
+
+##### Feedback from the Admin UI
+
+- **`admin_feedback`** (step 13) adds *Send feedback* beside the release in the sidebar, for every
+  signed-in administrator, at most five messages per administrator in ten minutes.
+
+#### For API clients and integrators {#after-0-108-0-api}
+
+##### Pricing
+
+- **The old admin pricing routes are removed**: `/api/v1/admin/price-lists-engine/…`,
+  `/api/v1/admin/pricing/rule-targets/…`, `/api/v1/admin/products/:id/price-lists` and
+  `/api/v1/admin/products/:id/resolved-price`. Their replacement is `/api/v1/admin/price-books/…`:
+  `GET ?productId=` for a product's books and `POST /api/v1/admin/price-books/resolve` for a
+  resolved price with its explanation.
+- **A catalogue write that names a price is refused**: `POST`/`PATCH
+  /api/v1/admin/catalog/products[/:id]` with `attributeValues.defaultPrice` or
+  `attributeValues.price`, and a variant write with `priceOverride`, answer
+  `400 PRICE_SET_IN_PRICE_BOOKS` and write nothing. Base prices are written with
+  `PUT /api/v1/admin/price-books/base-prices/:productId`.
+- **`GET /api/v1/storefront/products/:id/resolved-price` answers an unpriced product honestly**:
+  `baseListId`, `basePrice` and `quantityBracket` are all `null`, where `baseListId` used to be an
+  empty string. Amounts are decimal strings (`{ "amount": "199.0000", "currency": "PLN" }`), as the
+  route always sent them. The answer also carries `source` (which tier priced it), `compareAt` and,
+  when the shop shows it, `listPrice`.
+- **The price-matrix error codes are gone** (`PRICE_MATRIX_ENTRY_NOT_FOUND`,
+  `PRICE_MATRIX_ENTRY_OVERLAP`, `PRICE_MATRIX_ATTRIBUTE_NOT_ELIGIBLE`, `PRICE_MATRIX_ENTRY_LIMIT`);
+  the price-book codes, `PRICE_BOOK_*` and `PRECEDENCE_CHANGE_UNAVAILABLE`, replace them.
+- **A product feed pinned to a price book** publishes only while the book is *Active* or
+  *Scheduled* within its dates, on the feed's channel and for everyone. A run of a feed whose book
+  does not apply ends with the new run status `withdrawn` and `withdrawalReason` (the reason; `null`
+  on every other run), clears the published file and answers the public URL with `404`; a client
+  that switches exhaustively on the run status has one more case. The failure code
+  `price_list_unavailable`, which nothing raised, is removed. An admin feed (`GET /api/v1/admin/product-feeds`, `GET …/:id`) carries
+  `pinnedPriceBookWarning`: the reason it does not publish, or `null`.
+- **`POST /api/v1/orders/:id/reorder`** reports a line it left out because nothing prices it with
+  `reason: 'no_price'` in `unavailableItems`.
+
+##### Amounts and VAT
+
+- **A typed money amount with more than two decimal places answers
+  `400 AMOUNT_PRECISION_EXCEEDED`** (a new code) and is not stored; it used to be rounded. The fields
+  are `cost` of a delivery method, `additionalPrice` of a payment method, `approvedRefundAmount` of a settlement, `returnCost` of
+  a return delivery method, `amount` of an admin order refund, `grantedAmount` of a credit limit,
+  an opportunity's `manualValue`, a promotion's `amount`, `spendStep`, `minCartSubtotal` and the
+  `value` of an `amount_off` promotion, and an ERP integration's `netTotal`, `taxTotal`,
+  `grossTotal` and `paidTotal` of a sale document. `details` names each field with the issue
+  `AMOUNT_PRECISION_EXCEEDED`, and the message is in the reader's language. A request that also
+  fails anything else answers `400 VALIDATION_FAILED`, with the same issue among its details.
+  Trailing zeros are not significant (`"123.4500"` is 123.45); a string that is not a decimal at
+  all is `400 VALIDATION_FAILED` with a format issue.
+- **A unit price carries up to four decimal places**.
+  A quote request line's `desiredUnitPrice` and `agreedUnitPrice` (`POST /api/v1/quote-requests`,
+  the admin create and `PATCH` routes) accept four places; a fifth answers
+  `400 UNIT_PRICE_PRECISION_EXCEEDED` (a new code, *A unit price may have at most four decimal
+  places.*), with `details` naming the field. A request refused both for an amount and for a unit
+  price answers `400 VALIDATION_FAILED`. Responses carry the four-place unit price: the numbers
+  (`unitPrice` of a cart and an order line, `agreedUnitPrice`, `unitNetPrice` of an invoice line)
+  as the value — `0.0125` — and the decimal strings as four places — the admin order preview's
+  `unitPrice` is `"0.0125"` or `"29.4950"`, where it was rounded to `"29.50"`, and so are
+  `previousUnitPrice` and `currentUnitPrice` in the `details.lines` of `409 CART_PRICE_CHANGED`. **A line's value is
+  `unitPrice × quantity` rounded half-up to two places once**: compute it that way rather than
+  from a unit price rounded to two. An order placed before the upgrade keeps its two-place prices.
+- **VAT is taken per rate on the sum of the net amounts at that rate**, rounded half-up once: an
+  order's `taxTotal` and `total`, the checkout and admin previews, an invoice's `vatSummary`,
+  `taxTotal` and `grossTotal`, and a correction's amounts. An order line's `lineTotal` and an
+  invoice line's `grossValue` are the line's own rounding, `round(net × (1 + rate))`, and may add up
+  to a cent more or less than the total. The shapes are unchanged. An order at two rates can differ
+  by a cent from the same basket before the upgrade.
+- **An invoice's `paidTotal` is what was paid for the order** — each captured payment attempt less
+  what was refunded from it, or the order's stored total when it is recorded as paid with nothing
+  captured — never the invoice's own gross, so `amountDue` can be `0.01` for an order placed before
+  the upgrade. An order refunded in part before it is invoiced is invoiced, with only what was kept
+  as paid.
+- **An order refunded in full before it is invoiced is not invoiced.** When its payments' refunds
+  equal what was captured and cover the whole order total, there is no sale left to document:
+  issuing a VAT invoice answers `422 INVOICE_ORDER_REFUNDED` (*This order's payments were refunded
+  in full before it was invoiced, so there is no sale left to invoice. Nothing was issued.*) and draws
+  no number, and automatic issuance on an order status skips the order and logs
+  `[invoices] the order was not auto-invoiced: its payments were refunded in full`.
+- **A settlement naming one case line twice answers `400 VALIDATION_FAILED`** (issue `duplicate_line`)
+  and moves nothing; a settlement whose correction would be refused is refused before the refund.
+- **A settlement's `totalRefundAmount` covers every line of the case**, not only the lines in
+  `lines`: a line left out counts at its stored `approvedRefundAmount`, and the correction credits
+  the same lines. Settlements of one order run one at a time; one that waits more than 15 seconds
+  for another answers `409 VALIDATION_FAILED` (`details.code: settlement_in_progress`), with nothing
+  moved, and can be retried.
+- **A correction of a discounted order** credits the goods at their invoiced value and the discount
+  back on a negative 0 % line; a cancelled correction no longer counts against later ones.
+- **A correction refuses a `total` above the sum of its lines** with `400 VALIDATION_FAILED`
+  (`details.code: correction_total_exceeds_lines`), and corrections of one invoice credit
+  cumulatively: together never more than it charged.
+- **Invoices issued before the upgrade are not changed.** One issued for an order of a VAT payer
+  overstates `netTotal`, `taxTotal` and `grossTotal` (each line's net was the order line's gross);
+  its per-rate summary is shown as it was issued.
+
+##### Minimum order quantities and returnable products
+
+- **New refusals.** `422 PRODUCT_BELOW_MINIMUM_QUANTITY` and
+  `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` (`details.lines[]`) from cart adds and changes,
+  `POST /api/v1/cart/submit-for-approval`, placement, the external order API and a buyer's quote
+  request writes; `422 PACKAGING_UNIT_MISMATCH` from a quote request line whose packaging unit is
+  not one of the product's; `422 RETURN_LINE_NOT_RETURNABLE` from `POST /api/v1/returns` with
+  `kind: 'return'`. A product name in such a refusal is in the language the response is answered
+  in — the q-sorted `Accept-Language`, else the channel's default language — and so are the line
+  names of `GET /api/v1/cart`, which are no longer English by default.
+- **200-line bound.** `POST /api/v1/admin/orders`, `POST /api/v1/admin/orders/preview`,
+  `POST /api/v1/external/orders` and the quick-order builds refuse more than 200 lines with
+  `422 VALIDATION_FAILED`, `details: { code: 'too_many_items', maximum: 200 }`; on the external
+  API this is checked before the `Idempotency-Key` header is required.
+- **New fields.** `minOrderQuantity` on product, search and comparison summaries;
+  `minOrderUnits` on packaging units; `minOrderQuantity` and `belowMinimum` on cart lines;
+  `belowMinimumLines[]` on `POST /api/v1/orders/preview-total`; `returnable` and
+  `notReturnableReason` on the lines of `GET /api/v1/orders/:orderId/returnable`, whose `eligible:
+  false` with reason `no_returnable_lines` still allows a complaint. The admin product write takes
+  `minOrderQuantity` and `returnable`.
+- **`GET /api/v1/cart` answers `5xx`** when the catalogue cannot be read, instead of a cart without
+  the minimum flags.
+
+##### Groups of lines
+
+- **Every order and quote request reply** carries `itemGroups` and each item's `groupId` and
+  `position`, with `items` in display order — the replies had no defined order before. Admin
+  `POST`/`PATCH` of a quote request and admin `POST /api/v1/admin/orders` accept `groups` and a
+  per-line `groupKey`. `POST /api/v1/admin/orders/preview` answers each priced line's `taxRate`.
+
+##### Custom fields
+
+- **List filters.** The admin Orders list and its CSV export, the Quote Requests list and the
+  Opportunities list accept `customFieldFilters` (JSON keyed by custom-field key); a key the list
+  does not offer is refused with `400 CUSTOM_FIELD_FILTER_UNAVAILABLE`. Each list's offered fields
+  are at `GET /api/v1/admin/orders/custom-field-filters`,
+  `GET /api/v1/admin/quote-requests/custom-field-filters` and
+  `GET /api/v1/admin/crm/opportunities/custom-field-filters`. On
+  `GET /api/v1/admin/crm/opportunities` without `cardValues=true`, a `custom:` reference in
+  `fieldFilters` now follows the list-filter option instead of the board card.
+- **Definitions.** Definitions carry `listFilter` and `carryTo`; three 409 refusals that shared
+  `CUSTOM_FIELD_DEFINITION_INVALID` now have their own codes (`CUSTOM_FIELD_OPTION_IN_USE`,
+  `CUSTOM_FIELD_VALUE_TYPE_LOCKED`, `CUSTOM_FIELD_STORED_VALUES_EXIST`), and an option `PATCH`
+  changes only the members it names. Turning a carry on towards a field that cannot take the values
+  is refused with `422 CUSTOM_FIELD_CARRY_INCOMPATIBLE`.
+- **Carry records.** `GET /api/v1/admin/orders/:id/comments` gives every comment `systemNote`
+  (`null` for an ordinary one); the customer's comments read never lists a system note. The
+  admin quote-request history gains the `custom_field_carry_skipped` entry. The Opportunity history
+  leaves `customFieldValues` out for a caller without `custom_fields:read`.
+
+##### Quote requests
+
+- **`POST /api/v1/admin/quote-requests/:id/prepare-customer-basket`** (`rfqs:handle`) prepares the
+  owning customer's basket from an approved request; the Admin UI no longer calls the customer's
+  `convert-to-order` route.
+
+##### Storefront product reads
+
+- **`GET /api/v1/catalog/products/:idOrSlug`, `GET /api/v1/catalog/products` and the search
+  results and suggestions** return the product's override for the request's sales channel and
+  language; a product without one answers exactly as before.
+
+##### Feedback
+
+- **`POST /api/v1/admin/feedback`**, while `admin_feedback` is present: any signed-in
+  administrator, `204` when the relay accepts, `429 RATE_LIMITED`,
+  `502 ADMIN_FEEDBACK_DELIVERY_FAILED`, or `503 ADMIN_FEEDBACK_NOT_CONFIGURED` when the relay
+  address is empty or not an `http(s)` URL.
+
+#### For module and overlay authors {#after-0-108-0-authors}
+
+##### Pricing
+
+- **`priceListAdminPort` is removed; `priceBookWritePort` replaces it** — base prices per currency,
+  addressed by product and currency rather than by a list id, written as one audited command.
+- **`@endora-commerce/contracts` drops the Application rule and the old list, bracket and matrix
+  shapes**, `ListingPrice` loses its `source: 'product'` arm, and `PriceListRecord` /
+  `PriceListReadPort` are reshaped for books. Each removal is listed with its replacement in the
+  package's changelog.
+- **An overlay that decorates `pricingService`** must decorate the batched entry points
+  (`resolveLinePrices`, `resolveListingPrices`) as well as the single calls; the cart, the placement
+  check and quote reference prices price through the batch.
+- **A module whose events decide a price** bumps `PricingGeneration` as before; `bump(change?)` now
+  takes a `SurfaceChange` saying what it moved, and a bump without one makes the price surface
+  rebuild every profile.
+- **A feed-pricing port of your own** must implement `namedListPublishability` beside
+  `namedListPrices`, which now takes the feed's `salesChannelId`.
+
+##### Money arithmetic
+
+- **`@endora-commerce/contracts` carries the platform's money arithmetic**: `money-decimal`
+  (`roundHalfUp`, exact sums and products, `vatByRate` — the one VAT method, per rate on the sum of
+  the net amounts — and its inverse `netForGrossAtRate`) and `money-input` (`twoDecimalAmount`,
+  `twoDecimalAmountString`, `addAmountPrecisionIssue` and `ERROR_CODES.AMOUNT_PRECISION_EXCEEDED`).
+  An overlay that computes an amount from a price uses them rather than `Number#toFixed(2)` or
+  `Math.round(x * 100) / 100`, and a new money input field uses the refinement.
+- **A unit price is carried at four places, and the line value is the rounding point** (owner
+  ruling of 2026-10-25). `@endora-commerce/contracts` adds `unitPriceHalfUp` (a unit price at its
+  four places, as `numeric(14,4)` stores it), `unitPriceFractionDigits` and `unitPriceDisplayText`
+  (the one display rule), `grossUnitPriceHalfUp`, and in `money-input` `fourDecimalUnitPrice`,
+  `fourDecimalUnitPriceString`, `isUnitPricePrecisionIssue` and
+  `ERROR_CODES.UNIT_PRICE_PRECISION_EXCEEDED`. An overlay that stores a resolved or typed unit
+  price keeps it with `unitPriceHalfUp` — never `roundAmountHalfUp`, which rounds to two — and
+  computes a line with `lineAmountHalfUp(unit, quantity)`. `formatMoney` in
+  `@endora-commerce/admin-kit/lib` takes `{ unitPrice: true }`, and a document value of kind `money`
+  takes `unitPrice: true`, to show a unit price by the rule.
+- **`OrderReturnContext` gains `vatMethod`, `productsPaidTotal` (stored subtotal + tax − discount)
+  and `discountTotal`, and `OrderReturnContextLine` gains `unitNetPrice` and `taxRate`**;
+  `paidLineAmount` is the line total the order stored. An implementation of `OrderReturnContextPort`
+  in an overlay owes these fields and reads them from what the order stored, never recomputes them.
+- **`CorrectiveInvoicePort` gains `validateCorrection(input)`**, which refuses what
+  `createCorrection` would refuse without writing anything, and `CorrectiveInvoiceLine` gains an
+  optional `discount`; an implementation in an overlay owes the method.
+- **Two new nullable columns record which method a document was made under**: `orders.vat_method`
+  (`per_rate` from 0.108.0) and `invoices.vat_summary` (the per-rate summary an invoice or a
+  correction was issued with). `null` is a document from before; nothing is backfilled. A third,
+  `return_case_items.default_discount_amount` (default `0`), records the discount a refund carries.
+
+##### Other ports and shapes
+
+- **`CatalogProductReadPort`** gains `listPackagingUnitsByProductIds`, and its records
+  `minOrderQuantity`, `returnable` and `minOrderUnits`: a typed stub of the port must add them.
+- **`CartWritePort.addItems`** adds lines in batches of up to 200 (`onBelowMinimum`,
+  `replaceExisting`, `keepRepeatedLines`); the new `OrderQuoteSourcePort` (`orderQuoteSourcePort`,
+  owner `orders`) says whether a basket's quote-seeded lines keep their exemption.
+- **Defaulted reply keys** (`itemGroups`, `groupId`, `position`, and `groups` on quote document
+  data) make the inferred types require them: code that builds a `QuoteRequest`, `QuoteRequestItem`,
+  `Order`, `OrderItem` or `QuoteRequestDocumentData` literal must now supply them.
+  `adminPatchQuoteRequestSchema` and `adminCreateQuoteRequestSchema` are refined objects, so
+  `.extend()` and `.omit()` on them are no longer available.
+- **`CustomFieldDefinitionRecord`** requires `carryTo`, and `CustomFieldEntityTypeInfo` has
+  `carryTargets`; a hand-built value needs them. `customFieldListFilterPort` and
+  `customFieldCarryPort` are new.
+- **`request.responseLanguage()`** is available on every request of a composition that registers
+  the error envelope; registering the envelope twice with different language resolvers now throws.
+- **A stored `grouping: null`** on a document template's line-items table now means *the
+  document's groups* (it meant no grouping); a table that must stay flat stores `{ by: 'none' }`.
+- **`mod-crm`'s admin layer** has optional peer dependencies `@tiptap/react` and
+  `@tiptap/starter-kit` (`^3`), which the admin application already carries.
+
+#### In an existing storefront {#after-0-108-0-storefront}
+
+The pricing routes a storefront calls keep their paths, so a storefront created by an earlier
+release keeps rendering prices. What it does not show until its files are brought over from the
+release's storefront: a selected variant's own price on the product page, a sale shown as the list
+price struck through beside *Your price*, the buyer price as compare-at on product cards, and the
+list price beside a lower buyer price. The files are `app/(catalog)/p/[slug]/page.tsx`,
+`app/page.tsx`, `components/ProductCard.tsx`, `components/PriceTag.tsx`,
+`components/VariantPicker.tsx`, `components/SearchAutocomplete.tsx`,
+`components/pricing/BaseSalePriceBlock.tsx`, `components/pricing/PdpPriceToggle.tsx`,
+`lib/api/pricing.ts` (where `ResolvedPrice.baseListId` is now `string | null`) and the pricing
+strings in `lib/i18n/messages.ts`. The variant picker of an earlier storefront showed a variant's
+*Price override*; that field is no longer sent, so the picker shows no price for a variant until
+`VariantPicker.tsx` is brought over.
+
+The release's storefront also shows a unit price with its significant places, up to four
+(`0,0125 zł`) — product cards, rows, the product page, the basket, the order and quote pages —
+through `formatMoney(…, { unitPrice: true })` and `grossUnitPriceFromNet` in `lib/i18n/money.ts`,
+and lets a quote proposal be typed at four places. A storefront created earlier shows such a price
+rounded to two places, while the basket charges the four-place price: bring over
+`lib/i18n/money.ts`, `components/ProductCard.tsx`, `components/ProductRow.tsx`,
+`components/PriceTag.tsx`, `components/VariantPicker.tsx`, `components/SearchAutocomplete.tsx`,
+`components/pricing/BaseSalePriceBlock.tsx`, `components/CartLine.tsx`,
+`components/orders/OrderItemRows.tsx`, `components/rfq/RfqDraftView.tsx`,
+`app/(account)/quote-requests/[id]/page.tsx` and `lib/analytics/ecommerce.ts`.
+
+The release's storefront also shows minimum order quantities (product page, card, basket,
+checkout, quick order, quote draft, shopping list), the returnable state of each line in the
+return form, and a quote's and an order's line groups. A storefront created earlier does not: its
+buyers meet the server's refusals — `422 PRODUCT_BELOW_MINIMUM_QUANTITY`,
+`422 RETURN_LINE_NOT_RETURNABLE` — with the server's message, and see an order's or a quote's
+lines ungrouped, in display order. The changes are in the reference storefront between `v0.107.0`
+and `v0.108.0`: `git diff v0.107.0 v0.108.0 -- storefront` in the platform repository lists them.
+
+This section was written on 2026-10-23, 2026-10-24 and 2026-10-25 against the release branch of
+the pricing change (`feat/160-pricing-model-v2`) and `master` since `v0.107.0`, read from the changesets of the
+release against its migrations, manifests, routes and the reference storefront's history. No instance had been upgraded with
+`pnpm run upgrade 0.108.0` when it was written; the order of the steps and the storefront edits are
+untried.
+
+### After upgrading to 0.109.0 {#after-0-109-0}
+
+`pnpm run upgrade 0.109.0` moves the packages of the release from `0.108.0` and applies its
+migrations — twenty-four for modules of earlier releases (each runs where its module is declared), and six more for the two new
+modules, `tasks` and `projects`, which run only once an instance declares them. **Two changes are
+breaking for stored data and need a decision from you**: a product's status is `active` or
+`inactive`, `draft` is gone and archiving is its own action
+([Products](#after-0-109-0-product-status)); and the megamenu becomes the storefront's navigation
+bar, with every stored top-level item turned into a tab ([Navigation bar](#after-0-109-0-megamenu)).
+The page builder's *Image slider* block is removed in favour of the *Carousel*
+([Page builder](#after-0-109-0-page-builder)). Beside them the release puts the language into the
+storefront URL, gives product data a value per sales channel and language, makes a quote's validity
+bind order placement, places orders taken for a customer without touching the customer's basket,
+restarts a storefront that has stopped answering, keeps each administrator's Admin UI preferences
+on the server, hides a library file from a reader who may not see the records using it, and brings
+the storefront's buyer-facing text into English and Polish. The steps below say what to do, in
+order; each entry after them stands on its own, so read the ones for the parts of the platform you
+use.
+
+#### What to do, in order {#after-0-109-0-steps}
+
+Before the upgrade:
+
+1. **Stop every process of the previous release before you migrate**, API and workers alike.
+   `Migration20261028T173317CoreSalesChannelsRetireIsPublic` drops `sales_channels.is_public`,
+   which the previous release reads. On a database the platform has never started on, start the
+   previous release once first — the reason is in [Sales channels](#after-0-109-0-channel-prices).
+2. **Note the CMS pages that use the *Image slider* block.** The block is removed: its content stays
+   stored but the storefront renders nothing for it, and nothing converts it
+   ([Page builder](#after-0-109-0-page-builder)).
+
+The upgrade itself:
+
+3. **Run `pnpm run upgrade 0.109.0`.** `setup` applies the migrations module by module, in the
+   order of the modules' dependencies, and each module's own in the order of their stamps. Grouped
+   by module:
+
+   | Migration | Module | What it does |
+   | --- | --- | --- |
+   | `Migration20261028T173317CoreSalesChannelsRetireIsPublic` | `core` | Gives each channel that had `is_public` off its own `pricing.unauthenticated_display_mode = none`, then drops `sales_channels.is_public` — see [Sales channels](#after-0-109-0-channel-prices) |
+   | `Migration20261029T152922CoreSalesChannelsPrefixDefaultLanguage` | `core` | `sales_channels.prefix_default_language`, off for every existing channel — see [the language in the URL](#after-0-109-0-language-in-url) |
+   | `Migration20261030T145645AdminActionsKeywordsKey` | `admin_actions` | Nullable `module_actions.keywords_key`, filled by the next install or boot reconcile |
+   | `Migration20261027T160234AdminUsersAdminUserPreferences` | `admin_users` | Table `admin_user_preferences` — see [Admin UI](#after-0-109-0-admin) |
+   | `Migration20261022T035133CatalogProductScopes` | `catalog` | Tables `product_channel_scopes` and `product_channel_language_scopes`, empty |
+   | `Migration20261022T054223CatalogProductUrlKeys` | `catalog` | Tables `product_url_keys` and `product_url_redirects` |
+   | `Migration20261025T222634CatalogProductStatusDropDraft` | `catalog` | Archives every `inactive` product, then turns every `draft` into `inactive` — see [Products](#after-0-109-0-product-status) |
+   | `Migration20261026T033453CatalogProductMediaScopes` | `catalog` | `gallery_items.alt_text`, tables `gallery_item_channel_hidden` and `gallery_item_channel_labels` |
+   | `Migration20261026T084533CatalogAttachmentPackagingTranslations` | `catalog` | Per-language names and descriptions of attachments and packaging units, table `product_attachment_channel_hidden` |
+   | `Migration20261025T215911SeoMetaOverrideChannelScope` | `seo` | Nullable `seo_meta_overrides.sales_channel_id`; `locale` becomes nullable, one of the two required |
+   | `Migration20261022T163218CmsBrandTokens` | `cms` | Table `cms_brand_tokens`, empty: every block reads the default tokens until you set your own |
+   | `Migration20261023T052237CmsPageTreeAndShare` | `cms` | `cms_pages.parent_page_id`, `breadcrumbs_visible` (`true`), `breadcrumbs_scheme` (`light`) and `share_image_asset_id` |
+   | `Migration20261027T165458CmsPageParentPathInUrl` | `cms` | `cms_pages.parent_path_in_url`, `false` for every page, so no URL moves |
+   | `Migration20261028T090524CmsPageBreadcrumbsOverlay` | `cms` | `cms_pages.breadcrumbs_overlay`, `false` |
+   | `Migration20261029T131218CmsPageTranslations` | `cms` | `cms_pages.translations`, empty: every page reads as before |
+   | `Migration20261023T063013BlogPostMainImage` | `blog` | Nullable `blog_posts.main_image_asset_id` |
+   | `Migration20261029T162855MegamenuNavigationBar` | `megamenu` | `presentation`, `alignment` and `audience` on `megamenu_items`; every top-level item becomes a start-aligned `mega` tab for everyone — see [Navigation bar](#after-0-109-0-megamenu) |
+   | `Migration20261029T190956MegamenuTabClickNavigates` | `megamenu` | `megamenu_items.click_navigates`, `false` |
+   | `Migration20261027T020030CrmOpportunityReferenceDocuments` | `crm` | Admits references to quote requests and tasks |
+   | `Migration20261028T143444CrmOpportunityReferenceKinds` | `crm` | Admits references to opportunities and projects |
+   | `Migration20261102T121950CartsCartItemQuoteRequest` | `carts` | Nullable `cart_items.quote_request_id`, backfilled for the agreed lines of a basket filled from a quote — see [Quote validity](#after-0-109-0-quote-validity) |
+   | `Migration20261102T122014CartsCartStatusWorking` | `carts` | Admits the basket status `working` — see [Working baskets](#after-0-109-0-working-basket) |
+   | `Migration20261025T145041ProductFeedsGoogleTemplatePackFields` | `product_feeds` | Three pack fields on the installed Google Merchant Center template — see [Product feeds](#after-0-109-0-feed-packs) |
+
+   Declaring `tasks` adds `Migration20261026T133731TasksInit` and
+   `Migration20261028T140002TasksTaskManagement`; declaring `projects` adds
+   `Migration20261026T144350ProjectsInit`, `Migration20261026T231555ProjectsLinkOrganization`,
+   `Migration20261027T172441ProjectsValueChanges` and `Migration20261028T143448ProjectsReferenceKinds`
+   (step 13). All six only create the modules' own tables and seed their default statuses,
+   priorities and roles.
+
+After the upgrade, before the instance takes traffic again:
+
+4. **Run one search reindex per sales channel** (Bulk actions page), so the search index carries
+   each product's per-channel and per-language state ([Products](#after-0-109-0-product-status)).
+5. **Restore the products you mean to sell again.** Every product that was `inactive` is now
+   archived, and setting it `active` does not bring it back. Open **Archived products**
+   (`/catalog/products/archived`), select them and choose **Restore**.
+6. **Bring the storefront over.** A storefront created by an earlier release keeps working against
+   this one, but it does not show the navigation bar's new tabs, the language-prefixed URLs, the
+   bilingual text, the quote-validity notice at checkout or the contact form, and it is not
+   restarted when it stops answering. What each needs is in the entries below; the shortest path is
+   to bring over the release's storefront as a whole — `git diff v0.108.0 v0.109.0 -- storefront`
+   in the platform repository lists every change. At the very least copy
+   `scripts/supervise.mjs` and the Dockerfile's last stage, and set `init: true` on the storefront
+   service ([Storefront supervisor](#after-0-109-0-storefront-supervisor)).
+7. **Check `REVALIDATE_SECRET`**: it must be the same value in the backend's `.env` and the
+   storefront's. With different values the storefront refuses every revalidation, so a cached page
+   — a product page now among them — stays stale until its time window runs out; the backend logs
+   the refusal
+   ([Cache revalidation](#after-0-109-0-revalidation)).
+
+Whenever it suits you:
+
+8. **Review the navigation bar** on the menu editor (*Megamenu*): every stored top-level item is
+   now a *mega* tab, and the release's storefront header no longer adds *All categories* or the
+   Quick Order button by itself — add them as tabs if you want them
+   ([Navigation bar](#after-0-109-0-megamenu)).
+9. **Rebuild the pages of step 2** with a *Carousel* and one *Carousel image* per slide.
+10. **On a channel that had the public-channel flag off, check what signed-in buyers see**: they now
+    see prices according to their display mode ([Sales channels](#after-0-109-0-channel-prices)).
+11. **Add the root `worker` script** if you run the queue consumers in their own process
+    ([Worker script](#after-0-109-0-worker-script)).
+12. **Set the new settings you want**: *Contact form* recipients per sales channel
+    (`cms.contact_form_recipients`, needed before the *Contact form* block sends anything), the
+    shop's logo and social profiles (`shop.logo_asset_id`, `shop.social_profiles`, used by the
+    storefront's structured data) and the *Reporting time zone* (`analytics.reporting_time_zone`,
+    `UTC` by default).
+13. **Decide whether to add `tasks` and `projects`**
+    ([Tasks and Projects](#after-0-109-0-tasks-projects)).
+14. **Check the new peer dependencies** ([Dependencies](#after-0-109-0-dependencies)).
+
+#### Product feeds: a price below one cent is published as a pack {#after-0-109-0-feed-packs}
+
+- **What changed.** Until this release a product feed rounded every price to two decimal places, so
+  a product priced 0.0125 PLN was published as 0.01 PLN while its product page showed 0,0125 zł — a
+  price mismatch Google Merchant Center disapproves products for. A price with more than two
+  significant decimal places is now published as the price of a **pack** of 10, 100, 1 000 or
+  10 000 pieces — the smallest that makes it exact to the grosz: 0.0125 PLN is published as 100
+  pieces at 1.25 PLN (1.54 PLN on a gross feed at 23 %). The pack size goes in the template's pack
+  fields. **A price with two decimal places is published exactly as before**, byte for byte.
+- **The predefined Google Merchant Center template gains three fields**, after `g:sale_price`:
+  `g:multipack`, `g:unit_pricing_measure` and `g:unit_pricing_base_measure`. On an existing
+  instance the migration `Migration20261025T145041ProductFeedsGoogleTemplatePackFields` adds them
+  to the installed template. They are empty, and left out of the file, for every product priced to
+  the grosz.
+- **A product the template cannot publish as a pack is left out of the feed**, where it used to be
+  published with a rounded price. That is every such product in a feed on the Meta, Amazon, eBay or
+  Allegro template, and in a feed on your own copy of the Google template. The run lists each one
+  under the new reason `sub_cent_price_without_pack_field`. What to do: after the upgrade, open the
+  latest run of each feed; if the reason appears and the product belongs in that feed, add a field
+  bound to the source *Pack size (prices below one cent)* to the template — in a copy of the Google
+  template as `g:multipack`, with `g:unit_pricing_measure` and `g:unit_pricing_base_measure` bound
+  to the two *pack as a count* sources. A run that leaves out more than half its items fails with
+  `skip_threshold_exceeded` and keeps serving the previous file, which still carries the rounded
+  prices — so do not leave such a failure alone.
+- **The landing page.** The storefront's product page shows the price of one piece. Google's
+  multipack rules ask the landing page to show the multipack's price, so watch the Merchant Center
+  diagnostics for products published as packs.
+- **For API clients and integrators**: `feedFieldSourceKindSchema` gains `pack_quantity`,
+  `pack_unit_pricing_measure` and `pack_unit_pricing_base_measure`, and `feedRunIssueReasonSchema`
+  gains `sub_cent_price_without_pack_field` and `sub_cent_price_beyond_pack_limit`. A client that
+  validates a template, an exported template document or a run's issues against a closed list must
+  accept them.
+- **For overlay authors**: `FeedItemPrice` gains `taxRatePercent: number | null`, and
+  `ResolveFeedItemInput` an optional `templateFields`. An overlay that replaces the item field
+  resolver receives both and publishes whatever it writes: to publish a sub-cent price as a pack it
+  applies the same rule, with `feedPackQuantity` from `services/feed-pack.ts`.
+
+#### Quotes: a discount below one grosz prints "—" {#after-0-109-0-quote-discount}
+
+- **On the quote PDF**, and in the document template editor's preview, a line discount or a discount
+  total that is real but rounds to 0.00 — 0.0001 PLN a unit over three units, say — prints "—"
+  instead of "0,00 zł", which read as "no discount". The amount itself is unchanged, so list value
+  − discount = net still holds on the document. Nothing to do.
+- **On the admin quote request screen**, the *Difference* column shows a difference of unit prices
+  with its significant places, up to four — −0.0001 PLN — instead of rounding it to 0.00.
+- **For module and overlay authors**: a document value of kind `money` may carry
+  `belowMinorUnit: true`. `formatDocumentValue` prints it as "—" and `sumDocumentValues` keeps the
+  mark when the sum is still zero; a custom block that formats values some other way should do the
+  same.
+
+#### Invoices, payments and order totals: money rules of issue #428 {#after-0-109-0-money}
+
+**For operators.**
+
+- **An invoice counts every refund made before it was issued** (issue #428). Until this release a
+  VAT invoice deducted from what was paid only the refunds the payment gateway reported. It now
+  also deducts a return settled with a refund by bank transfer, for an order not paid through a
+  gateway, and a return settled as a credit to the credit limit; an order an operator marked as
+  refunded counts as refunded in full — with nothing captured, and also with a captured payment
+  refunded by hand (for example after a refund anomaly, below), never adding the mark to a gateway
+  refund already recorded. So an order refunded in full this
+  way before it was invoiced is **not invoiced** any more — issuing answers
+  `422 INVOICE_ORDER_REFUNDED`, and automatic issuance skips it and logs why — and one refunded in
+  part is invoiced with only what was kept as paid. Invoices issued before the upgrade are not
+  changed. With the `returns` module switched off, only the gateway's refunds are deducted.
+- **An invoice never shows a negative amount due** (issue #428). When more was paid than the
+  invoice's gross, the amount due is 0 and the difference is shown as the **overpayment** — a row
+  on the invoice screen and a *Nadpłata* line on the PDF. An invoice template edited before the
+  upgrade prints the line too, labelled *Nadpłata*; the label and a switch to hide the line are in
+  the totals block of the template editor. A correction, whose gross is negative, now shows 0 due
+  and the amount to be returned as its overpayment.
+- **The minimum order value takes at most two decimal places** (issue #428). Saving
+  `orders.min_order_value` with more is refused with `400 AMOUNT_PRECISION_EXCEEDED`, as every
+  other typed amount is; a value already stored is read as before. Nothing to do unless a script
+  writes the setting with more places.
+- **A gateway refund amount with more than two decimal places is refused, not rounded** (issue
+  #428). The payment keeps its refunded amount and status, the refusal is logged with the payment,
+  the order, the reported amount and the gateway's refund reference, and the payment's history
+  carries `providerDetails.refundAnomaly`. The gateway's webhook is still acknowledged, so it is not
+  delivered again: check such a refund with the gateway and settle it by hand.
+- **A line group's summary on an order adds up to the order's own VAT method** (issue #428). The
+  admin order screen's group summaries took a placed order's gross as the sum of its line totals,
+  each line's own rounding, which could be a cent away from the VAT per rate the order charged.
+  They now take the VAT per rate on the sum of the group's net amounts; the line totals stay as
+  shown.
+
+**For API clients and integrators.**
+
+- **An invoice carries `overpayment`, and `amountDue` is never negative** (issue #428): on
+  `GET /api/v1/admin/invoices/:id` and every reply carrying an invoice detail, `amountDue` is
+  `max(0, grossTotal − paidTotal)` and the new `overpayment` is `max(0, paidTotal − grossTotal)`.
+  A client that read a negative `amountDue` as an overpayment reads `overpayment` instead. The
+  template merge field `{{var invoice.overpayment}}` is new beside `{{var invoice.amountDue}}`.
+- **`paidTotal` of an invoice issued after the upgrade deducts refunds made outside `payments`**,
+  and `POST /api/v1/admin/orders/:orderId/invoices` answers `422 INVOICE_ORDER_REFUNDED` for an order
+  refunded in full that way — see the operators' entry above.
+- **A gateway module calling `receivePaymentPort.reflectRefund` with more than two decimal
+  places** gets `{ paymentId, changed: false }` and nothing recorded, where the amount used to be
+  rounded half-up. Report the gateway's amount in major units with at most two places.
+
+**In an existing storefront.**
+
+The release's storefront takes a line group's summary on the order page from the VAT per rate on
+the group's net amounts (`orderSectionTotals` in `components/line-groups/GroupedLineRows.tsx`,
+called by `components/orders/OrderItemRows.tsx`), where an earlier storefront adds up the line
+totals and can show a summary a cent away from the order's VAT. Bring over those two files to
+match; nothing breaks without them.
+
+This entry was written on 2026-10-25 against `master` at `9e43c3412` and the branch of issue
+#428 (`fix/428-money-followups`). No instance had been upgraded to 0.109.0 when it was written.
+
+#### Sales channels: the public-channel flag is retired into the display modes {#after-0-109-0-channel-prices}
+
+**For operators.**
+
+- **What changed** (issue #492). A sales channel used to carry a price-visibility flag of its own
+  (`is_public`, never shown in the admin). With it off — the state of every channel created by the
+  admin, by the boot-time default-channel reconciler and of the demo's *PL B2B VIP* — the channel
+  sent no price to **anyone**, signed-in buyers included. The flag is gone. Whether a viewer sees a
+  price is decided by the display modes alone: *Pricing settings* for every channel, the *Settings*
+  screen for one channel, and the organization, category and product overrides.
+- **What the migration does.** `Migration20261028T173317CoreSalesChannelsRetireIsPublic` gives every
+  channel that had the flag off `pricing.unauthenticated_display_mode = none` as that channel's own
+  value, so its anonymous visitors still see no prices, and then drops the column. A channel that
+  already had its own value for that setting keeps it.
+- **What you will see.** On a channel that had the flag off, **signed-in buyers now see prices**
+  according to their display mode, and may sort and filter by price. If that is not what you want
+  for a channel, set its *Default price display mode* (`pricing.default_display_mode`) to *None* on
+  the *Settings* screen for that channel, or set an override for the organizations concerned. A
+  product or category display-mode override applies to anonymous visitors too, as it always did, so
+  a product overridden to *Gross only* shows its price to guests on such a channel.
+- **Before migrating**, stop the processes running the previous release: the column they read is
+  dropped. The migration refuses a database that has a channel with the flag off but no registered
+  `pricing.unauthenticated_display_mode` setting (one the platform has never started on); start the
+  previous release once so the settings are registered, then migrate.
+
+**For API clients and module authors.** No HTTP response carried the flag, so none changes shape;
+a viewer whose display mode is `none` is answered as described in the `price_lists` module's
+documentation (`resolvedPrice.displayMode: 'none'` and no amount, where such a channel used to
+answer `resolvedPrice: null`). In code, `SalesChannel.isPublic`, `CachedChannel.isPublic`,
+`ResolvedSearchChannel.isPublic` and `CatalogResolvedChannel.isPublic` are removed — drop them from
+anything you construct — and the channel cache key moves to `sales-channels:v4:`.
+
+This entry was written on 2026-10-28 on the branch of issue #492 (`fix/492-retire-ispublic`).
+
+#### Products: two statuses, Archive and Restore, and data per channel and language {#after-0-109-0-product-status}
+
+This release gives a product's status, publication window, audience, URL key, SEO texts, gallery,
+attachments, packaging-unit names and order rules a value per sales channel and per language, and it
+changes the product status model. **The status change is breaking**; the rest is additive.
+
+**For operators.**
+
+- **A product's status is `active` or `inactive`; `draft` is gone.** The upgrade's migration turns
+  every `draft` product, and every `draft` override per channel or channel × language, into
+  `inactive` without archiving anything. New and duplicated products start `inactive`.
+- **`inactive` no longer archives.** It switches a product off where it is set — the product is not
+  listed, not searchable, not orderable, and its page answers as for a product that does not exist —
+  and nothing more. Archiving is its own action, **Archive** / **Restore**, in the product editor,
+  in bulk on the product list and from the admin assistant, behind `catalog:write`.
+- **Every product `inactive` at the upgrade stays archived and needs an explicit Restore.** Until
+  this release `inactive` was how a product was archived, so the migration keeps such products
+  archived (with their archived time, or their last-update time when they had none). Setting one
+  `active` does **not** bring it back: open the product list's **Archived** tab
+  (`/catalog/products/archived`, or **Archived products** in the command palette), select the
+  products to sell again and choose **Restore**.
+- **An archived product answers "gone" (`410`) only to a buyer who could otherwise see it** — in its
+  channel, language and audience; everyone else gets the absent product's `404`. An archived product
+  can no longer be added to a basket or put on a quote request.
+- **A saved product-list view that used the Draft status** opens on **All**, with a note saying so.
+- **After deploying over an existing database, run one search reindex per sales channel** (Bulk
+  actions page), so the search index carries each product's per-channel and per-language state.
+
+**For API clients and integrators.**
+
+- `status` takes `active` or `inactive` only. `draft` and the legacy write alias `archived` are
+  refused with `400 VALIDATION_FAILED` — on `POST` / `PATCH /api/v1/admin/catalog/products`, the bulk
+  update, `POST …/products/resolve-ids`, the API-key upsert `PUT /api/v1/catalog/products/by-sku/:sku`
+  and a catalogue import. Send `inactive` where you sent `draft`; to archive, call
+  `POST /api/v1/admin/catalog/products/:id/archive` (`…/restore` to bring it back), or the bulk update
+  with `fields: { archived: true }` (`false` restores) as the only field.
+- **Admin product list:** `counts.draft` is replaced by `counts.archived` (`counts` is
+  `{ all, active, inactive, archived }`), and the filter `status=archived` by `archived=only`
+  (`archived=exclude|include|only`, default `exclude`; `includeArchived=1` still means `include`).
+- **`product.archived.v1`** means "archived by the Archive action", no longer "status moved to
+  `inactive`"; Restore sends `product.updated.v1` with `changedFields: ['archivedAt']`.
+- **Quote requests** refuse an archived product: an operator's create and edit answer
+  `409 PRODUCT_ARCHIVED` with `details.productIds`, a customer's paths the absent product's `404`.
+- The Catalog and Quote requests module pages describe the rest — the per-channel and per-language
+  values, URL keys and redirects, and the external order intake's `404 PRODUCT_NOT_FOUND` for a
+  product the key's Organization cannot see in its channel.
+
+**For module and overlay authors.**
+
+- **`productStatusSchema`** is `active | inactive`; `coerceProductStatusWrite` and
+  `productStatusWriteSchema` are removed — use `productStatusSchema`.
+- **`CatalogGalleryPort.listForProducts(productIds, channelId)`** and
+  **`CatalogGalleryPort.baseImageUrls(productIds, channelId)`** take a required `channelId`
+  (`string | null`): pass the sales channel you serve, or `null` for the previous, global answer. An
+  overlay implementing the port leaves out the items hidden in that channel.
+- **`CatalogBulkImportPort`** has a new required method, `exportScopedStatuses()`.
+- **`ProductDetail`** has a required `paths` (`productPagePathsSchema`): a literal you build must
+  carry it.
+- **`seoMetaOverrideSchema.locale`** and **`cartViewLineSchema.productSlug`** may be `null`.
+- **A new admin zone, `product.editor.seo.after`**, at the end of the product editor's SEO tab. Its
+  props are `ProductEditorZoneProps` (`productId`). The `seo` module's link to its meta-tag editor
+  is a contribution to it, so the Catalog module no longer names `seo`:
+
+  ```ts
+  import { zoneComponent, type AdminContributions } from '@endora-commerce/admin-kit/contributions';
+
+  export const contributions: AdminContributions = {
+    zones: [
+      zoneComponent('product.editor.seo.after', () => import('./zones/ProductSeoNote.js'), {
+        requiredPermission: 'catalog:read',
+      }),
+    ],
+  };
+  ```
+
+  A contribution vanishes with its module, and a failing one does not take the tab with it.
+
+**In an existing storefront.** The release's storefront renders the product page's canonical and
+alternate-language links from the response's `paths`, and lets the link's `?lang=` beat the
+language cookie on the product page. Bring the release's storefront over, so that the product
+page's links follow the per-language URL keys.
+
+This entry was written on 2026-10-27 against the branch of spec `163-product-data-scopes` (`feat/163-product-data-scopes`).
+
+#### Storefront: the language is part of the URL {#after-0-109-0-language-in-url}
+
+- **What changed.** A storefront URL now names its language as its first path segment —
+  `/pl/p/wiertarka`, `/en/p/drill` — so one URL means one language for every visitor and every
+  search engine. Each channel language gets a derived prefix; a sales channel setting,
+  **Prefix the default language in URLs**, decides whether the default language is prefixed too.
+- **Your existing channels keep their addresses.** The upgrade migration
+  (`Migration20261029T152922CoreSalesChannelsPrefixDefaultLanguage`) sets the setting **off** on
+  every channel that exists when it runs: default-language URLs stay unprefixed (`/p/wiertarka`).
+  Channels created afterwards start **on**.
+- **Other languages gain prefixes either way.** A non-default-language product link was
+  `/p/<key>?lang=<language>`; it now answers a permanent redirect (308) to `/<prefix>/p/<key>`.
+  Sitemaps, product feeds, canonical and `hreflang` links and e-mails emit the prefixed URLs.
+- **To adopt prefixes for the default language too**, open *Sales channels*, edit the channel and
+  switch **Prefix the default language in URLs** on. Every default-language URL then moves under
+  its prefix; an unprefixed URL is redirected (307) to the language chosen by `?lang=`, the `lang`
+  cookie or the browser's languages. Nothing indexed or bookmarked breaks. Browsers may keep a
+  cached permanent redirect for up to an hour after you flip the setting.
+- **CMS pages.** A page slug whose first segment is a channel's language prefix (`en`, `pl/…`) can
+  no longer be saved. An existing one is marked in the CMS page list as hidden by the language
+  prefix: rename its slug.
+- **Third-party code** calling `productPath` from `@endora-commerce/contracts` must pass the
+  channel's URL facts: `productPath({ key, languageCode, channel })` replaces
+  `productPath({ key, languageCode, channelDefaultLanguage })`.
+
+#### Storefront: the message catalogue is split into namespaces {#after-0-109-0-message-namespaces}
+
+- **What changed.** The storefront's message catalogue, `lib/i18n/messages.ts`, was one file: the
+  `MessageKey` union and the `en-US` and `pl-PL` blocks. Its header invited a theme to replace the
+  file or extend the record. The blocks now live in namespace files under `lib/i18n/messages/`:
+  `core.ts` holds every key the old file held, with the same wording, and `commerce.ts`,
+  `account.ts`, `auth.ts`, `chrome.ts` and `content.ts` hold the strings the storefront showed in one
+  language only and now shows in both. Each namespace is written with `defineMessages` from
+  `messages/define.ts`, which refuses, at type-check time, a Polish block that lacks a key of the
+  English one or has a key it does not. `messages.ts` composes them: `MessageKey` is derived from the
+  namespaces' keys, and `MESSAGES`, `tForLocale`, `CATALOGUE_LOCALES` and `SupportedLocale` keep their
+  shape. A new helper, `lib/i18n/format.ts`, fills a message's `{name}` placeholders.
+- **Components take the language.** Components that rendered English or Polish only now read their
+  words from the catalogue, and a client component receives the page language as a `locale` prop
+  from the server component that renders it — `components/contact/ContactForm.tsx`, for example. A
+  page of your own that renders such a component passes it the `locale` from `getServerContext()`.
+- **If your storefront left `lib/i18n/messages.ts` as it was**, bring over `lib/i18n/messages.ts`,
+  the whole `lib/i18n/messages/` directory and `lib/i18n/format.ts` together, with the components.
+- **If you changed wording in `lib/i18n/messages.ts`**, bring the files over, then make the same
+  change where the key is now declared: `git grep "'<key>'" lib/i18n/messages/` names the file —
+  `core.ts` for every key the old file had. Keep a list of those edits; they are edits to the
+  release's files and have to be made again after each upgrade.
+- **If you added keys of your own**, do not add them to `core.ts`. Put them in a namespace file of
+  your own — for example `lib/i18n/messages/theme.ts`, written with `defineMessages({ 'en-US': {…},
+  'pl-PL': {…} })` like the others — and add it to `MESSAGE_NAMESPACES` in `lib/i18n/messages.ts`.
+  A key may be declared in one namespace only: a second declaration would silently replace the
+  first.
+- **If you replaced `lib/i18n/messages.ts` with a catalogue of your own**, the release's components
+  name keys your file does not have, so the storefront no longer type-checks. Bring the release's
+  catalogue over and move your wording into it as above, rather than replacing the file again.
+
+This entry was written on 2026-10-31 against the branch of issue #85
+(`debt/85-storefront-i18n-infra` and the area branches stacked on it). No instance had been
+upgraded with it when it was written.
+
+#### Orders: a quote's validity binds order placement {#after-0-109-0-quote-validity}
+
+**For operators.**
+
+- **What changed** (issue #167). A quote's *valid until* date used to bind only its conversion into
+  a basket: once the basket was filled from an accepted quote, it could be ordered at the agreed
+  prices at any time afterwards. Placement now checks every basket line still priced at its
+  agreement. **A basket filled from a quote whose validity has passed can no longer be ordered**,
+  and neither can one whose quote no longer applies — re-opened, cancelled, expired or deleted. The
+  buyer can still remove those lines, or ask for a new quote.
+- **With the `quote_requests` module switched off, such a basket is refused too**, because nothing
+  can confirm the agreed prices. Until this release it was placed at the agreed prices.
+- **What the migration does.** `Migration20261102T121950CartsCartItemQuoteRequest` records on each
+  basket line which quote it came from, backfilled for the agreed lines of every basket already
+  filled from a quote, so the rule also holds for baskets filled before the upgrade.
+
+**For API clients and integrators.** Placement answers `410 QUOTE_VALIDITY_ENDED` with
+`details.code` `lapsed`, `withdrawn` or `unavailable`; the order-total preview carries the same
+verdict as `quoteCommitmentRefusal` (`null` when nothing is refused).
+
+**In an existing storefront.** The release's storefront warns at checkout before the buyer tries to
+order (`components/checkout/QuoteValidityNotice.tsx`, used by `app/(commerce)/checkout/page.tsx`,
+with `lib/checkout/place-order-gate.ts` and `lib/api/orders.ts`). An earlier storefront shows the
+server's refusal when the order is placed; bring those files over to warn earlier.
+
+#### Orders placed for a customer leave the customer's basket alone {#after-0-109-0-working-basket}
+
+- **What changed** (issue #169). An order created by an operator in the Admin UI, a one-click buy
+  and an order taken through the external order intake used to empty and close the customer's
+  active basket — one filled from an accepted quote included — and place the order from it. They
+  now place from a separate **working basket** built from the order's lines; the customer's basket
+  is left exactly as it was, whether the order is placed or refused.
+- **What you will see.** Nothing new: a working basket is never listed on the carts screens and
+  never swept as abandoned. It ends `completed` with the order, or is deleted when the order is
+  refused. `Migration20261102T122014CartsCartStatusWorking` admits the new basket status `working`.
+- **For API clients and integrators**: a cart's `status` may be `working` (`cartStatusSchema`); a
+  client that validates statuses against a closed list must accept it.
+- **For module and overlay authors**: `CartWritePort.addItems`' option `replaceExisting: true` is
+  replaced by `workingBasket: true`, which returns a new cart; pass its id to
+  `OrderPlacementPort.placeOrder` as `workingBasketId`. An implementation of
+  `CartPlacementApplyPort` has to provide the new `readWorkingForPlacement` and
+  `discardWorkingBasket`.
+
+#### Storefront: a server that stops answering is restarted {#after-0-109-0-storefront-supervisor}
+
+- **What changed** (issue #152). Docker restarts a container that **exits**, never one that is only
+  *unhealthy*, so a storefront process that was alive but no longer answered stayed down until
+  someone restarted it. The release's storefront image runs the server under a supervising parent,
+  `scripts/supervise.mjs`, which probes `/robots.txt` and, after three unanswered probes in a row,
+  ends the server and exits `1`, so the restart policy starts a fresh container. Any HTTP answer
+  counts, a `500` or a `503` included. With the defaults a hung server is ended within about 50
+  seconds.
+- **New, optional environment variables** on the storefront service:
+  `STOREFRONT_SUPERVISOR_PROBE`, `STOREFRONT_SUPERVISOR_PROBE_URL`,
+  `STOREFRONT_SUPERVISOR_INTERVAL_SECONDS`, `STOREFRONT_SUPERVISOR_TIMEOUT_SECONDS`,
+  `STOREFRONT_SUPERVISOR_FAILURES`, `STOREFRONT_SUPERVISOR_START_GRACE_SECONDS` and
+  `STOREFRONT_SUPERVISOR_KILL_GRACE_SECONDS`. The defaults need none; a value the supervisor
+  cannot read stops the container at start. Their meaning is on
+  [Storefront process supervisor](./deployment/storefront-supervisor.md).
+- **`init: true`.** The compose examples (`deploy/compose.prod.yml`,
+  `deploy/three-host/compose.storefront.yml`) now set it on the storefront service, so Docker's
+  init reaps any process the server leaves behind.
+- **What to do in an existing storefront.** `endora upgrade` does not touch the storefront's own
+  files. Copy `scripts/supervise.mjs` from the release's storefront and the last stage of its
+  `Dockerfile`, whose command becomes
+  `CMD ["node", "storefront/scripts/supervise.mjs", "storefront/server.js"]`, then add
+  `init: true` to the storefront service of your compose file (`docker run --init` for a container
+  started by hand). Nothing else changes; without these edits the storefront runs as before,
+  unsupervised.
+
+#### Instance: a root `worker` script {#after-0-109-0-worker-script}
+
+A new instance's root `package.json` declares `worker`, so the separate worker tier is started with
+`pnpm run worker` beside `pnpm run start` for the API, as
+[Queue consumers](./operations/queue-consumers.md) describes. `endora upgrade` does not add it to an
+existing instance: run `pnpm -C backend run worker`, which is the same command, or add
+`"worker": "pnpm -C backend run worker"` to the root `scripts`. The operator commands throughout
+this documentation are now written in the form an instance runs them, from the instance root.
+
+#### Storefront cache revalidation: `REVALIDATE_SECRET` and its warnings {#after-0-109-0-revalidation}
+
+- **Product pages follow their product at once.** The backend now asks the storefront to drop a
+  product's cached page after the product changes, is archived, deleted or leaves a sales channel,
+  through the same `/api/revalidate` call it already made for categories and CMS pages
+  (`STOREFRONT_BASE_URL` and `REVALIDATE_SECRET`; nothing is asked without them).
+- **A refusal is logged.** Each call is bounded to five seconds, and a refusal — a `401` because the
+  two sides hold different `REVALIDATE_SECRET` values, a `400`, a `5xx` — is logged as a warning
+  with its status and the number of tags, never the secret. A warning repeated within a minute is
+  counted rather than written again, and the next one carries `suppressed`, the number held back.
+  If such warnings appear after the upgrade, set the same value on both sides.
+- **An instance installed with `endora install --no-storefront`** has an empty `REVALIDATE_SECRET`;
+  the installer now says so and prints the command that adds a storefront with the same value.
+
+#### Storefront: the megamenu becomes the navigation bar {#after-0-109-0-megamenu}
+
+**For operators.**
+
+- **What changed** (spec 168). A menu's top-level item is a **tab** with a presentation — *Link*,
+  *Dropdown*, *Mega* panel or *Panel with side list* — and an alignment, start or end. Two new item
+  kinds, **Group** (a heading and a column of a mega panel) and **Category tree** (the live
+  categories under a root, one to three levels deep), and an **audience** on every item —
+  everyone, guests, signed-in customers or chosen customer groups. A tab with a link of its own and
+  a panel can follow its link on click.
+- **What the migration does.** `Migration20261029T162855MegamenuNavigationBar` makes every stored
+  top-level item a start-aligned *Mega* tab shown to everyone, and converts nothing else. Saving a
+  menu now refuses a tab of a kind that cannot be one, a *Link* tab with children and a group,
+  external link or button with no label.
+- **What you will see.** The release's storefront header renders the menu's tabs and nothing else:
+  the hard-coded *All categories* trigger, the Quick Order button and the mobile drawer's Quick
+  Order promo are gone. Add them as tabs if you want them — a *Panel with side list* tab over a
+  category tree, and a link tab to Quick Order aligned to the end, as the demo menu does.
+
+**For API clients and integrators.** The megamenu wire contract changes without a compatibility
+period: a resolved item's `id` and `parentId` are strings, not uuids (a category a tree expands to
+is `<tree item id>:<category id>`), tabs carry `presentation` and `alignment`, and a `category-tree`
+item never appears in a resolved tree. An identified caller is answered with
+`Cache-Control: private, no-store`, since the answer depends on its audience. The cache prefix
+moves to `megamenu:v2:`.
+
+**In an existing storefront.** An earlier storefront still renders the stored menu, as mega panels,
+with its own *All categories* and Quick Order buttons, but it cannot render groups, category trees,
+the other presentations or the new tab-click behaviour. Bring over `components/Header.tsx`, the
+`components/Megamenu/` directory (`NavigationBar.tsx` and `panels.tsx` are new),
+`lib/api/megamenu.ts` and the navigation styles in `app/globals.css`.
+
+#### Page builder: the Carousel replaces the Image slider, and new blocks {#after-0-109-0-page-builder}
+
+**For operators.**
+
+- **The *Image slider* block (`cms.ImageSlider`) is removed.** A page that uses it keeps the block
+  in storage, but the storefront renders nothing in its place and the rest of the page renders as
+  before. Rebuild it with a **Carousel** (the former *Content slider*) holding one **Carousel
+  image** per slide: every image-slider option has a counterpart there. A stored *Content slider*
+  keeps its look — arrows over the edges, dots below.
+- **New blocks and options.** The Carousel gains a header, several slides per view per breakpoint,
+  a fade effect, control placements and an autoplay that is off by default, and accepts the new
+  item blocks *Carousel image*, *Carousel split*, *Link tile* and *Download tile*. New blocks:
+  *Contact form*, *Page navigation* (jump links to sections of the page), *Latest posts* and a
+  reshaped *Newsletter sign-up* that can collect subscriber attributes. Most blocks gain layout,
+  text and spacing options per breakpoint.
+- **Brand tokens.** One set of colours, colour schemes, fonts, type scale, button sizes, spacing and
+  widths every block reads, set globally and optionally per sales channel
+  ([Brand](./modules/cms/brand.md)). The upgrade stores none, so every page looks as before until
+  you set them.
+- **Pages.** A page can have a breadcrumb parent, breadcrumb display options, a sharing image, and
+  its own name, slug and description in each of its languages. None changes a stored page: a parent
+  shapes only the breadcrumb trail, and the parent's path joins the URL only when *parent path in
+  URL* is switched on for that page.
+- **The contact form sends nothing until it has recipients.** Set *Contact form* recipients
+  (`cms.contact_form_recipients`, up to ten addresses per sales channel, on the *Settings* screen or
+  through ⌘K / CTRL+K). Without them the form answers that it is unavailable. It e-mails each message through
+  the platform mailer with the visitor as Reply-To and stores nothing; submissions are limited to
+  ten per client address in ten minutes ([Contact form](./modules/cms/contact-form.md)).
+- **Blog.** A post has a main image, picked from the library, and its related products are shown as
+  product cards priced for the viewer.
+
+**For module and overlay authors.** `@endora-commerce/cms-components` no longer exports
+`ImageSlider`, `imageSliderTitleStyle`, the `components/image-slider-item` subpath or their types;
+`carouselImageFromImageSliderItem(item)` maps a stored image-slider item for code that converts
+content. `EmailMailerSendInput` gains an optional `replyTo`. `blogProductCardSchema`,
+`BlogProductCard` and `blogResolvedPostSchema.relatedProducts` are deprecated and are removed in a
+later minor: read `relatedProductIds` and fetch the products with
+`GET /api/v1/catalog/products?ids=…` as the viewer.
+
+**In an existing storefront.** The blocks render through `@endora-commerce/cms-components`, which
+the upgrade moves, but the contact form posts to the storefront's own `app/forms/contact/route.ts`
+(with `lib/api/contact-form.ts`), the newsletter sign-up to `app/newsletter/subscribe/route.ts`, and
+the blocks' words in the page language come from `lib/page-builder/` and
+`components/LocalizedCmsRenderProvider.tsx`; brand tokens are read by `lib/api/brand.ts`, and a
+post's related products by `app/blog/_components/RelatedProductsStrip.tsx`. Bring those over with
+the rest of the storefront (step 6).
+
+#### Tasks and Projects: two new modules {#after-0-109-0-tasks-projects}
+
+The release brings two new packages. Neither is required by any other module, so the upgrade does
+not declare them; [Adding a module that is new in a release](#adding-a-new-module) says how.
+
+- **`@endora-commerce/mod-tasks`** (module id `tasks`): Tasks for administrators — a number, a
+  title, a description, assignees, a due date, a status and a priority — on their own or linked to
+  records other modules own: orders, products, quote requests, opportunities and projects. Statuses,
+  their transitions, priorities and tags are configurable; reminders and a daily digest are sent by
+  e-mail. Permissions `tasks:read`, `tasks:write`, `tasks:see_private` and `tasks:configure`. See
+  [Tasks](./modules/tasks.md).
+- **`@endora-commerce/mod-projects`** (module id `projects`): Projects for one or more
+  Organizations, or internal, run through Stages by Members holding Project Roles, from templates,
+  with analytics. Permissions `projects:read`, `projects:write`, `projects:see_all`,
+  `projects:configure` and `projects:analytics`. It works without Tasks, and offers Tasks when that
+  module is on. See [Projects](./modules/projects.md).
+- **Once declared, each is switched on** (`tasks.enabled`, `projects.enabled`) and can be switched
+  off on `/platform/modules` without losing data. Give the roles that should use them the
+  permissions above on *Admin roles*.
+- **Without them** nothing changes, except that Sales opportunities can now also refer to other
+  opportunities, quote requests and — when the modules are present — Tasks and Projects.
+
+#### Library files follow the visibility of the records that use them {#after-0-109-0-asset-visibility}
+
+- **What changed** (spec 166). A file in the asset library used only by records a reader may not
+  see — a private or draft Task, a Project they are not a member of, an Opportunity outside their
+  reach — is hidden from that reader: it is left out of the library list, its search, the folders
+  and the file picker, and every admin route that takes its id answers as for a file that does not
+  exist. A file nobody uses, or one used by a product, category, CMS page, blog post or menu, is
+  visible to every library reader as before. The Platform administrator sees every file.
+- **Linking a file by id** — to a product's gallery, attachments or downloads, a category or blog
+  image, a menu item — refuses a file the administrator may not see exactly as a missing one.
+- **Deleting a folder with its contents** now refuses with `409 ASSET_REFERENCED` when any file
+  inside is still in use (issue #535). It used to delete such files.
+- Nothing to do: there is no migration and no new permission.
+
+#### Two-step verification {#after-0-109-0-two-step}
+
+- **One code admits one sign-in.** The same valid authenticator code or recovery code sent to
+  several sign-in attempts at once used to be accepted by each of them; it is now accepted once.
+- **Enrolment shows a QR code** beside the manual key, in the Admin UI's *Account security* and in
+  every setup answer (`qrSvg`, an SVG document to render as an image, never as HTML).
+- **One name.** Multi-factor sign-in is called **two-step verification** (Polish: *weryfikacja
+  dwuetapowa*) in every screen, setting name, permission label and message, in place of
+  "two-factor authentication" and "2FA". Identifiers, permission codes, setting keys and error codes
+  are unchanged, and the palette still finds *two-factor* and *2fa*.
+- `@endora-commerce/mod-mfa` now peers on `uqr` ([Dependencies](#after-0-109-0-dependencies)).
+
+#### Admin UI: preferences, pins, notifications and the palette {#after-0-109-0-admin}
+
+- **Preferences are kept on the server, per administrator** (spec 164): sidebar pins, folded sidebar
+  groups, the rail mode, each list's page size and its list-or-board choice follow an administrator
+  to every browser and device. On the first load after the upgrade, the page sizes the browser
+  remembered for the signed-in administrator are carried over once; the folded groups and rail mode
+  were not tied to an administrator and are reset, so everyone opens in the default sidebar layout
+  once. Nothing is kept in the browser's storage any more.
+- **Pins.** Every sidebar entry has a pin button; pinned entries come first, in a *Pinned* section
+  that can be reordered by dragging or with the keyboard. A palette result that leads to a sidebar
+  entry can be pinned with `Alt+Enter`.
+- **Every administrator reads their own notifications** on the bell, whatever their role (issue
+  #518). `admin:read` — now labelled *View notifications sent to all admins* — decides only whether
+  the broadcasts to all administrators are shown.
+- **Every module's screens are reachable from the command palette**, and the palette finds an
+  action by a word in the operator's language as well as by the English one. The Polish words now
+  come from the module bundles; `Migration20261030T145645AdminActionsKeywordsKey` stores the key the
+  next reconcile writes.
+- **Custom fields** are created in the same form that edits them, with a label per language and
+  options with their own labels.
+- **The Admin UI loads less code** (issue #175): the admin kit and shell can now be tree-shaken,
+  and in the platform's own build the admin entry chunk fell to about a third of its size.
+
+#### Prices withheld under display mode *None* {#after-0-109-0-display-mode-none}
+
+- **What changed** (issue #491). A viewer whose display mode is *None* — a guest on a shop that shows
+  prices only after sign-in, typically — used to have prices hidden by the storefront only, while
+  the API still sent them: the price, the base and sale prices, the list price and every tier. The
+  server now sends no amount to such a viewer, on listings, the product page, search, comparisons
+  and the resolved-price route; the storefront still renders "price on request".
+- **Price-sorted listing cursors are sealed** (issue #497): a cursor can no longer be decoded to
+  reveal a product, or a price, the viewer may not see. Paging is unchanged.
+- Nothing to do. A client that read a guest's prices from the API reads none.
+
+#### Messages and documents in the reader's language {#after-0-109-0-languages}
+
+- **Text the backend writes follows a language rather than being Polish in code** (issues #94, #95):
+  the new-organization notification is read in each administrator's language, its fallback e-mail
+  and the in-code order confirmation are written in the sales channel's language, the moderation
+  messages a buyer sees follow the request's language, and a bulk operation's log is shown in the
+  reader's language. A Polish channel or reader sees the same text as before; elsewhere the
+  new-organization notification, its fallback e-mail, the moderation messages and the bulk
+  operation log now read English where they read Polish.
+- **Invoices are unchanged**: they are printed in Polish, and that rendering is byte for byte the
+  same; their labels now come from the module's language bundle.
+- **Error messages are sentences** in English and Polish where 137 of each read as the error code
+  in Title Case. Error codes and HTTP statuses are unchanged.
+- **The storefront's buyer-facing text is in both languages**, every area — catalogue, basket,
+  checkout, account, sign-in, content and the page chrome (issue #85); see
+  [the message catalogue](#after-0-109-0-message-namespaces) for an existing storefront.
+
+#### Dependencies {#after-0-109-0-dependencies}
+
+The release adds peer dependencies an instance must resolve:
+
+| Package | Peer | Declare it in |
+| --- | --- | --- |
+| `@endora-commerce/mod-mfa` | `uqr` `^0` (the platform builds with `^0.1.3`) | `backend/package.json` |
+| `@endora-commerce/admin-kit` | `@tiptap/react` and `@tiptap/starter-kit` `^3.22.5` | `admin/package.json` |
+| `@endora-commerce/mod-cms` | `@fastify/rate-limit` `^10` | `backend/package.json` |
+| `@endora-commerce/mod-analytics` | `zod` `^4` | `backend/package.json` (already declared for the platform) |
+
+pnpm installs a missing peer by itself while `auto-install-peers` is on, its default, so the upgrade
+runs without these edits; declaring them pins the version in your own manifest and is required where
+that option is off. Then run `pnpm install`. `endora upgrade` moves only the release's own packages.
+
+#### For module and overlay authors {#after-0-109-0-authors}
+
+- **`@endora-commerce/admin-shell`'s re-export shims over `@endora-commerce/admin-kit` are removed**
+  (issue #97). None was reachable through the package's `exports`, so no import changes; a test that
+  mocks one with `vi.mock` must name the kit specifier, for example
+  `vi.mock('@endora-commerce/admin-kit/lib', …)`.
+- **`AuditLogEntry` from `@endora-commerce/contracts` is now `AuditLogEntryResponse`.** The old name
+  stays as a deprecated alias and is removed in the next minor; the shape is unchanged.
+- **Sales channel identity writes run through the Command Bus.** `SalesChannelsService.create` and
+  `update` need an ambient TenantContext — wrap a call outside a request in
+  `withSystemScope('<reason>', …)` from `@endora-commerce/platform/tenancy` — and lose their
+  optional `context` argument. The audit entry `sales_channel.identity.changed` now holds the
+  snapshot before and after.
+- **The cart-view schemas describe what the routes answer** (issue #128): several fields became
+  nullable or optional and none was narrowed, so everything that parsed before still parses.
+- **Palette keywords in a manifest are English**; words in another language go into the module's
+  bundle under the action's `keywordsKey` (issues #560, #573), resolved in the operator's language.
+- **`endora new module` writes its tests beside their subjects** and type-checks them. A package
+  scaffolded earlier keeps working; the changelog of `@endora-commerce/cli` says how to move its
+  `test/unit/` files.
+- **`@endora-commerce/cli/lib/sql-tables.js`** can read DDL against an existing table
+  (`{ ddl: true }`), so `check:module-boundary` now reports a migration that indexes or alters
+  another module's table (issue #108).
+
+This section was written on 2026-11-02 against the release branch `release/version-0.109.0`, read
+from the changesets of the release against its migrations, manifests, routes and the reference
+storefront's history; the entries from *Product feeds* to *the message catalogue* were written
+earlier, by the pull requests that made each change. No instance had been upgraded with `pnpm run upgrade 0.109.0` when it was written; the
+order of the steps and the storefront edits are untried.
+
+### After upgrading to 0.110.0 {#after-0-110-0}
+
+`pnpm run upgrade 0.110.0` moves the packages of the release from `0.109.0` and applies its
+migrations — twenty-six for modules of earlier releases (each runs where its module is declared),
+and one more for the new `forms` module, which runs only once an instance declares it. **Four
+changes drop or rewrite stored data and need a decision from you before you migrate**: a product's
+values now have three scopes, Global, Channel and Channel × language, and **the migrations drop every
+language-only value**, product names and descriptions in languages other than the Global one among
+them ([Product scopes](#after-0-110-0-product-scopes)); the legacy two-value organization role is
+replaced by roles with permissions, and the cart-approval policy of an Organization becomes a
+permission of its *Member* role ([Organization roles](#after-0-110-0-organization-roles)); order
+placement now enforces cart approval ([Cart approval](#after-0-110-0-cart-approval)); and the
+personal address book is retired ([Personal address book](#personal-address-book-retired-1)).
+Beside them the release anonymizes deleted customer accounts on schedule, enforces a role's
+two-step verification requirement, serves a blog post only in the languages assigned to it, places
+admin and API-key orders only on the Organization's channels, refunds the delivery and the surcharge
+on a consumer's withdrawal, and adds the `forms` module. The steps below say what to do, in order;
+each entry after them stands on its own, so read the ones for the parts of the platform you use.
+
+#### What to do, in order {#after-0-110-0-steps}
+
+Before the upgrade:
+
+1. **Export the product translations you want to keep.** The `catalog` and `seo` migrations keep one
+   Global name and description per product (the `en-US` text, else the first non-empty language,
+   else the SKU for the name) and drop every other language, every language-only attribute value,
+   gallery alt text and attachment or packaging-unit name, and every product SEO override stored for
+   a language without a channel. Nothing converts them. Export the products CSV before upgrading so
+   that you can re-enter them at Channel × language afterwards
+   ([Product scopes](#after-0-110-0-product-scopes)).
+2. **Make sure the role that runs migrations may create the `btree_gist` extension**, or create it
+   once as a superuser: `create extension if not exists btree_gist;`. It ships with PostgreSQL, and
+   `Migration20261030T113904CatalogScopeModelUrlKeys` needs it.
+3. **Count the deleted customer accounts the first sweep will anonymize**, and raise
+   `customers.deletion_retention_days` if you want to keep any of them
+   ([Anonymization sweep](#customer-anonymization-sweep)). This cannot be undone after the upgrade.
+4. **List the people a role's two-step verification requirement will stop**, and the API keys and
+   operators who place orders on channels their Organization is not assigned to
+   ([Two-step verification by role](#role-two-factor-enforced),
+   [API-key orders](#api-key-intake-organization-channels),
+   [Admin orders](#after-0-110-0-order-channels)).
+5. **Save the Assets Library's settings as platform-wide values** if you configured them per sales
+   channel: a per-channel `assets.*` value is no longer read
+   ([Assets settings](#after-0-110-0-assets-settings)).
+6. **Check the published blog posts assigned to a language they are not written in**: from this
+   release they answer 404 in that language ([Blog](#after-0-110-0-blog)).
+7. **Stop every process of the previous release before you migrate**, API and workers alike. The
+   migrations drop columns the previous release reads (`customer_accounts.role`,
+   `organizations.requires_cart_approval`, `organization_invitations.role`) and change the type of
+   `products.name` and `products.description`.
+
+The upgrade itself:
+
+8. **Run `pnpm run upgrade 0.110.0`.** `setup` applies the migrations module by module, in the
+   order of the modules' dependencies, and each module's own in the order of their stamps. Grouped
+   by module:
+
+   | Migration | Module | What it does |
+   | --- | --- | --- |
+   | `Migration20261103T162518CoreAuditActorCustomerAccount` | `core` | Nullable `audit_log_entries.actor_customer_account_id`: the customer who acted, for entries written from now on |
+   | `Migration20261103T140300AdminUsersAuthorProfile` | `admin_users` | Nullable avatar and per-language biography of an administrator's author profile — see [Blog](#after-0-110-0-blog) |
+   | `Migration20261103T173304OrganizationsOrganizationRoles` | `organizations` | Table `organization_roles` with an *Administrator* and a *Member* role for every Organization; withholds `carts.order_without_approval` and `quick_order.one_click` from *Member* where the Organization required cart approval — see [Organization roles](#after-0-110-0-organization-roles) |
+   | `Migration20261104T094535OrganizationsDropLegacyRoleColumns` | `organizations` | Drops `organizations.requires_cart_approval` and `organization_invitations.role` |
+   | `Migration20261105T121034OrganizationsRegistryLookupProvenance` | `organizations` | `origin`, `registry_details` and `submitted_values` on `organization_tax_id_validations`, and the `gus_pl` provider — see [Registration](#after-0-110-0-registration) |
+   | `Migration20261103T190132CustomerAccountsOrganizationRoleAssignment` | `customer_accounts` | `customer_accounts.organization_role_id` for every account: *Administrator* for an `organization_admin` and for every member of a personal Organization, else *Member* |
+   | `Migration20261104T094540CustomerAccountsDropLegacyRoleColumn` | `customer_accounts` | Drops `customer_accounts.role` |
+   | `Migration20261105T180317CustomersAddressBookRetirement` | `customers` | Provenance columns the address-book retirement job writes — see [Personal address book](#personal-address-book-retired-1) |
+   | `Migration20261030T113855CatalogScopeModelTexts` | `catalog` | `products.name` and `description` become the Global text; **drops every other language** and every language-only attribute value — see [Product scopes](#after-0-110-0-product-scopes) |
+   | `Migration20261030T113859CatalogScopeModelOrderRules` | `catalog` | A flag for a channel's own minimum order quantity |
+   | `Migration20261030T113904CatalogScopeModelUrlKeys` | `catalog` | Recreates `product_url_keys` and `product_url_redirects` at Channel and Channel × language; **drops every language key and every redirect**; needs `btree_gist` |
+   | `Migration20261030T113908CatalogScopeModelMedia` | `catalog` | One override table per gallery, attachment and packaging-unit family; drops the per-channel tables and the `*_translations` columns |
+   | `Migration20261104T121504CatalogProductContentValues` | `catalog` | Table `product_content_values`, empty — see [Product content attributes](#after-0-110-0-product-content) |
+   | `Migration20261107T093126CatalogSkuUniqueAmongLive` | `catalog` | A deleted product and its variants free their SKUs: uniqueness holds among live rows only |
+   | `Migration20261107T120008CatalogProductCreatedAtMilliseconds` | `catalog` | `products.created_at` to the millisecond, so the storefront listing no longer skips imported rows |
+   | `Migration20261103T171312SeoProductMetaThreeLevels` | `seo` | **Deletes every product SEO override stored for a language without a channel**; category and CMS page overrides are unchanged |
+   | `Migration20261103T112345BlogUrlPrefixes` | `blog` | Table `blog_url_prefixes`: the prefixes each channel serves and has served |
+   | `Migration20261103T134216BlogUrlKeysAndRedirects` | `blog` | URL keys per language for posts and categories, and the former keys that redirect |
+   | `Migration20261103T140555BlogPostAuthor` | `blog` | Nullable `blog_posts.author_id` |
+   | `Migration20261103T154219ImportExportImportProfiles` | `import_export` | Table of import profiles (a locale mapping for products imports), empty |
+   | `Migration20261107T110328DocumentTemplatesInvoiceSeededLabels` | `document_templates` | Empties the English labels a template copied from the built-in invoice layout — see [Documents](#after-0-110-0-documents) |
+   | `Migration20261108T000543OrdersCompletedAt` | `orders` | `orders.completed_at`, filled with `updated_at` for every completed order — see [Return windows](#return-window-from-completion) |
+   | `Migration20261108T073238OrdersChargeLines` | `orders` | Nullable `orders.charge_lines` and the `per_rate_charges` VAT method; nothing writes them yet |
+   | `Migration20261108T073244InvoicesInvoiceLineKind` | `invoices` | Nullable `invoice_lines.line_kind`, written for documents issued from now on |
+   | `Migration20261108T023047ReturnsConsumerWithdrawal` | `returns` | The consumer-withdrawal columns of `return_cases`; cases filed before stay unclassified — see [Consumer withdrawal](#consumer-withdrawal-consent) |
+   | `Migration20261108T125405ReturnsCaseChargeRefunds` | `returns` | Four `0.00` columns for the delivery and surcharge refunded — see [Withdrawal refunds](#withdrawal-refunds-charges) |
+
+   Declaring `forms` adds `Migration20261102T111501FormsInit`, which only creates the module's own
+   four tables (step 15).
+
+After the upgrade, before the instance takes traffic again:
+
+9. **Keep a process that runs workers up.** Its first boot installs the anonymization schedule,
+   whose first run starts at once, and runs the address-book retirement job
+   ([Personal address book](#personal-address-book-retired-1)).
+10. **Run one full search reindex** (*Reindex products* in the Admin UI, or
+    `pnpm run cli search reindex`): the search document now carries one text block per channel
+    language, and until an index is reindexed it is queried without the language restriction
+    ([Product scopes](#after-0-110-0-product-scopes)).
+11. **Review the Organizations that required cart approval**: their *Member* role no longer holds
+    `carts.order_without_approval`, so their members' baskets need approval before they are placed
+    ([Cart approval](#after-0-110-0-cart-approval)).
+12. **Bring the storefront over.** A storefront created by an earlier release does not have the
+    organization role screens, the cart-approval screen, the per-language blog addresses or the
+    error codes in URLs, and its personal address pages call endpoints that now answer `410`. The
+    shortest path is to bring over the release's storefront as a whole —
+    `git diff v0.109.0 v0.110.0 -- storefront` in the platform repository lists every change
+    ([Storefront](#after-0-110-0-storefront)).
+
+Whenever it suits you:
+
+13. **Re-enter the product translations** of step 1 at Channel × language, in the product editor or
+    with a products CSV in the new column grammar ([Product scopes](#after-0-110-0-product-scopes)).
+14. **Save the S3 or GCS credentials again** once `SETTINGS_SECRET_ENCRYPTION_KEY` is set, and rotate
+    them if old backups hold them in plaintext ([Assets settings](#after-0-110-0-assets-settings)).
+15. **Decide whether to add `forms`** ([Forms](#after-0-110-0-forms)).
+16. **Check B2C registration per channel** and the invoice labels you kept in English
+    ([Registration](#after-0-110-0-registration), [Documents](#after-0-110-0-documents)).
+
+#### Products: three scopes, and the language-only values are dropped {#after-0-110-0-product-scopes}
+
+- **What changed.** The product editor edits one scope at a time: **Global**, a **sales channel**, or
+  a **channel and language**. The language-only scope of 0.109.0 is gone. A Channel or Channel ×
+  language value overrides the one above it and shows the value it inherits. `products.name` and
+  `description` hold the Global text.
+- **What the migrations drop.** Every name and description in a language other than the Global one,
+  every language-only attribute value, gallery alt text and attachment or packaging-unit name, every
+  0.109.0 language URL key and every product URL redirect, the per-channel gallery and attachment
+  rows of 0.109.0, and every product SEO override stored for a language without a channel. `down`
+  restores the 0.109.0 schema without that data. Re-enter translations at Channel × language.
+- **URL keys** are set at Channel and at Channel × language, and a key text belongs to one product
+  per sales channel across its languages. Until a key is set, the product's slug serves it.
+- **Search.** The search document carries `texts.<language>` for every language a channel offers,
+  and a query searches only the shopper's language. Run one full reindex after the upgrade.
+- **Products CSV.** Headers are `<field>`, `<field>@<channel code>` and
+  `<field>@<channel code>/<language>`. An empty cell is no change, `NULL` is deliberately empty and
+  `INHERIT` removes the own value. **A file with a 0.109.0 per-language header such as `name_en` is
+  refused as a whole**: rename it to `name@<channel>/en-US`, or `name` for the Global value. Import
+  profiles map a source file's locales and channels to scopes.
+- **PIM connectors** map each locale to Global or to a channel and language, and write through the
+  scope write port v2 ([For module and overlay authors](#after-0-110-0-authors)).
+- **API clients.** `GET|PUT /api/v1/admin/catalog/products/:id/scoped-values` read and save one
+  scope, with a `version` precondition (`409 VERSION_CONFLICT`). `…/scope-context`,
+  `…/value-overrides` and `…/gallery/channel-roles` are removed. In every scoped write `null` means
+  *deliberately empty*; send `{ "inherit": true }` to remove an override. Product SEO is saved with
+  the product: the generic `PUT` and `DELETE /api/v1/admin/seo/meta/product/:id` answer
+  `422 VALIDATION_FAILED` (`reason: product_seo_saved_with_product`).
+
+#### Organization roles and permissions {#after-0-110-0-organization-roles}
+
+- **What changed.** Every Organization has an *Administrator* and a *Member* role, and up to 50
+  custom roles, each a set of organization permissions the modules declare. A member holds one role,
+  and what they may do follows from its permissions: creating baskets (`carts.create`), approving
+  them (`carts.approve`), ordering without approval (`carts.order_without_approval`), managing
+  addresses (`addresses.manage`), quote requests, quick order and shopping lists among them. An
+  Organization's administrator manages the roles on the storefront; an operator manages them on the
+  Organization's *Roles* tab with the new `organizations:read-roles` and
+  `organizations:manage-roles` permissions.
+- **The migration.** Every `organization_admin` becomes *Administrator*, every other member
+  *Member*, and every member of a personal Organization *Administrator*. Where an Organization
+  required cart approval, *Member* does not hold `carts.order_without_approval` or
+  `quick_order.one_click`. The legacy `role` columns and the cart-approval policy flag are dropped.
+- **What to do.** Give the operators who manage Organizations the two new permissions on *Admin
+  roles*. Tell the administrators of company Organizations that they can now define roles.
+- **API clients.** Requests name a role by id (`roleId`), and a body that still sends `role` is
+  `400 VALIDATION_FAILED`. Responses carry `organizationRole: { id, name, kind }` and `permissions`
+  instead of `role`. A member whose role lacks a permission is refused with
+  `403 ORGANIZATION_PERMISSION_REQUIRED`, naming it. The cart-approval policy endpoints
+  (`PATCH /api/v1/organization/policies/cart-approval`,
+  `GET`/`PATCH /api/v1/admin/organizations/:id/cart-approval-policy`) are removed.
+
+#### Cart approval is enforced at placement {#after-0-110-0-cart-approval}
+
+- **Placement.** A basket of a member whose role lacks `carts.order_without_approval` that is not
+  `approved` is refused by `POST /api/v1/orders` with `409 ORDER_CART_APPROVAL_REQUIRED`, before
+  anything is reserved. Such baskets were placed until now. Orders placed from a working basket
+  (admin order creation, one-click buy, the external order API) are unchanged.
+- **Editing a pending basket withdraws it.** A change to a basket awaiting approval returns it to
+  *not sent*, and the buyer sends it again. An administrator can no longer approve contents other
+  than those submitted.
+- **E-mails.** `cart_approval_requested`, `cart_approved` and `cart_rejected` are sent, in the
+  default language of the basket's sales channel; edit or switch them off on the e-mail templates
+  screen.
+- **What to do.** Where members used to order without sending baskets for approval, either have
+  them send the basket and an approver approve it, or give their role
+  `carts.order_without_approval`. Approving one's own basket answers
+  `422 CART_APPROVAL_SELF_APPROVE`.
+
+#### Admin orders are placed only on the Organization's channels {#after-0-110-0-order-channels}
+
+`POST /api/v1/admin/orders` and `POST /api/v1/admin/orders/preview` for a sales channel that is not
+one of the customer's Organization's active assigned channels answer
+`422 ORDER_SALES_CHANNEL_NOT_ALLOWED`, where they answered `201` / `200` (or `404` for a channel
+that does not exist). `GET` and `PUT /api/v1/admin/organizations/:id/sales-channels` for an
+Organization outside a sales representative's reach answer `404`. Before upgrading, assign each
+Organization to the channels your operators order on for it (its *Sales channels* panel). The same
+rule now applies to API-key orders ([API-key orders](#api-key-intake-organization-channels)).
+
+Refusals on the order paths also have codes of their own instead of `VALIDATION_FAILED`, with the
+same HTTP status: `ORDER_DELIVERY_METHOD_UNAVAILABLE`, `ORDER_PAYMENT_METHOD_UNAVAILABLE`,
+`ORDER_BELOW_MINIMUM_VALUE` (whose `minimum` and `subtotal` are now two-decimal strings, with
+`currency`), `ORDER_COMMENTS_CLOSED` and `ORDER_CLONE_NO_LINES`; six cart refusals likewise. A
+client that matched on `VALIDATION_FAILED` for these cases must match the new codes.
+
+#### Assets Library settings are read platform-wide {#after-0-110-0-assets-settings}
+
+- The module reads every `assets.*` setting through the platform's settings, so a value saved as the
+  platform-wide value now takes effect: the storage adapter, the local store, every `assets.s3.*` and
+  `assets.gcs.*` setting, and the upload policy. **A per-channel value is no longer read.** If you
+  configured storage or the upload policy per channel, save the same values as the platform-wide
+  value before upgrading, or the module falls back to the defaults: the local store under
+  `var/assets`, any file type, no size limit.
+- `assets.s3.secret_access_key` and `assets.gcs.service_account_json` are `secret` settings. A
+  stored plaintext secret, these two included, is encrypted at the first boot once
+  `SETTINGS_SECRET_ENCRYPTION_KEY` is set; that boot logs
+  `[settings] encrypted the stored plaintext of N secret setting(s): <codes>`. Until the key is set,
+  every boot logs a warning per code still holding plaintext. Backups and Redis snapshots taken
+  before that boot still hold the plaintext: rotate the credentials it names if those copies are
+  less protected than the credentials themselves.
+- Soft-delete retention (`assets.soft_delete_retention_days`) is held to 1–3650 days.
+
+#### Blog: languages, addresses and authors {#after-0-110-0-blog}
+
+- **A post or category is served only in the languages assigned to it**; requested in another
+  language it answers 404. Before upgrading, either write the published posts in the languages
+  they are assigned to or unassign those languages. A category assigned no language is in every
+  one. Publishing is refused with `422 BLOG_LANGUAGE_INCOMPLETE` while an assigned language has no
+  name or content.
+- **The blog URL prefix set per channel (`blog.url_prefix`) takes effect.** The storefront used to
+  serve the blog at `/blog` whatever the setting said; it now serves it under the prefix, and
+  `/blog/…` answers `301`. A prefix per language is `blog.url_prefix_by_language`. A malformed,
+  reserved or conflicting prefix is refused when it is saved.
+- Posts and categories get a URL key per language, a former key redirects while `seo` is present,
+  and **Blog → Addresses** lists every prefix a channel has served. A post can name an author, an
+  administrator with a public author profile, and the blog lists are paginated.
+
+#### Registration {#after-0-110-0-registration}
+
+- **B2C registration follows the setting of each sales channel.** An installation that enabled it
+  only for its default channel offered it on every channel; after this release only the default
+  channel does, and federated sign-up follows the same setting. Set the value for every channel
+  that should offer registration.
+- **Company registry lookup** at registration — GUS REGON, the Ministry of Finance VAT White List and
+  VIES — is off by default (`organizations.registration.registry_lookup_enabled`).
+
+#### Documents: invoice and quote labels in the document's language {#after-0-110-0-documents}
+
+An invoice template created from the built-in layout stored its English labels, so a Polish invoice
+printed *Paid*. The migration empties those labels, and they now print in the document's language.
+If you kept an English label on purpose, type it into the block again. Canvas labels of invoice
+and quote templates follow the edited tree's language.
+
+#### Product content attributes {#after-0-110-0-product-content}
+
+A new attribute type, **Page Builder content**, holds one Page Builder document per language and
+product, shown on the product page's description tab. Deleting an attribute is now refused while a
+channel override or a variant holds a value, and a value held only by a deleted product no longer
+refuses it.
+
+#### Forms: a new module {#after-0-110-0-forms}
+
+The release brings a new package, **`@endora-commerce/mod-forms`** (module id `forms`): a form
+builder whose forms are placed on CMS pages as the *Form* block, with entries, notes, CSV export,
+e-mail notifications, spam protection (honeypot, rate limit, optional Cloudflare Turnstile or
+hCaptcha) and retention. No module requires it, so the upgrade does not declare it;
+[Adding a module that is new in a release](#adding-a-new-module) says how. Once declared it is
+switched on (`forms.enabled`); give the roles that should use it `forms:read`, `forms:write`,
+`forms:entries_read`, `forms:entries_write` and `forms:entries_export`. See
+[Forms](./modules/forms.md).
+
+#### Sign-in and errors carry codes {#after-0-110-0-error-codes}
+
+- A refused federated sign-in (Google, Microsoft) redirects to `/login?error=<code>` on both the
+  Admin UI and the storefront, never with a sentence. Take `admin-kit`, `admin-shell` and `mod-mfa`
+  from the same release.
+- A malformed or unknown record id answers `404` on every id route, where some answered `500`.
+- The storefront carries error codes in its URLs, never free text.
+- The return list's saved views follow the rules of the other lists: a non-UUID id or another
+  admin's private view answers `404`, names are trimmed and at most 160 characters, `shared` is
+  required on `POST`, and `DELETE` answers `{ "data": { "deleted": "<id>" } }`.
+- In `GET /api/v1/admin/audit-log/recent-activity`, `actorKind` can be `'customer'`.
+
+#### In an existing storefront {#after-0-110-0-storefront}
+
+The release's storefront has the organization roles and members screens, the cart-approval screen
+and rejection notice, the per-language blog addresses, error codes in URLs, the Organization book
+as the one address book, and module links hidden while their module is off. A storefront created by
+an earlier release keeps rendering, but its personal address pages call endpoints that answer
+`410 CUSTOMER_ADDRESS_BOOK_RETIRED`, and its member and invitation forms send `role`, which is
+refused. Bring the release's storefront over — `git diff v0.109.0 v0.110.0 -- storefront` lists
+every change.
+
+#### Dependencies {#after-0-110-0-dependencies}
+
+New peer dependencies, all already present in an instance that runs the platform:
+`@endora-commerce/mod-customers` on `bullmq` and `ioredis` `^5`, `@endora-commerce/mod-quick-order`
+on `ioredis` `^5`, and `@endora-commerce/mod-import-export` on `@mikro-orm/core`,
+`@mikro-orm/migrations` and `@mikro-orm/postgresql` `^6` and `zod` `^4`. `@endora-commerce/mod-forms`
+declares the peers every module of its kind does.
+
+#### For module and overlay authors {#after-0-110-0-authors}
+
+- **The legacy organization role is removed** from `@endora-commerce/contracts`:
+  `OrganizationRole`, `organizationRoleSchema` and `CustomerAccountRole` give way to
+  `OrganizationRoleRef` and `OrganizationRoleKind`; read and write `organizationRoleId`; ask
+  `OrganizationPermissionPort` (`can`, `assert`, `isAdministrator`) instead of `isOrgAdmin`. The
+  changelog of `@endora-commerce/contracts` has the full old → new list.
+- **`catalogProductValueOverrideWritePort` and `seoMetaWritePort` are retired.** A connector writes
+  through `catalogProductScopeWritePort.applyScopes` v2: cells `{ scope, field, value }`, refused
+  per cell. `name` and `description` on `CatalogProductRecord` are strings, and a reader with a
+  channel resolves the effective texts through `catalogProductAvailabilityPort.effectiveTexts`.
+- **`CartWritePort.clearForCustomer` is removed**; no platform code called it.
+- `CmsPageReadPort` gains `firstSegmentsInChannel`: an implementer of the port must add it.
+- A new platform port lets a module redact the audit history of an anonymized subject.
+- `endora new module` refuses a title-case `--name`: write it in sentence case.
+
+#### Personal address book retired (release 1 of 2) {#personal-address-book-retired-1}
+
+The release that ships `CUSTOMER_ADDRESS_BOOK_RETIRED` gives every customer **one** address book,
+their Organization's (`specs/173-b2c-address-book-merge/`). The `customers` module's personal
+address book (`customer_addresses`) is retired for everyone. No order could ever be placed to one of
+its addresses, so no capability that worked is removed. The table is dropped by a later release, the
+second of two, and that release refuses to migrate while any row is left. So pass through this one
+first, as described here.
+
+**What changes:**
+
+- On the storefront, an individual's *My addresses* (`/addresses`) shows their personal
+  Organization's book, the one checkout offers and saves to. A company member has one entry,
+  *Organization addresses*, and `/addresses` redirects them there. The storefront's
+  `lib/api/customers.ts` loses `listMyAddresses`, `createMyAddress`, `deleteMyAddress` and
+  `setMyDefaultAddress`. A storefront built on them reads and writes
+  `/api/v1/organizations/mine/addresses` instead (`lib/api/organization.ts`).
+- Every former personal-book endpoint answers `410 Gone` with `CUSTOMER_ADDRESS_BOOK_RETIRED`, in
+  Polish or English, for every caller: `GET` and `POST /api/v1/me/customer/addresses`, `PATCH` and
+  `DELETE /api/v1/me/customer/addresses/:addressId`,
+  `PUT /api/v1/me/customer/addresses/:addressId/default`,
+  `POST /api/v1/admin/customers/:id/addresses`, and a `PUT /api/v1/me/customer/defaults` whose body
+  names `billingAddressId` or `shippingAddressId`. `GET /api/v1/me/customer/defaults` reports the
+  Organization book's default addresses.
+- The customer's *Addresses* card in the Admin UI is read-only. It lists the Organization book, then
+  any personal-book row the job below refused, with its reason.
+- When the retention sweep anonymizes an individual, their personal Organization's addresses are
+  blanked and soft-deleted too. Placed orders keep their address snapshots.
+
+**The job.** A one-time background job in `customers` processes the remaining personal-book rows.
+It is enqueued at every boot of a process that runs workers, and runs only while `customers` is on:
+
+- an individual's rows are **moved** into their personal Organization's book. An address already
+  there is not copied twice, and an existing default stays the default;
+- every other row — a company member's, an individual's whose personal Organization was already
+  anonymized, or an account's whose Organization cannot be found — is **erased**: blanked and soft-deleted;
+- a row the address book refuses, for example one whose country is no longer active, stays, marked
+  with the reason, and is shown only on the Admin UI card.
+
+Each row leaves an audit entry (`customer_address.merge`, `customer_address.erased` or
+`customer_address.merge_refused`). The worker logs a summary at `info`, starting with
+`customers: personal address book retirement finished`. A later boot finds nothing to do.
+
+**What to do:**
+
+1. **Keep `customers` switched on, and run a process that runs workers**, until the job has
+   finished. That is any process with `BACKEND_ROLE` unset or `all` (the default — `pnpm run start`
+   alone qualifies) or `worker` (`pnpm run worker`). A process with `BACKEND_ROLE=api` neither
+   enqueues the job nor runs it, so a deployment that splits the tiers needs its worker tier up.
+   While `customers` is off the job does not run, and the address pages and checkout keep working
+   regardless.
+2. **Expect a short window after the upgrade.** From the boot until the job's first run, an
+   individual's pre-upgrade personal addresses are not yet in their one list.
+3. **Count what is left.** Run this read-only query before the upgrade, to know what the job will
+   do, and again after it, to confirm it has finished:
+
+   ```sql
+   select
+     count(*) filter (where ca.deleted_at is null)                           as live,
+     count(*) filter (where ca.deleted_at is null and o.is_personal and o.deleted_at is null)       as live_b2c,    -- moved by the job
+     count(*) filter (where ca.deleted_at is null
+                        and (o.is_personal = false or o.deleted_at is not null))                     as live_erased, -- company members and anonymized personal orgs: erased by the job
+     count(*) filter (where ca.deleted_at is null and o.id is null)          as live_no_org    -- erased by the job
+   from customer_addresses ca
+   join customer_accounts acc on acc.id = ca.customer_account_id
+   left join organizations o on o.id = acc.organization_id;
+   ```
+
+   After the job, `live` equals the number of refused rows
+   (`select count(*) from customer_addresses where deleted_at is null and merge_refusal is not null`).
+   The release that drops the table needs `live` to be `0`.
+4. **Decide about each refused row.** Fix the cause — for example, reactivate the country — then
+   clear the mark (`update customer_addresses set merge_refusal = null where id = '…'`) and the job
+   retries it on the next boot. Or accept that the address is lost
+   (`delete from customer_addresses where merge_refusal is not null`): the customer can type it
+   again at checkout.
+5. **API clients** that called the personal-book endpoints switch to
+   `/api/v1/organizations/mine/addresses`. Those routes need the `addresses.manage` organization
+   permission to write, and an individual, the Administrator of their personal Organization, always
+   holds it. **Module authors:** `@endora-commerce/contracts` no longer exports
+   `CustomerAddressReadPort`, `CustomerAddressRecord`, `customerAddressInputSchema` or
+   `ERROR_CODES.CUSTOMER_ADDRESS_NOT_FOUND`, the `customerAddressReadPort` port is gone, and
+   `AddressServicePort` gains `anonymizeForOrganization`.
+
+#### Deleted customer accounts are anonymized on schedule {#customer-anonymization-sweep}
+
+The release that ships the `customers.anonymization.sweep` queue starts the retention sweep that
+earlier releases built but never ran (issue #677). Until now a soft-deleted customer account kept
+its personal data indefinitely, whatever `customers.deletion_retention_days` said. From this release
+an account whose deletion is older than the retention window (default 365 days) is anonymized for
+good: its e-mail, name, password and custom field values are erased, and for an individual their
+personal Organization and its saved addresses too. Placed orders keep their address snapshots.
+`customer_account.anonymized.v1` is sent for each account, so modules that listen for it, such as
+`forms`, erase what they hold for it.
+
+**When the first run happens.** The sweep is a BullMQ job scheduler that fires once a day. It runs
+only in a process that runs workers (`BACKEND_ROLE` unset, `all` or `worker`) and only while
+`customers` is on. The first worker boot after the upgrade installs the schedule, and **its first
+run starts immediately**. Later boots keep the existing schedule and do not trigger an extra run.
+So every account already past its window on the day you upgrade is anonymized within minutes of the
+first worker boot. **This cannot be undone**, and an account past its window can no longer be
+restored (`409 CUSTOMER_RESTORE_WINDOW_ELAPSED`), whether or not the sweep has reached it yet.
+
+**The audit history of each anonymized account is erased too** (issue #844). This covers the rows
+about the account and, for an individual, about their personal Organization and its addresses.
+Every row keeps its action, actors, time and object, but the recorded personal values become
+`[erased]`, and so do the IP address and user agent on the rows the customer wrote for themselves.
+This also cannot be undone. Each account gets one `audit.redacted` entry. The rule is described in
+the audit log module's documentation, under *Redaction on anonymisation*.
+
+**What to do:**
+
+1. **Count the accounts the first run will anonymize.** Run this read-only query before the
+   upgrade. Replace `365` with your value of `customers.deletion_retention_days`, the one set for
+   all channels or for the default channel; the sweep reads the default channel's:
+
+   ```sql
+   select count(*) as due
+   from customer_accounts
+   where deleted_at is not null
+     and anonymized_at is null
+     and deleted_at < now() - interval '365 days';
+   ```
+
+2. **To keep any of them, raise the retention window before you upgrade.** Raising
+   `customers.deletion_retention_days` (for all channels, or at least the default channel) above
+   the age of the oldest deletion you want to keep moves those accounts back inside the window, so
+   the first run leaves them alone and they can be restored. This is the only way to keep one:
+   restore is refused once the window has passed, and lowering the value later anonymizes them on
+   the next daily run.
+3. **Restore what you want to keep**, then set the window back to the value you want, if you
+   raised it.
+4. **After the first run**, the worker logs `customers: anonymization sweep finished` at `info`
+   with the number anonymized, and each account has a `customer_account.anonymized` and an
+   `audit.redacted` audit entry. An
+   account that could not be anonymized is reported by id in a warning
+   (`customers: the anonymization sweep failed; the next tick retries`) and is retried the next
+   day. The query above then returns `0`.
+
+#### API-key orders are placed only on the Organization's channels {#api-key-intake-organization-channels}
+
+The release that ships this change applies the admin order rule to the external order API
+(`POST /api/v1/external/orders`, issue #699). An API key is bound to an Organization and a sales
+channel, and an order placed with it now has to land on one of that Organization's **active
+assigned** channels. The check runs every time an order is placed, not when the key is issued.
+Until now the intake never checked it. A key whose Organization is not assigned to the key's
+channel, or was unassigned from it later, now gets
+`422 ORDER_SALES_CHANNEL_NOT_ALLOWED` ("This sales channel is not one of the organization's active
+sales channels."), and nothing is written: no order, no change to the service account's basket. A
+bound channel that is switched off was already refused, with `400 INACTIVE_SALES_CHANNEL`.
+
+**After upgrading:**
+
+1. **List the keys that will be refused.** Run this read-only query. Every row is an active key
+   with the `orders:write` scope whose Organization is not assigned to the key's channel:
+
+   ```sql
+   select k.id, k.name, o.name as organization, sc.code as channel, sc.active as channel_active
+   from api_keys k
+   join sales_channels sc on sc.id = k.sales_channel_id
+   left join organizations o on o.id = k.organization_id
+   where k.status = 'active'
+     and k.scopes::jsonb ? 'orders:write'
+     and k.organization_id is not null
+     and not exists (
+       select 1 from sales_channel_organizations sco
+       where sco.sales_channel_id = k.sales_channel_id
+         and sco.organization_id = k.organization_id
+     )
+   order by k.name;
+   ```
+
+2. **Fix each row in one of two ways.** Either assign the channel to the Organization (the
+   Organization's *Sales channels* in the Admin UI), if it really buys there; or re-bind the key to
+   one of the Organization's own channels, that is, issue a new key bound to that channel, hand it
+   to the integration and revoke the old one. A key's binding cannot be edited.
+3. **Run the query again.** It returns no rows when every integration can place orders.
+
+#### Quote request lines carry their channel's currency {#quote-line-currency}
+
+Until this release every quote request line was stored with the currency `PLN`, whatever the
+default currency of the sales channel the request was raised on (issue #303). From this release a
+new request's lines carry that channel's default currency, decided once when the request is created
+— by the customer or by an operator on their behalf — and kept by every later edit, seller revision
+and resubmission. The quote request lists show a request with no lines in its channel's currency.
+
+**Existing requests are not changed.** Their prices were typed and agreed against screens that said
+PLN, so relabelling them would change what past offers mean. A request already stored keeps `PLN`
+on its lines, and so does a resubmission of it. An instance whose sales channels all use PLN has
+nothing to do.
+
+**What to do:** list the quote requests raised on a channel whose default currency is not PLN. This
+read-only query shows each of them, with the currency its channel uses and the currencies its lines
+were stored in:
+
+```sql
+select qr.id, qr.business_id, qr.status, qr.created_at,
+       sc.code as channel, sc.default_currency as channel_currency,
+       array_agg(distinct qi.line_currency) as line_currencies
+from quote_requests qr
+join sales_channels sc on sc.id = qr.sales_channel_id
+left join quote_request_items qi on qi.quote_request_id = qr.id
+where sc.default_currency <> 'PLN'
+group by qr.id, sc.code, sc.default_currency
+order by qr.created_at;
+```
+
+Review any request this returns with its seller. There is no automatic correction: changing the
+currency of a stored request is a decision about what its prices meant, so make it per request, by
+hand, and only where the seller confirms the prices were meant in the channel's currency.
+
+#### A role's two-step verification requirement is enforced {#role-two-factor-enforced}
+
+The release that ships `MFA_REQUIRED_FOR_ROLE_TWO_FACTOR` makes a role's **Requires two-step
+verification on assigned users** checkbox (`requiresTwoFactor`) do what it says (issue #349).
+Until now it was stored, shown and edited, and no sign-in read it. From this release a holder of
+such a role signs in with a second factor, exactly as `mfa.admin.totp_enforced` makes every
+administrator do. The admin users module page, section *Roles that require two-step
+verification*, describes the behaviour.
+
+**Behaviour change on upgrade:**
+
+- An operator may have ticked the box believing it already worked. At their next sign-in, every
+  holder of such a role who has not set up two-step verification is taken to set it up and gets a
+  session only after that; a holder who has set it up is asked for a code. Google and Microsoft
+  sign-in behave the same way.
+- **The upgrade itself signs nobody out.** Sessions end only when the requirement starts binding
+  somebody after the upgrade: when a role's box is ticked, or when such a role is given to an
+  administrator who has not set up two-step verification. Holders already signed in before the
+  upgrade keep their sessions until they expire or sign out.
+- The MFA module cannot be switched off while any role requires two-step verification: the module
+  screen answers `409 MFA_DEACTIVATION_BLOCKED` and names the roles. Untick the box on those roles
+  first. While MFA is off, the box cannot be ticked.
+- **Switching Admin UI — enforce two-step verification (`mfa.admin.totp_enforced`) on now signs
+  administrators out**, as ticking a role's box does (issue #349). Before, it took effect at each
+  administrator's next sign-in, which could be thirty days away. Now every administrator who has
+  not set up two-step verification is signed out at once, except for the session the change was
+  made from; **Settings** asks first and says how many. The upgrade itself signs nobody out.
+
+**Before upgrading:**
+
+1. **See who will be asked to set up two-step verification.** Run this read-only query. Every row
+   is a role that requires it, with the number of its live administrators and how many of them have
+   not set it up:
+
+   ```sql
+   select r.code,
+          count(u.id) as admins,
+          count(u.id) filter (where e.id is null) as not_enrolled
+   from admin_roles r
+   join admin_users u on u.admin_role_id = r.id and u.deleted_at is null
+   left join mfa_enrolments e
+     on e.subject_type = 'admin' and e.subject_id = u.id and e.status = 'active'
+   where r.requires_two_factor
+   group by r.code
+   order by r.code;
+   ```
+
+2. **Check that a second factor can be set up.** Without `MFA_SECRET_ENCRYPTION_KEY` no second
+   factor can be enrolled or checked, so the requirement is **not applied**: the holders sign in
+   with their password alone, as before the upgrade. The Roles screen shows *Not in force: no
+   encryption key* under the box, and the backend logs an error at every start naming the roles
+   and how many of their administrators have no second factor. Set the key and restart if you want
+   the requirement applied; otherwise untick the box on those roles to make the screen say what
+   happens (see
+   [Enforced two-step verification without an encryption key](#admin-two-step-without-key)).
+3. **Keep at least one administrator who can sign in.** If your own role is among the rows, set up
+   two-step verification before you upgrade (*Account security* in the Admin UI), or make sure an
+   administrator of another role can sign in to change the role.
+
+#### A consumer's withdrawal refunds the delivery and the surcharge {#withdrawal-refunds-charges}
+
+On a consumer's withdrawal from a sale, the trader must refund every payment received, the delivery
+cost included (Directive 2011/83/EU art. 13(1); art. 32 ust. 1 of the Polish Consumer Rights Act).
+Until this release a B2C return refunded the goods only, so the delivery cost and the payment
+surcharge stayed with the shop and on the invoice (issue #876).
+
+From this release, the return that brings back the last unit of a B2C order refunds the order's
+delivery cost and payment surcharge as well. A B2C order is one whose organization is a personal
+one. The settlement form fills both in at the full amount when the case was opened within 14 days of
+the order's completion, or within the channel's `returns.free_return_days` when that is longer.
+Outside that window it starts at 0, and you may raise it to what was paid. A partial return, a
+complaint and a business customer's return are unchanged.
+
+**What changes for you:**
+
+- A B2C case that completes a withdrawal moves more money than the sum of its lines. Its
+  `totalRefundAmount` includes the charges.
+- An API client that settles such a case without `deliveryRefundAmount` and `surchargeRefundAmount`
+  refunds the prefilled amounts. Send `0` to refund neither, or a lower amount when the customer
+  chose a more expensive delivery than the cheapest standard one (art. 13(2)).
+- On an invoiced order, the correction credits the delivery and the surcharge on lines of their own.
+  On an order not invoiced yet, the invoice charges only what is left of each. A B2C order refunded
+  in full is not invoiced.
+
+Migration `20261108T125405_returns_case_charge_refunds.ts` adds four columns to `return_cases`, all
+`0.00` by default. Cases settled before the upgrade are not changed, and the platform does not
+refund them retroactively.
+
+**Orders already returned in full.** To find B2C orders returned in full before the upgrade whose
+delivery or surcharge was not refunded, run this read-only query after the upgrade:
+
+```sql
+with returned as (
+  select rc.order_id, rci.order_item_id, sum(rci.quantity) as quantity
+  from return_cases rc
+  join return_case_items rci on rci.return_case_id = rc.id
+  where rc.kind = 'return'
+    and rc.resolution_type in ('refund', 'credit')
+  group by rc.order_id, rci.order_item_id
+),
+returned_in_full as (
+  select oi.order_id
+  from order_items oi
+  left join returned r on r.order_id = oi.order_id and r.order_item_id = oi.id
+  group by oi.order_id
+  having bool_and(coalesce(r.quantity, 0) >= oi.quantity)
+)
+select o.id as order_id,
+       o.placed_at,
+       o.currency,
+       o.delivery_total,
+       coalesce((o.payment_method_snapshot ->> 'additionalPrice')::numeric, 0) as payment_surcharge
+from orders o
+join returned_in_full f on f.order_id = o.id
+join organizations org on org.id = o.organization_id
+where org.is_personal
+  and (o.delivery_total > 0
+       or coalesce((o.payment_method_snapshot ->> 'additionalPrice')::numeric, 0) > 0)
+  and not exists (
+    select 1 from return_cases rc
+    where rc.order_id = o.id
+      and (rc.approved_delivery_refund > 0 or rc.approved_surcharge_refund > 0)
+  )
+order by o.placed_at;
+```
+
+Each row is an order whose every line came back through returns settled with a refund or a
+credit, and whose delivery or surcharge no case refunded. Decide for each one whether to refund
+it by hand, for example by bank transfer, and record that on the order.
+
+#### Enforced two-step verification without an encryption key {#admin-two-step-without-key}
+
+The release that ships `MFA_ENFORCEMENT_UNAVAILABLE` closes a lockout (issue #930). Without
+`MFA_SECRET_ENCRYPTION_KEY` the MFA module cannot set up a second factor: it serves no setup or
+code-entry step. Yet with **Admin UI — enforce two-step verification** (`mfa.admin.totp_enforced`)
+on, sign-in still sent every administrator without a second factor to a setup step, which could
+not be completed, so none of them could sign in.
+
+**Behaviour change on upgrade:**
+
+- Turning `mfa.admin.totp_enforced` on is refused while the key is not set:
+  `409 MFA_ENFORCEMENT_UNAVAILABLE`, with `details.reason: 'encryption_key_missing'`. Turning it off
+  is always allowed, and so is saving it again when it is already on.
+- **On an instance where the setting is already on and the key is not set**, the setting is not
+  applied: administrators without a second factor sign in with their password, as they would with
+  the setting off. The setting is not changed. **Settings** shows *Not in force: no encryption key*
+  under it (the API's settings reads carry `notice.code: 'encryption_key_missing'`), and the
+  backend logs an error at every start until the key is set or the setting is turned off. Before,
+  these administrators could not sign in at all.
+- Nothing changes on an instance that has the key: enforcement applies as before.
+- **Without the key no second factor is asked for at all** (issue #948):
+  - a role that requires two-step verification is not applied either; the Roles screen shows the
+    same notice under its box (the role read carries `twoFactorNotice.code: 'encryption_key_missing'`),
+    and the error logged at every start names those roles (see
+    [A role's two-step verification requirement is enforced](#role-two-factor-enforced));
+  - administrators and customers who set up two-step verification while the key was configured are
+    not asked for a code, because nothing can check it. Before, they could not sign in at all. The
+    backend logs an error at every start with how many such enrolments there are;
+  - nobody is signed out for being given a role that requires two-step verification.
+  - without the key, customers are not asked for a second factor either, whether they are
+    enrolled or bound by storefront or organization enforcement.
+
+**After upgrading,** if a notice or a logged error appears, either set `MFA_SECRET_ENCRYPTION_KEY`
+(see the [first deployment checklist](./deployment/first-deployment-checklist.md)) and restart, so
+that enforcement applies again, or turn the setting off in **Settings** and untick the box on the
+roles. Set the key the enrolments were made with: an enrolment made with another key cannot be
+checked with this one.
+
+#### Return windows count from the order's completion {#return-window-from-completion}
+
+The release that ships this change records when an order was completed (`orders.completed_at`,
+issue #905) and counts the return windows from it. Until now they counted from the order's last
+edit, which moved forward whenever a completed order was changed. The migration fills the new column
+with each completed order's `updated_at`, which is the moment those orders were judged by before, so
+nothing changes for existing orders at upgrade time.
+
+Two things do change from then on:
+
+- **Calendar days.** The free-return window (`returns.free_return_days`) now ends at the end of its
+  last calendar day, and a last day on a Saturday or Sunday moves to the Monday. Before, it ended
+  exactly `free_return_days × 24 h` after the anchor. A case can now be free-return eligible up to a
+  day later than before (up to three over a weekend), never earlier.
+- **A time zone.** The days are counted in a new setting, `returns.time_zone` (default
+  `Europe/Warsaw`, settable per sales channel).
+
+**After upgrading:**
+
+1. **If the shop is not in `Europe/Warsaw`**, set `returns.time_zone` to its zone, for example
+   `Europe/Berlin`, on the Admin Settings screen (group *Returns*).
+2. **Tell the operators to complete an order when the goods have been delivered.** The consumer's
+   withdrawal period counts from the order's completion, because the platform has no delivery date.
+
+#### A consumer's withdrawal settles as a refund unless consent is recorded {#consumer-withdrawal-consent}
+
+The release that ships this change marks every return a consumer files as a **consumer withdrawal**
+(issue #905): a return by a personal Organization, filed within the withdrawal period, the channel's
+longer free-return window, or the 7-day grace after them. Such a case is refunded by the same means
+of payment unless the consumer agreed otherwise (Directive 2011/83 art. 13(1)), so:
+
+- **Credit toward future orders, a replacement and a repair need the consumer's consent on record.**
+  Without it the settlement answers `422 RETURN_ALTERNATIVE_RESOLUTION_CONSENT_REQUIRED`. An operator
+  records the consent, with an evidence note, in the case's *Consumer withdrawal* panel.
+- **The refund proposes the order's own payment method.** Another one is accepted with a warning, and
+  the settlement's audit entry records it.
+
+Company returns and complaints are unchanged. **Cases filed before the upgrade are not classified**:
+they settle as before. A later release classifies the open ones.
+
+**After upgrading:** tell the operators who settle returns that a consumer's credit, replacement or
+repair now needs the consent recorded first, and where the consumer agreed (an e-mail, a ticket) goes
+in its evidence note.
+
+This section was written on 2026-11-09 against the release branch `release/version-0.110.0`, read
+from the changesets of the release against its migrations and manifests; the entries from
+*Personal address book retired* to *A consumer's withdrawal settles as a refund* were written
+earlier, by the pull requests that made each change. No instance had been upgraded with
+`pnpm run upgrade 0.110.0` when it was written; the order of the steps and the storefront edits are
+untried.
+
+### After upgrading to 0.111.0 {#after-0-111-0}
+
+`pnpm run upgrade 0.111.0` moves the packages of the release from `0.110.0` and applies its
+migrations — twenty-four for modules of earlier releases (each runs where its module is declared),
+and one more for the new `customer_notifications` module, which runs only once an instance declares
+it. **The minimum version to upgrade from is `0.100.0`**: on an older database the first
+`organizations` migration refuses to run and changes nothing. **Two migrations may refuse to run on
+existing data, and one locks a table for as long as it is rewritten**, so read
+[Tax IDs](#after-0-111-0-tax-ids) before you migrate. Beside them the release takes tenant values out
+of the platform audit log module by module, applies one reach rule for sales representatives on every
+admin surface, records each customer account's e-mail language, finishes Google and Microsoft sign-in
+on the storefront's own host, restarts a backend that stops answering, and adds the buyer's
+notification centre. The steps below say what to do, in order; each entry after them stands on its
+own, so read the ones for the parts of the platform you use.
+
+#### What to do, in order {#after-0-111-0-steps}
+
+Before the upgrade:
+
+1. **Check the version you upgrade from.** An instance below `0.100.0` upgrades to a `0.100.x`–`0.110.x`
+   release first ([Tax IDs](#after-0-111-0-tax-ids)).
+2. **Find the organizations whose tax IDs become one once normalised**, and give each its own tax ID.
+   `Migration20261110T183238OrganizationsTaxIdNormalise` refuses to run, and changes nothing, while
+   any remain ([Tax IDs](#after-0-111-0-tax-ids)).
+3. **Plan a maintenance window for `organizations`.** `Migration20261110T135941OrganizationsTaxIdScope`
+   adds a stored generated column, which rewrites the table under an exclusive lock.
+4. **Make sure the role that runs migrations may create the `btree_gist` extension**, or create it
+   once as a superuser: `create extension if not exists btree_gist;`. An instance that ran `0.110.0`
+   already has it.
+5. **Stop every process of the previous release before you migrate**, API and workers alike.
+   `quote_requests` drops a table the previous release writes, and `organizations` makes
+   `organizations.tax_id` nullable and rewrites every value.
+
+The upgrade itself:
+
+6. **Run `pnpm run upgrade 0.111.0`.** `setup` applies the migrations module by module, in the
+   order of the modules' dependencies, and each module's own in the order of their stamps. Grouped
+   by module:
+
+   | Migration | Module | What it does |
+   | --- | --- | --- |
+   | `Migration20261110T140633CoreSchemaExtensionsLedger` | `core` | Table `schema_extensions`: the columns and indexes a declared schema extension added — see [Schema extensions](#schema-extensions-instance-command) |
+   | `Migration20261112T124348CoreCommandOutbox` | `core` | Table `command_outbox`: the after-commit hook deliveries a Command owes, delivered at least once |
+   | `Migration20261114T003519LanguagesDictionaryColumns` | `languages` | Creates `languages.native_label`, `is_rtl` and `fallback_code` where an older migration of another module did not; nothing changes on an instance that has them |
+   | `Migration20261114T002913AdminUsersPreferredLanguage` | `admin_users` | Creates `admin_users.preferred_language` where it is missing; nothing changes on an instance that has it |
+   | `Migration20261115T190121AdminUsersImpersonationReasons` | `admin_users` | Table `admin_impersonation_reasons`, empty — see [Impersonation reasons](#impersonation-reason-store) |
+   | `Migration20261116T131329AdminUsersImpersonationReasonAttribution` | `admin_users` | The D-187 attribution check on `admin_impersonation_reasons` (an account's row names its Organization); both columns are already `not null`, so no row can violate it |
+   | `Migration20261109T144721OrganizationsReachGovernor` | `organizations` | Table `organization_reach_governor`, filled from every Organization's path and the sales-representative assignments — see [Sales-representative reach](#sales-rep-reach-async-helpers) |
+   | `Migration20261110T135922OrganizationsPersonalTaxIdRemoval` | `organizations` | **Clears the placeholder tax ID of every personal Organization**, records its account in `personal_account_id`; refuses below `0.100.0` — see [Tax IDs](#after-0-111-0-tax-ids) |
+   | `Migration20261110T135941OrganizationsTaxIdScope` | `organizations` | Stored generated column `organizations.root_id` (**rewrites the table under an exclusive lock**), `btree_gist`, and the installation's tax-ID scope, `global` |
+   | `Migration20261110T173752OrganizationsTaxIdWriteLock` | `organizations` | A trigger that makes two writers of one tax ID take turns |
+   | `Migration20261110T183238OrganizationsTaxIdNormalise` | `organizations` | Rewrites every tax ID without spaces and dashes, upper-cased; **refuses while two Organizations would share one** |
+   | `Migration20261115T145934CustomerAccountsPreferredLanguage` | `customer_accounts` | Nullable `customer_accounts.preferred_language`, not backfilled — see [E-mail language](#after-0-111-0-email-language) |
+   | `Migration20261106T094044CustomFieldsDefinitionCustomerInputAdminAccess` | `custom_fields` | The buyer input surfaces and admin access of a custom-field definition; existing definitions keep today's behaviour |
+   | `Migration20261114T000706CatalogCategoryMainImage` | `catalog` | Creates `categories.main_image_asset_id` where it is missing |
+   | `Migration20261110T073922PriceListsValueChanges` | `price_lists` | Table `price_list_value_changes`: a price book's own history of the prices its Commands changed |
+   | `Migration20261115T065605InventoryAvailabilityNotificationScope` | `inventory` | The sales channel and language a back-in-stock subscription was taken in; older subscriptions keep `NULL` and their e-mail keeps the Global product name |
+   | `Migration20261115T182156InventoryAvailabilityNotificationNotifiedStatus` | `inventory` | Marks `notified` the back-in-stock subscriptions the stock worker consumed but left `queued` |
+   | `Migration20261110T143322OrdersOrderExternalReferences` | `orders` | Table `order_external_references`, empty |
+   | `Migration20261114T001851PaymentsProcessColumns` | `payments` | Creates `payments.provider_details`, `failure_reason` and `attempt_no` where they are missing |
+   | `Migration20261113T081826QuoteRequestsNotificationsRedesign` | `quote_requests` | **Drops `quote_request_notification_events`** (written on every transition, read by nothing) and creates the delivery records `quote_request_notifications`; no rows are carried over |
+   | `Migration20261109T163616CrmOpportunityValueChanges` | `crm` | Table of an opportunity's own value history — see [Opportunity values](#crm-audit-names-only) |
+   | `Migration20261110T054810TasksValueChanges` | `tasks` | Table of a task's own value history — see [Task values](#tasks-audit-names-only) |
+   | `Migration20261114T145439ProjectsStageAlertInterrupted` | `projects` | An `interrupted` outcome for a Stage deadline alert whose pass died |
+   | `Migration20261114T153132ProjectsConfigurationVersions` | `projects` | Version tokens that refuse a stale edit of a Project's configuration |
+
+   Declaring `customer_notifications` adds `Migration20261113T082045CustomerNotificationsInit`, which
+   only creates the module's own table (step 9).
+
+After the upgrade, before the instance takes traffic again:
+
+7. **Bring the storefront over.** A storefront copied from an earlier release does not have the
+   federated sign-in hand-off routes, without which every customer Google or Microsoft sign-in is
+   refused ([Federated sign-in](#federated-sign-in-storefront-handoff)), the one *Save changes* of a
+   shopping list, the notification centre or the e-mail language row of the account page. The
+   shortest path is to bring over the release's storefront as a whole — `git diff v0.110.0 v0.111.0 --
+   storefront` in the platform repository lists every change.
+8. **Set `ADMIN_BASE_URL` to the panel's full address** if the backend refuses to boot naming it, or if
+   the instance has no `mfa` and never set it ([Admin panel address](#admin-base-url-platform-input)).
+   On every sales channel served on a host of its own, set **Storefront URL** to that host.
+
+Whenever it suits you:
+
+9. **Declare `customer_notifications`** if buyers should have a notification centre on the storefront
+   ([Adding a module that is new in a release](#adding-a-new-module)). Quote requests work without it.
+10. **Run the backend under its supervisor**: copy `backend/scripts/supervise.mjs` and change the
+    backend image's command ([Backend supervisor](#backend-supervisor)). Without it the backend runs
+    as before.
+11. **Code of your own** that called `isOrgInScope` or `ruleVisibleForScope`, matched
+    `OrgConstraint`'s `'set'` arm, read an Organization's `taxId` as a string, read tenant values
+    from the platform audit log, mounted one of six editor zones or matched a refusal on a generic
+    error code needs the changes in [Breaking changes](#after-0-111-0-breaking).
+
+#### Tax IDs {#after-0-111-0-tax-ids}
+
+Four `organizations` migrations change how a tax ID is stored (`specs/177-tax-id-scope/`):
+
+- **A personal (B2C) Organization has no tax ID.** It carried a 32-character hexadecimal placeholder
+  derived from its account id; the migration clears it and records the account in
+  `personal_account_id`. A personal row whose tax ID was not that placeholder is cleared and left
+  without a link, and how many is reported as a notice. **Documents written before the upgrade are not
+  rewritten**: an order, invoice, quote document or audit entry made for a personal Organization earlier
+  still shows the placeholder. Orders that carry one can be listed with
+  `select id from orders where billing_address->>'taxId' ~ '^[0-9a-f]{32}$';`.
+- **Every tax ID is stored without spaces and dashes, upper-cased**, so `526-025-09-95` and
+  `5260250995` are one tax ID. The migration refuses to run, and changes nothing, while two
+  Organizations would hold one tax ID once normalised; it lists up to 50 such groups. Find them before
+  upgrading and give each Organization its own tax ID:
+
+  ```sql
+  select upper(regexp_replace(tax_id, '[[:space:]-]', '', 'g')) as tax_id, array_agg(id)
+  from organizations where tax_id is not null group by 1 having count(*) > 1;
+  ```
+
+- **The installation has a tax-ID scope**, `global` after the upgrade: one tax ID belongs to one
+  Organization, as before. An operator can switch it to *per tree root*, where a head office and its
+  branches share one (see the `organizations` module page). Adding `organizations.root_id` rewrites the
+  table under an exclusive lock.
+- **The minimum version to upgrade from is `0.100.0`.** On a database that has Organizations but has
+  not applied `customer_accounts`' `Migration20260825T141659CustomerAccountsOrganizationRequired`
+  (first shipped in `0.100.0`) the first migration refuses to run.
+
+#### E-mail language {#after-0-111-0-email-language}
+
+A customer account records the language its owner reads (issue #652): from the request that creates
+it, and at sign-in while it has none; the buyer can change it on the storefront's account page, and the
+admin customer page shows it read-only. Existing accounts start with none and fill in at their next
+sign-in. This release only records it: transactional e-mails still go out in the channel's language. A
+storefront copied from an earlier release forwards the page language on its sign-in and registration
+calls only once it is brought over (step 7); until then accounts record the channel's default language.
+
+#### Breaking changes {#after-0-111-0-breaking}
+
+- **An Organization's `taxId` is `string | null`** (`organizationSchema.taxId`,
+  `OrganizationRecord.taxId`): a personal Organization has none. Code that read it as a string handles
+  `null`.
+- **`@endora-commerce/platform/tenancy` removes `isOrgInScope(id, ctx?)` and
+  `ruleVisibleForScope(ids, ctx?)`**: a sales representative's reach is loaded on demand and the scope
+  helpers are asynchronous — see
+  [A sales representative's reach loads on demand](#sales-rep-reach-async-helpers).
+- **`OrgConstraint`'s `'set'` arm is removed**: it is `{ kind: 'allowed', organizationIds }`, beside the
+  new `{ kind: 'excluded', excludedOrganizationIds, assignedOrganizationIds }`.
+- **Tenant values leave the platform audit log** in `crm`, `tasks`, `projects`, `orders`,
+  `customer_accounts`, `quote_requests`, `credit_limits`, `returns`, `invoices`, `newsletter`,
+  `organizations`, `quick_order`, `addresses`, `customers`, `forms` and `admin_users`:
+  an entry names the fields a write changed and, where a module keeps one, points at the module's own
+  value history. Entries written before the upgrade are not rewritten. Each module's entry below says
+  what moved where.
+- **Six admin zones take a required `saveSession` prop** (`ProductEditorZoneProps`,
+  `ProductEditorFieldZoneProps`, `CategoryEditorZoneProps`, `SalesChannelEditorZoneProps`,
+  `OrganizationDetailZoneProps`, `CustomerDetailZoneProps`; issue #407): code that mounts one of them
+  through `<AdminZone>` or `useAdminZone()` passes the host's save session, or `INERT_SAVE_SESSION`
+  from `@endora-commerce/admin-kit/lib`. A contribution that does not read the prop is unaffected.
+- **Domain refusals get their own error codes** (issue #86) in `catalog`, `delivery_methods`,
+  `dictionaries`, `invoices`, `megamenu`, `newsletter`, `orders`, `payment_methods`, `payments`,
+  `price_lists`, `product_feeds`, `projects`, `promotions`, `quick_order`, `returns`, `shipments`,
+  `tasks`, `crm`, `transactional_emails`, `api_keys`, `import_export` and `invoice_ledger`: a refusal
+  that answered `VALIDATION_FAILED` or another generic code answers a code of its own, with its values
+  in `details`. A caller that matched the generic code matches the new one; each module's
+  `CHANGELOG.md` for 0.111.0 names its refusals and their codes.
+
+This section was written on 2026-11-16 against the release branch `release/version-0.111.0`, read
+from the changesets of the release against its migrations and manifests; the entries from
+*One sales-representative reach rule on every surface* to *Federated sign-in completes on the
+storefront's own host* were written earlier, by the pull requests that made each change. No instance
+had been upgraded with `pnpm run upgrade 0.111.0` when it was written; the order of the steps is
+untried.
+
+#### One sales-representative reach rule on every surface {#sales-rep-reach-one-rule}
+
+The release that ships this change applies one reach rule for sales representatives on every admin
+surface (issue #305). A sales representative reaches every Organization **not governed by another
+representative**: the ones assigned to them (with `organizations:rollup`, their subtrees, the nearest
+assignment winning) and every Organization nobody is assigned to. Until now the Organization screens
+followed that rule while the tenant-scoped reads — members, customers, orders, invoices, carts,
+returns, quote requests — followed only the assignments, and the Organizations list and admin search
+showed every Organization. Two things change for every sales representative:
+
+- **They gain the tenant data of every unassigned Organization**, personal (B2C) Organizations
+  included: no representative can be assigned to a personal Organization, so every representative now
+  reads and acts on every B2C customer's orders, invoices, carts and returns. The owner confirmed this
+  on 2026-11-08.
+- **The Organizations list, its pickers and admin search lose the Organizations assigned to other
+  representatives.** They used to show them, and opening one answered `404`.
+
+Nothing is migrated and nothing needs configuring; platform administrators see no change.
+
+**After upgrading:**
+
+1. **See what changes for each representative.** Run this read-only query. Per sales representative,
+   `gains_tenant_data_of` counts the Organizations whose members, orders, invoices, carts, returns and
+   quote requests they now reach (`of_which_personal` of them B2C), and `leaves_list_and_search` the
+   business Organizations the list and admin search no longer show them:
+
+   ```sql
+   with reps as (
+     select au.id, au.email,
+            (ar.permissions ? 'organizations:rollup' or ar.permissions ? '*') as rollup
+     from admin_users au
+     join admin_roles ar on ar.id = au.admin_role_id
+     where ar.code = 'sales_representative' and au.deleted_at is null
+   ),
+   gov as (
+     select a.organization_id as id, o.path, array_agg(a.admin_user_id) as reps
+     from organization_sales_rep_assignments a
+     join organizations o on o.id = a.organization_id
+     group by a.organization_id, o.path
+   ),
+   orgs as (
+     select o.id, o.is_personal,
+            (select g.reps from gov g where g.id = o.id) as own_reps,
+            (select g.reps from gov g
+              where o.path like g.path || '%'
+              order by length(g.path) desc limit 1) as nearest_reps
+     from organizations o
+     where o.deleted_at is null
+   ),
+   decided as (
+     select r.email, o.is_personal,
+            case when r.rollup then o.nearest_reps else o.own_reps end as governed_by,
+            r.id as rep_id
+     from reps r cross join orgs o
+   )
+   select email as sales_representative,
+          count(*) filter (where governed_by is null) as gains_tenant_data_of,
+          count(*) filter (where governed_by is null and is_personal) as of_which_personal,
+          count(*) filter (where governed_by is not null and not is_personal
+                             and not (rep_id = any (governed_by))) as leaves_list_and_search
+   from decided
+   group by email
+   order by email;
+   ```
+
+2. **If a representative must not reach an unassigned Organization**, assign it to the
+   representative who looks after it: it is then governed, and every other representative loses it.
+   A personal Organization cannot be assigned; keeping B2C data from representatives would be a
+   different rule, and is not configurable.
+
+#### Customer two-step verification requirements without an encryption key {#customer-two-step-without-key}
+
+The release that ships this change extends to the customer requirements what
+[Enforced two-step verification without an encryption key](#admin-two-step-without-key) did for the
+administrator one (issue #947). Without `MFA_SECRET_ENCRYPTION_KEY` customers are already not asked
+for a second factor; the requirements could still be turned on, though, and nothing said they were
+not in force.
+
+**Behaviour change on upgrade:**
+
+- Turning **Storefront — enforce two-step verification** (`mfa.storefront.totp_enforced`) on, for
+  every sales channel or for some of them, is refused while the key is not set:
+  `409 MFA_ENFORCEMENT_UNAVAILABLE`, with `details.reason: 'encryption_key_missing'`. So is an
+  organization's policy requiring two-step verification of its members, whether its administrator
+  sets it on the storefront or an operator sets it through the Admin API. Turning either off is
+  always allowed, and so is saving it again when it is already on.
+- Before, neither organization-policy write existed without the key, so a policy set while the key
+  was configured could not be lifted. Both writes now exist without the key.
+- While the storefront setting is on, **Settings** shows *Not in force: no encryption key* under
+  it. The backend logs an error at every start for the setting, naming the sales channels it is on
+  for, and another with how many organizations require two-step verification.
+- Nothing changes on an instance that has the key.
+
+**After upgrading,** if the notice or a logged error appears, either set `MFA_SECRET_ENCRYPTION_KEY`
+(see the [first deployment checklist](./deployment/first-deployment-checklist.md)) and restart, so
+that the requirements apply again, or turn the storefront setting off in **Settings** and lift the
+organizations' policies. Set the key the enrolments were made with: an enrolment made with another
+key cannot be checked with this one.
+
+#### A private asset's file route answers 404 without a signature {#private-asset-file-404}
+
+The release that ships this change stops the public file route from telling a private asset apart
+from one that does not exist (issue #542).
+
+**Behaviour change on upgrade:**
+
+- `GET /assets/file/<asset id>` answers a request for a **private** asset that carries no
+  signature, or an expired or invalid one, with `404 ASSET_NOT_FOUND`: the same status, body and
+  headers as an id that names nothing. It used to answer `403 ASSET_ACCESS_DENIED`, which let anyone
+  holding an id confirm that a private asset exists. The permalink form already answered `404`.
+- `ERROR_CODES.ASSET_ACCESS_DENIED` is removed from `@endora-commerce/contracts`, because nothing
+  raises it any more.
+- A signed link to a private file in S3 or GCS storage now carries the file's type and its
+  inline or attachment disposition (issue #815), and `?download=1` asks for an attachment there as
+  it already did on local storage.
+
+**After upgrading,** if a client or an integration treats `403` from the file route as "exists but
+needs a signed link", make it treat `404` the same way and fetch a signed URL as before. Code that
+compares against `ERROR_CODES.ASSET_ACCESS_DENIED` no longer compiles: drop the comparison, or
+compare against `ERROR_CODES.ASSET_NOT_FOUND`. With cloud storage, add `X-Content-Type-Options:
+nosniff` in front of the bucket, as the assets library page describes.
+
+#### The last second factor stays while two-step verification is required {#last-factor-required}
+
+The release that ships this change closes a gap in the two-step requirements (issue #935). An
+administrator or a customer whose policy required a second factor could switch their only one off
+on their own security screen; the next sign-in then asked them to set it up again.
+
+**Behaviour change on upgrade:**
+
+- `POST /api/v1/admin/account/mfa/disable` and `POST /api/v1/account/mfa/disable` refuse to remove
+  the account's last second factor while a requirement is in force for it:
+  `409 MFA_LAST_FACTOR_REQUIRED`. The refusal comes before the code or password is checked, so it
+  spends neither.
+- Every source of the requirement counts, and each counts exactly as it does at sign-in: for an
+  administrator, **Admin UI — enforce two-step verification** (`mfa.admin.totp_enforced`) and a
+  role with *Requires two-step verification on assigned users*; for a customer,
+  **Storefront — enforce two-step verification** (`mfa.storefront.totp_enforced`) on the sales
+  channel of the request, and the organization's policy.
+- Without `MFA_SECRET_ENCRYPTION_KEY` no requirement is in force, and these routes are not served,
+  so nothing changes there.
+- `GET …/mfa/status` answers two new fields, `canDisable` and `disableBlockedReason`
+  (`'factor_required'` or `null`). The Admin UI's **Account security** screen and the storefront's
+  account security page hide the switch-off form while it is refused and say why.
+- An administrator's reset of somebody else's two-step verification is unchanged: it is the way
+  back in for a lost device.
+
+**After upgrading,** nothing has to be done. A client of the API that offers switching two-step
+verification off should read `canDisable` instead of guessing, and handle
+`409 MFA_LAST_FACTOR_REQUIRED`.
+
+#### Opportunity values leave the platform audit log {#crm-audit-names-only}
+
+The release that ships this change stops writing a sales opportunity's values into the
+platform-wide audit log (issue #470). That log is one table, read by everybody holding
+`audit_log:read` whichever organizations they may see, so it now names what an opportunity's
+change touched and nothing more.
+
+**Behaviour change on upgrade:**
+
+- On the **Audit log** screen, and in `audit_logs read`, a new `crm.opportunity.*` entry no
+  longer carries the opportunity's title, description, value, currency, contact person,
+  organization, tag names, custom field values, a status change's reason, an event's name or an
+  attachment's file name. It carries the opportunity's number, its status and other codes, the
+  assignee and sales channel ids, dates, and `changedFields` / `changedCustomFields`, the names of
+  what changed.
+- An opportunity's **Change history** tab is unchanged: it still shows the values as they were and
+  as they are, now read from a store the CRM module keeps beside the opportunity
+  (`crm_opportunity_value_changes`, created by this release's migration), and only to a reader
+  who may read that opportunity. Custom field values still need `custom_fields:read`.
+- Entries recorded before the upgrade are not rewritten: they keep their values, on the Audit log
+  screen and in the history.
+
+**After upgrading,** nothing has to be done. A report or an export that read an opportunity's
+values out of the audit log reads them from the opportunity, or from its history
+(`GET /api/v1/admin/crm/opportunities/:id/history`), instead.
+
+#### Line quantities and line counts are bounded {#line-quantity-bound}
+
+The release that ships this change bounds the quantity of a request line at **1 000 000** — the
+same ceiling as the order minimums — on every route that takes one, and bounds the line lists of
+an operator's quote request and of a return at **200**, as the basket, quick order, the order
+intake and the customer's quote request already were (issue #351). A larger quantity used to pass
+validation and fail at the database with `500 INTERNAL`.
+
+**Behaviour change on upgrade:**
+
+- A line quantity above 1 000 000 is refused with a new error code, `400 LINE_QUANTITY_EXCEEDED`,
+  whose message is translated and whose `details` name the field. This applies to adding to the
+  basket and editing a basket line, the customer's and the operator's quote request create and
+  edit, the operator's order creation and its preview, quick order (build and one-click),
+  shopping lists (add and update), returns, the promotion preview, and a packaging unit's base
+  quantity. A request that is wrong in another way as well answers `400 VALIDATION_FAILED`, with
+  `LINE_QUANTITY_EXCEEDED` among its `details`.
+- On the external API, `POST /api/v1/external/orders` and `POST /api/v1/external/catalog/prices`
+  answer `422 VALIDATION_FAILED`, as they do for every malformed body; the `details` entry's
+  `issue` is `LINE_QUANTITY_EXCEEDED`.
+- Adding to the basket is refused with `422 LINE_QUANTITY_EXCEEDED`,
+  `details: { quantity, maximum }`, when the line it adds to would pass 1 000 000, or when a
+  packaging unit's pieces (the unit's base quantity times the units ordered) would. Nothing is
+  written. This covers adding several products at once, reordering and moving a shopping list to
+  the basket. When signing in sums the anonymous basket into the customer's, a summed line is kept
+  at 1 000 000 instead.
+- Editing a basket line accepts any quantity up to 1 000 000; it used to stop at 999.
+- `POST /api/v1/admin/quote-requests`, `PATCH /api/v1/admin/quote-requests/:id` and
+  `POST /api/v1/returns` refuse more than 200 lines with `400 VALIDATION_FAILED`. The value is the
+  same 200 as elsewhere, but the refusal is not: the order intake and quick order keep answering
+  `422 VALIDATION_FAILED` with `details.code: 'too_many_items'`, and the basket
+  `422 CART_LINE_CAP_EXCEEDED`.
+- A quick-order file row with a quantity above 1 000 000, and every row of a repeated product whose
+  rows add up to more, is listed as rejected for its quantity instead of being recognised.
+- In the admin, the order and quote request create screens mark such a line invalid. In the
+  storefront, the quick-order, basket, quote draft and mobile buy-bar quantity inputs stop at the
+  bound, and a value typed past it is shown as 1 000 000.
+- Nothing stored changes: a line or a packaging unit already above the bound stays as it is. Adding
+  by such a unit is refused.
+
+**After upgrading,** an integration that sends larger quantities, or more than 200 lines to the
+operator's quote request or to returns, has to split the request, and one that branches on error
+codes should handle `LINE_QUANTITY_EXCEEDED`.
+
+#### Order values leave the platform audit log {#orders-audit-names-only}
+
+The release that ships this change stops writing an order's values into the platform-wide audit
+log (issue #470). That log is one table, read by everybody holding `audit_log:read` whichever
+organizations they may see, so it now names what an order's change touched and nothing more.
+
+**Behaviour change on upgrade:**
+
+- On the **Audit log** screen, and in `audit_logs read`, a new `order.custom_fields.update` or
+  `order.custom_fields.carry` entry no longer carries custom field values. It names the keys that
+  changed as `changedCustomFields`.
+- A new `order.place_on_behalf` entry no longer carries the order's total and currency, and its
+  `groups` give each group's line count without the group's name.
+- A new `order.place_via_api_key` entry no longer carries the organization and the customer the
+  key places for. It keeps the API key's id and the order number.
+- Entries recorded before the upgrade are not rewritten.
+
+**After upgrading,** nothing has to be done. A report or an export that read these values out of
+the audit log reads them from the order (`GET /api/v1/admin/orders/:id`) instead.
+
+#### Task values leave the platform audit log {#tasks-audit-names-only}
+
+The release that ships this change stops writing a task's values into the platform-wide audit log
+(issue #470). That log is one table, read by everybody holding `audit_log:read` whatever they may
+see, so it now names what a task's change touched and nothing more.
+
+**Behaviour change on upgrade:**
+
+- On the **Audit log** screen, and in `audit_logs read`, a new `tasks.*` entry no longer carries the
+  task's title, its note from the record it was created for, its custom field values or an
+  attachment's file name. It carries the task's number, status, dates, context type and id, and
+  `changedFields` / `changedCustomFields`, the names of what changed.
+- A task's **History** tab is unchanged: it still shows the values, now read from a store the Tasks
+  module keeps beside the task (`task_value_changes`, created by this release's migration), and only
+  to a reader who may see that task.
+- A task's history now shows custom field values, and the names of the custom fields a change
+  touched, only to a reader who also holds `custom_fields:read`, as opportunity and project
+  histories already do. A role holding `tasks:read` without it no longer reads them there.
+- Entries recorded before the upgrade are not rewritten: they keep their values, on the Audit log
+  screen and in the history.
+
+**After upgrading,** nothing has to be done. A report or an export that read a task's values out of
+the audit log reads them from the task, or from its history (`GET /api/v1/admin/tasks/:id/history`),
+instead.
+
+#### Customer account values leave the platform audit log {#customer-accounts-audit-names-only}
+
+The release that ships this change stops writing a customer account's values into the
+platform-wide audit log (issue #470). That log is one table, read by everybody holding
+`audit_log:read` whichever organizations they may see, so it now names what an account's change
+touched and nothing more.
+
+**Behaviour change on upgrade:**
+
+- On the **Audit log** screen, and in `audit_logs read`, a new `customer_account.*` entry no
+  longer carries the account's e-mail, first or last name, its organization, a block's reason or a
+  custom organization role's name, and `customer.custom_fields.update` no longer carries custom
+  field values.
+- Instead, a profile change, an account's creation and a move between organizations name the
+  fields as `changedFields`. A custom-field change names the keys as `changedCustomFields`. A block
+  records `hasBlockReason`. A role change records the role's id and kind.
+- Entries recorded before the upgrade are not rewritten. The erasure of a deleted customer
+  (`customers.deletion_retention_days`) still redacts them, as before.
+
+**After upgrading,** nothing has to be done. A report or an export that read these values out of
+the audit log reads them from the account (`GET /api/v1/admin/customers/:id`) instead.
+
+#### Project titles leave the platform audit log {#projects-title-out-of-audit}
+
+The release that ships this change stops writing a project's title into the platform-wide audit log
+(issue #470, owner ruling of 2026-11-10: a title is a value). Projects already kept the value and the
+custom field values out of it.
+
+**Behaviour change on upgrade:**
+
+- On the **Audit log** screen, and in `audit_logs read`, a new `projects.project.*` entry names a
+  project by its number and no longer carries its title. A change of the title is recorded as
+  `changedFields: ['title']`.
+- A project's **Change history** tab is unchanged: the title before and after a change is read from
+  the project's own `project_value_changes`, and only for a reader who may see the project. No
+  migration is needed: the table already exists.
+- Entries recorded before the upgrade are not rewritten: they keep the title they were written with.
+
+**After upgrading,** nothing has to be done.
+
+#### Stage names, task titles and file names leave the project audit entries {#projects-stage-names-out-of-audit}
+
+The release that ships this change stops writing the free text of a project's stages, stage tasks
+and attachments into the platform-wide audit log (issue #1226, D-288, owner ruling of 2026-11-10: a
+title is a value). The project's title already left it.
+
+**Behaviour change on upgrade:**
+
+- On the **Audit log** screen, and in `audit_logs read`, a new `projects.project.*` entry names a
+  stage by its id (`stageId`), a stage's task by its `position` and a file by `attachmentId` /
+  `assetId`. `stageName` is no longer recorded by `stage_move`, `close` and `reopen`;
+  `projects.project.create` records `stageIds` in place of the list of stage names; `stage_create`,
+  `stage_update` and `stage_delete` no longer carry `name`; each task under `tasks` of
+  `stage_tasks_set` no longer carries `title`; `attachment_add` no longer carries `fileName`.
+- A rename of a stage is recorded as `changedFields: ['name']`, a change of a stage's task titles as
+  `changedFields: ['taskTitles']`, and the names before and after go to the project's own
+  `project_value_changes`, which the entry points at by `valueChangeId`. A deleted stage's entry
+  carries both on its state before.
+- A project's **Change history** tab still names stages, tasks and files: it reads the names from
+  that store, and only for a reader who may see the project. A stage task whose title a change did
+  not touch is named by its place (*Task 1*). No migration is needed.
+- Entries recorded before the upgrade are not rewritten: they keep the names they were written with.
+
+**After upgrading,** nothing has to be done. A report that read stage names out of the audit log
+reads them from the project (`GET /api/v1/admin/projects/:id`) instead.
+
+#### Quote request values leave the platform audit log {#quote-requests-audit-names-only}
+
+The release that ships this change stops writing a quote request's values into the platform-wide
+audit log (issue #470). That log is one table, read by everybody holding `audit_log:read`
+whichever organizations they may see, so it now names what a quote request's change touched and
+nothing more.
+
+**Behaviour change on upgrade:**
+
+- On the **Audit log** screen, and in `audit_logs read`, a new `quote_request.cancel` entry
+  records `hasReason` instead of the reason.
+- `quote_request.modify` and `quote_request.create_on_behalf` record each group's line count
+  without the group's name.
+- `quote_request.send_document` records `recipientCount` and `failedRecipientCount` instead of the
+  addresses.
+- `quote_request.prepare_customer_basket` no longer records the customer.
+- `quote_request.custom_fields.carry` names the carried keys as `changedCustomFields` instead of
+  the custom field values.
+- A quote request's **History** tab is unchanged. It still shows the reason, the group names and
+  the addresses, read from the request's own revisions and events.
+- Entries recorded before the upgrade are not rewritten.
+
+**After upgrading,** nothing has to be done. A report or an export that read these values out of
+the audit log reads them from the quote request's history
+(`GET /api/v1/admin/quote-requests/:id/history`) instead.
+
+#### Credit-limit amounts leave the platform audit log {#credit-limits-audit-names-only}
+
+The release that ships this change stops writing credit-limit amounts into the platform-wide audit
+log (issue #470). That log is one table, read by everybody holding `audit_log:read` whatever
+Organizations they may see.
+
+**Behaviour change on upgrade:**
+
+- On the **Audit log** screen, and in `audit_logs read`, a new `credit_limit.grant`,
+  `credit_limit.adjust` or `credit_limit.credit_from_return` entry no longer carries the granted
+  amount, the currency or the Organization's id. It says what changed (`changedFields`, for example
+  `['grantedAmount']`), and a credit from a return keeps the return case's id. The entry is still
+  recorded against the Organization.
+- The limit itself, and the Organization's credit-limit screen, are unchanged.
+- Entries recorded before the upgrade are not rewritten: they keep their amounts.
+
+**After upgrading,** nothing has to be done. A report that read granted amounts out of the audit log
+reads them from the credit limit instead.
+
+#### A sales representative's reach loads on demand; the scope helpers are async {#sales-rep-reach-async-helpers}
+
+The release that ships this change stops computing a sales representative's reach on every admin
+request (issue #955; owner ruling of 2026-11-10). The tenant filter already reads the reach as a
+subquery owned by `organizations`; the lists of excluded and assigned Organizations are now loaded
+only when a request asks a single-Organization question or ranks search results, and at most once per
+request. Nobody's reach changes, and nothing is cached.
+
+**Breaking change for code that builds on the platform:**
+
+- `isOrgInScope(id, ctx?)` and `ruleVisibleForScope(ids, ctx?)` are removed from
+  `@endora-commerce/platform/tenancy`. Use `await orgInScope(id, ctx?)` and
+  `await ruleInScope(ids, ctx?)`. For a check repeated over rows you already hold, take the
+  synchronous predicate once: `const inScope = await orgScopeTest(ctx?)`, then `inScope(id)`.
+- `assignedOrganizationIdsForRanking(ctx?)` returns a promise.
+- `AdminTenantScope`'s `excluding` member (`@endora-commerce/contracts`) no longer carries
+  `excludedOrganizationIds` / `assignedOrganizationIds`; it carries
+  `excludedOrganizationsQuery` and `loadReach()`. The `excluded` arm of `OrgConstraint` changed the
+  same way, and `PreferenceActor`'s `salesperson.reaches(id)` returns a promise.
+- The helpers were removed rather than retyped on purpose: `if (!isOrgInScope(x))` over a promise is
+  always false, so a gate kept on the old spelling would have stopped refusing. Code that still names
+  them fails to compile. Turn on `@typescript-eslint/no-floating-promises` and
+  `@typescript-eslint/no-misused-promises` for the files that ask the question.
+
+**After upgrading,** rebuild any extension package or overlay module that imports these helpers and
+follow the compile errors. Nothing else needs doing: the migration that ships with the reach change
+(`organization_reach_governor`) is unchanged.
+
+#### Return amounts and reasons leave the platform audit log {#returns-audit-names-only}
+
+The release that ships this change stops writing return amounts and free-text reasons into the
+platform-wide audit log (issue #470). That log is one table, read by everybody holding
+`audit_log:read` whatever Organizations they may see.
+
+**Behaviour change on upgrade:**
+
+- A new `return.settled` entry no longer carries `amount`, `charges` (each charge's maximum and
+  approved amount), `recomputedDefaults` or `lineCeilings`. It names what they concerned instead:
+  `refundedCharges` (charge kinds), `recomputedDefaultItemIds` and `ceilingBoundItemIds` (line ids).
+  The resolution, currency, settlement state and correction outcome stay.
+- A new `return.status_changed` entry no longer carries the `reason` typed with the change; it
+  records `hasReason: true | false`. The reason is still passed to the status events of that
+  change, but **it is no longer stored anywhere**: if your operators read transition reasons back
+  from the audit log, ask them to put the reason in a case comment instead.
+- Return cases, refunds and their amounts are unchanged. Entries recorded before the upgrade are not
+  rewritten: they keep their amounts and reasons.
+
+**After upgrading,** check whether anybody relies on reading transition reasons from the Audit log
+screen (see above).
+
+#### Invoice amounts leave the platform audit log {#invoices-audit-names-only}
+
+The release that ships this change stops writing invoice amounts into the platform-wide audit log
+(issue #470). That log is one table, read by everybody holding `audit_log:read` whatever
+Organizations they may see.
+
+**Behaviour change on upgrade:**
+
+- On the **Audit log** screen, and in `audit_logs read`, a new `invoice.issued` entry no longer
+  carries `grossTotal`, and a new `invoice.corrected` entry no longer carries `credited` or the
+  amounts of credited charges (`charges`). A correction now names the kinds of charges it credited
+  in `chargeKinds`. The number, kind, order, sales channel and original invoice stay.
+- Invoices, corrections, their PDFs and their totals are unchanged.
+- Entries recorded before the upgrade are not rewritten: they keep their amounts.
+
+**After upgrading,** nothing has to be done. A report that read invoice totals out of the audit log
+reads them from the invoices instead.
+
+#### The schema-extension commands run in the instance {#schema-extensions-instance-command}
+
+The release that ships this change adds `module:schema-extensions` to the instance scaffold, beside
+the five `module:*` commands (issue #1036). In the instance root:
+
+```bash
+pnpm run module:schema-extensions list                      # declared extension columns, and orphaned ones
+pnpm run module:schema-extensions drop <moduleId>           # prints the plan
+pnpm run module:schema-extensions drop <moduleId> --confirm # drops orphaned elements, one audit entry
+pnpm run module:schema-extensions audit-packages            # what migrate would refuse, executing nothing
+```
+
+`drop` removes only elements that are orphaned and that no installed package declares any more;
+it is the only way the columns an uninstalled module left behind are ever removed.
+`audit-packages` reads every installed package's migrations without executing them and lists each
+statement the foreign-schema guard refuses at `migrate` (exit 65 while one remains). `migrate`
+stops at the first such statement and rolls the whole run back; `audit-packages` names all of them.
+
+**An instance created before this release** has no such command: `pnpm run upgrade` changes no
+file of your tree. Add it by hand, then run `pnpm run build:backend`:
+
+1. `backend/src/module-commands/schema-extensions.ts`:
+
+   ```ts
+   import { runInstanceSchemaExtensionsCommand } from '@endora-commerce/platform/lifecycle';
+   import config from '../mikro-orm.config.js';
+
+   await runInstanceSchemaExtensionsCommand({ ormConfig: config });
+   ```
+
+2. In `backend/package.json`, under `scripts`:
+   `"module:schema-extensions": "node --env-file-if-exists=../.env dist/module-commands/schema-extensions.js"`.
+3. In the instance's root `package.json`, under `scripts`:
+   `"module:schema-extensions": "pnpm -C backend run module:schema-extensions"`.
+
+**After upgrading,** if `migrate` was refused with `foreign-schema-write`, run
+`pnpm run module:schema-extensions audit-packages` to see every statement it would refuse, and ask
+the package's author for a release that declares its columns instead.
+
+#### The catalogue reads the whole `Accept-Language` header {#catalog-accept-language}
+
+The release that ships this change makes the catalogue read `Accept-Language` as the weighted
+list it is (issue #397). The public catalogue API (`/api/v1/catalog/*`) and the external
+catalogue API (`/api/v1/external/catalog/*`) used to take the first entry of the header as written,
+including any `;q=` weight.
+
+**Behaviour change on upgrade:**
+
+- The tags are read in order of their `q` weight, highest first. The catalogue answers in the first
+  language the sales channel offers, matched exactly or by language alone, so `pl` matches a
+  channel's `pl-PL`. If the channel offers none of them, it answers in the channel's default
+  language. `en;q=0.1, pl-PL;q=0.9` is now answered in Polish. Before, the answer was English.
+- A language the channel does not offer is not served any more, even where a category name or
+  an attribute label still has text in it. The response uses the channel's default language.
+- The storefront sends the language it resolved for the channel, so it is normally not affected.
+  Neither is a request without the header.
+
+**After upgrading,** check integrations that call the catalogue API with their own
+`Accept-Language`. One that needs a particular language must ask for a language the sales
+channel offers. Add the language to the channel in **Sales channels** if it is missing.
+
+#### Subscriber addresses leave the platform audit log {#newsletter-audit-names-only}
+
+The release that ships this change stops writing newsletter subscribers' e-mail addresses and
+unsubscribe reasons into the platform-wide audit log (issue #470). That log is one table, read by
+everybody holding `audit_log:read` whatever they may see.
+
+**Behaviour change on upgrade:**
+
+- On the **Audit log** screen, and in `audit_logs read`, a new `newsletter_subscribe`,
+  `newsletter_resubscribe`, `newsletter_bounce`, `newsletter_complaint` or `newsletter_delete` entry
+  no longer carries the e-mail address, and a new `newsletter_unsubscribe` entry no longer carries
+  the reason; it records `hasReason`. Entries name the subscriber by id. A suppression of an address
+  that has no subscriber is recorded against its suppression row (`newsletter_suppression` and the
+  row's id), not against the address.
+- Subscribers, their unsubscribe reasons and the suppression list are unchanged.
+- Entries recorded before the upgrade are not rewritten: they keep their addresses and reasons.
+
+**After upgrading,** nothing has to be done. A report that looked subscribers up by address in the
+audit log looks them up on the **Newsletter** screen instead.
+
+#### An Organization edit's values leave the platform audit log {#organization-admin-patch-audit-names-only}
+
+The release that ships this change stops writing an Organization's values into the platform-wide
+audit log when an operator edits it (issue #470, owner ruling O-2: the Organization's name, tax ID
+and reasons are the tenant's values). That log is one table, read by everybody holding
+`audit_log:read` whatever Organizations they may see.
+
+**Behaviour change on upgrade:**
+
+- On the **Audit log** screen, and in `audit_logs read`, a new `organization.admin_patch` entry
+  (`PATCH /api/v1/admin/organizations/:id`) no longer carries the Organization's snapshot: no name,
+  legal name, tax ID, registered address, order-confirmation e-mails, block or rejection reason or
+  custom field values.
+- Instead, it records the status, VAT status and fulfilment-strategy codes before and after, and
+  names what changed: the fields as `changedFields`, the custom field keys as
+  `changedCustomFields`.
+- The Organization and its values are unchanged.
+- Entries recorded before the upgrade are not rewritten: they keep the snapshot they were written
+  with.
+
+**After upgrading,** nothing has to be done. A report or an export that read an Organization's
+values out of the audit log reads them from the Organization (`GET /api/v1/admin/organizations/:id`)
+instead.
+
+#### Every other organizations entry leaves its values out of the audit log {#organizations-audit-names-only}
+
+The release that ships this change stops writing values into the platform-wide audit log from
+every remaining `organizations` write (issue #470, owner rulings O-1 and O-2: an Organization's
+name, tax ID and reasons and a custom role's name are the tenant's values). That log is one table,
+read by everybody holding `audit_log:read` whatever Organizations they may see.
+
+**Behaviour change on upgrade:**
+
+- On the **Audit log** screen, and in `audit_logs read`, a new `organization.create` or
+  `organization.register` entry no longer carries the Organization's name, tax ID or registered
+  address; it names them as `changedFields`. An `organization.delete` entry records the status,
+  VAT status, whether the Organization is personal, its parent and its version instead of the whole
+  Organization.
+- `organization.approved`, `.rejected`, `.blocked` and `.unblocked` record whether a reason was
+  given (`hasBlockedReason`, `hasRejectedReason`), never the reason, and no longer repeat the
+  Organization's id in their state.
+- The member writes on an Organization's page (`customer_account.admin_create`,
+  `.admin_profile_update`, `.admin_rollup_change`, `.admin_remove`) no longer carry the member's
+  e-mail, first or last name or the Organization's id; they record the role by id, the member's
+  flags and, after a change, the names of what changed as `changedFields`.
+- `organization_invitation.create`, `.revoke` and `organization.invite_accept` no longer carry the
+  invitee's e-mail. The invitation's role is recorded by id and kind, without a custom role's name.
+- `organization_role.create`, `.update` and `.delete` no longer carry a custom role's name or
+  description: the role is recorded by id, kind and permission codes, and an update names what
+  changed as `changedFields` (`name`, `description`, `permissions`).
+- The Organizations, members, invitations and roles themselves are unchanged.
+- Entries recorded before the upgrade are not rewritten: they keep the values they were written
+  with.
+
+**After upgrading,** nothing has to be done. A report or an export that read these values out of
+the audit log reads them from the Organization (`GET /api/v1/admin/organizations/:id`), its members
+and its roles instead.
+
+#### Default ordering preferences leave the Organization and the account out of the audit log {#quick-order-preferences-audit-names-only}
+
+The release that ships this change stops writing the Organization's or the customer account's id
+into the platform-wide audit log when a default ordering preference changes (issue #470). That log
+is one table, read by everybody holding `audit_log:read` whatever Organizations they may see.
+
+**Behaviour change on upgrade:**
+
+- On the **Audit log** screen, and in `audit_logs read`, a new
+  `quick_order.default_preference.update` entry no longer carries `scopeId`, the id of the
+  Organization or the customer account whose defaults changed. It keeps the scope (`organization`
+  or `customer`) and the ids of the chosen payment method, delivery method and addresses, and its
+  `stateAfter` now names the fields that changed as `changedFields`. The entry is still recorded
+  against the preference by id.
+- The preferences themselves are unchanged.
+- Entries recorded before the upgrade are not rewritten: they keep the `scopeId`.
+
+**After upgrading,** nothing has to be done. The audit log still says who changed a preference,
+when, and what changed; it no longer says whose preference it was. A report that read that out of
+`scopeId` reads an Organization's or a customer's current defaults from
+`GET /api/v1/quick-order/preferences?scope=…&scopeId=…` instead.
+
+#### Organization addresses leave the platform audit log {#addresses-audit-names-only}
+
+The release that ships this change stops writing the Organization's id into the platform-wide
+audit log from Organization address writes, and makes an address update say what changed
+(issue #470). That log is one table, read by everybody holding `audit_log:read` whatever
+Organizations they may see.
+
+**Behaviour change on upgrade:**
+
+- On the **Audit log** screen, and in `audit_logs read`, a new `address.create`, `address.update`,
+  `address.delete` or `address.anonymized` entry no longer carries the Organization's id. The entry
+  is still recorded against the address by id.
+- `address.create` and `address.update` now name the fields as `changedFields` (for an update,
+  only the fields whose value changed), beside the kind of address. Neither carries the recipient,
+  street, city, postal code or phone, as before.
+- The addresses themselves are unchanged.
+- Entries recorded before the upgrade are not rewritten: they keep the Organization's id.
+
+**After upgrading,** nothing has to be done. A report that found an Organization's address entries
+by the `organizationId` in their state lists the Organization's addresses first
+(`GET /api/v1/organizations/mine/addresses`, or `addressReadPort.listIdsForOrganization`) and
+filters the audit log by those ids.
+
+#### Retired personal address book entries leave out the account and the Organization {#customers-address-audit-names-only}
+
+The release that ships this change stops writing the customer account's id and the personal
+Organization's id into the platform-wide audit log from the entries about rows of the retired
+personal address book (issue #470). That log is one table, read by everybody holding
+`audit_log:read` whatever Organizations they may see.
+
+**Behaviour change on upgrade:**
+
+- On the **Audit log** screen, and in `audit_logs read`, a new `customer_address.merge`,
+  `customer_address.merge_refused`, `customer_address.erased` or `customer_address.anonymized`
+  entry no longer carries the customer account's id, and a merge entry no longer carries the
+  Organization's id. The entry is still recorded against the row by id. A merge still names the
+  Organization address the row went to (`mergedIntoAddressId`), and a refusal its error code.
+- The rows, the Organization address book and the retirement job are unchanged.
+- Entries recorded before the upgrade are not rewritten: they keep the ids.
+
+**After upgrading,** nothing has to be done. The retention sweep's erasure of a customer's audit
+history finds these entries by the row ids, not by their state, so it is unaffected.
+
+#### A form entry export's search text leaves the platform audit log {#forms-export-audit-names-only}
+
+The release that ships this change stops writing the search text of a form entry export into the
+platform-wide audit log (issue #470). That log is one table, read by everybody holding
+`audit_log:read` whatever Organizations they may see, and the search text is whatever the employee
+typed — often a submitter's e-mail address or a phrase from their answers.
+
+**Behaviour change on upgrade:**
+
+- On the **Audit log** screen, and in `audit_logs read`, a new `forms.entries.export` entry no
+  longer carries `filter.q`. When the export was filtered by a search text, `filter` records
+  `hasQuery: true` and `queryLength`, the number of characters typed. The form, the statuses, the
+  submission dates, the sales channel and the row count are recorded as before.
+- The export itself is unchanged.
+- Entries recorded before the upgrade are not rewritten: they keep the search text.
+
+**After upgrading,** nothing has to be done. The audit log still says who exported which form's
+entries, when, with which filters and how many rows; it no longer says what was searched for.
+
+#### Impersonation reasons and Organizations leave the platform audit log {#impersonation-reason-store}
+
+The release that ships this change stops writing the reason an administrator gives for
+impersonating a customer, and the Organization the impersonation was started from, into the
+platform-wide audit log (issue #470). That log is one table, read by everybody holding
+`audit_log:read` whatever Organizations they may see. The release adds one table,
+`admin_impersonation_reasons`, which the upgrade's migration step creates.
+
+**Behaviour change on upgrade:**
+
+- On the **Audit log** screen, and in `audit_logs read`, a new `impersonation.start` entry no
+  longer carries `reason` or `organizationId`. It records `hasReason`, `reasonLength` when a reason
+  was given, `organizationScoped` (whether the start was made from the Organization's screen) and
+  `valueChangeId`, the id of the `admin_impersonation_reasons` row that holds the reason. The entry
+  is still recorded against the customer account, with the administrator who started it.
+- The reason itself is kept in `admin_impersonation_reasons`, written in the same transaction as
+  the audit entry. No screen shows it yet.
+- When a customer account is anonymised, its impersonation reasons are deleted, and an
+  `impersonation.reasons_erase` entry records how many.
+- Starting and ending an impersonation work as before.
+- Entries recorded before the upgrade are not rewritten: they keep the reason and the Organization.
+
+**After upgrading,** nothing has to be done. A report that read the reason out of the audit log
+reads it from `admin_impersonation_reasons` by the entry's `valueChangeId`.
+
+#### The admin panel's address is a platform input {#admin-base-url-platform-input}
+
+The release that ships this change makes `ADMIN_BASE_URL` — the admin panel's address — an input
+of the platform instead of the `mfa` module's (issue #185), so every module that e-mails an
+administrator can link into the panel from it, not only `mfa`.
+
+**Behaviour change on upgrade:**
+
+- An instance's `.env.example` lists `ADMIN_BASE_URL` whether or not `mfa` is installed, and
+  `endora install` writes the admin's address into it in the same cases it already did for
+  `mfa`.
+- The value must be an absolute `http` or `https` address with a host, path included when the
+  panel has one (`https://shop.example.com/admin`), with no query and no fragment. A value that is
+  set and is not (`admin.example.com`, `/admin`) **refuses the boot** in every environment: the
+  backend exits with `ADMIN_BASE_URL="…" is not an absolute http(s) URL with a host, and no query or
+  fragment`. Until now `mfa` used such a value as it was and built a sign-in redirect that opened
+  nothing.
+- Unset, `mfa`'s sign-in redirect to the panel falls back to `http://localhost:3002` only outside
+  production. In production it carries no absolute address — a path on the host that served the
+  sign-in callback — and never `localhost`.
+- A well-formed value works as before. A trailing slash is ignored.
+
+**After upgrading:**
+
+1. If the backend refuses to boot naming `ADMIN_BASE_URL`, set it to the panel's full address,
+   for example `https://admin.example.com`, or remove it, and restart.
+2. If the instance has no `mfa` and never set `ADMIN_BASE_URL`, set it now so that e-mails to
+   administrators can link into the panel; unset, they carry no link.
+3. A module of your own that read `process.env['ADMIN_BASE_URL']` reads
+   `configuredAdminBaseUrl()` from `@endora-commerce/platform/kernel` instead. It returns the
+   address without a trailing slash, or `null` when it is unset — omit the link then. A module of your own that declared `ADMIN_BASE_URL` in its manifest's `env` removes the
+   declaration: the platform owns it, and `check:env-inputs` reports a module declaring it.
+
+#### A backend that stops answering is restarted {#backend-supervisor}
+
+The release that ships this change runs the backend under a supervising parent, as the storefront
+has run since 0.109.0 (issue #596). Docker restarts a container that **exits**, never one that is
+only *unhealthy*, so a backend process that was alive but no longer answered — and, in the default
+`BACKEND_ROLE=all`, every queue consumer with it — stayed down until someone restarted it.
+
+**Behaviour change on upgrade:**
+
+- The backend image's command is `CMD ["node", "scripts/supervise.mjs", "dist/index.js"]`. The
+  supervisor probes `/api/v1/_health` and, after three unanswered probes in a row, ends the API
+  and exits `1`, so the restart policy starts a fresh container. Any HTTP answer counts, a `503`
+  for a database or search outage included. With the defaults a hung API is ended within about 70
+  seconds.
+- On `docker stop` the supervisor forwards `SIGTERM` and waits up to 25 seconds for the queue
+  consumers to drain before it sends `SIGKILL`. The compose examples set
+  `stop_grace_period: 30s` on the backend service, and `init: true`.
+- New, optional environment variables on the backend service: `BACKEND_SUPERVISOR_PROBE`,
+  `BACKEND_SUPERVISOR_PROBE_URL`, `BACKEND_SUPERVISOR_INTERVAL_SECONDS`,
+  `BACKEND_SUPERVISOR_TIMEOUT_SECONDS`, `BACKEND_SUPERVISOR_FAILURES`,
+  `BACKEND_SUPERVISOR_START_GRACE_SECONDS` and `BACKEND_SUPERVISOR_KILL_GRACE_SECONDS`. The
+  defaults need none; a value the supervisor cannot read stops the container at start. Their
+  meaning is on [Backend process supervisor](./deployment/backend-supervisor.md).
+- `backend-migrate`, `backend-install` and a separate worker service running `node dist/worker.js`
+  keep their own commands and are not supervised.
+- A new instance is scaffolded with `backend/scripts/supervise.mjs` and with the image and compose
+  examples above.
+
+**After upgrading:**
+
+1. `endora upgrade` does not touch the deployment examples or the backend's own files. Copy
+   `backend/scripts/supervise.mjs` from a newly scaffolded instance (or from the platform
+   repository) into your backend, and change the last line of your backend Dockerfile to
+   `CMD ["node", "scripts/supervise.mjs", "dist/index.js"]`. The image's working directory must be
+   the backend's (`/app/backend` in the example).
+2. Add `init: true` and `stop_grace_period: 30s` to the backend service of your compose file
+   (`docker run --init --stop-timeout 30` for a container started by hand).
+3. A service of your own that overrides the backend image's `command` — the migration and
+   install jobs, a worker tier — needs nothing: it keeps running its own command.
+
+Without these edits the backend runs as before, unsupervised.
+
+#### Federated sign-in completes on the storefront's own host {#federated-sign-in-storefront-handoff}
+
+The release that ships this change makes Google and Microsoft sign-in work on the storefront when
+the API is served from another host (issue #1279). The provider returns to the API host, and the
+session cookie the callback used to set there belonged to that host, so the storefront never saw
+it.
+
+**Behaviour change on upgrade:**
+
+- The customer callback `GET /api/v1/auth/customer/oauth/{provider}/callback` sets no
+  `b2b_session`, `b2b_mfa_challenge` or `b2b_cart_merge_flash` any more. It sends the browser to
+  `/auth/federated/complete?code=…` on the storefront of the sales channel the sign-in was started
+  on — the channel's **Storefront URL** (`sales_channels.storefront_url`), else
+  `STOREFRONT_BASE_URL` — and the refusals go to that storefront's `/login?error=…`.
+- The storefront redeems the code with the new `POST /api/v1/auth/customer/oauth/exchange`, once,
+  within sixty seconds, on the same sales channel, and only with the browser's binding secret. It
+  answers the session in `Set-Cookie` and `{ status: 'authenticated', redirectPath, cartMerge }`,
+  or `{ status: 'mfaRequired', challengeId, redirectPath }`; every refusal is
+  `400 MFA_FEDERATED_HANDOFF_INVALID`. The signed-out basket is carried over in that call.
+- The customer start `GET /api/v1/auth/customer/oauth/{provider}/start` requires `binding`, the
+  SHA-256 (hex) of that secret. Without it the browser is sent to `/login?error=sign_in_failed`.
+- The provider's redirect URIs do not change, and nor does the Admin UI's federated sign-in.
+- `deploy/compose.prod.yml` and `deploy/.env.prod.example` pass `MFA_OAUTH_*` to the backend;
+  they did not before, so a production stack built from them could not configure a provider.
+
+**After upgrading:**
+
+1. A storefront copied from the reference adds the two route handlers
+   `app/auth/federated/start/route.ts` and `app/auth/federated/complete/route.ts` with their helper
+   `lib/auth/federated-sign-in-routes.ts` and `lib/auth/federated-sign-in-start-path.ts`, the
+   exchange call `exchangeFederatedSignIn` in `lib/api/federated-sign-in.ts`, and the two paths in
+   `HANDLERS_SINCE` in `lib/seo/robots-directive.ts`, which keeps the middleware from prefixing or
+   redirecting them. `SocialLoginButtons` links to `/auth/federated/start?provider=…&next=…` and
+   loses its `backendBaseUrl` and `salesChannelCode` props; drop them where the sign-in page
+   renders it. A storefront that still links to the API's `start` gets every customer federated
+   sign-in refused with `sign_in_failed`.
+2. On every sales channel served on a host of its own, set **Storefront URL** to that host.
+3. A deployment built from your own compose file passes `MFA_OAUTH_GOOGLE_CLIENT_ID`,
+   `MFA_OAUTH_GOOGLE_CLIENT_SECRET`, `MFA_OAUTH_MICROSOFT_CLIENT_ID`,
+   `MFA_OAUTH_MICROSOFT_CLIENT_SECRET` and `MFA_OAUTH_MICROSOFT_TENANT` to the backend if it offers
+   federated sign-in. The `mfa` module page lists the redirect URIs to register.
+
+### After upgrading to 0.112.0 {#after-0-112-0}
+
+`pnpm run upgrade 0.112.0` moves the packages of the release from `0.111.0` and applies its
+migrations — twelve for modules of earlier releases (each runs where its module is declared), and one
+more for the new `related_payers` module, which runs only once an instance declares it. **No migration
+refuses on existing data and none rewrites a table**; three of them only move statements out of
+another module's frozen migrations and change nothing on an instance that ran those. The release
+closes the admin UX audit (issue #1567): one visual system, one list page, one Save and one primary
+action per screen across the Admin UI, which **removes the admin kit's legacy `b2b-*` classes** a
+module or theme of your own may still render. Beside it, promotions compute on the gross the buyer
+pays, an order's payment status follows a transition graph, a write that stores an asset id the
+administrator cannot see is refused, the admin quote request list pages on the server, and `returns`
+takes complaints about goods bought elsewhere and from guests without an account. The steps below say
+what to do, in order; each entry after them stands on its own, so read the ones for the parts of the
+platform you use.
+
+#### What to do, in order {#after-0-112-0-steps}
+
+Before the upgrade:
+
+1. **On a production instance that sends newsletters, choose an SMTP e-mail credential** in the
+   *Email credentials* setting of `newsletter`. Without one, sending a campaign is refused with
+   `422 NEWSLETTER_PROVIDER_NOT_CONFIGURED` instead of going to the server log
+   ([Newsletter sending](#after-0-112-0-newsletter)).
+2. **Review the promotions whose minimum spend or "spend X" step was set as a net amount.** Thresholds,
+   fixed-amount caps and percentages are now computed on the gross
+   ([Promotions on the gross](#after-0-112-0-promotions)).
+
+The upgrade itself:
+
+3. **Run `pnpm run upgrade 0.112.0`.** `setup` applies the migrations module by module, in the order
+   of the modules' dependencies, and each module's own in the order of their stamps. Grouped by
+   module:
+
+   | Migration | Module | What it does |
+   | --- | --- | --- |
+   | `Migration20261117T065542CurrenciesTable` | `currencies` | Creates the `currencies` table, its indexes, columns, checks and the `PLN` and `EUR` rows where an older migration of another module did not; **nothing changes on an instance that has them** |
+   | `Migration20261117T065601DictionariesDefaultCurrencyFk` | `dictionaries` | Adds `countries_default_currency_fk` where it is missing; nothing changes on an instance that has it |
+   | `Migration20261117T033143OrganizationsCustomerGroupColumn` | `organizations` | Creates `organizations.customer_group_id` and its index where they are missing; nothing changes on an instance that has them |
+   | `Migration20261119T090000CartsBuyingFor` | `carts` | Nullable `carts.buying_for_organization_id` and `buying_for_terms`: the related payer a cart is bought for |
+   | `Migration20261118T162646OrdersPayerOnOrder` | `orders` | Four nullable payer columns on `orders` and an index on `payer_organization_id`; every existing order has no payer |
+   | `Migration20261116T204304InvoicesInvoiceLineKindRetained` | `invoices` | `invoice_lines.line_kind` admits `retained`, an amount withheld on a return |
+   | `Migration20261113T145001ReturnsAuthorizerStatusNotifications` | `returns` | `return_cases.authorized_by_admin_user_id`, back-filled from the audit log, and `return_statuses.notify_customer_on_entry`, off for every status |
+   | `Migration20261113T155433ReturnsOffPlatformComplaints` | `returns` | `return_cases.order_id` becomes nullable, with the columns of a complaint without a platform order; `return_case_attachments` carries `organization_id`, back-filled from its case; table `return_case_clauses` — see [Returns](#after-0-112-0-returns) |
+   | `Migration20261116T104415ReturnsGuestComplaints` | `returns` | `return_cases.customer_account_id` becomes nullable, with the guest columns on cases, comments and attachments; table `return_guest_verifications` |
+   | `Migration20261117T120057QuoteRequestsRenumberResubmittedPlaceholders` | `quote_requests` | **Gives every quote request still named `QR-<uuid>` a business number** from the sequence, oldest first; irreversible, and texts already rendered keep the placeholder |
+   | `Migration20261122T074243CrmOpportunityListSavedViews` | `crm` | Table `crm_opportunity_list_saved_views`, empty |
+   | `Migration20261122T074256ProjectsListSavedViews` | `projects` | Table `project_list_saved_views`, empty |
+
+   Declaring `related_payers` adds `Migration20261118T144820RelatedPayersLinksAndRequests`, which
+   only creates the module's own two tables (step 7).
+
+After the upgrade, before the instance takes traffic again:
+
+4. **Bring the storefront over.** A storefront copied from an earlier release has no guest complaint
+   and tracking pages, no payer screens in the account and none of the returns form's attachments and
+   clauses. The shortest path is to bring over the release's storefront as a whole —
+   `git diff v0.111.0 v0.112.0 -- storefront` in the platform repository lists every change.
+5. **Release the credit reservations of credit-limit orders settled through
+   `POST /api/v1/payments/receive`** before this release: run `pnpm run cli orders
+   transition-effects-repair`, review what it lists, then run it again with `--apply`
+   ([Payment status](#after-0-112-0-payment-status)).
+
+Whenever it suits you:
+
+6. **Switch on what `returns` now offers**, per sales channel: complaints about goods bought elsewhere
+   (`returns.off_platform_complaints_enabled`), then complaints from guests
+   (`returns.guest_complaints_enabled`), and the new-case recipients
+   (`returns.new_case_recipients`). All are off after the upgrade ([Returns](#after-0-112-0-returns)).
+7. **Declare `related_payers`** if a buyer Organization should place orders another Organization pays
+   for ([Adding a module that is new in a release](#adding-a-new-module)). It comes up switched off;
+   switch it on on **Modules** and per sales channel.
+8. **Code of your own** that renders the admin kit's `b2b-*` classes, mounts `ScopePicker`,
+   `RuleBuilder` or one of the kit's panels on its own, calls the returns attachment API, writes asset
+   ids, sends an Organization's `status` in a `PATCH`, sets payment statuses or reads the admin quote
+   request list in one call needs the changes in [Breaking changes](#after-0-112-0-breaking).
+
+#### Promotions on the gross {#after-0-112-0-promotions}
+
+Promotions compute on the gross the buyer pays (issues #1350 and #1396). Percent-off and free-unit
+promotions take their share of the goods gross, so a buyer pays less than before for the same
+promotion: "10 % off the cart" at 23 % VAT took about 8.1 % off what the buyer paid and now takes 10 %,
+and a free unit is free VAT included. `minCartSubtotal`, the rule builder's cart total and the "spend
+X" steps compare the goods gross before any discount, and fixed amounts are capped at the gross, so
+some promotions apply to carts they skipped before: a minimum spend of 500 needed 500 net and now
+needs 500 gross. Orders placed before the upgrade are not changed. A caller of
+`POST /api/v1/admin/promotions/preview` sends `taxRate` on each line to get the discount an order
+would take.
+
+#### Payment status {#after-0-112-0-payment-status}
+
+An order's payment status follows a transition graph (issue #1574). The admin route refuses `paid`
+for a `refunded` order and `refunded` for an order that was never paid with
+`409 ORDER_PAYMENT_STATUS_TRANSITION_NOT_ALLOWED`; asking for the status an order already has changes
+nothing and writes no audit entry. Settlement follows the same graph: a late decline no longer puts a
+paid order on hold, and the payment row still records what the gateway reported. A credit-limit order
+settled through `POST /api/v1/payments/receive` now releases its credit reservation after commit
+(issue #1576); one settled before the upgrade may still hold it, which step 5 repairs.
+
+#### Returns {#after-0-112-0-returns}
+
+`returns` stores the files of a case itself, sends four e-mails (a new case, a submission, a comment and
+a status entered), records who authorized a case, and takes two new kinds of case, each off until a
+sales channel switches it on (`specs/180-off-platform-complaints/`, `specs/181-guest-complaints/`):
+
+- **A complaint without a platform order**, about goods bought elsewhere; it is settled by
+  replacement, repair or *settled outside*, never by a refund or a credit. Clauses the customer accepts
+  or is shown are edited on the new *Return and complaint terms* screen.
+- **A complaint from a guest** without a customer account, who confirms an e-mail address by a
+  one-time link and follows the case through a private tracking link. The link is sealed with the
+  platform's cursor seal, so **rotating `SESSION_COOKIE_SECRET` voids every guest link**. A guest's
+  contact, address and files are erased `returns.guest_data_retention_days` after the case closes
+  (default 90).
+
+Attachment rows written by the old API keep their `asset_id` and are typed `other`; they stay in the
+database but are not listed on the case and cannot be downloaded. `returns` now binds on `_i18n`,
+`admin_users`, `assets_library` and `catalog`; `setup` declares them if the instance did not.
+
+#### Newsletter sending {#after-0-112-0-newsletter}
+
+On a production instance (`NODE_ENV=production`) sending a newsletter campaign needs a usable e-mail
+credential: the `newsletter.email_credentials` setting naming an SMTP `email_adapter` credential that
+resolves (issue #1334). Without one, the send is refused with `422 NEWSLETTER_PROVIDER_NOT_CONFIGURED`
+and the campaign keeps its status; until now it went to the server log, reached no mailbox and read as
+sent. Development and test instances keep the console sink.
+
+#### Breaking changes {#after-0-112-0-breaking}
+
+For API clients and integrators:
+
+- **Returns attachments** (`specs/180-off-platform-complaints/`): `attachmentAssetIds` on
+  `POST /api/v1/returns` and the JSON `{ assetId }` body of `POST /api/v1/returns/:id/attachments` are
+  removed. Upload each file with `POST /api/v1/returns/uploads` (multipart `file` and `type`) and file
+  the case with `attachments: [{ uploadId }]`; add a file to a filed case as multipart.
+  `returnAttachmentSchema` no longer carries `assetId`. `customerAccountId` of a case summary and
+  detail is `uuid | null`, `null` for a guest's case.
+- **Asset ids a write adds are checked** (issues #544, #1354): CMS, catalog, blog, document template,
+  settings, PWA, sales channel and transactional e-mail writes refuse an asset id the administrator
+  cannot see, or that does not exist, with `404`; ids the record already stores are not checked. In
+  Page Builder content only a key ending in `assetId` counts as a reference to a file (issue #1359),
+  and the catalog and blog content saves answer `ASSET_NOT_FOUND` instead of `NOT_FOUND`.
+- **`PATCH /api/v1/admin/organizations/:id` refuses `status`** (issue #1468): change it through
+  `…/approve`, `…/reject`, `…/block` or `…/unblock`. Four `organizations` refusals answer
+  `ORGANIZATION_PERSONAL` or `ORGANIZATION_STATUS_INVALID` instead of `VALIDATION_FAILED` (issue
+  #629).
+- **Payment status transitions** are refused as described under
+  [Payment status](#after-0-112-0-payment-status); `orderPaymentStatusApplyPort` answers an `outcome`.
+- **`GET /api/v1/admin/quote-requests` answers one page** (issue #317): page through it with `page` and
+  `pageSize` (default 25, at most 200), or read `pagination.total`.
+- **`ATTRIBUTE_VALUE_REJECTED`'s two Page Builder content refusals** carry `details.code` and the key
+  instead of a list of `{ path, issue }` (issue #1223).
+- **`GET /api/v1/admin/audit-log/recent-activity`** answers an invalid query with `VALIDATION_FAILED`
+  in the standard envelope instead of `validation_error` (issue #1339).
+
+For module, theme and overlay authors:
+
+- **The admin kit's legacy classes are removed from `theme.css`** (issues #1436, #1488, #1492, #1502):
+  `.b2b-page-head*`, `.b2b-card*`, `.b2b-btn*`, `.b2b-field*`, `.b2b-select`, `.b2b-label`,
+  `.b2b-help`, `.b2b-input-wrap`, `.b2b-tbl`, `.b2b-table`, `.b2b-bulkbar`, `.b2b-row`, `.b2b-col`,
+  `.b2b-grow`, `.b2b-mono`, `.b2b-tabular` and `.b2b-hr`. A module that renders one gets unstyled
+  markup. Use the kit's `PageHeader`, `Card`, `Button`, `Input`, `Select`, `FormField`, `Table` and
+  `ListToolbarSearch`, or Tailwind utilities; the `@endora-commerce/admin-kit` changelog for 0.112.0 maps each class. A theme override
+  of one of them moves to the tokens (`--card-pad`, `--fs-section-title`). The `.dark` token block is
+  removed too (issue #1810).
+- **Cards are denser and kit panels are sections** (issues #1437, #1438, #1488, #1503): `Card` pads
+  16 px, `CardTitle` is an `h2`; `CustomFieldValuesPanel`, `FieldProtectionSummary`,
+  `FieldProtectionPricePanel`, `ScopePicker` and `RuleBuilder` draw no frame of their own — pass
+  `chrome="card"` where one stands alone on a page.
+- **`@endora-commerce/page-builder-admin` removes `PageBuilderTemplateActions` and
+  `PageBuilderHeaderShell`** (issue #1494): pass their props to `PageBuilderHeaderActions`.
+  **`@endora-commerce/cms-components`' `SectionPreset.build`** takes the resolved copy instead of a
+  translator (issue #1684).
+- **`ChannelMembershipListResponseSchema`** is removed from `@endora-commerce/contracts` (issue
+  #1162); use `ChannelMemberIdListResponseSchema`. `importChannelTargetSchema` requires `name`.
+- **Ports gain methods** an implementation outside the platform must add:
+  `SalesRepAssignmentPort.listOrganizationIdsWithAssignments()`, `InvoicePdfPort.renderInvoice()`,
+  `SettingsAdminPort.resetValuesForSubset()` and `AuditPort.queryFacets()`.
+  `ModerationActionsPanel` takes a required `canModerate`.
+- **Translation keys are removed** from several bundles as the screens that read them changed; a
+  deployment that overrides a key drops it. Each module's `CHANGELOG.md` for 0.112.0 names them.
+
+This section was written on 2026-11-23 against the release branch `release/version-0.112.0`, read from
+the changesets of the release against its migrations and manifests. No pull request of this cycle wrote
+an entry of its own on this page. No instance had been upgraded with `pnpm run upgrade 0.112.0` when it
+was written; the order of the steps is untried.
+
+### The MikroORM CLI is not supported {#mikro-orm-cli-removed}
+
+The platform no longer installs `@mikro-orm/cli`, and its `backend/package.json` no longer carries
+the `mikro-orm` block that pointed the CLI at a configuration file (issue #1865). An instance created
+with `create-endora-commerce` never declared either, so nothing changes in one that did not add them
+itself.
+
+An instance that added `@mikro-orm/cli` to run `mikro-orm debug`, `mikro-orm migration:up` or
+`mikro-orm schema:update` loses those commands: they are not supported, and the next MikroORM major
+(issue #1073) moves every `@mikro-orm/*` package together, so a CLI left at another major does not
+load. Remove it, and any `mikro-orm` block, and use the instance's own commands instead:
+`pnpm run migrate` applies the migrations in the order the installed manifests compute,
+`pnpm run setup` builds, migrates and installs every declared module, and `pnpm run module:status`
+reports what is installed. `mikro-orm debug` has no replacement — the ORM configuration is the
+platform's (`mikroOrmConfigFrom` in `@endora-commerce/platform/db`). Never run `mikro-orm
+schema:update` or `schema:create` against an instance's database: they change the schema outside the
+migrations, which then no longer describe it.
+
+This entry was written by the pull request that made the change, ahead of the release that carries
+it.
+
+### MikroORM 7 {#mikro-orm-7}
+
+The platform and every module package now run on **MikroORM 7.2.11** (issue #1866, part of #1073),
+and their `@mikro-orm/*` peers are `^7.2.11`. This is a breaking change for an instance: `pnpm run
+upgrade` moves only the packages of the release, so the instance's own `@mikro-orm/*` ranges have to
+move by hand, and code of the instance's own that uses MikroORM — an overlay module, an entity, a
+migration, a script — has to follow the major. Nothing changes in the database: no migration comes
+with the switch, and the migration history table is read as before.
+
+**Before running `pnpm run upgrade`**, in `backend/package.json`:
+
+1. Set `@mikro-orm/core`, `@mikro-orm/postgresql` and `@mikro-orm/migrations` to `^7.2.11`.
+2. Add `@mikro-orm/decorators` at `^7.2.11`. MikroORM 7 moved the entity decorators out of
+   `@mikro-orm/core` into this package.
+   Add `reflect-metadata` at `^0.2.2` beside it: `@mikro-orm/decorators/legacy` loads it, and
+   without it the backend stops at its first import with `Cannot find package 'reflect-metadata'`.
+3. Remove `@mikro-orm/cli` if the instance added it ([The MikroORM CLI is not
+   supported](#mikro-orm-cli-removed)); a CLI left at 6 does not load.
+
+**In the instance's own code**, if it has any:
+
+| MikroORM 6 | MikroORM 7 |
+| --- | --- |
+| `import { Entity, Property, … } from '@mikro-orm/core'` | `import { Entity, Property, … } from '@mikro-orm/decorators/legacy'` — every decorator, the relation and hook decorators included. Types (`Collection`, `OptionalProps`, `EntityManager`, …) stay where they were. `experimentalDecorators` stays on; `emitDecoratorMetadata` is not needed and can be dropped |
+| `em.persistAndFlush(x)` / `em.removeAndFlush(x)` | `em.persist(x).flush()` / `em.remove(x).flush()` |
+| `em.getKnex()`, `getConnection().getKnex()`, `this.getKnex()` in a migration | `em.execute(sql, params)` with `?` values and `??` identifiers; in a migration, `this.addSql(…)` with text or `raw(sql, params)` |
+| `orm.getMigrator()`, `getPendingMigrations()`, `getExecutedMigrations()` | `orm.migrator`, `getPending()`, `getExecuted()` |
+| `orm.getMetadata().getAll()` as an object (`Object.values(…)`) | a `Map`: `[...orm.getMetadata().getAll().values()]` — `Object.values` of it is empty, without an error |
+| an entity named by string (`em.find('Product', …)`) | the class (`em.find(Product, …)`) |
+| `MikroORM.initSync(options)` | `new MikroORM(options)` |
+| `MetadataStorage.getMetadataFromDecorator(cls)` | the class's own metadata, `cls[MetadataStorage.META_SYMBOL]` |
+
+`check:entity-decorators` — and `endora check` over a module package — reports a decorator imported
+from anywhere but `@mikro-orm/decorators/legacy`, so the first row cannot be missed in a package.
+
+**What does not change.** The platform's ORM configuration keeps MikroORM 6's `joined` loading,
+`forceUtcTimezone: false` and late `onCreate` hooks, so a query sends the statements it sent before
+and a timestamp reads the same; MikroORM 7's own defaults for the three are not taken. `em.execute(sql,
+params)` still fills the values in client-side (`Platform.formatQuery`), as it did on 6: too few
+values leave a placeholder `NULL`, and a JavaScript array given to one `?` becomes a comma-separated
+list. The tenant filters answer an empty organization set with an always-false condition in a joined
+`populate` too, where MikroORM 6 sent `in ()` and failed.
+
+**A package migration has fewer raw handles.** The foreign-schema guard refuses `getKysely()` on a
+package migration's entity manager, and MikroORM 7's `Migration` offers no query builder of its own;
+build the statement for `addSql` as text or as `raw(sql, params)`, which the guard judges as it is
+rendered.
+
+This entry was written by the pull request that made the change, ahead of the release that carries
+it.
 
 ## An instance that is mixed from the start
 

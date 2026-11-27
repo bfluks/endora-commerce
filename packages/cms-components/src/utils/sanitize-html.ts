@@ -12,10 +12,14 @@
 export interface HtmlSanitizePolicy {
   /** Whether an element is emitted. A refused element is unwrapped — its children are kept. */
   allowTag(tag: string): boolean;
-  /** Whether an attribute is kept on an emitted element (`on*` and `srcdoc` never are). */
-  allowAttr(tag: string, attr: string): boolean;
-  /** Returns the cleaned `style` attribute value, or `null` to drop the attribute. */
-  cleanStyle(style: string): string | null;
+  /**
+   * Whether an attribute is kept on an emitted element (`on*` and `srcdoc` never are). `value`
+   * is the attribute's value as the browser reads it (character references decoded), for a
+   * policy that admits an attribute only with a value of a given form, such as an anchor `id`.
+   */
+  allowAttr(tag: string, attr: string, value: string): boolean;
+  /** Returns the cleaned `style` attribute value, or `null` to drop the attribute. `tag` is the element's. */
+  cleanStyle(style: string, tag?: string): string | null;
   /**
    * Whether a `<style>` element is emitted. Its text is kept only when it contains no `<`, so
    * it reads identically as raw text (HTML) and as markup (inside SVG or MathML).
@@ -260,7 +264,7 @@ function serialiseStartTag(token: TagToken, policy: HtmlSanitizePolicy): string 
   let relIndex = -1;
   for (const [name, raw] of token.attrs) {
     if (!ATTR_NAME.test(name) || name.startsWith('on') || name === 'srcdoc') continue;
-    if (!policy.allowAttr(token.name, name)) continue;
+    if (!policy.allowAttr(token.name, name, decodeHtmlEntities(raw))) continue;
     if (URL_ATTRS.has(name)) {
       const decoded = decodeHtmlEntities(raw).trim();
       if (!isSafeUrl(decoded)) continue;
@@ -274,7 +278,7 @@ function serialiseStartTag(token: TagToken, policy: HtmlSanitizePolicy): string 
       continue;
     }
     if (name === 'style') {
-      const cleaned = policy.cleanStyle(decodeHtmlEntities(raw));
+      const cleaned = policy.cleanStyle(decodeHtmlEntities(raw), token.name);
       if (cleaned) parts.push(` style="${escapeAttr(cleaned)}"`);
       continue;
     }

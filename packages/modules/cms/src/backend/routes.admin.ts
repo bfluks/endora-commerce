@@ -1,9 +1,12 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { z } from 'zod';
 import {
+  assessBrandContrast,
   createCmsBlockRequestSchema,
   createCmsHookRequestSchema,
   createCmsPageRequestSchema,
   createCmsTemplateRequestSchema,
+  duplicateCmsRecordRequestSchema,
   cmsHookAttachmentRequestSchema,
   cmsPageBuilderTranslateRequestSchema,
   patchCmsBlockRequestSchema,
@@ -11,19 +14,27 @@ import {
   patchCmsPageRequestSchema,
   patchCmsTemplateRequestSchema,
   putCmsColorPaletteRequestSchema,
+  putCmsBrandTokensRequestSchema,
   putCmsPageContentRequestSchema,
+  type CmsBrandTokensAdminRead,
+  type CmsHookSummary,
 } from '@endora-commerce/contracts';
 import type { ColorPaletteAuditContext, ColorPaletteWriter } from './plugin.js';
 import type { CmsPageService } from './services/cms-page-service.js';
 import type { PageBuilderRegistry } from './services/page-builder-registry.js';
 import type { CmsBlockService } from './services/cms-block-service.js';
 import type { CmsHookService } from './services/cms-hook-service.js';
+import { localizeSeededHook, type CmsBundleTranslate } from './services/seed-hooks.js';
 import type { CmsTemplateService } from './services/cms-template-service.js';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import type { PageBuilderTranslationService } from './services/translation/page-builder-translation.service.js';
+import type { CmsBrandTokensService } from './services/brand-tokens-service.js';
 
 /** Feature 151 — a canvas at the 200 000-character ceiling, with styling, stays below this. */
 const TRANSLATE_BODY_LIMIT = 5 * 1024 * 1024;
+
+/** `?salesChannelId=` on the brand-token and page-builder reads; absent means the global set. */
+const salesChannelQuerySchema = z.object({ salesChannelId: z.string().uuid().optional() });
 
 export async function registerCmsAdminRoutes(
   app: FastifyInstance,
@@ -37,6 +48,12 @@ export async function registerCmsAdminRoutes(
     resolveAdminAuditContext?: (req: FastifyRequest) => ColorPaletteAuditContext;
     requireAdmin: RequireAdminFactory;
     translation: PageBuilderTranslationService;
+    brandTokensService: CmsBrandTokensService;
+    /**
+     * Issue #1809 — a seeded hook's name and description in the request's
+     * language (`localizeSeededHook`). Absent: the stored text, as before.
+     */
+    hookText?: CmsBundleTranslate;
   },
 ): Promise<void> {
   const requireRead = deps.requireAdmin('cms.read');
@@ -75,9 +92,48 @@ export async function registerCmsAdminRoutes(
     async () => ({ data: { segments: await deps.pageService.reservedSegments() } }),
   );
 
-  app.get('/api/v1/admin/cms/page-builder/config', { preHandler: requireRead }, async () => ({
-    data: await deps.pageBuilderRegistry.describe(),
-  }));
+  // Feature 163 (research R-4): `?salesChannelId=` selects whose brand tokens
+  // the descriptor carries, so the canvas previews the channel being edited.
+  app.get('/api/v1/admin/cms/page-builder/config', { preHandler: requireRead }, async (request) => {
+    const query = salesChannelQuerySchema.parse(request.query ?? {});
+    return {
+      data: await deps.pageBuilderRegistry.describe({ salesChannelId: query.salesChannelId ?? null }),
+    };
+  });
+
+  /**
+   * Feature 163 — brand tokens (`contracts/storefront-and-admin-api.md` §1).
+   *
+   * Read under `cms.read`, so an editor sees the brand the canvas is styled
+   * with; written under its own code, `cms.brand`, because the brand is every
+   * page at once and not one page's content. The write is the Command
+   * `cms.brand_tokens.update` inside the service; the contrast findings are
+   * warnings and never refuse a save (FR-006b).
+   */
+  app.get('/api/v1/admin/cms/brand-tokens', { preHandler: requireRead }, async (request) => {
+    const query = salesChannelQuerySchema.parse(request.query ?? {});
+    const read = await deps.brandTokensService.read(query.salesChannelId ?? null);
+    const data: CmsBrandTokensAdminRead = {
+      global: read.global,
+      ...(read.channel ? { channel: read.channel } : {}),
+      effective: read.effective,
+      warnings: assessBrandContrast(read.effective),
+    };
+    return { data };
+  });
+
+  const requireBrand = deps.requireAdmin('cms.brand');
+
+  app.put(
+    '/api/v1/admin/cms/brand-tokens',
+    { preHandler: requireBrand },
+    async (request) => {
+      const body = putCmsBrandTokensRequestSchema.parse(request.body);
+      return {
+        data: await deps.brandTokensService.update(body.scope, body.tokens, body.expectedVersion),
+      };
+    },
+  );
 
   /**
    * Feature 151 — the Page Builder translation
@@ -174,6 +230,17 @@ export async function registerCmsAdminRoutes(
     async (request) => ({ data: await deps.pageService.unarchive(request.params.id) }),
   );
 
+  // Issue #1495 (DEC-17) — a draft copy under a derived slug; 201 with the create envelope.
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/admin/cms/pages/:id/duplicate',
+    { preHandler: requireWrite },
+    async (request, reply) => {
+      const body = duplicateCmsRecordRequestSchema.parse(request.body ?? {});
+      const copy = await deps.pageService.duplicate(request.params.id, body);
+      return reply.code(201).send({ data: copy });
+    },
+  );
+
   app.delete<{ Params: { id: string } }>(
     '/api/v1/admin/cms/pages/:id',
     { preHandler: requireWrite },
@@ -236,6 +303,17 @@ export async function registerCmsAdminRoutes(
     },
   );
 
+  // Issue #1495 (DEC-17) — a draft copy under a derived code; 201 with the create envelope.
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/admin/cms/blocks/:id/duplicate',
+    { preHandler: requireWrite },
+    async (request, reply) => {
+      const body = duplicateCmsRecordRequestSchema.parse(request.body ?? {});
+      const copy = await deps.blockService.duplicate(request.params.id, body);
+      return reply.code(201).send({ data: copy });
+    },
+  );
+
   app.get('/api/v1/admin/cms/templates', { preHandler: requireRead }, async (request) => {
     const query = (request.query ?? {}) as Record<string, string | undefined>;
     return deps.templateService.list({
@@ -289,23 +367,42 @@ export async function registerCmsAdminRoutes(
     },
   );
 
+  // Issue #1495 (DEC-17) — a draft copy under a derived code; 201 with the create envelope.
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/admin/cms/templates/:id/duplicate',
+    { preHandler: requireWrite },
+    async (request, reply) => {
+      const body = duplicateCmsRecordRequestSchema.parse(request.body ?? {});
+      const copy = await deps.templateService.duplicate(request.params.id, body);
+      return reply.code(201).send({ data: copy });
+    },
+  );
+
+  // Issue #1809 — every hook response names a seeded hook in the reader's language.
+  const localizeHook = async <T extends CmsHookSummary>(request: FastifyRequest, hook: T): Promise<T> => {
+    const translate = deps.hookText;
+    if (!translate) return hook;
+    return localizeSeededHook(hook, await request.responseLanguage(), translate);
+  };
+
   app.get('/api/v1/admin/cms/hooks', { preHandler: requireRead }, async (request) => {
     const query = (request.query ?? {}) as Record<string, string | undefined>;
-    return deps.hookService.list({
+    const out = await deps.hookService.list({
       ...(query['salesChannelId'] ? { salesChannelId: query['salesChannelId'] } : {}),
     });
+    return { ...out, data: await Promise.all(out.data.map((hook) => localizeHook(request, hook))) };
   });
 
   app.post('/api/v1/admin/cms/hooks', { preHandler: requireWrite }, async (request, reply) => {
     const body = createCmsHookRequestSchema.parse(request.body);
     const hook = await deps.hookService.create(body);
-    return reply.code(201).send({ data: hook });
+    return reply.code(201).send({ data: await localizeHook(request, hook) });
   });
 
   app.get<{ Params: { id: string } }>(
     '/api/v1/admin/cms/hooks/:id',
     { preHandler: requireRead },
-    async (request) => ({ data: await deps.hookService.get(request.params.id) }),
+    async (request) => ({ data: await localizeHook(request, await deps.hookService.get(request.params.id)) }),
   );
 
   app.patch<{ Params: { id: string } }>(
@@ -313,7 +410,7 @@ export async function registerCmsAdminRoutes(
     { preHandler: requireWrite },
     async (request) => {
       const body = patchCmsHookRequestSchema.parse(request.body);
-      return { data: await deps.hookService.patch(request.params.id, body) };
+      return { data: await localizeHook(request, await deps.hookService.patch(request.params.id, body)) };
     },
   );
 
@@ -350,10 +447,9 @@ export async function registerCmsAdminRoutes(
     '/api/v1/admin/cms/hooks/:id/attachments/:blockId',
     { preHandler: requireWrite },
     async (request) => {
-      const body = cmsHookAttachmentRequestSchema.parse({
-        ...(request.body as Record<string, unknown> | null | undefined),
-        blockId: request.params.blockId,
-      });
+      // The block id is the path's, and a malformed one names no attachment: the
+      // service answers it as an unknown one rather than the schema's `400` (#781).
+      const body = cmsHookAttachmentRequestSchema.pick({ position: true }).parse(request.body ?? {});
       return {
         data: await deps.hookService.reorderAttachment(
           request.params.id,

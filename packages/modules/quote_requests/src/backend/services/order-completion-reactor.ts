@@ -2,7 +2,6 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import type { OrderReadPort, OrderRecord } from '@endora-commerce/contracts';
 import { QuoteRequest } from '../entities/quote-request.entity.js';
 import type { RfqEventService } from './rfq-event-service.js';
-import type { RfqNotificationService } from './rfq-notification-service.js';
 
 export interface OrderCompletionReactorDeps {
   emFactory: () => EntityManager;
@@ -15,7 +14,6 @@ export interface OrderCompletionReactorDeps {
    */
   orders: OrderReadPort;
   eventService: RfqEventService;
-  notificationService: RfqNotificationService;
   /**
    * Runs `work` off the bus's dispatch chain, in a scope of its own, and never
    * rejects: a `work` that throws is **logged** by it. Supplied by the
@@ -53,21 +51,23 @@ export interface OrderCompletionReactorDeps {
  * request and a request that still reads `Approved`, and nothing comes back
  * for it. The deferred work throws, `defer` logs, and an operator can find the
  * order. (`orders` refuses to write a second Order onto such a request by
- * itself, so what is lost is the request's status and its notification, not
+ * itself, so what is lost is the request's status, not
  * the one-request-one-Order rule.)
  */
 const COMMIT_WAIT_PAUSES = [10, 25, 75, 150, 250, 500, 1000] as const;
 
 /**
  * US5 — when an order is created carrying `sourceQuoteRequestId`, flip the
- * originating RFQ to Completed and notify both parties (FR-007 + FR-028).
+ * originating RFQ to Completed (FR-007 + FR-028). Nobody is notified: the
+ * order confirmation covers it, and the notification matrix has no row for a
+ * completed request (`specs/179-rfq-and-customer-notifications/`, owner
+ * ruling Q1).
  *
  * The order-creation flow lives in `orders`, so this observes `order.created.v1`
  * rather than coupling the two modules. The **subscription** lives in this
  * module's `backend.ts` and goes through `ctx.subscribe` (issue #107): it was a
  * bare `eventBus.on` in the plugin body, which meant a switched-off
- * `quote_requests` still completed quote requests, appended an event row and
- * enqueued a customer notification.
+ * `quote_requests` still completed quote requests and appended an event row.
  */
 export function createOrderCompletionReactor(deps: OrderCompletionReactorDeps): {
   onOrderCreated: (payload: unknown) => Promise<void>;
@@ -93,30 +93,32 @@ export function createOrderCompletionReactor(deps: OrderCompletionReactorDeps): 
     // (`rfq-expiry-worker`, `rfq-event-service`, `rfq-revision-service`,
     // `rfq-notification-service`).
     if (!order.sourceQuoteRequestId) return;
-    const em = deps.emFactory();
-    const rfq = await em.findOne(QuoteRequest, { id: order.sourceQuoteRequestId });
-    if (!rfq || rfq.status === 'Completed') return;
-    // Constitution XI. `orders` vouches for the source before it stamps it, and
-    // this is the same question asked by the module that owns the answer: an
-    // order of one Organization never completes a request of another, whoever
-    // wrote the column.
-    if (rfq.organizationId !== order.organizationId) return;
-    rfq.status = 'Completed';
-    rfq.completedAt = new Date();
-    rfq.convertedOrderId = order.id;
-    rfq.version += 1;
-    await em.flush();
-    const evt = await deps.eventService.append({
-      quoteRequestId: rfq.id,
-      eventType: 'completed',
-      actor: { roleLabel: 'System' },
-      payload: { type: 'completed', orderId: order.id },
-    });
-    await deps.notificationService.enqueue({
-      quoteRequestId: rfq.id,
-      sourceEventId: evt.id,
-      recipients: [{ customerAccountId: rfq.customerAccountId }],
-      channels: ['email', 'in_app'],
+    const sourceQuoteRequestId = order.sourceQuoteRequestId;
+    // The status and its `completed` history entry commit together
+    // (`specs/179-rfq-and-customer-notifications/` research R-6): a completion
+    // whose entry failed is not left `Completed` without one.
+    await deps.emFactory().transactional(async (em) => {
+      const rfq = await em.findOne(QuoteRequest, { id: sourceQuoteRequestId });
+      if (!rfq || rfq.status === 'Completed') return;
+      // Constitution XI. `orders` vouches for the source before it stamps it, and
+      // this is the same question asked by the module that owns the answer: an
+      // order of one Organization never completes a request of another, whoever
+      // wrote the column.
+      if (rfq.organizationId !== order.organizationId) return;
+      rfq.status = 'Completed';
+      rfq.completedAt = new Date();
+      rfq.convertedOrderId = order.id;
+      rfq.version += 1;
+      await em.flush();
+      await deps.eventService.append(
+        {
+          quoteRequestId: rfq.id,
+          eventType: 'completed',
+          actor: { roleLabel: 'System' },
+          payload: { type: 'completed', orderId: order.id },
+        },
+        em,
+      );
     });
   };
 

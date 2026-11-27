@@ -43,6 +43,7 @@ describe('admin Megamenu bindings + activation contract (T023)', () => {
         items: [
           {
             parentId: null,
+            presentation: 'mega',
             position: 0,
             kind: 'external-link',
             labels: { 'en-US': 'Phone' },

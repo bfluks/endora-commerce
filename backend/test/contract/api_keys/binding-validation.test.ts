@@ -1,6 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Organization } from '../../helpers/package-entities.js';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import {
+  ERROR_CODES,
+  apiKeyListResponseSchema,
+  createApiKeyResponseSchema,
+} from '@endora-commerce/contracts';
 import {
   setupBackendServer,
   teardownBackendServer,
@@ -9,6 +13,11 @@ import {
 import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 import { CustomerAccount } from '../../helpers/package-entities.js';
 import { AuditLogEntry } from '@endora-commerce/platform/kernel';
+import { deepStrict, disagreements } from '../../helpers/strict-schema.js';
+
+/** Strict copies: a key an API key reply carries that the contract does not declare fails (issue #599 §6). */
+const strictCreated = deepStrict(createApiKeyResponseSchema);
+const strictList = deepStrict(apiKeyListResponseSchema);
 
 /**
  * Feature 062 / T003 — API key creation binding rules B1–B5
@@ -76,7 +85,7 @@ describe('API key binding validation (062 / B1–B5)', () => {
     });
     // Flush the org first — organizationId is a plain uuid column (no ORM
     // relation), so MikroORM cannot order the inserts by FK on its own.
-    await em.persistAndFlush(foreignOrg);
+    await em.persist(foreignOrg).flush();
     const foreignCustomer = em.create(CustomerAccount, {
       id: FOREIGN_CUSTOMER_ID,
       organizationId: FOREIGN_ORG_ID,
@@ -84,7 +93,6 @@ describe('API key binding validation (062 / B1–B5)', () => {
       passwordHash: 'x',
       firstName: 'Foreign',
       lastName: 'Service',
-      role: 'regular_user',
       emailVerifiedAt: new Date(),
     });
     const blockedCustomer = em.create(CustomerAccount, {
@@ -94,11 +102,10 @@ describe('API key binding validation (062 / B1–B5)', () => {
       passwordHash: 'x',
       firstName: 'Blocked',
       lastName: 'Service',
-      role: 'regular_user',
       emailVerifiedAt: new Date(),
       blockedAt: new Date(),
     });
-    await em.persistAndFlush([foreignCustomer, blockedCustomer]);
+    await em.persist([foreignCustomer, blockedCustomer]).flush();
 
     // Feature 075 (D-87) — a soft-deleted organisation. B4's read was
     // `select 1 from "organizations" where "id" = ? and "deleted_at" is null`
@@ -119,7 +126,7 @@ describe('API key binding validation (062 / B1–B5)', () => {
       },
       deletedAt: new Date(),
     });
-    await em.persistAndFlush(deletedOrg);
+    await em.persist(deletedOrg).flush();
   });
 
   afterAll(async () => {
@@ -159,27 +166,33 @@ describe('API key binding validation (062 / B1–B5)', () => {
     expect(res.statusCode).toBe(422);
     const body = res.json() as ErrorBody;
     expect(body.error.code).toBe(ERROR_CODES.VALIDATION_FAILED);
-    expect(body.error.details).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ path: 'binding.customerAccountId' }),
-      ]),
-    );
+    expect(body.error.details).toEqual([
+      {
+        path: 'binding.customerAccountId',
+        issue: 'Service account does not belong to the bound organization.',
+      },
+    ]);
   });
 
-  it('B3 — blocked service account → 422 naming binding.customerAccountId', async () => {
+  // Issue #644 — a blocked account of the bound organization is the account's
+  // stored state refusing a well-formed request, not validation. The sentence
+  // and the `removed` token are asserted in
+  // `test/integration/api_keys/inactive-service-account.test.ts`.
+  it('B3 — blocked service account → 422 API_KEY_SERVICE_ACCOUNT_INACTIVE', async () => {
     const res = await createKey({
       name: 'B3 blocked key',
       scopes: ['orders:write'],
       binding: { ...validBinding(), customerAccountId: BLOCKED_CUSTOMER_ID },
     });
     expect(res.statusCode).toBe(422);
-    const body = res.json() as ErrorBody;
-    expect(body.error.code).toBe(ERROR_CODES.VALIDATION_FAILED);
-    expect(body.error.details).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ path: 'binding.customerAccountId' }),
-      ]),
-    );
+    const body = res.json() as { error: { code: string; details?: unknown } };
+    expect(body.error.code).toBe(ERROR_CODES.API_KEY_SERVICE_ACCOUNT_INACTIVE);
+    expect(body.error.details).toEqual({
+      code: 'blocked',
+      field: 'binding.customerAccountId',
+      customerAccountId: BLOCKED_CUSTOMER_ID,
+      organizationId: TEST_ORGANIZATION_ID,
+    });
   });
 
   it('B4 — unknown organization → 422 naming binding.organizationId', async () => {
@@ -268,6 +281,7 @@ describe('API key binding validation (062 / B1–B5)', () => {
       expiresAt,
     });
     expect(res.statusCode).toBe(201);
+    expect(disagreements(strictCreated, (res.json() as { data: unknown }).data)).toEqual([]);
     const { apiKey } = (res.json() as {
       data: { apiKey: Record<string, unknown>; bearerToken: string };
     }).data;
@@ -292,11 +306,22 @@ describe('API key binding validation (062 / B1–B5)', () => {
   it('legacy unbound create keeps working; binding fields serialize as null', async () => {
     const res = await createKey({ name: 'Legacy PIM key', scopes: ['catalog:read'] });
     expect(res.statusCode).toBe(201);
+    expect(disagreements(strictCreated, (res.json() as { data: unknown }).data)).toEqual([]);
     const { apiKey } = (res.json() as { data: { apiKey: Record<string, unknown> } }).data;
     expect(apiKey['organizationId']).toBeNull();
     expect(apiKey['salesChannelId']).toBeNull();
     expect(apiKey['customerAccountId']).toBeNull();
     expect(apiKey['expiresAt']).toBeNull();
+  });
+
+  it('GET /api/v1/admin/api-keys — the list, bound and unbound keys alike, is the published shape', async () => {
+    const res = await h.app.inject({ method: 'GET', url: '/api/v1/admin/api-keys', cookies: ADMIN_COOKIE });
+    expect(res.statusCode, res.body).toBe(200);
+    const body = res.json() as { data: Array<{ organizationId: string | null }> };
+    // The happy paths above created one bound and one unbound key.
+    expect(body.data.some((k) => k.organizationId === null)).toBe(true);
+    expect(body.data.some((k) => k.organizationId !== null)).toBe(true);
+    expect(disagreements(strictList, body)).toEqual([]);
   });
 
   it('revoke is unchanged — DELETE /:id returns 204', async () => {

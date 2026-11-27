@@ -1,9 +1,9 @@
 ---
-title: webhooks
+title: Webhooks
 description: Outbound HMAC-signed event subscriptions
 ---
 
-# `webhooks`
+# Webhooks (`webhooks`)
 
 Outbound HMAC-signed event subscriptions. Domain events on the in-process
 event bus are bridged to a BullMQ queue; the worker signs and POSTs each
@@ -35,6 +35,30 @@ verification example.
 Up to 8 attempts per delivery, exponential backoff starting at 1 s, 10 s
 per-attempt timeout. Final attempt → `dead_lettered`. The replay endpoint
 copies a failed/dead-lettered row into a fresh `pending` delivery.
+
+## Delivery history retention
+
+Each delivery row keeps the event's payload as it was sent, and the receiver's
+response. A payload can hold personal data, such as the reason an operator gave
+for blocking an organization, so the history is kept for a limited time. Once a
+day, every finished delivery (`succeeded`, `failed` or `dead_lettered`) older
+than `webhooks.delivery_retention_days` is deleted. The default is 365 days, the
+same as the customer deletion retention window, so by the time a deleted
+customer is anonymized, the deliveries written before the deletion are already
+gone. A value outside 1–3650 whole days is read as the default. A `pending` or
+`in_flight` delivery is never deleted, however old it is. A deleted delivery can
+no longer be replayed. The check runs in the worker process and only while this
+module is on; while it is off nothing is deleted, and the first run after it is
+switched back on deletes what came due meanwhile.
+
+The delivery queue keeps its own copy of each finished job in Redis, with the
+payload and the subscription's signing secret. That copy is bounded by the same
+window: a finished job is removed once it is older than
+`webhooks.delivery_retention_days`, and the queue also keeps no more than the
+latest 500 succeeded and 5 000 failed jobs. The daily check removes the expired
+jobs as well, so they go even when no new delivery finishes. A changed window
+applies to the jobs queued after the change and, at the next daily check, to
+the jobs already finished.
 
 ## Which events are delivered
 

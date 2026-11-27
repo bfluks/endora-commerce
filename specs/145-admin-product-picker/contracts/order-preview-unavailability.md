@@ -64,9 +64,24 @@ existing preview error (*Could not calculate prices*). The create path does **no
 today: `POST /api/v1/admin/orders` with a `salesChannelId` naming no channel answers `201`. Closing
 that gap belongs to the separate create-path fix, out of scope for this feature.
 
-**Product read**: `findByIds` with default lookup options (not `liveOnly`): a soft-deleted
-product resolves and is priced as today, consistent with the create path; it is **not**
-`PRODUCT_NOT_FOUND` (research.md R-7).
+**Product read** *(amended 2026-11-06, issue #820; supersedes the PO ruling of 2026-10-13)*:
+`findByIds(ids, { liveOnly: true })`. A soft-deleted product has no live row, so it is step 1,
+`PRODUCT_NOT_FOUND`, on every channel, and no membership or availability read is made for it. The
+2026-10-13 ruling ("priced as today, consistent with the create path") assumed the create path
+accepted a soft-deleted product. Since feature 163 (`specs/163-product-data-scopes/` FR-001,
+FR-002, FR-004) a deleted product is unavailable everywhere, and `POST /api/v1/admin/orders`
+refuses it with `404 PRODUCT_NOT_FOUND`. The preview follows create, as `spec.md`'s
+*Out of Scope* note required ("the preview and the create path together"). An archived or draft
+product still resolves here and is judged by steps 2–3 and the feature-163 availability filter.
+
+**Archived product** *(amended 2026-11-07, issue #829, owner ruling)*: an archived product
+(`archivedAt` set, feature 163 FR-019) is `PRODUCT_ARCHIVED`, a step between 1 and 2 —
+`ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE` now reads `PRODUCT_NOT_FOUND`, `PRODUCT_ARCHIVED`,
+`PRODUCT_NOT_VISIBLE_TO_CUSTOMER`, … — on every channel and whoever may see it. Before, the
+availability filter dropped it and it read `PRODUCT_NOT_IN_SALES_CHANNEL`. The code equals
+`ERROR_CODES.PRODUCT_ARCHIVED`: `POST /api/v1/admin/orders` refuses the same line with `409
+PRODUCT_ARCHIVED` naming the archived products in `details.productIds` and writes nothing, the
+answer an operator's quote request gives (FR-115, P-3b). A draft product is unchanged.
 
 Unchanged: `assertCustomerInScope` runs first; a customer without an organization is still `422`;
 method gates unchanged; a product with no applicable price list is still priced from its
@@ -77,6 +92,7 @@ catalogue default (possibly 0.00) and is not unavailable.
 | Code | Line reason (core key) | EN / PL |
 | --- | --- | --- |
 | `PRODUCT_NOT_FOUND`, `QUOTE_ONLY`, any unknown code | `orderCreate.line.unavailable` (existing) | No price / Brak ceny |
+| `PRODUCT_ARCHIVED` (issue #829) | `orderCreate.line.archived` | Archived product / Produkt zarchiwizowany |
 | `PRODUCT_NOT_VISIBLE_TO_CUSTOMER` | `orderCreate.line.notVisible` (new) | The customer cannot see this product / Klient nie widzi tego produktu |
 | `PRODUCT_NOT_IN_SALES_CHANNEL` | `orderCreate.line.notInChannel` (new) | Not in this sales channel's assortment / Poza asortymentem tego kanału sprzedaży |
 
@@ -103,6 +119,6 @@ already list exempt seams, naming `POST /api/v1/admin/orders/preview` and the tw
   not in channel A → assortment code; channel B containing it → priced), sc. 13 (both → visibility
   only; channel switch keeps visibility; customer switch to a permitted org → assortment), one
   message per line, `PRODUCT_NOT_FOUND` before visibility, `QUOTE_ONLY` after assortment; an
-  unknown `salesChannelId` → 404 `NOT_FOUND` with no preview body; a soft-deleted product is priced
-  with no message; the
+  unknown `salesChannelId` → 404 `NOT_FOUND` with no preview body; a soft-deleted product is
+  `PRODUCT_NOT_FOUND` only, on any channel, and the other lines stay priced; the
   existing `backend/test/contract/orders/admin-order-preview.test.ts` stays green.

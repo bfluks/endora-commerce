@@ -171,6 +171,22 @@ function renderText(p: EmailTextProps): string {
   );
 }
 
+/** An address that is one `{{var path}}` directive and nothing else. */
+const LONE_VARIABLE_HREF = /^\s*\{\{\s*var\s+([^\s}]+)\s*\}\}\s*$/;
+
+/**
+ * Wrap a rendered button in `{{if path}}` when its address is the lone
+ * variable `path`, so the directive pass drops the button while that variable
+ * is empty or unset instead of shipping one that points at `#` (follow-up to
+ * issue #185: an operator e-mail carries its admin link only when the admin's
+ * address is configured). The unsubscribe anchor's guard (issue #520) for a
+ * button, shared by the HTML and the text part.
+ */
+export function guardLoneVariableHref(href: string, rendered: string): string {
+  const path = LONE_VARIABLE_HREF.exec(href)?.[1];
+  return path ? `{{if ${path}}}${rendered}{{/if}}` : rendered;
+}
+
 function renderButton(p: EmailButtonProps, accent: string): string {
   const bg = p.backgroundColor || accent;
   const fg = p.textColor || '#ffffff';
@@ -182,7 +198,7 @@ function renderButton(p: EmailButtonProps, accent: string): string {
     `style="display:inline-block;padding:12px 22px;font-family:Arial,Helvetica,sans-serif;font-size:14px;` +
     `font-weight:bold;color:${escapeAttr(fg)};text-decoration:none;">${escapeHtml(p.label)}</a>` +
     `</td></tr></table>`;
-  return row(`<div style="text-align:${p.align};">${btn}</div>`);
+  return guardLoneVariableHref(p.href, row(`<div style="text-align:${p.align};">${btn}</div>`));
 }
 
 function renderImage(p: EmailImageProps): string {
@@ -196,7 +212,7 @@ function renderImage(p: EmailImageProps): string {
     ? `<a href="${escapeAttr(p.href)}" target="_blank" rel="noreferrer" style="display:inline-block;margin:${margin};">${img}</a>`
     : img;
   // Table cell align is more reliable than text-align + display:block img.
-  return `<tr><td align="${p.align}" style="padding:0 24px;font-family:Arial,Helvetica,sans-serif;">${wrapped}</td></tr>`;
+  return guardLoneVariableHref(p.src, `<tr><td align="${p.align}" style="padding:0 24px;font-family:Arial,Helvetica,sans-serif;">${wrapped}</td></tr>`);
 }
 
 function renderLogo(p: EmailLogoProps): string {
@@ -580,7 +596,42 @@ function prepareFooterLegalHtml(text: string): string {
       );
     }
   }
-  return sanitizeEmailHtml(t.replace(/\r?\n/g, '<br />'));
+  return guardUnsubscribeLink(sanitizeEmailHtml(t.replace(/\r?\n/g, '<br />')));
+}
+
+/**
+ * A sanitized anchor to `{{var unsubscribeUrl}}`, with the line break in front
+ * of it. Only newsletter sends inject that variable; a transactional message
+ * has none, and there is no notification-preferences page to point it at.
+ */
+const UNSUBSCRIBE_ANCHOR =
+  /(?:<br \/>)?<a href="\s*\{\{\s*var\s+unsubscribeUrl\s*\}\}\s*"[^>]*>[\s\S]*?<\/a>/gi;
+
+/**
+ * Issue #520 — wrap the unsubscribe anchor in `{{if unsubscribeUrl}}`, so the
+ * directive pass drops it while the variable is empty or unset instead of
+ * shipping `<a href="">Unsubscribe</a>`. Done here rather than in
+ * `defaultFooterTree()`, so a seeded footer and an operator-edited one behave
+ * alike, and newsletter, which always sets the URL, keeps its link.
+ */
+function guardUnsubscribeLink(html: string): string {
+  return html.replace(UNSUBSCRIBE_ANCHOR, (anchor) => `{{if unsubscribeUrl}}${anchor}{{/if}}`);
+}
+
+/** A sanitized anchor; the sanitizer writes `href` first and double-quoted. */
+const SANITIZED_ANCHOR = /<a href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+
+/**
+ * The plain-text form of an `EmailFooterLegal` text: no tag survives, and an
+ * anchor is written as "label: url" (or the URL alone when it is its own
+ * label), keeping the unsubscribe guard of the HTML part (issue #520).
+ */
+export function footerLegalPlainText(text: string): string {
+  const html = prepareFooterLegalHtml(text).replace(SANITIZED_ANCHOR, (_, href: string, inner: string) => {
+    const label = emailHtmlToPlainText(inner);
+    return label === '' || label === href ? href : `${label}: ${href}`;
+  });
+  return emailHtmlToPlainText(html);
 }
 
 function renderCallout(p: EmailCalloutProps): string {

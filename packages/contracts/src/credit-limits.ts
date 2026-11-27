@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isoDateTimeSchema, uuidSchema } from './common.js';
+import { twoDecimalAmount } from './money-input.js';
 
 /**
  * Credit Limit module contracts (US6) — see
@@ -20,12 +21,43 @@ export type CreditLimitReservationReleaseReason = z.infer<
 
 export const creditLimitViewSchema = z.object({
   organizationId: uuidSchema,
+  /**
+   * The organization's name, for the admin roster and detail; `null` when the
+   * organization cannot be read, and always `null` on the customer's own
+   * `GET /api/v1/me/credit-limit`. Answered since the admin roster shipped and
+   * declared here only by issue #599; optional for a client that predates it.
+   */
+  organizationName: z.string().nullable().optional(),
   grantedAmount: z.number().finite().nonnegative(),
   availableAmount: z.number().finite(),
   currency: z.string().length(3),
+  /**
+   * How many reservations the limit holds — **every** one of them, whoever
+   * placed the order (issue #748). The limit is shared, so `availableAmount`
+   * and this count are the Organization's figures; `activeReservations` is the
+   * list the caller may read, which for the customer's `GET
+   * /api/v1/me/credit-limit` is narrower when their organization role lacks
+   * `orders.view_organization`. Never derive the count from the list's length.
+   */
+  activeReservationCount: z.number().int().nonnegative(),
+  /**
+   * The active reservations the caller may read. The admin views list every
+   * one; the customer view lists the reservations of the orders the buyer may
+   * read under `orders`' read scope (`specs/170-organization-roles/` FR-049).
+   */
   activeReservations: z.array(
     z.object({
       orderId: uuidSchema,
+      /**
+       * The order's customer-facing number (`businessId`, the one the buyer's
+       * order list shows), so neither the storefront (issue #661) nor the admin
+       * credit-limit screen (issue #1178) shows the database id. Answered by
+       * the customer's `GET /api/v1/me/credit-limit` and by the admin list,
+       * detail and adjustment replies; omitted from a fresh grant's reply,
+       * which holds no reservation. `null` when `orders` returned no such
+       * order; optional for a server that predates it.
+       */
+      orderBusinessId: z.string().nullable().optional(),
       amount: z.number().finite(),
       createdAt: isoDateTimeSchema,
     }),
@@ -34,15 +66,43 @@ export const creditLimitViewSchema = z.object({
 });
 export type CreditLimitView = z.infer<typeof creditLimitViewSchema>;
 
+/**
+ * `GET /api/v1/admin/credit-limits?page=&pageSize=` — the paging the admin list
+ * asks for (issue #1664). A caller that names no `pageSize` keeps the whole
+ * list on one page, as the endpoint answered before.
+ */
+export const adminCreditLimitListQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().positive().max(200).optional(),
+});
+export type AdminCreditLimitListQuery = z.infer<typeof adminCreditLimitListQuerySchema>;
+
+/**
+ * `GET /api/v1/admin/credit-limits` — one page of granted credit limits, newest
+ * grant first with the limit's id as the tie-break (issue #599). `meta` is the
+ * offset page and the total across every page (issue #1664), in the shape the
+ * Organizations list answers with; without a `pageSize` the page is the whole
+ * list and `meta.pageSize` its length (at least 1).
+ */
+export const creditLimitListResponseSchema = z.object({
+  data: z.array(creditLimitViewSchema),
+  meta: z.object({
+    page: z.number().int().positive(),
+    pageSize: z.number().int().positive(),
+    total: z.number().int().nonnegative(),
+  }),
+});
+export type CreditLimitListResponse = z.infer<typeof creditLimitListResponseSchema>;
+
 export const grantCreditLimitRequestSchema = z.object({
-  grantedAmount: z.number().finite().positive(),
+  grantedAmount: twoDecimalAmount(z.number().finite().positive()),
   currency: z.string().length(3),
   reason: z.string().max(2000).optional(),
 });
 export type GrantCreditLimitRequest = z.infer<typeof grantCreditLimitRequestSchema>;
 
 export const adjustCreditLimitRequestSchema = z.object({
-  grantedAmount: z.number().finite().nonnegative(),
+  grantedAmount: twoDecimalAmount(z.number().finite().nonnegative()),
   reason: z.string().max(2000).optional(),
   allowOverAllocation: z.boolean().optional(),
 });
@@ -102,6 +162,23 @@ export interface CreditLimitReadPort {
   activeReservationsForOrders(
     orderIds: readonly string[],
   ): Promise<Array<{ orderId: string; amount: string; currency: string }>>;
+}
+
+/**
+ * Container name: `creditAvailabilityReadPort`. Owner: `credit_limits`.
+ *
+ * An Organization's available credit — its grant (resolved under the inheritance rule) less
+ * its active reservations — computed exactly as `GET /api/v1/me/credit-limit` computes it for
+ * the Organization itself. Published for `related_payers` (`specs/182-related-payers/`
+ * RP-16 c), whose checkout offers the credit-limit method for a payer by the rule the buyer's
+ * own credit follows. The caller establishes the scope: a read for an Organization other than
+ * the ambient one runs under `withSystemScope`.
+ *
+ * **Owner off:** resolving this port throws `ModuleDisabledError` (503 `MODULE_DISABLED`).
+ */
+export interface CreditAvailabilityReadPort {
+  /** `null` when the Organization (and its chain) holds no grant. */
+  availableFor(organizationId: string): Promise<{ availableAmount: number; currency: string } | null>;
 }
 
 /**

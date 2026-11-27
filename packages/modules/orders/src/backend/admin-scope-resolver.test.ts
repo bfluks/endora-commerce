@@ -1,12 +1,6 @@
 import type { FastifyRequest } from 'fastify';
 import { describe, expect, it } from 'vitest';
-import {
-  createModuleContext,
-  createModuleRegistrationSink,
-  createRootContainer,
-  registerValues,
-} from '@endora-commerce/platform/composition';
-import { EventBus } from '@endora-commerce/platform/events';
+import { composeModuleForTest } from '@endora-commerce/test-kit/module';
 import { registerModule } from './index.js';
 
 /**
@@ -33,25 +27,17 @@ const resolverOver = (
   ports: Record<string, unknown>,
 ): ((
   request: FastifyRequest,
-) => Promise<{ allowAll: true } | { allowAll: false; allowedOrganizationIds: string[] }>) => {
-  const container = createRootContainer();
-  registerValues(container, {
-    emFactory: () => ({}) as never,
-    eventBus: new EventBus(),
-    commandBus: {},
-    auditLogService: {},
-    redis: undefined,
-    ...ports,
+) => Promise<{ allowAll: boolean }>) => {
+  const { container } = composeModuleForTest({
+    module: { id: 'orders', registerModule },
+    values: {
+      emFactory: () => ({}) as never,
+      commandBus: {},
+      auditLogService: {},
+      redis: undefined,
+      ...ports,
+    },
   });
-  registerModule(
-    createModuleContext({
-      module: { id: 'orders', version: '1.0.0' },
-      container,
-      eventBus: new EventBus(),
-      sink: createModuleRegistrationSink(),
-      log: { info: () => {}, warn: () => {}, error: () => {} },
-    }),
-  );
   expect(container.hasRegistration('ordersAdminScopeResolver')).toBe(true);
   return container.cradle.ordersAdminScopeResolver as never;
 };
@@ -83,17 +69,19 @@ describe('orders — the admin orders scope it defaults', () => {
     });
   });
 
-  it('scopes a sales representative to the organizations the assignment port lists', async () => {
+  // Issue #305 — the resolver says only *that* a sales representative's list is
+  // scoped; *what* it reaches is the ambient tenant context's, derived by
+  // `organizations`' one reach rule (unassigned organizations included).
+  it('scopes a sales representative, and asks the assignment port nothing', async () => {
     const resolve = resolverOver({
       adminUserReadPort: { findById: () => Promise.resolve({ adminRoleId: 'role-2' }) },
       adminRolePort: { getById: () => Promise.resolve({ code: 'sales_representative' }) },
       organizationSalesRepScopePort: {
-        listAssignedOrganizationIds: () => Promise.resolve(['org-7']),
+        listAssignedOrganizationIds: () => Promise.reject(new Error('the reach is not the resolver’s to read')),
       },
     });
     await expect(resolve(requestWith({ kind: 'admin', adminUserId: 'rep-1' }))).resolves.toEqual({
       allowAll: false,
-      allowedOrganizationIds: ['org-7'],
     });
   });
 

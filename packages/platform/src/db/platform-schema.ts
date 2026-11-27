@@ -57,6 +57,8 @@ import { SalesChannel } from '../kernel/sales-channels/sales-channel.entity.js';
 import { Setting } from '../kernel/settings/setting.entity.js';
 import { SettingGroup } from '../kernel/settings/setting-group.entity.js';
 import { SettingValue } from '../kernel/settings/setting-value.entity.js';
+import { SchemaExtensionElement } from '../kernel/schema-extensions/schema-extension-element.entity.js';
+import { CommandOutboxEntry } from '../commands/outbox/command-outbox-entry.entity.js';
 import {
   Migration20260424T165847CoreFoundationInit,
   Migration20260425T050720CoreCommerceInit,
@@ -72,6 +74,12 @@ import {
   Migration20260816T203339CoreRetireCoreActivationSettings,
   Migration20260919T101500CoreModuleRegistrationsBootConverged,
   Migration20261011T135250CoreSettingsMultiline,
+  Migration20261018T101912CoreSalesChannelsAnonymousAccess,
+  Migration20261028T173317CoreSalesChannelsRetireIsPublic,
+  Migration20261029T152922CoreSalesChannelsPrefixDefaultLanguage,
+  Migration20261103T162518CoreAuditActorCustomerAccount,
+  Migration20261110T140633CoreSchemaExtensionsLedger,
+  Migration20261112T124348CoreCommandOutbox,
 } from '../migrations/index.js';
 import type { MigrationRegistryEntry } from './migration-order.js';
 
@@ -102,6 +110,8 @@ export const PLATFORM_ENTITIES: readonly EntityClassLike[] = [
   Setting,
   SettingGroup,
   SettingValue,
+  SchemaExtensionElement,
+  CommandOutboxEntry,
 ];
 
 /**
@@ -133,6 +143,12 @@ export const PLATFORM_MIGRATION_ENTRIES: readonly MigrationRegistryEntry[] = [
   Migration20260816T203339CoreRetireCoreActivationSettings,
   Migration20260919T101500CoreModuleRegistrationsBootConverged,
   Migration20261011T135250CoreSettingsMultiline,
+  Migration20261018T101912CoreSalesChannelsAnonymousAccess,
+  Migration20261028T173317CoreSalesChannelsRetireIsPublic,
+  Migration20261029T152922CoreSalesChannelsPrefixDefaultLanguage,
+  Migration20261103T162518CoreAuditActorCustomerAccount,
+  Migration20261110T140633CoreSchemaExtensionsLedger,
+  Migration20261112T124348CoreCommandOutbox,
 ].map((cls) => ({ moduleId: CORE_MODULE_ID, cls }));
 
 /**

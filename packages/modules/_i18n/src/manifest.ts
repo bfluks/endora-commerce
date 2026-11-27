@@ -51,7 +51,7 @@ export const manifest = defineModuleManifest({
       'on the platform screen that holds the module switches.',
   },
   /**
-   * **The platform's error-code block — 21 codes, and this is their home** rather
+   * **The platform's error-code block — 24 codes, and this is their home** rather
    * than the residue of a migration (feature 090,
    * `specs/090-module-owned-error-codes/core-block-home.md`; D-186 §4).
    *
@@ -120,10 +120,12 @@ export const manifest = defineModuleManifest({
    * the reason the numbers survived it. Measured over the 21 by balanced-paren
    * extraction of every `new HttpError(...)` call's own arguments: **794 raise
    * sites, four of the codes carrying a `details.code`**. Three of the four
-   * declare their tokens here — five tokens in total, of which **two have a
-   * sentence in both languages** (`FORBIDDEN.organization_cannot_transact`,
-   * `.customer_outside_assignment_scope`) and three do not, each of those three
-   * being a Phase 4 finding rather than a silent absence. The fourth is
+   * declare their tokens here — five tokens in total, of which two had a
+   * sentence in both languages (`FORBIDDEN.organization_cannot_transact`,
+   * `.customer_outside_assignment_scope`) and three did not. Nothing reported
+   * the three until issue #83 gave `check:error-translations` a predicate that
+   * reads raise sites and declared tokens (P6); all five have a sentence now.
+   * The fourth is
    * `VALIDATION_FAILED`, which declares **none** although 19 distinct tokens are
    * passed at its raise sites: `localizeErrorEnvelope` returns before translating
    * that code (`packages/platform/src/http/error-envelope.ts`), so its
@@ -132,8 +134,21 @@ export const manifest = defineModuleManifest({
    * would declare sentences nothing can render. If a code arrives or leaves,
    * re-run the scan; do not adjust the number.
    *
-   * **What the bundle holds for these 21**: 16 `errors.*` keys in each language —
-   * 14 base sentences and the two token keys above. The seven codes with no
+   * **What the bundle holds for these 23** (re-counted for issue #83): 21
+   * `errors.*` keys in each language — 16 base sentences and the five token
+   * keys above. (`AMOUNT_PRECISION_EXCEEDED`,
+   * issue #417, and its unit-price sibling `UNIT_PRICE_PRECISION_EXCEEDED`
+   * (owner ruling of 2026-10-25) arrived after the measurement of 21 and are
+   * raised by the envelope itself rather than at a `new HttpError` site, so the
+   * raise-site count stands. `LINE_QUANTITY_EXCEEDED` (issue #351, architect
+   * ruling R1 on PR #1009) arrived after them and is raised both by the envelope
+   * and at one `new HttpError` site in `carts`, so the count was re-scanned for
+   * it on 2026-11-09 rather than incremented: every `new HttpError(...)` whose
+   * code argument names a code of this block, read from the TypeScript AST over
+   * the same walk `check:error-translations` reads — **944 raise sites over the
+   * 24 codes, one of them `LINE_QUANTITY_EXCEEDED`'s, five codes carrying a
+   * `details.code`** (`INVALID_TRANSITION` joined the four since #83). The 794
+   * above is the issue-#83 measurement and is kept as that.) The seven codes with no
    * sentence are the six `MODULE_*` refusals an operator meets through the
    * lifecycle CLI rather than through the envelope, plus `PRICE_UNAVAILABLE`,
    * which nothing raises. All seven are on `UNTRANSLATED_ERROR_CODES` under this
@@ -155,7 +170,7 @@ export const manifest = defineModuleManifest({
     { code: 'MODULE_NOT_FOUND' },
     { code: 'MODULE_SETTING_READ_ONLY' },
 
-    // T3 — the envelope's generic vocabulary (6). Each of these is what dozens
+    // T3 — the envelope's generic vocabulary (7). Each of these is what dozens
     // of modules answer with for a condition that is about the request rather
     // than about a noun, so its sentence has to be generic and the specific case
     // is a token on it (issue #65) or an interpolated value (issue #161).
@@ -166,6 +181,18 @@ export const manifest = defineModuleManifest({
     ] },
     { code: 'INTERNAL', tokens: ['customer_account_organization_missing'] },
     { code: 'NOT_FOUND' },
+    // Issue #417 — a typed money amount with more than two decimal places, on
+    // any module's money field; the error envelope raises it from the Zod issue
+    // `money-input.ts` tags.
+    { code: 'AMOUNT_PRECISION_EXCEEDED' },
+    // Owner ruling of 2026-10-25 — its sibling for a typed unit price, which
+    // keeps four places; the sentence has to say four, not two.
+    { code: 'UNIT_PRICE_PRECISION_EXCEEDED' },
+    // Issue #351 (architect ruling R1 on PR #1009) — a line quantity past
+    // `LINE_QUANTITY_MAX`, on any module's line: raised by the error envelope
+    // from the Zod issue `line-bounds.ts` tags, and by `carts` for a line a
+    // merge or a packaging unit would take past the bound.
+    { code: 'LINE_QUANTITY_EXCEEDED' },
     { code: 'UNAUTHORIZED' },
     { code: 'VALIDATION_FAILED' },
     { code: 'VERSION_CONFLICT', tokens: ['organization_version_mismatch'] },
@@ -188,6 +215,39 @@ export const manifest = defineModuleManifest({
     // it `core-block-home.md` §1.3's counter-example: an explicit T3 with one
     // raiser today. The noun is a request budget, which the platform imposes.
     { code: 'RATE_LIMITED' },
+
+    // T3 by noun (3) — `specs/176-command-hooks-outbox/` P2. The noun is a
+    // Command's hook chain, which the platform's Command Bus runs: no module
+    // owns it, and the hook module that misused it is named in the message,
+    // not in the code. `COMMAND_EXTENSION_UNCLAIMED` is a client error (422,
+    // refused before any write); the other two are 500s a deployment meets
+    // when a hook recursed or an owner forgot its hook data.
+    { code: 'COMMAND_EXTENSION_UNCLAIMED' },
+    { code: 'COMMAND_HOOK_CYCLE' },
+    { code: 'COMMAND_HOOK_DATA_MISSING' },
+    // T3 by noun (1) — `specs/176-command-hooks-outbox/` P4. The noun is the
+    // command outbox, the platform's own table of afterCommit deliveries for
+    // every module: an operator retried a row that is not dead (409).
+    { code: 'COMMAND_OUTBOX_NOT_DEAD' },
+    // T3 by noun (3) — `specs/189-command-middleware/` FR-060. The noun is the
+    // Command Bus's admission and middleware step, which runs for every
+    // module's Commands: an admission rule that timed out or failed (503,
+    // nothing written) and a middleware that ran a Command (500). A
+    // contributor's own refusal codes are its module's, not these.
+    { code: 'COMMAND_ADMISSION_TIMEOUT' },
+    { code: 'COMMAND_ADMISSION_FAILED' },
+    { code: 'COMMAND_MIDDLEWARE_REENTRY' },
+    // T3 by noun (1) — `specs/187-side-table-extensions/` FR-054. The noun is
+    // the side-table extension include on a host read port, which the
+    // platform's `entityExtensionReads` answers for every extensible host: an
+    // `include` no loader of the composition claims (422). The module the
+    // include names is in the details, not owned by the code.
+    { code: 'ENTITY_EXTENSION_UNCLAIMED' },
+    // T3 by D-122 (1) — issue #1560. A batch reorder (`PUT …/order`) whose
+    // list is not the current one: a row left out or named twice (409). The
+    // noun is an ordered configuration list, and `crm` and `tasks` each own
+    // one — two claimants, so neither may own the code.
+    { code: 'ORDER_STALE' },
   ],
 });
 

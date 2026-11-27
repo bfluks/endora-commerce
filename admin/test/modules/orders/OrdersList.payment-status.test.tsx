@@ -3,6 +3,7 @@ import { cleanup, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { renderWithI18n } from '../../helpers/render-with-i18n';
+import { adminSession, withSession } from '../../helpers/render-with-session';
 
 /**
  * Feature 085 Phase G (FR-021, FR-022) — the money axis on the admin orders
@@ -36,7 +37,6 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
   );
   return {
     ...actual,
-    usePageSizePreference: () => ({ pageSize: 20 as const, setPageSize: vi.fn() }),
     apiClient: {
       get: (...args: unknown[]) => getSpy(...args),
       post: (...args: unknown[]) => postSpy(...args),
@@ -59,7 +59,7 @@ const { OrdersList } = await import('../../../../packages/modules/orders/src/adm
 const EN = {
   core: {
     'orders.field.paymentStatus': 'Payment status',
-    'orders.filter.toggle': 'Filters',
+    'common.listToolbar.moreFilters': 'More filters',
     'orders.filter.all': 'All',
     'orders.column.payment': 'Payment',
     'orderDetail.paymentStatus.failed': 'failed',
@@ -72,7 +72,7 @@ const EN = {
 const PL = {
   core: {
     'orders.field.paymentStatus': 'Status płatności',
-    'orders.filter.toggle': 'Filtry',
+    'common.listToolbar.moreFilters': 'Więcej filtrów',
     'orders.filter.all': 'Wszystkie',
     'orders.column.payment': 'Płatność',
     'orderDetail.paymentStatus.failed': 'nieudana',
@@ -107,6 +107,7 @@ beforeEach(() => {
       return Promise.resolve({ data: { statuses: [{ code: 'on_hold', name: { en: 'On Hold' } }] } });
     }
     if (path.startsWith('/api/v1/admin/orders/list-views')) return Promise.resolve({ data: [] });
+    if (path.startsWith('/api/v1/admin/orders/custom-field-filters')) return Promise.resolve({ data: [] });
     if (path.startsWith('/api/v1/admin/orders')) {
       return Promise.resolve({
         data: [row('o1', 'ORD-1', 'failed'), row('o2', 'ORD-2', 'refunded')],
@@ -121,9 +122,13 @@ beforeEach(() => {
 
 function renderList(bundle: Record<string, Record<string, string>>): void {
   renderWithI18n(
-    <MemoryRouter>
-      <OrdersList />
-    </MemoryRouter>,
+    withSession(
+      <MemoryRouter>
+        <OrdersList />
+      </MemoryRouter>,
+      // The kit pager reads the admin's remembered page size, inside the session (issue #1500).
+      { session: adminSession({ permissions: ['*'] }) },
+    ),
     bundle,
   );
 }
@@ -150,7 +155,7 @@ describe('OrdersList — payment status (feature 085)', () => {
 
     // The filter lives in the collapsible advanced panel, beside the two method
     // filters it reads like.
-    await userEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    await userEvent.click(screen.getByRole('button', { name: 'More filters' }));
     const control = await screen.findByLabelText('Payment status');
     await userEvent.click(control);
     await userEvent.click(await screen.findByText('failed (1)'));
@@ -168,7 +173,7 @@ describe('OrdersList — payment status (feature 085)', () => {
     renderList(EN);
     await waitFor(() => expect(screen.getByText('#ORD-1')).toBeInTheDocument());
 
-    await userEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    await userEvent.click(screen.getByRole('button', { name: 'More filters' }));
     await userEvent.click(await screen.findByLabelText('Payment status'));
 
     // The count comes from `paymentStatusCounts`, the map the list gained

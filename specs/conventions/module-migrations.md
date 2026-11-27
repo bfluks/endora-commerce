@@ -27,6 +27,17 @@ number", never pick a number, never edit an execution list.
    `Migration…Core…`) — that is what makes a class name unique across every module the
    platform can compose, including one installed from a package. `orderMigrations` refuses a
    violation as `unscoped-name` and `check:naming` refuses one in the core tree.
+   **An overlay module's form** (`specs/190-overlay-full-modules/` FR-056, FR-057): here,
+   `--module <overlay-id>` writes into `backend/src/apps/<deployment>/modules/<id>/migrations/`
+   — `DEPLOYMENT`, when set, is the only deployment looked in, and an id two deployments hold
+   is refused without it; in an instance, `endora new migration <id> --name <slug>` writes into
+   `apps/<deployment>/modules/<id>/migrations/` of the deployment `.env` selects and refuses an
+   id that is not an overlay module of it, since an installed package's migrations are its
+   author's. Both name the file with one implementation,
+   `@endora-commerce/cli/lib/migration-naming.js`, clamped above `BASELINE_THROUGH`, and
+   `endora new module --entities` names an overlay's first migration with it too. There is no
+   step 2 for either: an overlay's `migrations/` is read file by file at runtime and never
+   emitted into the registry (D-104) — `composer:generate` validates it and emits nothing.
 2. **Register it** — run `pnpm --filter backend run composer:generate` and commit
    **`backend/src/db/migrations-registry.generated.ts`** alongside the migration. The
    registry is generated from a filesystem walk (feature 071, F2) and replaced the
@@ -64,7 +75,9 @@ number", never pick a number, never edit an execution list.
    accesses stood in 28 migration files, 4 of them undeclared and 37 of them writes.
    `check:module-boundary` now judges them, under two rules with two ledgers:
    **R1** is item 4 with its predicate widened from `references` to every statement
-   `sqlTableAccesses` recognises, and **R2** is that a migration owned by `A` may not
+   `sqlTableAccesses` recognises — DML, knex builders and, since issue #108, DDL against an
+   existing table (`create index … on`, `alter table`, `drop table`, `drop index`,
+   `comment on`, triggers), which counts as a write — and **R2** is that a migration owned by `A` may not
    **write** a table owned by `B` *whether or not R1 holds* — a declaration is an
    ordering-and-presence fact and a write is an ownership fact, so seeding, reseeding and
    correcting a module's rows is that module's own migration's job. Kernel-owned tables are
@@ -80,6 +93,32 @@ number", never pick a number, never edit an execution list.
    switchable: that makes the owner's activation control a dead switch (`module-composition.md`
    item 4a), and it is the case that produced the feature.
    `specs/097-migration-sql-boundary/contracts/migration-cross-module-sql.md` is normative.
+
+   **R2's one exception is column-granular** (`specs/178-extensible-columns/`, Constitution I as
+   amended to 4.2.0): an installed package that declares extension columns on an extensible host
+   owns its `x_<moduleId>_*` columns, so its own migration may `update "<host>" set` them — every
+   set column its own, and nothing else in the statement a write. The columns themselves are never
+   created by a hand-written migration: the platform generates that DDL from the declaration, as a
+   step at the head of the declaring module's block, and records it in the `schema_extensions`
+   ledger. A module of this repository does not declare extensions at all (the composer refuses a
+   `schemaExtensions` export from a workspace module package); it owns its tables or uses a side
+   table. A **deployment overlay module** declares them as an installed package does, from its
+   `backend` export and nowhere else under `apps/<deployment>/` (`specs/190-overlay-full-modules/`
+   FR-065 – FR-066): V9 – V11 hold with the overlay id as the declaring module and the dependency
+   closure walked over core, the installed packages and the deployment's overlays, and the
+   generated step, the ledger rows, the verifier, `module:schema-extensions` and the `orphaned`
+   columns a hard uninstall leaves are a package's, under the overlay's id. And the owner of an extensible table owes the other side: a migration that rebuilds one
+   (`drop table`, `rename to`, a `create table … as select` copy) loses every extension's columns,
+   which `check:extensible-tables` refuses on the merge request and the preservation test in
+   `test:backend` catches after the merge. In an **instance** every module arrives as an installed
+   package or as a deployment overlay module, and there R2 is not a review finding but a refusal:
+   the platform's foreign-schema guard wraps every package migration and refuses a write to a
+   table the module does not own at `migrate`, letting through only R2's ledger entries
+   (`composer:generate` renders them into `FIRST_PARTY_FOREIGN_WRITE_EXEMPTIONS`). An overlay
+   module's migrations take the same guard with **no** exemption (`overlay-modules.md`, OR-4), in
+   an instance and in this repository's `backend/src/apps/` alike — so R2 reads them, and no R2
+   entry excuses one. So a new R2 write in this tree is also a broken `migrate` for every client
+   until it is ledgered or repaired.
 5. **Renaming an applied migration class costs a database rebuild.** Since feature 072 there
    is no frozen name map and nothing in the repository forbids the rename — but
    `mikro_orm_migrations` stores the **class name**, so every database that already ran the
@@ -113,8 +152,13 @@ number", never pick a number, never edit an execution list.
 **Entities are registered the same way.** `backend/src/db/entities-registry.generated.ts`
 comes out of the same command and the same walk: add the `@Entity()` class under the
 module's `entities/`, run `composer:generate`, commit the artefact. An **overlay** module
-contributes to neither — it can ship no migration (D-106), so the generator refuses an entity
-or a migration under `backend/src/apps/` rather than emitting schema nothing creates.
+contributes to neither. Since D-297 (`overlay-modules.md`, #1850) it may own entities and
+migrations, and they are **discovered at runtime** from the deployment root — `backend.ts`'
+`entities` export, and the module's `migrations/` read file by file, with origin `overlay` —
+take the foreign-schema guard with no deployment exemption, and are never baked into the
+committed registries: the generator validates an entity or a migration under
+`backend/src/apps/` (classification, `/legacy` imports, filename and class agreement, the
+module-scoped name) and emits none of it.
 
 **A module that has become a workspace package contributes to all four artefacts, with a
 bare specifier** (feature 080, T041a; D-149). Until then the generator had no notion of one:
@@ -186,6 +230,24 @@ hand. **The ranges a module package peers on come from the applications, plural*
 reason — `react` and `lucide-react` are declared by `admin` and by no other member — and which
 workspace members are applications is derived from the shape of their `pnpm-workspace.yaml` entry
 (a literal names one deployable, a glob enumerates a library family), never from a list.
+
+**And `backend/package.json`'s dependency on every module package, on the same terms** (issue
+#445). The generated manifest index imports every module's manifest by bare specifier, whatever
+layers it ships, so a module package the backend does not declare is `ERR_MODULE_NOT_FOUND` at
+`overlay:check` and at every boot. Until then each new module added the line by hand. The backend
+is found as the member whose directory holds the manifest index, not by its name; the population
+is every module package this run derived, not the names the committed index registers, because
+`composer:generate` runs after this command and a module scaffolded a moment ago is in the first
+set only. `manifests:check` refuses either application manifest drifting. **Do not add the entry
+by hand** — run `manifests:generate`.
+
+**A new package needs one generator run before its build, and none between.** The first run admits
+a package it is writing a first `package.json` for (it cannot have been built — nothing builds a
+non-member) and renders its `LICENSE` and `README.md` from the manifest it is about to write. Any
+later run — `manifests:generate` or `manifests:check` — refuses a package that has a manifest and no
+`dist`, because D-181's peer/devDependency split is read off the package's emitted declarations and
+a render without them is a fail-closed guess. That refusal is intended, not a defect: `pnpm install`,
+build the package, then regenerate or check.
 
 **Run `pnpm install --lockfile-only` in the same breath and commit `pnpm-lock.yaml`.** A generated
 manifest changes what a workspace declares, so `pnpm-lock.yaml` goes stale the moment the render

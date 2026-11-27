@@ -474,7 +474,18 @@ function services(
       ],
       body: [
         IMAGE('backend'),
+        '    # `restart` acts on an exit, never on `unhealthy`. The image runs a',
+        '    # supervising parent (backend/scripts/supervise.mjs) that kills an API',
+        '    # which stops answering /api/v1/_health and exits non-zero, which is',
+        '    # what this policy restarts; `init: true` puts an init in front of it.',
+        '    # On `docker stop` it forwards SIGTERM and waits up to 25 s for the',
+        '    # queue consumers to drain, so the stop timeout is 30 s rather than',
+        '    # Docker\'s 10. Tuned with BACKEND_SUPERVISOR_*; the defaults need no',
+        '    # variable. A separate worker service runs `node dist/worker.js`, which',
+        '    # never listens, and is not supervised.',
         '    restart: unless-stopped',
+        '    init: true',
+        '    stop_grace_period: 30s',
         '    environment: *backend-env',
         '    # Published on loopback only — your own nginx proxies the public',
         '    # name here and terminates TLS. See nginx.example.conf.',
@@ -502,7 +513,14 @@ function services(
         '    # Built from the storefront repository `endora new storefront` wrote,',
         '    # which is its own tree and declares no module package (D-195).',
         IMAGE('storefront'),
+        '    # `restart` acts on an exit, never on `unhealthy`. The image runs a',
+        '    # supervising parent that kills a server which stops answering and',
+        '    # exits non-zero, which is what this policy restarts; `init: true`',
+        '    # puts an init in front of it to reap orphaned processes. Tuned with',
+        '    # STOREFRONT_SUPERVISOR_* (see scripts/supervise.mjs); the defaults',
+        '    # need no variable.',
         '    restart: unless-stopped',
+        '    init: true',
         '    environment:',
         '      NODE_ENV: production',
         "      PORT: '3000'",
@@ -1200,6 +1218,23 @@ function wrapComment(text: string, prefix = '# '): readonly string[] {
 
 // ── the nginx example ──────────────────────────────────────────────────────
 
+/**
+ * The storefront's proxy buffer margin, line for line as
+ * `deploy/nginx.example.conf` carries it (#805, #817).
+ */
+const STOREFRONT_PROXY_BUFFERS: readonly string[] = [
+  '',
+  "        # Headroom for the storefront's response headers. Nothing the storefront",
+  '        # writes needs it: the quick-order preview, which rode in a cookie sized',
+  "        # to nginx's DEFAULTS (proxy_buffer_size 4k, a 502 past it;",
+  '        # large_client_header_buffers 4 8k, a 400 past it), is kept by the backend',
+  '        # since #809. These lines are a margin, so headers you add yourself (a CSP,',
+  '        # HSTS, more cookies) do not run into those defaults.',
+  '        proxy_buffer_size 16k;',
+  '        proxy_buffers 8 16k;',
+  '        proxy_busy_buffers_size 32k;',
+];
+
 /** One `server` block, per public origin this instance actually has. */
 function nginxBlock(
   title: string,
@@ -1207,6 +1242,7 @@ function nginxBlock(
   variable: string,
   port: string,
   extra: readonly string[],
+  locationExtra: readonly string[] = [],
 ): readonly string[] {
   return [
     `# --- ${title} ${'-'.repeat(Math.max(0, 60 - title.length))}`,
@@ -1227,6 +1263,7 @@ function nginxBlock(
     '        proxy_set_header Upgrade           $http_upgrade;',
     '        proxy_set_header Connection        $connection_upgrade;',
     '        proxy_read_timeout 120s;',
+    ...locationExtra,
     '    }',
     '}',
     '',
@@ -1261,11 +1298,18 @@ function nginxExample(input: DeployInput): string {
     "    ''      close;",
     '}',
     '',
-    ...nginxBlock('Storefront', 'example.com', 'STOREFRONT_DOMAIN', '127.0.0.1:3000', [
-      '    # Room for the SSR responses of a large catalogue page.',
-      '    client_max_body_size 25m;',
-      '',
-    ]),
+    ...nginxBlock(
+      'Storefront',
+      'example.com',
+      'STOREFRONT_DOMAIN',
+      '127.0.0.1:3000',
+      [
+        '    # Room for the SSR responses of a large catalogue page.',
+        '    client_max_body_size 25m;',
+        '',
+      ],
+      STOREFRONT_PROXY_BUFFERS,
+    ),
     ...(input.admin
       ? nginxBlock('Admin', 'admin.example.com', 'ADMIN_DOMAIN', '127.0.0.1:8080', [])
       : [
@@ -1385,6 +1429,7 @@ function nginxPathsExample(input: DeployInput): string {
     '    # Everything else is the storefront.',
     '    location / {',
     ...proxy('127.0.0.1:3000'),
+    ...STOREFRONT_PROXY_BUFFERS,
     '    }',
     '}',
   ].join('\n')}\n`;
@@ -1508,8 +1553,15 @@ function backendDockerfile(input: DeployInput): string {
     'WORKDIR /app/backend',
     'EXPOSE 3001',
     '',
-    '# The compose example overrides this for the one-shot migrate and install jobs.',
-    'CMD ["node", "dist/index.js"]',
+    '# The command is a supervising parent, not the API: Docker restarts a',
+    '# container whose process exited and does nothing for one that is only',
+    '# `unhealthy`. `scripts/supervise.mjs` runs the API as its child, forwards',
+    '# signals and its exit code, probes /api/v1/_health over HTTP, and after a',
+    '# run of unanswered probes kills it and exits non-zero so the restart policy',
+    '# brings the container back. Run it with an init in front (`init: true`).',
+    '# The compose example overrides this for the one-shot migrate and install',
+    '# jobs, and a worker service runs `node dist/worker.js` unsupervised.',
+    'CMD ["node", "scripts/supervise.mjs", "dist/index.js"]',
   ].join('\n')}\n`;
 }
 
@@ -1532,6 +1584,9 @@ function adminDockerfile(input: DeployInput): string {
     '# admin\'s own build runs `endora generate` first, which renders its screen',
     '# registry over the module packages THIS instance installed. That dependency',
     '# is what keeps one module list governing all three deployables.',
+    '#',
+    '# THE BUNDLE IS BOUND TO ONE DEPLOYMENT TOO. `DEPLOYMENT` below selects which',
+    '# apps/<deployment>/ overlay admin layers it holds, and it holds no other\'s.',
     '',
     `FROM ${nodeImage(input.enginesNode)} AS build`,
     'ENV PNPM_HOME=/pnpm',
@@ -1544,7 +1599,7 @@ function adminDockerfile(input: DeployInput): string {
     '',
     'COPY . .',
     '',
-    ...argDeclarations('admin'),
+    ...argDeclarations('admin', new Map([['DEPLOYMENT', input.deployment]])),
     '# The path the bundle is served under is fixed at build time too. It is `/`',
     '# unless the admin shares a host with the storefront (nginx.paths.example.conf):',
     '# then commit `admin/.env.production` holding the line `ADMIN_BASE_PATH=/admin/`.',

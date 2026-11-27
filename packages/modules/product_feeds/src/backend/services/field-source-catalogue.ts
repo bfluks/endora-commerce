@@ -26,6 +26,19 @@ export interface ProductFieldDefinition {
   valueType: string;
 }
 
+/**
+ * The product-host definitions a feed may bind or select on (feature 172,
+ * FR-044). A `page_builder` definition is a Page Builder content attribute —
+ * a document per language the catalogue stores apart from attribute values —
+ * so no feed field can carry it. One filter feeds both the picker and the
+ * save-time key check, so such a key is neither offered nor accepted.
+ */
+export function feedableProductFieldDefinitions(
+  definitions: readonly ProductFieldDefinition[],
+): ProductFieldDefinition[] {
+  return definitions.filter((definition) => definition.valueType !== 'page_builder');
+}
+
 interface PlatformSource {
   sourceKind: string;
   labelKey: string;
@@ -59,6 +72,10 @@ const PRICE_AND_STOCK: PlatformSource[] = [
   { sourceKind: 'sale_price', labelKey: 'fieldSource.salePrice' },
   { sourceKind: 'availability', labelKey: 'fieldSource.availability' },
   { sourceKind: 'stock_quantity', labelKey: 'fieldSource.stockQuantity' },
+  // Issue #430 — what a sub-cent price is the price of; empty for every other item.
+  { sourceKind: 'pack_quantity', labelKey: 'fieldSource.packQuantity' },
+  { sourceKind: 'pack_unit_pricing_measure', labelKey: 'fieldSource.packUnitPricingMeasure' },
+  { sourceKind: 'pack_unit_pricing_base_measure', labelKey: 'fieldSource.packUnitPricingBaseMeasure' },
 ];
 
 const COMPUTED: PlatformSource[] = [

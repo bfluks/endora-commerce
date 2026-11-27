@@ -25,11 +25,26 @@
  * ## What counts as a violation
  *
  * An **unscoped wipe**: a statement in a file under `backend/test/` that
- * removes every row of a table, in either spelling —
+ * removes or rewrites every row of a table, in any of these spellings —
  *
  *   1. **orm** — `em.nativeDelete(Entity, {})`, an empty filter meaning "all";
  *   2. **sql-truncate** — `conn.execute('truncate table "x", "y" cascade')`;
- *   3. **sql-delete** — `conn.execute('delete from "x"')` with no `where`.
+ *   3. **sql-delete** — `conn.execute('delete from "x"')` with no `where`;
+ *   4. **orm-remove-each** — `em.find(Entity, {})` (or `em.findAll(Entity)`)
+ *      whose result reaches `remove` / `removeAndFlush`: the array itself, a
+ *      `for … of` over it, or a `forEach` / `map` callback over it. No
+ *      `nativeDelete` and no SQL, and the table is just as empty after the
+ *      `flush` (issue #115: `sales_channels/boot-time-default-reconciliation`
+ *      removed the platform's default channel this way). Whether a `flush`
+ *      follows is not asked — a test that removes and never flushes has a
+ *      different bug, and some helper downstream flushes it anyway;
+ *   5. **sql-update** — `update "x" set …` with no `where`, and
+ *   6. **orm-update** — `em.nativeUpdate(Entity, {}, …)`. Neither removes a
+ *      row, and both leave every row of a table rewritten for the next file
+ *      to read — the same issue's `update "quote_requests" set
+ *      "sales_channel_id" = null`. An update's `set` clause routinely carries a
+ *      `${…}` hole before its `where`, so this one is read over the template's
+ *      whole text, holes included, rather than over its head alone.
  *
  * A wipe with a filter is not reported and is the repair: `nativeDelete(Entity,
  * { id: { $in: mine } })`, `delete from x where code = ?`. So is not wiping at
@@ -50,6 +65,11 @@
  *   - **A scoped delete of any size.** Deleting a hundred rows the test created
  *     is bookkeeping; deleting one row it did not is the defect. The predicate
  *     is the filter, not the volume.
+ *   - **A find-all whose result travels further than its own function.** The
+ *     result is followed through its binding, a `for … of` over it and a
+ *     callback over it, inside the function the find sits in. Returned to a
+ *     caller that removes it, it is not seen — no such shape exists in the tree,
+ *     and following values across functions is a type checker's job.
  *   - **A table named by a `${…}` hole.** `delete from ${table}` computes the
  *     table at runtime, so the statement's own text does not say what it
  *     empties. Every such statement in the tree today carries a `where`, so
@@ -87,6 +107,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import ts from 'typescript';
+import { parseSource, rememberRead, withSharedParses } from '@endora-commerce/cli/lib/parsed-source.js';
 import { reportReadSize } from './lib/read-size.js';
 
 const TEST_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'test');
@@ -102,6 +123,18 @@ const SEAM_PREFIXES: readonly string[] = ['helpers/', 'global-setup.ts'];
 
 /** The MikroORM call that takes a filter, where `{}` means every row. */
 const ORM_WIPE = 'nativeDelete';
+
+/** The MikroORM update that takes a filter first, where `{}` means every row. */
+const ORM_UPDATE = 'nativeUpdate';
+
+/** The MikroORM reads whose result, removed row by row, empties the table. */
+const ORM_FIND_ALL: ReadonlySet<string> = new Set(['find', 'findAll']);
+
+/** The unit-of-work removals that take an entity or an array of them. */
+const ORM_REMOVE: ReadonlySet<string> = new Set(['remove', 'removeAndFlush']);
+
+/** The array methods whose callback receives each row of the result in turn. */
+const ITERATING_METHODS: ReadonlySet<string> = new Set(['forEach', 'map', 'flatMap']);
 
 /** The raw-SQL entry points a test reaches the connection through. */
 const SQL_ENTRY: ReadonlySet<string> = new Set(['execute', 'query']);
@@ -120,16 +153,24 @@ const SQL_ENTRY: ReadonlySet<string> = new Set(['execute', 'query']);
  * they were fixed in the same change, and an entry for a file at zero would be
  * an invitation to write the shape back.
  *
+ * **Issue #115 widened what counts** — the find-all/remove-each shape and the
+ * two spellings of an unqualified update — and the sites that measured were
+ * either repaired in the same change (the three `sales_channels` files that
+ * emptied the platform's default channel now run on a first-boot database of
+ * their own, `setupTestDb({ firstBoot })`) or entered here, each with the shape it
+ * is written in beside it. Those comments say what the statement does, not
+ * that it is harmless: every one of them rewrites rows another file seeded.
+ *
  * It is meant to reach `{}`.
  */
 export const UNSCOPED_WIPES_BASELINE: Readonly<Record<string, number>> = {
   'contract/carts/cart-coupon-autodrop.contract.test.ts': 1,
   'contract/carts/cart-coupon.contract.test.ts': 1,
-  'contract/price_lists/admin-resolved-price.test.ts': 3,
   'contract/price_lists/display-modes.test.ts': 1,
-  'contract/price_lists/pricing-resolution.test.ts': 3,
-  'contract/price_lists/product-pricing-panel.test.ts': 3,
-  'contract/product_feeds/taxonomy-revisions.test.ts': 3,
+  'contract/price_lists/pricing-resolution.test.ts': 1,
+  // #115: +1, the same helper detaches every feed template from its taxonomy (`update … set "taxonomy_id" = null`).
+  // #607: drains with the `sql-delete` debt — scope the delete to the file's own taxonomies, then the update to those ids.
+  'contract/product_feeds/taxonomy-revisions.test.ts': 4,
   'contract/promotions/attribute-criterion.test.ts': 1,
   'contract/promotions/coupon-generator.test.ts': 1,
   'contract/promotions/coupons.test.ts': 1,
@@ -138,6 +179,7 @@ export const UNSCOPED_WIPES_BASELINE: Readonly<Record<string, number>> = {
   'contract/prompt_actions/boundaries.test.ts': 1,
   'contract/prompt_actions/requests.test.ts': 1,
   'contract/search/admin-llm-toggle.contract.test.ts': 1,
+  'integration/_lifecycle/install-all.integration.test.ts': 1,
   'integration/addresses/dictionary-boundary.test.ts': 3,
   'integration/blog/asset-references.test.ts': 22,
   'integration/blog/dictionary-boundary.test.ts': 3,
@@ -146,10 +188,10 @@ export const UNSCOPED_WIPES_BASELINE: Readonly<Record<string, number>> = {
   'integration/carts/cart-customer-group-promotion.test.ts': 1,
   'integration/carts/cart-promotion-display.test.ts': 1,
   'integration/catalog/attributes-migration-parity.test.ts': 3,
-  'integration/catalog/link-tile-price-source.test.ts': 3,
-  'integration/catalog/listing-price-source.test.ts': 3,
+  'integration/catalog/link-tile-price-source.test.ts': 1,
+  'integration/catalog/listing-price-source.test.ts': 1,
   'integration/cms/legacy-migration.test.ts': 1,
-  'integration/comparisons/comparison-price-source.integration.test.ts': 3,
+  'integration/comparisons/comparison-price-source.integration.test.ts': 1,
   'integration/dictionaries/country-service.test.ts': 3,
   'integration/dictionaries/currency-service.test.ts': 3,
   'integration/dictionaries/language-country-service.test.ts': 3,
@@ -160,19 +202,19 @@ export const UNSCOPED_WIPES_BASELINE: Readonly<Record<string, number>> = {
   'integration/email/delivery-record.test.ts': 1,
   'integration/inventory/availability-worker.test.ts': 1,
   'integration/inventory/dictionary-boundary.test.ts': 3,
-  'integration/_lifecycle/install-all.integration.test.ts': 1,
   'integration/megamenu/dictionary-boundary.test.ts': 3,
   'integration/organizations/dictionary-boundary.test.ts': 3,
-  'integration/organizations/flat-behavior-preserved.test.ts': 3,
-  'integration/price_lists/display-mode-chain.test.ts': 4,
-  'integration/price_lists/inherited-price-list.test.ts': 3,
-  'integration/price_lists/resolver-priority-and-tiebreak.test.ts': 3,
-  'integration/price_lists/sale-special-price.test.ts': 3,
+  'integration/organizations/flat-behavior-preserved.test.ts': 1,
+  'integration/price_lists/display-mode-chain.test.ts': 2,
   'integration/product_feeds/schedule-lifecycle.test.ts': 1,
   'integration/product_feeds/taxonomy-bundled-data.test.ts': 4,
-  'integration/product_feeds/taxonomy-fetch-check.test.ts': 3,
+  // #115: +1, the same helper detaches every feed template from its taxonomy (`update … set "taxonomy_id" = null`).
+  // #607: drains with the `sql-delete` debt — scope the delete to the file's own taxonomies, then the update to those ids.
+  'integration/product_feeds/taxonomy-fetch-check.test.ts': 4,
   'integration/product_feeds/taxonomy-fetch-disabled.test.ts': 1,
-  'integration/product_feeds/taxonomy-promote.test.ts': 3,
+  // #115: +1, the same helper detaches every feed template from its taxonomy (`update … set "taxonomy_id" = null`).
+  // #607: drains with the `sql-delete` debt — scope the delete to the file's own taxonomies, then the update to those ids.
+  'integration/product_feeds/taxonomy-promote.test.ts': 4,
   'integration/product_feeds/taxonomy-reconcile.test.ts': 4,
   'integration/promotions/attribute-criterion-resolution.test.ts': 1,
   'integration/promotions/channel-binding.test.ts': 1,
@@ -189,7 +231,6 @@ export const UNSCOPED_WIPES_BASELINE: Readonly<Record<string, number>> = {
   'integration/taxes/absent-owner-versus-configured-zero.test.ts': 5,
   'integration/taxes/dictionary-boundary.test.ts': 3,
   'integration/taxes/tax-service.test.ts': 1,
-  'perf/price_lists/resolver.bench.ts': 3,
   'unit/dictionaries/label-resolver.test.ts': 3,
   'unit/dictionaries/validator-lru-invalidation.test.ts': 3,
   'unit/dictionaries/validator-port.test.ts': 3,
@@ -210,7 +251,13 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 /** Which spelling the wipe was written in. */
-export type WipeKind = 'orm' | 'sql-truncate' | 'sql-delete';
+export type WipeKind =
+  | 'orm'
+  | 'sql-truncate'
+  | 'sql-delete'
+  | 'orm-remove-each'
+  | 'sql-update'
+  | 'orm-update';
 
 /**
  * Where the wipe sits. A `hook` runs for every test in the file, a `helper` runs
@@ -282,6 +329,19 @@ function literalText(node: ts.Expression): string | null {
   return null;
 }
 
+/**
+ * The whole static text of a string argument, each `${…}` hole kept as the
+ * literal `${}` — for a statement whose filter routinely sits after a hole.
+ */
+function fullLiteralText(node: ts.Expression): string | null {
+  const bare = unwrap(node);
+  if (ts.isStringLiteralLike(bare)) return bare.text;
+  if (ts.isTemplateExpression(bare)) {
+    return bare.head.text + bare.templateSpans.map((span) => '${}' + span.literal.text).join('');
+  }
+  return null;
+}
+
 /** Strip SQL quoting and schema qualification off a table name. */
 function normalizeTable(raw: string): string {
   return raw
@@ -330,6 +390,207 @@ export function unfilteredDeleteTable(sql: string): string | null {
   return table.length > 0 && !table.includes('${') ? table : null;
 }
 
+/**
+ * The table an unqualified `update` rewrites, or `null` when the statement is
+ * filtered or is not an update. `select … for update` is not one: the verb
+ * has to open the statement.
+ */
+export function unfilteredUpdateTable(sql: string): string | null {
+  const match = /^\s*update\s+(?:only\s+)?([^\s;]+)\s+set\b([\s\S]*)$/i.exec(sql);
+  if (!match) return null;
+  if (/\bwhere\b/i.test(match[2] as string)) return null;
+  const table = normalizeTable(match[1] as string);
+  return table.length > 0 && !table.includes('${') ? table : null;
+}
+
+/** Whether an expression is the empty object literal, `{}`. */
+function isEmptyObject(node: ts.Expression | undefined): boolean {
+  if (node === undefined) return false;
+  const bare = unwrap(node);
+  return ts.isObjectLiteralExpression(bare) && bare.properties.length === 0;
+}
+
+/** Whether a call is `em.nativeUpdate(Entity, {}, data)` — an empty filter. */
+function ormUpdateTable(call: ts.CallExpression, sf: ts.SourceFile): string | null {
+  if (tailName(call.expression) !== ORM_UPDATE) return null;
+  const [entity, filter] = call.arguments;
+  if (entity === undefined || !isEmptyObject(filter)) return null;
+  return unwrap(entity).getText(sf).trim();
+}
+
+/**
+ * Whether a call reads every row of an entity: `em.find(Entity, {})`,
+ * `em.find(Entity, {}, options)`, `em.findAll(Entity)` or `em.findAll(Entity,
+ * options)` with no `where` in the options. The entity has to be a name —
+ * `rows.find((r) => …)` is `Array#find`, whose argument is a function.
+ */
+function findAllEntity(call: ts.CallExpression, sf: ts.SourceFile): string | null {
+  const name = tailName(call.expression);
+  if (name === null || !ORM_FIND_ALL.has(name)) return null;
+  if (!ts.isPropertyAccessExpression(call.expression)) return null;
+  const [entity, second] = call.arguments;
+  if (entity === undefined) return null;
+  const bare = unwrap(entity);
+  if (!ts.isIdentifier(bare) && !ts.isStringLiteralLike(bare)) return null;
+  if (name === 'find') {
+    if (!isEmptyObject(second)) return null;
+  } else if (second !== undefined) {
+    const options = unwrap(second);
+    if (!ts.isObjectLiteralExpression(options)) return null;
+    const where = options.properties.find(
+      (p) => p.name !== undefined && ts.isIdentifier(p.name) && p.name.text === 'where',
+    );
+    if (where !== undefined && !(ts.isPropertyAssignment(where) && isEmptyObject(where.initializer))) {
+      return null;
+    }
+  }
+  return bare.getText(sf).trim();
+}
+
+/** The call a find sits in once `await` and parentheses are peeled off it. */
+function outerExpression(node: ts.Expression): ts.Expression {
+  let current: ts.Expression = node;
+  for (;;) {
+    const parent: ts.Node = current.parent;
+    if (
+      ts.isAwaitExpression(parent) ||
+      ts.isParenthesizedExpression(parent) ||
+      ts.isAsExpression(parent) ||
+      ts.isNonNullExpression(parent)
+    ) {
+      current = parent;
+      continue;
+    }
+    return current;
+  }
+}
+
+/** The nearest function body or source file a node sits in — where its binding lives. */
+function scopeOf(node: ts.Node): ts.Node {
+  for (let cursor = node.parent; cursor !== undefined; cursor = cursor.parent) {
+    if (ts.isFunctionLike(cursor) || ts.isSourceFile(cursor)) return cursor;
+  }
+  return node.getSourceFile();
+}
+
+/** The first parameter's name of a callback, when it is a plain identifier. */
+function firstParameter(node: ts.Expression | undefined): string | null {
+  if (node === undefined) return null;
+  const bare = unwrap(node);
+  if (!ts.isArrowFunction(bare) && !ts.isFunctionExpression(bare)) return null;
+  const param = bare.parameters[0];
+  return param !== undefined && ts.isIdentifier(param.name) ? param.name.text : null;
+}
+
+/** Whether `call` is `em.remove(x)` / `em.removeAndFlush(x)` over one of `names`. */
+function removesOneOf(call: ts.CallExpression, names: ReadonlySet<string>): boolean {
+  const name = tailName(call.expression);
+  if (name === null || !ORM_REMOVE.has(name)) return false;
+  const arg = call.arguments[0];
+  if (arg === undefined) return false;
+  const bare = unwrap(arg);
+  return ts.isIdentifier(bare) && names.has(bare.text);
+}
+
+/** Whether any call under `root` removes one of `names`. */
+function anyRemoval(root: ts.Node, names: ReadonlySet<string>): boolean {
+  let hit = false;
+  const visit = (node: ts.Node): void => {
+    if (hit) return;
+    if (ts.isCallExpression(node) && removesOneOf(node, names)) {
+      hit = true;
+      return;
+    }
+    node.forEachChild(visit);
+  };
+  visit(root);
+  return hit;
+}
+
+/**
+ * Whether the rows a find-all returned reach a removal — the binding, a
+ * `for … of` over it, a `forEach` / `map` callback over it, or the find
+ * inlined as the removal's own argument or as the receiver of the iteration.
+ */
+function rowsReachRemoval(find: ts.CallExpression): boolean {
+  const outer = outerExpression(find);
+  const parent = outer.parent;
+
+  // `em.remove(await em.find(E, {}))`.
+  if (ts.isCallExpression(parent) && parent.arguments[0] === outer) {
+    const name = tailName(parent.expression);
+    if (name !== null && ORM_REMOVE.has(name)) return true;
+  }
+  // `(await em.find(E, {})).forEach((row) => em.remove(row))`.
+  if (ts.isPropertyAccessExpression(parent) && parent.expression === outer) {
+    const call = parent.parent;
+    if (
+      ts.isCallExpression(call) &&
+      call.expression === parent &&
+      ITERATING_METHODS.has(parent.name.text)
+    ) {
+      const row = firstParameter(call.arguments[0]);
+      return row !== null && anyRemoval(call.arguments[0] as ts.Node, new Set([row]));
+    }
+  }
+  // `for (const row of await em.find(E, {})) em.remove(row)`.
+  if (ts.isForOfStatement(parent) && parent.expression === outer) {
+    const row = loopVariable(parent);
+    return row !== null && anyRemoval(parent.statement, new Set([row]));
+  }
+  // `const rows = await em.find(E, {})`, then any of the above over `rows`.
+  if (!ts.isVariableDeclaration(parent) || parent.initializer !== outer) return false;
+  if (!ts.isIdentifier(parent.name)) return false;
+  const rows = parent.name.text;
+  let hit = false;
+  const visit = (node: ts.Node): void => {
+    if (hit) return;
+    if (ts.isCallExpression(node)) {
+      if (removesOneOf(node, new Set([rows]))) {
+        hit = true;
+        return;
+      }
+      const callee = node.expression;
+      if (
+        ts.isPropertyAccessExpression(callee) &&
+        ITERATING_METHODS.has(callee.name.text) &&
+        ts.isIdentifier(unwrap(callee.expression)) &&
+        (unwrap(callee.expression) as ts.Identifier).text === rows
+      ) {
+        const row = firstParameter(node.arguments[0]);
+        if (row !== null && anyRemoval(node.arguments[0] as ts.Node, new Set([row]))) {
+          hit = true;
+          return;
+        }
+      }
+    }
+    if (ts.isForOfStatement(node)) {
+      const over = unwrap(node.expression);
+      const row = loopVariable(node);
+      if (
+        ts.isIdentifier(over) &&
+        over.text === rows &&
+        row !== null &&
+        anyRemoval(node.statement, new Set([row]))
+      ) {
+        hit = true;
+        return;
+      }
+    }
+    node.forEachChild(visit);
+  };
+  visit(scopeOf(find));
+  return hit;
+}
+
+/** The loop variable of `for (const row of …)`, when it is a plain identifier. */
+function loopVariable(loop: ts.ForOfStatement): string | null {
+  const init = loop.initializer;
+  if (!ts.isVariableDeclarationList(init)) return ts.isIdentifier(init) ? init.text : null;
+  const decl = init.declarations[0];
+  return decl !== undefined && ts.isIdentifier(decl.name) ? decl.name.text : null;
+}
+
 /** Whether a call is `em.nativeDelete(Entity, {})` — an empty filter. */
 function ormWipeTable(call: ts.CallExpression, sf: ts.SourceFile): string | null {
   if (tailName(call.expression) !== ORM_WIPE) return null;
@@ -366,41 +627,83 @@ function siteOf(node: ts.Node): { site: WipeSite; enclosing: string } {
   return { site: 'helper', enclosing: enclosingFunction ?? '(module scope)' };
 }
 
+/**
+ * What one test source holds, read off **one** tree (issue #910): whether it
+ * deletes or rewrites rows at all, and its unscoped wipes.
+ *
+ * The CLI parsed every test file three times — {@link filesDeletingRows} for
+ * the vacuous guard, {@link findUnscopedWipes} for `--list`, and again inside
+ * {@link checkSharedTableWipes}. Inside a `withSharedParses` scope this answer
+ * is remembered, so each file is parsed once; outside one it is derived on
+ * every call, exactly as before.
+ */
+interface SourceWipes {
+  readonly deletesRows: boolean;
+  readonly wipes: readonly UnscopedWipe[];
+}
+
+function sourceWipes(file: string, text: string): SourceWipes {
+  return rememberRead('shared-table-wipes:wipes', file, text, () => {
+    const sf = parseSource(file, text);
+    return {
+      deletesRows: deletesRows(sf),
+      wipes: SEAM_PREFIXES.some((prefix) => file.startsWith(prefix)) ? [] : wipesIn(file, sf),
+    };
+  });
+}
+
+/** One source's unscoped wipes, in source order. */
+function wipesIn(file: string, sf: ts.SourceFile): UnscopedWipe[] {
+  const found: UnscopedWipe[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+      const { site, enclosing } = siteOf(node);
+      const entity = ormWipeTable(node, sf);
+      const updated = entity === null ? ormUpdateTable(node, sf) : null;
+      const findAll = entity === null && updated === null ? findAllEntity(node, sf) : null;
+      if (entity !== null) {
+        found.push({ file, line, table: entity, kind: 'orm', site, enclosing });
+      } else if (updated !== null) {
+        found.push({ file, line, table: updated, kind: 'orm-update', site, enclosing });
+      } else if (findAll !== null) {
+        if (rowsReachRemoval(node)) {
+          found.push({ file, line, table: findAll, kind: 'orm-remove-each', site, enclosing });
+        }
+      } else if (SQL_ENTRY.has(tailName(node.expression) ?? '')) {
+        const sql = node.arguments[0] === undefined ? null : literalText(node.arguments[0]);
+        if (sql !== null) {
+          const truncated = truncatedTables(sql);
+          if (truncated !== null) {
+            for (const table of truncated) {
+              found.push({ file, line, table, kind: 'sql-truncate', site, enclosing });
+            }
+          } else {
+            const deleted = unfilteredDeleteTable(sql);
+            const full = fullLiteralText(node.arguments[0] as ts.Expression);
+            const rewritten = full === null ? null : unfilteredUpdateTable(full);
+            if (deleted !== null) {
+              found.push({ file, line, table: deleted, kind: 'sql-delete', site, enclosing });
+            } else if (rewritten !== null) {
+              found.push({ file, line, table: rewritten, kind: 'sql-update', site, enclosing });
+            }
+          }
+        }
+      }
+    }
+    node.forEachChild(visit);
+  };
+  sf.forEachChild(visit);
+  return found;
+}
+
 /** Every unscoped whole-table wipe in the given test sources. */
 export function findUnscopedWipes(input: TableWipeInput): UnscopedWipe[] {
   const found: UnscopedWipe[] = [];
 
   for (const [file, text] of input.sources) {
     if (SEAM_PREFIXES.some((prefix) => file.startsWith(prefix))) continue;
-    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-
-    const visit = (node: ts.Node): void => {
-      if (ts.isCallExpression(node)) {
-        const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
-        const { site, enclosing } = siteOf(node);
-        const entity = ormWipeTable(node, sf);
-        if (entity !== null) {
-          found.push({ file, line, table: entity, kind: 'orm', site, enclosing });
-        } else if (SQL_ENTRY.has(tailName(node.expression) ?? '')) {
-          const sql = node.arguments[0] === undefined ? null : literalText(node.arguments[0]);
-          if (sql !== null) {
-            const truncated = truncatedTables(sql);
-            if (truncated !== null) {
-              for (const table of truncated) {
-                found.push({ file, line, table, kind: 'sql-truncate', site, enclosing });
-              }
-            } else {
-              const deleted = unfilteredDeleteTable(sql);
-              if (deleted !== null) {
-                found.push({ file, line, table: deleted, kind: 'sql-delete', site, enclosing });
-              }
-            }
-          }
-        }
-      }
-      node.forEachChild(visit);
-    };
-    sf.forEachChild(visit);
+    found.push(...sourceWipes(file, text).wipes);
   }
 
   found.sort((a, b) =>
@@ -414,8 +717,10 @@ export function findUnscopedWipes(input: TableWipeInput): UnscopedWipe[] {
 }
 
 /**
- * How many test files delete from the database at all — the second
- * vacuous-pass guard.
+ * How many test files delete or rewrite rows at all — the second vacuous-pass
+ * guard, and the `sites` population the baseline ratchets: a `nativeDelete`,
+ * a `nativeUpdate`, a `remove` / `removeAndFlush`, or a SQL `delete`,
+ * `truncate` or `update`, whatever its filter.
  *
  * An empty file list is the obvious way to report a green over nothing; the
  * quieter one is a file list whose delete statements the detector no longer
@@ -427,24 +732,30 @@ export function findUnscopedWipes(input: TableWipeInput): UnscopedWipe[] {
 export function filesDeletingRows(input: TableWipeInput): number {
   let count = 0;
   for (const [file, text] of input.sources) {
-    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-    let deletes = false;
-    const visit = (node: ts.Node): void => {
-      if (deletes) return;
-      if (ts.isCallExpression(node)) {
-        const name = tailName(node.expression);
-        if (name === ORM_WIPE) deletes = true;
-        else if (name !== null && SQL_ENTRY.has(name)) {
-          const sql = node.arguments[0] === undefined ? null : literalText(node.arguments[0]);
-          if (sql !== null && /^\s*(delete|truncate)\b/i.test(sql)) deletes = true;
-        }
-      }
-      node.forEachChild(visit);
-    };
-    sf.forEachChild(visit);
-    if (deletes) count += 1;
+    if (sourceWipes(file, text).deletesRows) count += 1;
   }
   return count;
+}
+
+/** Does `sf` delete or rewrite rows at all, whatever its filter? */
+function deletesRows(sf: ts.SourceFile): boolean {
+  let deletes = false;
+  const visit = (node: ts.Node): void => {
+    if (deletes) return;
+    if (ts.isCallExpression(node)) {
+      const name = tailName(node.expression);
+      if (name === ORM_WIPE || name === ORM_UPDATE) deletes = true;
+      else if (name !== null && ORM_REMOVE.has(name) && ts.isPropertyAccessExpression(node.expression)) {
+        deletes = true;
+      } else if (name !== null && SQL_ENTRY.has(name)) {
+        const sql = node.arguments[0] === undefined ? null : literalText(node.arguments[0]);
+        if (sql !== null && /^\s*(delete|truncate|update)\b/i.test(sql)) deletes = true;
+      }
+    }
+    node.forEachChild(visit);
+  };
+  sf.forEachChild(visit);
+  return deletes;
 }
 
 /** One file's measured count against its baseline. */
@@ -506,6 +817,23 @@ export function checkSharedTableWipes(
   return { total: all.length, regressions, drained };
 }
 
+/**
+ * The guard's count, every unscoped wipe and the rule's verdict, in one
+ * shared-parse scope — one parse per test file between the three walks
+ * (issue #910). What the CLI runs.
+ */
+export function scanSharedTableWipes(input: TableWipeInput): {
+  readonly deleting: number;
+  readonly wipes: readonly UnscopedWipe[];
+  readonly result: CheckResult;
+} {
+  return withSharedParses(() => ({
+    deleting: filesDeletingRows(input),
+    wipes: findUnscopedWipes(input),
+    result: checkSharedTableWipes(input),
+  }));
+}
+
 function main(): void {
   const listMode = process.argv.includes('--list');
   const files = walk(TEST_ROOT);
@@ -521,17 +849,17 @@ function main(): void {
     sources.set(relative(TEST_ROOT, file).split('\\').join('/'), readFileSync(file, 'utf8'));
   }
 
-  const deleting = filesDeletingRows({ sources });
+  // Nothing in the scan prints, so computing the verdict before the guard below
+  // refuses changes nothing this check reports.
+  const { deleting, wipes, result } = scanSharedTableWipes({ sources });
   if (deleting === 0) {
     console.error(
-      `[shared-table-wipes] read ${sources.size} test sources and found no delete statement ` +
+      `[shared-table-wipes] read ${sources.size} test sources and found no delete or update statement ` +
         `in any of them — the detection has gone blind; refusing to report a vacuous pass`,
     );
     process.exit(2);
   }
 
-  const wipes = findUnscopedWipes({ sources });
-  const result = checkSharedTableWipes({ sources });
   const over = new Set(result.regressions.map((drift) => drift.file));
 
   if (listMode) {
@@ -545,8 +873,9 @@ function main(): void {
   }
 
   // What was read, beside what was found (issue #244). `files` is the walk;
-  // `sites` is the subset that deletes rows at all, the population the baseline
-  // ratchets. `self-reported`: nothing derives "every test that deletes".
+  // `sites` is the subset that deletes or rewrites rows at all (since issue
+  // #115, `remove` and `update` too), the population the baseline ratchets.
+  // `self-reported`: nothing derives "every test that deletes".
   reportReadSize({ prefix: '[shared-table-wipes]', files: sources.size, sites: deleting });
   console.log(
     `[shared-table-wipes] files deleting rows=${deleting} ` +

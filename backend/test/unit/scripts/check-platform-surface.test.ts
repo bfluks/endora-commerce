@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -8,9 +9,13 @@ import {
   applicationReachRefusal,
   checkApplicationReaches,
   checkPlatformSurface,
+  checkSharedNames,
+  collectPlatformSurfaceSources,
+  collectPlatformSurfaceTestSources,
   hostDependentCoverage,
   hostReachCoverage,
   isPackageToolingConfig,
+  isPlatformSurfaceTestSource,
   keyOf,
   NO_SYMBOL,
   platformSurfaceRefusal,
@@ -18,8 +23,11 @@ import {
   remedyOf,
   scanApplicationReaches,
   scanPlatformSurface,
+  SHARED_PUBLISHED_NAMES,
+  sharedNameRefusal,
   UNPUBLISHED_PLATFORM_REACHES,
   type ApplicationReachInput,
+  type SharedNameInput,
   type LedgeredReach,
   type PlatformSurfaceFinding,
   type PlatformSurfaceInput,
@@ -494,6 +502,83 @@ describe('a bare specifier into the host package', () => {
     });
   });
 
+  /**
+   * Issue #114 — a module's **test** files are judged on which subpaths of the
+   * host they name, and on nothing else. A module package whose tests need the
+   * host's internals cannot be tested outside this repository, so the subpath
+   * question is the one that matters for them; which *symbols* a test takes out
+   * of a published barrel is not this check's business, because a test may
+   * legitimately reach the module's own internals and fixtures.
+   */
+  describe('a module test file (issue #114)', () => {
+    const packagedTest = 'packages/modules/blog/src/backend.test.ts';
+
+    it('reports a host-internal subpath it names', () => {
+      const reach = {
+        [packagedTest]: "import { createRootContainer } from '@endora-commerce/platform/composition';",
+      };
+      const result = checkPlatformSurface(input(reach), {});
+      expect(kinds(result.violations)).toEqual(['host-internal-subpath']);
+      expect(result.violations[0]).toMatchObject({
+        file: packagedTest,
+        moduleId: 'blog',
+        target: '@endora-commerce/platform/composition',
+        symbol: NO_SYMBOL,
+      });
+    });
+
+    it('reports a subpath the host does not declare', () => {
+      const result = checkPlatformSurface(
+        input({ [packagedTest]: "import { x } from '@endora-commerce/platform/testing';" }),
+        {},
+      );
+      expect(kinds(result.violations)).toEqual(['unpublished-subpath']);
+    });
+
+    it('is not asked the symbol question, by either spelling', () => {
+      const result = checkPlatformSurface(
+        input({
+          [packagedTest]: [
+            "import { HttpError } from '@endora-commerce/platform/http';",
+            "import { NotOnTheBarrel } from '@endora-commerce/platform/kernel';",
+          ].join('\n'),
+          'backend/src/modules/blog/backend.test.ts':
+            "import { SettingsCache } from '../../kernel/settings/settings-cache.js';",
+        }),
+        {},
+      );
+      expect(result.violations).toEqual([]);
+    });
+
+    it('counts each host specifier it judged as a site, and none of them toward host coverage', () => {
+      // A package whose only host reaches were in its tests would otherwise
+      // satisfy `hostDependentCoverage` with no production source read at all.
+      const reach = { [packagedTest]: "import { HttpError } from '@endora-commerce/platform/http';" };
+      const scan = scanPlatformSurface(input(reach));
+      expect(scan.reaches).toBe(1);
+      expect([...scan.hostReachModules]).toEqual([]);
+    });
+  });
+
+  it('walks a module\'s test files as a population of their own', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'platform-surface-walk-'));
+    try {
+      mkdirSync(join(dir, 'src', 'node_modules'), { recursive: true });
+      for (const name of ['a.ts', 'a.test.ts', 'b.test.tsx', 'c.d.ts']) {
+        writeFileSync(join(dir, 'src', name), '');
+      }
+      writeFileSync(join(dir, 'src', 'node_modules', 'x.test.ts'), '');
+      const names = (files: readonly string[]): string[] =>
+        files.map((file) => file.slice(dir.length + 1)).sort();
+      expect(names(collectPlatformSurfaceSources(dir))).toEqual(['src/a.ts']);
+      expect(names(collectPlatformSurfaceTestSources(dir))).toEqual(['src/a.test.ts', 'src/b.test.tsx']);
+      expect(isPlatformSurfaceTestSource('packages/modules/blog/src/x.test.ts')).toBe(true);
+      expect(isPlatformSurfaceTestSource('packages/modules/blog/src/x.ts')).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('tells the declared-and-unpublished subpath from the one that does not exist', () => {
     // The two states are one branch and two verdicts, so the discrimination is
     // asserted rather than assumed: `composition` is in `declaredSubpaths`,
@@ -966,6 +1051,198 @@ describe('the application half refuses rather than reporting clean', () => {
   });
 });
 
+/**
+ * Issue #84 — a name both the platform and a workspace package it depends on
+ * export resolves to one declaration, or it is a finding.
+ *
+ * `published-surface.test.ts` keys `NOT_PUBLISHED` by name alone, which is sound
+ * only while no name means two things; and both packages are public, so a
+ * consumer importing "the same" name from each gets whichever declaration the
+ * specifier happened to reach. The fixture enters as source text for both
+ * packages — the platform's barrels, the files they re-export from, and the
+ * dependency's modules — so the follower that decides *which declaration a
+ * barrel name is* runs in every case below (issue #130).
+ */
+const CONTRACTS = '@endora-commerce/contracts';
+
+function sharedInput(
+  platform: Record<string, string>,
+  contracts: Record<string, string>,
+  barrels: readonly string[] = ['packages/platform/src/kernel/index.ts'],
+): SharedNameInput {
+  return {
+    barrels,
+    platformSource: (key) => platform[key],
+    dependencies: new Map([[CONTRACTS, new Map(Object.entries(contracts))]]),
+  };
+}
+
+const LOGGER_CONTRACT = {
+  'packages/contracts/src/modules.ts':
+    'export interface ModuleLifecycleLogger {\n  info(msg: string): void;\n}\n',
+};
+
+describe('a name the platform and a dependency both export (issue #84)', () => {
+  it('reports a name the platform declares itself and the dependency declares too', () => {
+    const scan = checkSharedNames(
+      sharedInput(
+        {
+          'packages/platform/src/kernel/index.ts':
+            "export type { ModuleLifecycleLogger } from './logger.js';\n",
+          'packages/platform/src/kernel/logger.ts':
+            'export interface ModuleLifecycleLogger {\n  info(msg: string): void;\n}\n',
+        },
+        LOGGER_CONTRACT,
+      ),
+      {},
+    );
+    expect(scan.violations).toEqual([
+      expect.objectContaining({
+        kind: 'shared-name-collision',
+        name: 'ModuleLifecycleLogger',
+        platformDeclaration: 'packages/platform/src/kernel/logger.ts',
+        dependency: CONTRACTS,
+        dependencyDeclarations: ['packages/contracts/src/modules.ts'],
+      }),
+    ]);
+  });
+
+  it('reports a name a barrel declares in place', () => {
+    const scan = checkSharedNames(
+      sharedInput(
+        {
+          'packages/platform/src/kernel/index.ts':
+            'export interface ModuleLifecycleLogger {\n  info(msg: string): void;\n}\n',
+        },
+        LOGGER_CONTRACT,
+      ),
+      {},
+    );
+    expect(scan.violations.map((finding) => finding.platformDeclaration)).toEqual([
+      'packages/platform/src/kernel/index.ts',
+    ]);
+  });
+
+  it('reports a dependency name re-exported under another dependency name', () => {
+    const scan = checkSharedNames(
+      sharedInput(
+        {
+          'packages/platform/src/kernel/index.ts':
+            `export type { RegistryState as ModuleLifecycleLogger } from '${CONTRACTS}';\n`,
+        },
+        { ...LOGGER_CONTRACT, 'packages/contracts/src/registry.ts': 'export type RegistryState = string;\n' },
+      ),
+      {},
+    );
+    expect(scan.violations.map((finding) => finding.kind)).toEqual(['shared-name-collision']);
+  });
+
+  it('does not report a barrel re-exporting the dependency, directly or through a file', () => {
+    const scan = checkSharedNames(
+      sharedInput(
+        {
+          'packages/platform/src/kernel/index.ts': [
+            `export type { ModuleLifecycleLogger } from '${CONTRACTS}';`,
+            "export type { RegistryState } from './types.js';",
+            "export { settingsManifest } from './settings.js';",
+          ].join('\n'),
+          'packages/platform/src/kernel/types.ts': `export type { RegistryState } from '${CONTRACTS}/registry';\n`,
+          'packages/platform/src/kernel/settings.ts': [
+            `import { settingsManifest } from '${CONTRACTS}';`,
+            'export { settingsManifest };',
+          ].join('\n'),
+        },
+        {
+          ...LOGGER_CONTRACT,
+          'packages/contracts/src/registry.ts': 'export type RegistryState = string;\n',
+          'packages/contracts/src/settings.ts': 'export const settingsManifest = {};\n',
+        },
+      ),
+      {},
+    );
+    expect(scan.violations).toEqual([]);
+    expect(scan.sharedNames).toBe(3);
+    expect(scan.sameDeclaration).toBe(3);
+  });
+
+  it('does not report names the two packages do not share', () => {
+    const scan = checkSharedNames(
+      sharedInput(
+        { 'packages/platform/src/kernel/index.ts': 'export class HttpError extends Error {}\n' },
+        LOGGER_CONTRACT,
+      ),
+      {},
+    );
+    expect(scan.violations).toEqual([]);
+    expect(scan.sharedNames).toBe(0);
+  });
+
+  it('reports a shared name whose platform declaration it cannot follow, rather than passing it', () => {
+    const scan = checkSharedNames(
+      sharedInput(
+        {
+          'packages/platform/src/kernel/index.ts':
+            "export type { ModuleLifecycleLogger } from './gone.js';\n",
+        },
+        LOGGER_CONTRACT,
+      ),
+      {},
+    );
+    expect(scan.violations.map((finding) => finding.kind)).toEqual(['shared-name-unresolved']);
+  });
+
+  it('moves a ledgered collision out of the violations, and reports a key describing none', () => {
+    const colliding = sharedInput(
+      {
+        'packages/platform/src/kernel/index.ts':
+          'export interface ModuleLifecycleLogger {\n  info(msg: string): void;\n}\n',
+      },
+      LOGGER_CONTRACT,
+    );
+    const ledger = { ModuleLifecycleLogger: { reason: 'a maintainer decision (#84)' } };
+    const held = checkSharedNames(colliding, ledger);
+    expect(held.violations).toEqual([]);
+    expect(held.ledgered.map((finding) => finding.name)).toEqual(['ModuleLifecycleLogger']);
+    expect(held.staleKeys).toEqual([]);
+
+    const clean = sharedInput(
+      { 'packages/platform/src/kernel/index.ts': 'export class HttpError extends Error {}\n' },
+      LOGGER_CONTRACT,
+    );
+    expect(checkSharedNames(clean, ledger).staleKeys).toEqual(['ModuleLifecycleLogger']);
+  });
+
+  it('never ledgers a name it could not follow', () => {
+    const scan = checkSharedNames(
+      sharedInput(
+        {
+          'packages/platform/src/kernel/index.ts':
+            "export type { ModuleLifecycleLogger } from './gone.js';\n",
+        },
+        LOGGER_CONTRACT,
+      ),
+      { ModuleLifecycleLogger: { reason: 'cannot hold an unread name' } },
+    );
+    expect(scan.violations.map((finding) => finding.kind)).toEqual(['shared-name-unresolved']);
+  });
+
+  it('refuses a run with no dependency, or a dependency that exports nothing', () => {
+    expect(sharedNameRefusal({ dependencies: new Map() })).toContain('no workspace package');
+    expect(
+      sharedNameRefusal({
+        dependencies: new Map([[CONTRACTS, new Map([['packages/contracts/src/a.ts', 'const a = 1;']])]]),
+      }),
+    ).toContain(CONTRACTS);
+    expect(sharedNameRefusal({ dependencies: sharedInput({}, LOGGER_CONTRACT).dependencies })).toBeNull();
+  });
+
+  it('ships a ledger whose every entry carries a reason', () => {
+    for (const [name, entry] of Object.entries(SHARED_PUBLISHED_NAMES)) {
+      expect(entry.reason.length, name).toBeGreaterThan(40);
+    }
+  });
+});
+
 describe('the vacuous-pass guards', () => {
   it('every published subpath has a barrel with exports on this tree', () => {
     for (const subpath of PUBLISHED_SUBPATHS) {
@@ -1031,10 +1308,17 @@ describe('the vacuous-pass guards', () => {
     // not a finding — and it disappears entirely when the ledger empties, which
     // is what R4.2 expects to happen.
     expect(run.stdout).toMatch(
-      /\[platform-surface\] read: files=\d+ sites=\d+ sources=manifest-index:(\d+)\/\1,platform-barrels:5\/5,host-dependents:(\d+)\/\2,host-reaches:(\d+)\/\3/,
+      /\[platform-surface\] read: files=\d+ sites=\d+ sources=manifest-index:(\d+)\/\1,platform-barrels:5\/5,host-dependents:(\d+)\/\2,host-reaches:(\d+)\/\3,platform-dependencies:1\/1/,
     );
     expect(run.stdout).toMatch(
       /application reaches into the platform by relative path=(\d+) violations=0 ledgered=\1 ledger-size=\d+ stale=0/,
+    );
+    // Issue #84: the fifth token is the platform manifest's `workspace:`
+    // dependencies against the ones whose modules this run read a declaration
+    // out of, and every shared name is either the dependency's own declaration
+    // or held by `SHARED_PUBLISHED_NAMES`.
+    expect(run.stdout).toMatch(
+      /published names a platform dependency exports too=\d+ same-declaration=\d+ violations=0 ledgered=(\d+) ledger-size=\1 stale=0/,
     );
   });
 });

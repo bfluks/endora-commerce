@@ -1,12 +1,16 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, type FormEvent, type ReactNode } from 'react';
+import { ListPlus, Plus, Tags } from 'lucide-react';
 import { slugify, type CustomFieldType, type NewsletterCustomField, type NewsletterTag } from '@endora-commerce/contracts';
 import { useAuth } from '@endora-commerce/admin-kit/lib';
-import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, PageHeader, Select } from '@endora-commerce/admin-kit/ui';
+import { ModalDialog, useConfirmDialog } from '@endora-commerce/admin-kit/components';
+import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, EmptyState, FormField, Input, PageHeader, Select } from '@endora-commerce/admin-kit/ui';
 import { newsletterClient } from '../api/newsletter-client.js';
+import { describeDeleteError } from '../describe-delete-error.js';
+import { customFieldTypeLabels } from '../lib/labels.js';
 
 /** Backend requires tag codes / field keys to match this pattern. */
 const CODE_RE = /^[a-z][a-z0-9_]*$/;
-const CUSTOM_FIELD_TYPES: CustomFieldType[] = ['text', 'number', 'boolean', 'date'];
 
 /**
  * Normalise free-text into a backend-valid code: lowercase, diacritics folded,
@@ -34,15 +38,15 @@ function slugifyCode(input: string): string {
 
 export function TagsPage(): React.ReactElement {
   const { hasPermission } = useAuth();
+  const tn = useTranslation('newsletter');
+  const tc = useTranslation('core');
+  const { confirm, confirmDialog } = useConfirmDialog();
   const canWrite = hasPermission('newsletter:write');
   const [tags, setTags] = useState<NewsletterTag[]>([]);
   const [fields, setFields] = useState<NewsletterCustomField[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [tagCode, setTagCode] = useState('');
-  const [tagName, setTagName] = useState('');
-  const [fieldKey, setFieldKey] = useState('');
-  const [fieldLabel, setFieldLabel] = useState('');
-  const [fieldType, setFieldType] = useState<CustomFieldType>('text');
+  // Issue #1439 (DS-05): the add forms are dialogs opened from each section's header.
+  const [adding, setAdding] = useState<'tag' | 'field' | null>(null);
   const [editTag, setEditTag] = useState<{ id: string; name: string; description: string } | null>(null);
   const [editField, setEditField] = useState<{ id: string; label: string } | null>(null);
 
@@ -51,6 +55,37 @@ export function TagsPage(): React.ReactElement {
     newsletterClient.listCustomFields().then((r) => setFields(r.items)).catch(() => undefined);
   }, []);
   useEffect(() => load(), [load]);
+
+  /** Issue #1464 — a delete asks first, and runs inside the dialog. */
+  async function confirmDeleteTag(tag: NewsletterTag): Promise<void> {
+    setError(null);
+    await confirm({
+      title: tn('delete.tag.title'),
+      message: tn('delete.tag.message', { name: tag.name, code: tag.code }),
+      confirmLabel: tn('delete.tag.action'),
+      destructive: true,
+      action: async () => {
+        await newsletterClient.deleteTag(tag.id);
+        load();
+      },
+      describeError: describeDeleteError(tn),
+    });
+  }
+
+  async function confirmDeleteField(field: NewsletterCustomField): Promise<void> {
+    setError(null);
+    await confirm({
+      title: tn('delete.field.title'),
+      message: tn('delete.field.message', { label: field.label, key: field.key }),
+      confirmLabel: tn('delete.field.action'),
+      destructive: true,
+      action: async () => {
+        await newsletterClient.deleteCustomField(field.id);
+        load();
+      },
+      describeError: describeDeleteError(tn),
+    });
+  }
 
   async function run(fn: () => Promise<unknown>): Promise<void> {
     setError(null);
@@ -62,66 +97,27 @@ export function TagsPage(): React.ReactElement {
     }
   }
 
-  const addTag = (): void =>
-    void run(async () => {
-      if (tagName.trim() === '') throw new Error('Tag name is required.');
-      const code = slugifyCode(tagCode.trim() || tagName);
-      if (!CODE_RE.test(code)) {
-        throw new Error('Code must start with a letter and use only lowercase letters, digits and underscores.');
-      }
-      await newsletterClient.createTag({ code, name: tagName.trim() });
-      setTagCode('');
-      setTagName('');
-    });
-
-  const addField = (): void =>
-    void run(async () => {
-      if (fieldLabel.trim() === '') throw new Error('Field label is required.');
-      const key = slugifyCode(fieldKey.trim() || fieldLabel);
-      if (!CODE_RE.test(key)) {
-        throw new Error('Key must start with a letter and use only lowercase letters, digits and underscores.');
-      }
-      await newsletterClient.createCustomField({ key, label: fieldLabel.trim(), type: fieldType });
-      setFieldKey('');
-      setFieldLabel('');
-      setFieldType('text');
-    });
-
   if (!hasPermission('newsletter:read')) {
     return (
       <Alert>
-        <AlertDescription>You do not have permission to view the newsletter.</AlertDescription>
+        <AlertDescription>{tn('common.noPermission')}</AlertDescription>
       </Alert>
     );
   }
 
   return (
     <div className="space-y-4">
-      <PageHeader title="Newsletter — Tags &amp; fields" description="Segmentation tags and custom subscriber fields." />
+      <PageHeader title={tn('tags.title')} />
       {error ? (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
       <Card>
-        <CardHeader>
-          <CardTitle>Tags</CardTitle>
-        </CardHeader>
+        <SectionHeader title={tn('tags.section')} addLabel={canWrite ? tn('tags.add') : null} onAdd={() => setAdding('tag')} />
         <CardContent className="space-y-3">
-          {canWrite ? (
-            <div className="space-y-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <Input placeholder="code (optional)" value={tagCode} onChange={(e) => setTagCode(e.target.value)} className="max-w-[160px]" />
-                <Input placeholder="name" value={tagName} onChange={(e) => setTagName(e.target.value)} className="max-w-[200px]" />
-                <Button size="sm" onClick={addTag}>
-                  Add tag
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Code uses lowercase letters, digits and underscores. Spaces and other characters are converted
-                automatically; leave it empty to derive one from the name.
-              </p>
-            </div>
+          {tags.length === 0 ? (
+            <EmptyState icon={<Tags size={20} />} title={tn('tags.empty')} description={tn('tags.emptyBody')} />
           ) : null}
           <ul className="divide-y text-sm">
             {tags.map((t) => {
@@ -129,20 +125,17 @@ export function TagsPage(): React.ReactElement {
               return (
                 <li key={t.id} className="flex items-center justify-between gap-2 py-2">
                   {et ? (
-                    <div className="flex flex-1 flex-wrap items-center gap-2">
-                      <span className="font-mono text-xs text-muted-foreground">{t.code}</span>
-                      <Input
-                        value={et.name}
-                        placeholder="name"
-                        onChange={(e) => setEditTag({ ...et, name: e.target.value })}
-                        className="max-w-[200px]"
-                      />
-                      <Input
-                        value={et.description}
-                        placeholder="description"
-                        onChange={(e) => setEditTag({ ...et, description: e.target.value })}
-                        className="max-w-[240px]"
-                      />
+                    <div className="flex flex-1 flex-wrap items-start gap-3">
+                      <span className="mt-8 font-mono text-xs text-muted-foreground">{t.code}</span>
+                      <FormField label={tn('tags.field.name')} className="w-full max-w-[220px]">
+                        <Input value={et.name} onChange={(e) => setEditTag({ ...et, name: e.target.value })} />
+                      </FormField>
+                      <FormField label={tn('tags.field.description')} className="w-full max-w-[260px]">
+                        <Input
+                          value={et.description}
+                          onChange={(e) => setEditTag({ ...et, description: e.target.value })}
+                        />
+                      </FormField>
                     </div>
                   ) : (
                     <span>
@@ -159,7 +152,7 @@ export function TagsPage(): React.ReactElement {
                             size="sm"
                             onClick={() =>
                               void run(async () => {
-                                if (et.name.trim() === '') throw new Error('Tag name is required.');
+                                if (et.name.trim() === '') throw new Error(tn('tags.nameRequired'));
                                 await newsletterClient.updateTag(t.id, {
                                   name: et.name.trim(),
                                   description: et.description.trim() === '' ? null : et.description.trim(),
@@ -168,10 +161,10 @@ export function TagsPage(): React.ReactElement {
                               })
                             }
                           >
-                            Save
+                            {tc('common.action.save')}
                           </Button>
                           <Button variant="ghost" size="sm" onClick={() => setEditTag(null)}>
-                            Cancel
+                            {tc('common.action.cancel')}
                           </Button>
                         </>
                       ) : (
@@ -181,10 +174,10 @@ export function TagsPage(): React.ReactElement {
                             size="sm"
                             onClick={() => setEditTag({ id: t.id, name: t.name, description: t.description ?? '' })}
                           >
-                            Edit
+                            {tc('common.action.edit')}
                           </Button>
-                          <Button variant="ghost" size="sm" onClick={() => void run(() => newsletterClient.deleteTag(t.id))}>
-                            Delete
+                          <Button variant="ghost" size="sm" onClick={() => void confirmDeleteTag(t)}>
+                            {tc('common.action.delete')}
                           </Button>
                         </>
                       )}
@@ -197,35 +190,10 @@ export function TagsPage(): React.ReactElement {
         </CardContent>
       </Card>
       <Card>
-        <CardHeader>
-          <CardTitle>Custom subscriber fields</CardTitle>
-        </CardHeader>
+        <SectionHeader title={tn('fields.section')} addLabel={canWrite ? tn('fields.add') : null} onAdd={() => setAdding('field')} />
         <CardContent className="space-y-3">
-          {canWrite ? (
-            <div className="space-y-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <Input placeholder="key (optional)" value={fieldKey} onChange={(e) => setFieldKey(e.target.value)} className="max-w-[160px]" />
-                <Input placeholder="label" value={fieldLabel} onChange={(e) => setFieldLabel(e.target.value)} className="max-w-[200px]" />
-                <Select
-                  value={fieldType}
-                  onChange={(e) => setFieldType(e.target.value as CustomFieldType)}
-                  className="max-w-[130px]"
-                >
-                  {CUSTOM_FIELD_TYPES.map((ty) => (
-                    <option key={ty} value={ty}>
-                      {ty}
-                    </option>
-                  ))}
-                </Select>
-                <Button size="sm" onClick={addField}>
-                  Add field
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Key uses lowercase letters, digits and underscores. Spaces and other characters are converted
-                automatically; leave it empty to derive one from the label. Key and type cannot be changed later.
-              </p>
-            </div>
+          {fields.length === 0 ? (
+            <EmptyState icon={<ListPlus size={20} />} title={tn('fields.empty')} description={tn('fields.emptyBody')} />
           ) : null}
           <ul className="divide-y text-sm">
             {fields.map((f) => {
@@ -233,19 +201,16 @@ export function TagsPage(): React.ReactElement {
               return (
                 <li key={f.id} className="flex items-center justify-between gap-2 py-2">
                   {ef ? (
-                    <div className="flex flex-1 flex-wrap items-center gap-2">
-                      <span className="font-mono text-xs text-muted-foreground">{f.key}</span>
-                      <Input
-                        value={ef.label}
-                        placeholder="label"
-                        onChange={(e) => setEditField({ ...ef, label: e.target.value })}
-                        className="max-w-[240px]"
-                      />
-                      <span className="text-xs text-muted-foreground">({f.type})</span>
+                    <div className="flex flex-1 flex-wrap items-start gap-3">
+                      <span className="mt-8 font-mono text-xs text-muted-foreground">{f.key}</span>
+                      <FormField label={tn('fields.field.label')} className="w-full max-w-[260px]">
+                        <Input value={ef.label} onChange={(e) => setEditField({ ...ef, label: e.target.value })} />
+                      </FormField>
+                      <span className="mt-8 text-xs text-muted-foreground">({customFieldTypeLabels.label(tn, f.type)})</span>
                     </div>
                   ) : (
                     <span>
-                      <span className="font-mono text-xs">{f.key}</span> — {f.label} ({f.type})
+                      <span className="font-mono text-xs">{f.key}</span> — {f.label} ({customFieldTypeLabels.label(tn, f.type)})
                     </span>
                   )}
                   {canWrite ? (
@@ -257,16 +222,16 @@ export function TagsPage(): React.ReactElement {
                             size="sm"
                             onClick={() =>
                               void run(async () => {
-                                if (ef.label.trim() === '') throw new Error('Field label is required.');
+                                if (ef.label.trim() === '') throw new Error(tn('fields.labelRequired'));
                                 await newsletterClient.updateCustomField(f.id, { label: ef.label.trim() });
                                 setEditField(null);
                               })
                             }
                           >
-                            Save
+                            {tc('common.action.save')}
                           </Button>
                           <Button variant="ghost" size="sm" onClick={() => setEditField(null)}>
-                            Cancel
+                            {tc('common.action.cancel')}
                           </Button>
                         </>
                       ) : (
@@ -276,14 +241,14 @@ export function TagsPage(): React.ReactElement {
                             size="sm"
                             onClick={() => setEditField({ id: f.id, label: f.label })}
                           >
-                            Edit
+                            {tc('common.action.edit')}
                           </Button>
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => void run(() => newsletterClient.deleteCustomField(f.id))}
+                            onClick={() => void confirmDeleteField(f)}
                           >
-                            Delete
+                            {tc('common.action.delete')}
                           </Button>
                         </>
                       )}
@@ -295,7 +260,182 @@ export function TagsPage(): React.ReactElement {
           </ul>
         </CardContent>
       </Card>
+      {adding === 'tag' ? (
+        <TagDialog
+          onClose={() => setAdding(null)}
+          onCreated={() => {
+            setAdding(null);
+            load();
+          }}
+        />
+      ) : null}
+      {adding === 'field' ? (
+        <FieldDialog
+          onClose={() => setAdding(null)}
+          onCreated={() => {
+            setAdding(null);
+            load();
+          }}
+        />
+      ) : null}
+      {confirmDialog}
     </div>
+  );
+}
+
+/**
+ * A section's header: its title and, for an operator who may write, an outline
+ * *Add …*. Outline, not filled: the screen manages two lists and neither add is
+ * its one primary (issue #1441, DS-07; Von Restorff).
+ */
+function SectionHeader(props: { title: string; addLabel: string | null; onAdd: () => void }): ReactNode {
+  return (
+    <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+      <CardTitle>{props.title}</CardTitle>
+      {props.addLabel ? (
+        <Button variant="outline" size="sm" onClick={props.onAdd}>
+          <Plus />
+          {props.addLabel}
+        </Button>
+      ) : null}
+    </CardHeader>
+  );
+}
+
+/** The submit and cancel row both create dialogs share; the submit is the dialog's one primary. */
+function DialogActions(props: { busy: boolean; submitLabel: string; onCancel: () => void }): ReactNode {
+  const tc = useTranslation('core');
+  return (
+    <div className="flex flex-wrap justify-end gap-2 pt-2">
+      <Button className="min-h-11 sm:min-h-9" type="button" variant="outline" disabled={props.busy} onClick={props.onCancel}>
+        {tc('common.action.cancel')}
+      </Button>
+      <Button className="min-h-11 sm:min-h-9" type="submit" disabled={props.busy} aria-busy={props.busy}>
+        {props.busy ? tc('common.state.saving') : props.submitLabel}
+      </Button>
+    </div>
+  );
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Create a tag. The name is required; the code is derived from it when left
+ * empty (Tesler). A missing name or an invalid code is marked on its field; a
+ * server refusal stays inside the dialog with what was typed.
+ */
+function TagDialog(props: { onClose: () => void; onCreated: () => void }): ReactNode {
+  const tn = useTranslation('newsletter');
+  const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+  const [errors, setErrors] = useState<{ name?: string; code?: string }>({});
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    setError(null);
+    if (name.trim() === '') {
+      setErrors({ name: tn('tags.nameRequired') });
+      return;
+    }
+    const derived = slugifyCode(code.trim() || name);
+    if (!CODE_RE.test(derived)) {
+      setErrors({ code: tn('tags.codeInvalid') });
+      return;
+    }
+    setErrors({});
+    setBusy(true);
+    try {
+      await newsletterClient.createTag({ code: derived, name: name.trim() });
+      props.onCreated();
+    } catch (err) {
+      setError(errorText(err));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ModalDialog title={tn('tags.dialog.title')} busy={busy} dismissOnScrim={false} onClose={props.onClose}>
+      <form noValidate className="space-y-4" onSubmit={(event): void => void submit(event)}>
+        {error ? (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+        <FormField label={tn('tags.field.name')} error={errors.name} required>
+          <Input value={name} autoFocus onChange={(e) => setName(e.target.value)} />
+        </FormField>
+        <FormField label={tn('tags.field.code')} hint={tn('tags.field.codeHint')} error={errors.code}>
+          <Input value={code} onChange={(e) => setCode(e.target.value)} className="font-mono" />
+        </FormField>
+        <DialogActions busy={busy} submitLabel={tn('tags.add')} onCancel={props.onClose} />
+      </form>
+    </ModalDialog>
+  );
+}
+
+/** Create a custom subscriber field; the key is derived from the label when left empty. */
+function FieldDialog(props: { onClose: () => void; onCreated: () => void }): ReactNode {
+  const tn = useTranslation('newsletter');
+  const [label, setLabel] = useState('');
+  const [key, setKey] = useState('');
+  const [type, setType] = useState<CustomFieldType>('text');
+  const [errors, setErrors] = useState<{ label?: string; key?: string }>({});
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    setError(null);
+    if (label.trim() === '') {
+      setErrors({ label: tn('fields.labelRequired') });
+      return;
+    }
+    const derived = slugifyCode(key.trim() || label);
+    if (!CODE_RE.test(derived)) {
+      setErrors({ key: tn('fields.keyInvalid') });
+      return;
+    }
+    setErrors({});
+    setBusy(true);
+    try {
+      await newsletterClient.createCustomField({ key: derived, label: label.trim(), type });
+      props.onCreated();
+    } catch (err) {
+      setError(errorText(err));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ModalDialog title={tn('fields.dialog.title')} busy={busy} dismissOnScrim={false} onClose={props.onClose}>
+      <form noValidate className="space-y-4" onSubmit={(event): void => void submit(event)}>
+        {error ? (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+        <FormField label={tn('fields.field.label')} error={errors.label} required>
+          <Input value={label} autoFocus onChange={(e) => setLabel(e.target.value)} />
+        </FormField>
+        <FormField label={tn('fields.field.key')} hint={tn('fields.field.keyHint')} error={errors.key}>
+          <Input value={key} onChange={(e) => setKey(e.target.value)} className="font-mono" />
+        </FormField>
+        <FormField label={tn('fields.field.type')}>
+          <Select value={type} onChange={(e) => setType(e.target.value as CustomFieldType)}>
+            {customFieldTypeLabels.options(tn).map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </Select>
+        </FormField>
+        <DialogActions busy={busy} submitLabel={tn('fields.add')} onCancel={props.onClose} />
+      </form>
+    </ModalDialog>
   );
 }
 

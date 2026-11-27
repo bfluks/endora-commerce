@@ -1,5 +1,10 @@
-import { defineModuleManifest, defineModuleSettingsManifest } from '@endora-commerce/contracts';
-import { NEWSLETTER_SETTING_CODES } from '@endora-commerce/contracts';
+import {
+  defineModuleManifest,
+  defineModuleSettingsManifest,
+  NEWSLETTER_HOOKABLE_ACTIONS,
+  NEWSLETTER_SETTING_CODES,
+  toHookableActionDeclaration,
+} from '@endora-commerce/contracts';
 
 /**
  * Newsletter module (feature 048). Owns the subscriber list, tags, custom
@@ -8,7 +13,8 @@ import { NEWSLETTER_SETTING_CODES } from '@endora-commerce/contracts';
  * tracking. Bulk delivery is independent of the transactional-email transport.
  * The SMTP connection + credentials come from a reusable `email_adapter`
  * credential configuration referenced by `newsletter.email_credentials`
- * (feature 058); when unset, dispatch uses the console (dev) sink.
+ * (feature 058); when unset, a production instance refuses campaign sends and a
+ * development or test one uses the console sink (issue #1334).
  */
 export const newsletterSettingsManifest = defineModuleSettingsManifest({
   moduleCode: 'newsletter',
@@ -45,11 +51,29 @@ export const newsletterSettingsManifest = defineModuleSettingsManifest({
       code: NEWSLETTER_SETTING_CODES.EMAIL_CREDENTIALS,
       name: 'Email credentials',
       description:
-        'Reference a reusable Email adapter credential configuration (Credentials screen) providing the SMTP host/port/security/username/password. Required to send real mail; when empty, newsletter dispatch uses the console (dev) sink.',
+        'Reference a reusable Email adapter credential configuration (Credentials screen) providing the SMTP host/port/security/username/password. Required to send real mail: on a production instance, a campaign cannot be sent while it is empty or names a credential that cannot be used; a development or test instance writes the messages to the server log instead.',
       groupCode: 'newsletter',
       valueType: 'credential_ref',
       configurationType: 'email_adapter',
       defaultValue: '',
+    },
+    {
+      code: NEWSLETTER_SETTING_CODES.TRACKING_OPENS_ENABLED,
+      name: 'Track campaign opens',
+      description:
+        'Counts opens per recipient with an invisible image in campaign e-mails. Automation e-mails are never tracked.',
+      groupCode: 'newsletter',
+      valueType: 'boolean',
+      defaultValue: false,
+    },
+    {
+      code: NEWSLETTER_SETTING_CODES.TRACKING_CLICKS_ENABLED,
+      name: 'Track campaign link clicks',
+      description:
+        'Counts clicks per recipient and link by redirecting campaign links. Automation e-mails are never tracked.',
+      groupCode: 'newsletter',
+      valueType: 'boolean',
+      defaultValue: false,
     },
     {
       code: NEWSLETTER_SETTING_CODES.SENDER_FROM_EMAIL,
@@ -149,9 +173,84 @@ export const manifest = defineModuleManifest({
    * No `tokens`, for the same reason and from the same direction: there is no
    * raise site to put a `details.code` on the wire.
    */
-  errorCodes: [{ code: 'ALREADY_SUBSCRIBED' }],
+  errorCodes: [
+    { code: 'ALREADY_SUBSCRIBED' },
+    /**
+     * Issue #626 (#86) — the admin services' business-rule refusals, which were
+     * `VALIDATION_FAILED` with an English literal the envelope never replaces.
+     * Each is one refusal, so none declares `tokens`; the values its sentence
+     * names (a status, a key, a code) travel as scalar `details`.
+     */
+    { code: 'NEWSLETTER_AUTOMATION_ACTIVE' },
+    { code: 'NEWSLETTER_CAMPAIGN_NOT_CANCELLABLE' },
+    { code: 'NEWSLETTER_CAMPAIGN_NOT_EDITABLE' },
+    { code: 'NEWSLETTER_CUSTOM_FIELD_KEY_TAKEN' },
+    { code: 'NEWSLETTER_EMAIL_BLOCK_CODE_TAKEN' },
+    { code: 'NEWSLETTER_EMAIL_BLOCK_SYSTEM' },
+    { code: 'NEWSLETTER_PROVIDER_NOT_CONFIGURED' },
+    { code: 'NEWSLETTER_TAG_CODE_TAKEN' },
+    { code: 'NEWSLETTER_TAG_IN_USE' },
+  ],
   i18n: { bundlesDir: 'i18n' },
   docs: { dir: 'docs' },
+  /**
+   * Issue #1843 (`specs/176-command-hooks-outbox/`) — the subscriber writes a
+   * deployment may take part in: a new address subscribing, a known one
+   * subscribing again, and a double opt-in confirmation. Both phases each; the
+   * hooks are handed ids and codes only, never the address or a token.
+   */
+  hookableActions: [
+    toHookableActionDeclaration(NEWSLETTER_HOOKABLE_ACTIONS.subscribe),
+    toHookableActionDeclaration(NEWSLETTER_HOOKABLE_ACTIONS.resubscribe),
+    toHookableActionDeclaration(NEWSLETTER_HOOKABLE_ACTIONS.confirm),
+  ],
+  /**
+   * Feature 163 (US7, FR-029, research R-17) — the sign-up block that
+   * subscribes through this module. Declared here, by the module whose data it
+   * writes, as `blog` declares `blog.LatestPosts`; its React code is
+   * `@endora-commerce/cms-components`' `NewsletterSignupForm.tsx`, and it posts
+   * to the storefront's `/newsletter/subscribe`, which calls this module's
+   * public subscribe with `source: 'cms-block'`. While `newsletter` is off the
+   * block is filtered from every palette and render, and the handler answers
+   * 404. `cms.NewsletterSignup`, a form posting to any external endpoint,
+   * stays `cms`' (owner decision (a), 2026-10-23).
+   */
+  blocks: [
+    {
+      name: 'newsletter.Signup',
+      translatable: [
+        { path: 'heading', format: 'tiptap' },
+        { path: 'text', format: 'tiptap' },
+        { path: 'emailLabel' },
+        { path: 'placeholder' },
+        { path: 'buttonLabel' },
+        { path: 'topicsLegend' },
+        { path: 'topics[].label' },
+        { path: 'consentLabel', format: 'tiptap' },
+        { path: 'messages.pending' },
+        { path: 'messages.active' },
+        { path: 'messages.consent' },
+        { path: 'messages.email' },
+        { path: 'messages.topics' },
+        { path: 'messages.unavailable' },
+        // Feature 169 (US7): the subscriber attributes' prose and the message for a required one left empty.
+        { path: 'attributes[].label' },
+        { path: 'attributes[].placeholder' },
+        { path: 'messages.fields' },
+      ],
+      labelKey: 'blocks.signup.label',
+      descriptionKey: 'blocks.signup.description',
+      category: 'forms',
+      contexts: ['cms'],
+      fields: {},
+      responsiveFields: [],
+      weight: 5,
+    },
+  ],
+  // The palette section the block sits in, declared beside it (the manifest
+  // validator refuses a block whose section its manifest does not declare);
+  // merged by key with `cms`'s.
+  blockCategories: [{ key: 'forms', titleKey: 'blocks.category.forms', contexts: ['cms'], weight: 70 }],
   permissions: [
     { code: 'newsletter:read', label: 'View newsletter' },
     {
@@ -185,8 +284,8 @@ export const manifest = defineModuleManifest({
      * deletes, arriving as declarations (Principle XVI).
      *
      * Same destinations, same codes and the same keywords the hand-written
-     * rows carried, English and Polish alike — the palette an operator sees is
-     * unchanged. What changes is who answers for it: a hand-written row is a
+     * rows carried — the English in `keywords`, the Polish under `keywordsKey`
+     * since issue #573 — so the palette an operator sees is unchanged. What changes is who answers for it: a hand-written row is a
      * copy the server was never asked about, so it went on advertising these
      * two screens after an operator switched `newsletter` off, and this module
      * is one that really can be switched off.
@@ -198,7 +297,8 @@ export const manifest = defineModuleManifest({
       icon: 'Inbox',
       targetRoute: '/newsletter/campaigns',
       requiredPermission: 'newsletter:read',
-      keywords: ['newsletter', 'campaigns', 'email', 'marketing', 'kampanie'],
+      keywords: ['newsletter', 'campaigns', 'email', 'marketing'],
+      keywordsKey: 'actions.openCampaigns.keywords',
       weight: 232,
     },
     {
@@ -208,8 +308,46 @@ export const manifest = defineModuleManifest({
       icon: 'Inbox',
       targetRoute: '/newsletter/automations',
       requiredPermission: 'newsletter:read',
-      keywords: ['newsletter', 'automations', 'workflow', 'automatyzacje'],
+      keywords: ['newsletter', 'automations', 'workflow'],
+      keywordsKey: 'actions.openAutomations.keywords',
       weight: 233,
+    },
+    // Issue #516 (Principle XVI): the last three sidebar screens. Tags and
+    // blocks open on `newsletter:read`; the provider screen opens on
+    // `newsletter:write`, its route's code and the code of its save and its
+    // test send (`check:action-route-permissions` ledgers the read-gated GET).
+    {
+      id: 'open-newsletter-tags',
+      labelKey: 'actions.openTags.label',
+      descriptionKey: 'actions.openTags.description',
+      icon: 'Inbox',
+      targetRoute: '/newsletter/tags',
+      requiredPermission: 'newsletter:read',
+      keywords: ['newsletter', 'tags', 'fields', 'subscribers'],
+      keywordsKey: 'actions.openTags.keywords',
+      weight: 234,
+    },
+    {
+      id: 'open-newsletter-blocks',
+      labelKey: 'actions.openBlocks.label',
+      descriptionKey: 'actions.openBlocks.description',
+      icon: 'Inbox',
+      targetRoute: '/newsletter/blocks',
+      requiredPermission: 'newsletter:read',
+      keywords: ['newsletter', 'blocks', 'email', 'header', 'footer'],
+      keywordsKey: 'actions.openBlocks.keywords',
+      weight: 235,
+    },
+    {
+      id: 'open-newsletter-provider',
+      labelKey: 'actions.openProvider.label',
+      descriptionKey: 'actions.openProvider.description',
+      icon: 'Inbox',
+      targetRoute: '/newsletter/provider',
+      requiredPermission: 'newsletter:write',
+      keywords: ['newsletter', 'provider', 'sender', 'smtp', 'throttle'],
+      keywordsKey: 'actions.openProvider.keywords',
+      weight: 236,
     },
   ],
 });

@@ -25,6 +25,33 @@ Zatwierdzone polecenie zapisuje więc jeden wiersz audytu i raz emituje zdarzeni
 nie zapisuje wiersza audytu i nie emituje zdarzenia. Zapis, wpis audytu i zdarzenie nigdy nie mogą
 sobie przeczyć.
 
+### Praca, która musi poczekać na zatwierdzenie: `EventBus.afterScope`
+
+Zdarzenie jest wstrzymywane, ponieważ `CommandBus.run` obejmuje swoją transakcję zakresem
+`EventBus.run`, a zakres buforuje każde `emit()`, dopóki jego funkcja się nie zakończy. Zapis, który
+musi zrobić coś **jeszcze** dopiero po zatwierdzeniu — na przykład usunąć z pamięci podręcznej dane,
+które zatwierdzenie czyni nieaktualnymi — odkłada to do tego samego zakresu przez
+`eventBus.afterScope(fn)`:
+
+- wewnątrz zakresu `fn` trafia do kolejki najbardziej wewnętrznego z nich. Gdy zakres zakończy się
+  powodzeniem, funkcje z kolejki są wykonywane po kolei, każda z oczekiwaniem na wynik, i dopiero
+  **potem** wysyłane są zbuforowane zdarzenia — subskrybent nigdy nie zobaczy tego, co `fn` miała
+  zastąpić;
+- jeśli zakres zgłosi błąd, kolejka jest odrzucana razem ze zdarzeniami;
+- poza jakimkolwiek zakresem `fn` jest wykonywana od razu, z oczekiwaniem na wynik.
+
+Odłożona funkcja jest odizolowana tak samo jak procedura obsługi zdarzenia: jeśli zgłosi błąd,
+błąd jest zapisywany w logu, pozostałe odłożone funkcje nadal są wykonywane, a zbuforowane zdarzenia
+nadal są wysyłane. Zakres nie kończy się błędem, ponieważ zapis został już zatwierdzony. Moduł zapisujący przynależność do kanałów sprzedaży używa
+jej do usunięcia wpisu z pamięci podręcznej dostępu, gdy wywołujący przekazuje `em` swojej transakcji
+(zgłoszenie #1926). Zwykłe `em.transactional(...)` poza poleceniem nie ma własnego zakresu; aby
+uzyskać tę samą kolejność, należy objąć je wywołaniem `eventBus.run(...)`.
+
+To nie jest procedura `afterCommit`: te są deklarowane dla akcji z hookami i wykonywane później z
+kolejki dostarczeń, co najmniej raz i w dowolnej kolejności — to właściwy kontrakt dla zewnętrznego
+efektu ubocznego i niewłaściwy dla usunięcia danych z pamięci podręcznej, od którego zależy już
+następne żądanie.
+
 ## Budowa polecenia
 
 ```ts
@@ -35,6 +62,9 @@ interface Command<TResult> {
   capture?(ctx): Promise<AuditState>;                 // optional pre-state
   run(ctx): Promise<{ result: TResult; before?; after?; skipAudit? }>;
   event?(result): CommandEvent | undefined;           // dispatched once on commit
+  hookData?(result): unknown;                         // required when the action is hookable
+  outboxData?(result): OutboxData;                    // afterCommit data, ids and codes only
+  extensions?: Record<string, unknown>;               // caller input for hook modules, by module id
 }
 ```
 
@@ -53,15 +83,227 @@ samej transakcji i ustalają użytkownika z bieżącego `TenantContext`:
 - **`recordAuditFromContext(auditLog, em, input)`** — lżejsze uzupełnienie
   (`packages/platform/src/commands/audit-from-context.ts`). Zapisuje wpis audytu w `em`, którym
   wywołujący już dysponuje, a zatwierdza go istniejące wywołanie `flush()`. Używaj go, gdy zapis
-  już działa we własnej transakcji albo w `persistAndFlush(...)` i nie da się go objąć transakcją
+  już działa we własnej transakcji albo w `persist(...).flush()` i nie da się go objąć transakcją
   Command Busa bez przebudowy. Użytkownik jest tu ustalany w miarę możliwości: bez kontekstu (np.
-  przy samodzielnej rejestracji przed zalogowaniem albo w workerze) zapisuje puste identyfikatory
-  użytkownika zamiast rzucać wyjątek, więc zapisy w tle też są audytowane. Kod, który *musi* znać
-  użytkownika, używa Command Busa.
+  w workerze, który go nie otworzył) zapisuje puste identyfikatory użytkownika zamiast rzucać
+  wyjątek, więc zapisy w tle też są audytowane. Kod, który *musi* znać użytkownika, używa Command
+  Busa. Żądanie anonimowe nie jest takim przypadkiem: ma kontekst systemowy, więc zapis przed
+  zalogowaniem, na przykład samodzielna rejestracja w storefroncie, działa jako polecenie
+  (`organization.register`) z pustym użytkownikiem.
 
 Większość zapisów w modułach korzysta z małej prywatnej metody pomocniczej
 `#audit(em, action, objectId, before, after)`, delegującej do `recordAuditFromContext`, dzięki
 czemu wywołanie audytu zajmuje w każdym miejscu zapisu jeden wiersz.
+
+## Co zawiera wpis audytu
+
+Dziennik audytu to jedna tabela całej platformy, czytana z jednym uprawnieniem
+(`audit_log:read`) bez względu na to, które Organizacje czytający widzi. Dlatego dla **rekordu
+o zakresie dzierżawcy** (encji `@OrgScoped`, `@CustomerScoped`, `@TransitivelyScoped` lub
+`@RuleScoped`) stan przed i po zapisany przez polecenie zawiera **nazwy i strukturę, nigdy
+wartości**: identyfikatory, numery dokumentów, kody statusów i inne kody, wartości logiczne,
+liczniki, daty oraz `changedFields` / `changedCustomFields`, czyli listę tego, co się zmieniło.
+Tytuły, opisy, kwoty, wartości pól własnych, dane osobowe ani identyfikator Organizacji lub Konta
+klienta, do którego rekord należy, do niego nie trafiają. Moduł, którego historia rekordu pokazuje
+wartości, trzyma je we własnym magazynie, zapisywanym w tym samym poleceniu i czytanym wyłącznie
+przez ścieżkę dostępu rekordu z jego zakresem; wpis audytu wskazuje ten wiersz przez
+`valueChangeId`. Rekordy globalne platformy (katalog, ustawienia, słowniki) nadal mogą zapisywać
+wartości. Regułę i obowiązek testowy opisuje w repozytorium `specs/conventions/audit-state.md`
+(zgłoszenie #470).
+
+## Hooki modułów (`beforeCommit`) {#command-hooks-beforecommit}
+
+Moduł może brać udział w **zapisie innego modułu** bez jego forkowania, ale tylko w zapisie, który
+moduł-właściciel otworzył dla hooków. Właściciel **deklaruje** akcję polecenia jako dostępną dla
+hooków: publikuje typowaną referencję w `@endora-commerce/contracts` i wymienia ją w
+`hookableActions` swojego manifestu. `organizations` deklaruje kilka; wymienia je strona modułu. Każdy
+moduł — moduł rdzenia, moduł nakładki wdrożenia albo zainstalowany pakiet — rejestruje wtedy hook:
+
+```ts
+import { ORGANIZATION_HOOKABLE_ACTIONS as ORG } from '@endora-commerce/contracts';
+import { CommandHookRefusal } from '@endora-commerce/platform/commands';
+
+export function registerModule(ctx: ModuleContext): void {
+  ctx.commandHooks([
+    {
+      id: 'refuse-unserved-country',
+      on: ORG.register,
+      phase: 'beforeCommit',
+      handler: ({ data }) => {
+        if (!SERVED.has(data.organization.registeredAddress.country)) {
+          throw new CommandHookRefusal(409, ACME_COUNTRY_NOT_SERVED, 'We do not serve this country.');
+        }
+      },
+    },
+  ]);
+}
+```
+
+**Kiedy działa.** Wewnątrz transakcji polecenia, po `run` właściciela i przed jego wpisem audytu:
+`capture → run → hooki → wpis audytu → zdarzenie → commit`. Hook dostaje zadeklarowane przez
+właściciela `data` (typowane przez referencję, odzwierciedlające niezatwierdzony zapis), to samo
+`em` i tego samego aktora oraz `ctx.run(child)`, by uruchomić w tej samej transakcji własne
+polecenie albo polecenie innego właściciela, z jego własnym wpisem audytu.
+
+**Weto.** Hook odmawia, rzucając `HttpError` z kodem, który jego moduł deklaruje i tłumaczy
+(`CommandHookRefusal` to czytelniejsza podklasa). Całe polecenie jest wycofywane — wiersz
+właściciela, każde polecenie potomne, każdy wpis i zdarzenie — a wywołujący dostaje ten status i
+kod. Każdy inny wyjątek również wycofuje zapis i daje odpowiedź `500`.
+
+**To, co hook zapisał, jest nazwane w jedynym wpisie właściciela.** Hook zapisujący własne tabele
+wywołuje `ctx.noteAuditChanges(['x_acme_erp_code'])`, a wpis właściciela dostaje
+`stateAfter.extensions.<moduleId>.changedFields`. Tylko nazwy: szyna odrzuca wszystko, co nie jest
+nazwą pola, więc reguła „nazwy, nie wartości” w audycie obowiązuje także hooki. Zgłoszone zmiany
+wymuszają wpis: jeśli właściciel odpowiedział `skipAudit`, a hook zgłosił zapis, wpis i tak powstaje,
+z `stateBefore: null` i `stateAfter: { extensions }`.
+
+**Dane rozszerzeń.** Wywołujący może przekazać w poleceniu `extensions: { <moduleId>: … }`. Każdy
+hook widzi tylko fragment własnego modułu jako `ctx.extension` i sam go waliduje. Klucz, którego nie
+przejmuje żaden obecny moduł z hookiem na tej akcji, jest odrzucany kodem
+`422 COMMAND_EXTENSION_UNCLAIMED`, zanim cokolwiek zostanie zapisane, więc literówka albo wyłączony
+moduł nigdy nie gubią danych po cichu. `currentCommandHookOrigin()` mówi kodowi na ścieżce
+asynchronicznej hooka, który hook właśnie działa.
+
+**Wyłączony znaczy wyłączony.** Hook, którego moduł jest wyłączony — na dowolnej z dwóch osi
+obecności — jest pomijany dla danego polecenia; decyzja zapada przy każdym wywołaniu, bez
+restartu. Zapis zachowuje się tak, jakby modułu nie zainstalowano.
+
+**Kompozycja odrzuca to, czego nie da się uporządkować albo co nie jest oferowane.** Przy starcie,
+po rejestracji wszystkich modułów i przed jakimkolwiek hookiem startowym, platforma odrzuca: hook na
+akcji, której nie deklaruje żaden moduł; fazę, której właściciel nie oferuje; jedną akcję
+zadeklarowaną przez dwa moduły; powtórzony identyfikator hooka w module; moduł z hookiem, którego
+`dependencies` w manifeście nie sięgają właściciela; oraz dwa moduły z hookami na jednej akcji bez
+ścieżki zależności między nimi. Hooki działają w kolejności zależności (moduł po każdym module, od
+którego zależy; hooki jednego modułu w kolejności rejestracji). Gdy dwa moduły są niezależne,
+kolejność ustala wdrożenie w swoim `divergence.ts`:
+
+```ts
+commandHookOrder: { 'organization.register': ['acme_erp', 'acme_crm'] }, // first runs first
+```
+
+Wpis sprzeczny z zależnością jest odrzucany. Hooki pojawiają się w raporcie rozbieżności wdrożenia
+jako `command-hook`, a `GET /api/v1/admin/command-hooks` (za uprawnieniem `platform.modules.read`)
+zwraca bieżący plan wykonania.
+
+**Zasady dla autorów hooków.** Zapisuj tylko tabele własnego modułu albo uruchamiaj polecenie
+właściciela przez `ctx.run` — nigdy tabelę innego modułu. Nie wywołuj usług zdalnych: transakcja
+jest otwarta, a wolny hook trzyma blokady wierszy właściciela. Hook zagnieżdżający polecenia, które
+powtarzają się we własnym łańcuchu, albo zagnieżdżający głębiej niż osiem poziomów, jest
+odrzucany kodem `500 COMMAND_HOOK_CYCLE`.
+
+**Zasady dla właścicieli.** Deklaruj tylko polecenie, którego `run` jest kompletny i które nie jest
+odwracalne (cofnięcie przywraca tylko to, co zapisał właściciel). Dostarcz `hookData` — szyna
+odrzuca polecenie z hookami bez niego (`500 COMMAND_HOOK_DATA_MISSING`) — oraz `outboxData` dla fazy
+`afterCommit` (odrzucane tak samo) i sprawdzaj każde zadeklarowane polecenie wobec jego referencji funkcją
+`expectHookableCommand` z `@endora-commerce/test-kit/command-hooks`. Nazwa akcji, fazy i typy danych
+są publicznym kontraktem.
+
+## Po zatwierdzeniu: odbiorcy `afterCommit` i kolejka dostarczeń {#aftercommit-outbox}
+
+Praca, która musi się wykonać **po** zapisie właściciela — na przykład powiadomienie systemu ERP o
+rejestracji organizacji — trafia do odbiorcy `afterCommit` na tej samej zadeklarowanej akcji.
+Rejestruje się go tym samym wywołaniem `ctx.commandHooks` i nigdy nie jest uruchamiany wewnątrz
+zapisu:
+
+```ts
+import { ORGANIZATION_HOOKABLE_ACTIONS as ORG } from '@endora-commerce/contracts';
+import { PermanentOutboxFailure } from '@endora-commerce/platform/commands';
+
+ctx.commandHooks([
+  {
+    id: 'notify-erp',
+    on: ORG.register,
+    phase: 'afterCommit',
+    handler: async ({ messageId, data, causation }) => {
+      const answer = await erp.registered(data.organizationId, { idempotencyKey: messageId });
+      if (answer.rejected) throw new PermanentOutboxFailure('acme-erp-rejected', answer.reason);
+    },
+  },
+]);
+```
+
+**Zapisywane w transakcji właściciela.** Dla każdego obecnego odbiorcy `afterCommit` szyna poleceń
+zapisuje jeden wiersz w platformowej tabeli `command_outbox`, na `em` samego polecenia, po wpisie
+audytu: `capture → run → hooki → wpis audytu → zdarzenie → wiersze kolejki dostarczeń → zatwierdzenie`. Wiersze
+zatwierdzają się razem z zapisem albo wcale — wycofane polecenie nie zostawia żadnego — a odbiorca,
+którego moduł jest wyłączony, nie dostaje wiersza. Na tym polega różnica wobec subskrybenta zdarzeń,
+który działa „w miarę możliwości” w procesie żądania po zatwierdzeniu i ginie, jeśli ten proces
+zakończy się wcześniej.
+
+**Tylko identyfikatory i kody.** Wiersz przechowuje `outboxData` właściciela, czyli listę 1 z
+`audit-state.md`: identyfikatory, kody, wartości logiczne, liczniki, daty i nazwy pól. Tabela jest
+globalna dla platformy, więc szyna odrzuca dane kolejki dostarczeń z zagnieżdżonym obiektem albo z ciągiem
+dłuższym niż kod lub zawierającym białe znaki albo `@` (adres e-mail to jedyna dana osobowa o kształcie
+kodu) — podaje klucz, nigdy wartość. Wszystko inne odbiorca
+odczytuje ponownie przez porty właściciela.
+
+**Dostarczane co najmniej raz.** Tabelę opróżnia proces roboczy: harmonogram zadań BullMQ uruchamia
+się co 10 sekund, a zatwierdzenie, które zapisało wiersze, dodaje jeszcze jedno zdeduplikowane
+wybudzenie, na które szyna nie czeka. Jeśli w chwili zatwierdzenia Redis nie działa, ginie
+wybudzenie, a nie wiersz: dostarczy go następny cykl. Wiersze są pobierane przez
+`for update skip locked` z pięciominutową dzierżawą, więc dwa procesy robocze nigdy nie przekażą
+jednego wiersza dwóm odbiorcom naraz. Partia jest dostarczana wiersz po wierszu w ramach dzierżawy
+uzyskanej przy pobraniu, a wiersz, na który kolej przychodzi po jej wygaśnięciu, zostaje dla
+następnego odzyskania, zamiast być dostarczony z opóźnieniem. Pojedynczy odbiorca, który sam działa
+dłużej niż dzierżawa, może jednak zobaczyć swój wiersz odzyskany i dostarczony ponownie, zanim
+skończy, więc odbiorca może zostać uruchomiony dwa razy: deduplikuj po `messageId`, czyli identyfikatorze wiersza, stałym
+między ponownymi próbami.
+
+**W kontekście organizacji.** Każdy wiersz jest dostarczany w zakresie przypiętym do organizacji,
+której dotyczy (`single-org`, z systemem jako aktorem), albo w systemowym zakresie procesu
+opróżniającego, gdy wiersz nie ma organizacji. Aktor i identyfikator żądania zapisane przy
+zatwierdzeniu trafiają do `causation`, a identyfikator żądania jest też identyfikatorem żądania
+zakresu dostarczenia, więc polecenie uruchomione przez odbiorcę zapisuje żądanie, które je
+spowodowało. Uprawnienia pierwotnego aktora nigdy nie są przywracane.
+
+**Ponowne próby, potem martwe wiersze.** Nieudane dostarczenie jest ponawiane po
+`min(30 s · 2^(n-1), 1 h)`, maksymalnie 10 razy, po czym wiersz staje się martwy. Odbiorca rzuca
+`PermanentOutboxFailure(code, message)`, aby od razu oznaczyć wiersz jako martwy. Wiersz przechowuje
+kod błędu i klasę błędu, nigdy jego komunikat. Wiersz, którego moduł odbiorcy jest wyłączony, czeka,
+nie zużywając próby, i zostaje dostarczony po ponownym włączeniu modułu. Wiersz, którego moduł jest
+obecny, ale nie rejestruje już odbiorcy, staje się martwy z kodem `hook-unregistered`. Dostarczone
+wiersze są usuwane po 7 dniach, martwe po 90. `module:uninstall --hard <moduł>` usuwa wiersze tego
+modułu; zwykła deinstalacja je zachowuje.
+
+W odróżnieniu od hooków `beforeCommit` odbiorcy `afterCommit` na jednej akcji nie są względem siebie
+uporządkowani — każdy to osobny wiersz, dostarczany osobno — i nie potrzebują wpisu w
+`commandHookOrder`. Wewnątrzprocesowy `EventBus` i jego subskrybenci pozostają bez zmian; kolejka
+dostarczeń to druga, trwała ścieżka tylko dla tych odbiorców.
+
+## Podgląd: ekran *Hooki modułów* {#command-hooks-screen}
+
+**Platforma → Hooki modułów** w panelu administracyjnym (`/platform/command-hooks` albo ⌘K / CTRL+K
+*hooki modułów*; *kolejka dostarczeń* otwiera od razu drugą kartę) pokazuje obie połowy. To ekran samej
+platformy, a nie żadnego modułu. Otwiera go uprawnienie do dowolnej z kart, a karta, do której
+administrator nie ma dostępu, nie jest pokazywana: ktoś z samym uprawnieniem do kolejki trafia od razu
+na kolejkę.
+
+- **Plan wykonania** — za uprawnieniem `platform.modules.read`, z
+  `GET /api/v1/admin/command-hooks`. Jedna karta na każdą zadeklarowaną akcję z jej właścicielem,
+  hookami `beforeCommit` jako listą numerowaną w kolejności wykonania i odbiorcami `afterCommit` jako
+  listą nienumerowaną: w odpowiedzi mają `position: null`, bo kolejka dostarczeń nie obiecuje kolejności między
+  wierszami, a kolejność listy (identyfikator modułu, potem kolejność rejestracji) służy tylko
+  stabilnemu widokowi. Przy każdym hooku widać, czy jego moduł jest włączony; wyłączony jest pomijany.
+- **Kolejka dostarczeń** — za uprawnieniem `platform.command_outbox.read`, z
+  `GET /api/v1/admin/command-outbox?status=dead|pending|in_flight&limit=&cursor=` (domyślnie martwe;
+  stronicowanie po kluczu `sequence` wiersza, od najnowszych). Wiersz pokazuje akcję, typ
+  i identyfikator obiektu, odbiorcę (`moduł#id`), liczbę prób, ostatni błąd, datę utworzenia oraz —
+  dla martwego wiersza datę niepowodzenia, dla oczekującego następną próbę — i nic więcej: `data`
+  wiersza nigdy nie jest zwracane, a błąd zapisano tylko jako kod i klasę.
+- **Ponowienie** — za uprawnieniem `platform.command_outbox.manage`, dostępne tylko przy martwym
+  wierszu. `POST /api/v1/admin/command-outbox/:id/retry` uruchamia polecenie `command_outbox.retry`,
+  które przywraca wiersz do stanu `pending`, gotowy od razu, bez zużytych prób, i zapisuje w audycie
+  `{ status: 'dead' } → { status: 'pending' }`. Nieznany identyfikator daje `404`; wiersz, który nie
+  jest martwy, daje `409 COMMAND_OUTBOX_NOT_DEAD`.
+
+**Przetłumacz swoje kody błędów.** Ekran pokazuje kod błędu w zapisanej postaci, a obok zdanie, jeśli
+istnieje: najpierw w paczce tłumaczeń modułu **odbiorcy**, potem platformy, pod kluczem
+`errors.<kod>`, a następnie `commandOutbox.failure.<kod>`. Kod `HttpError` zadeklarowany
+w `errorCodes` ma już swoje zdanie `errors.<KOD>`; kodowi `PermanentOutboxFailure`
+(`acme-erp-rejected`) daj wpis `commandOutbox.failure.<kod>` we własnych `i18n/en.json` i `pl.json` —
+rodzina `errors.*` należy do koperty błędu i przyjmuje wyłącznie kody SCREAMING_SNAKE. Platforma
+tłumaczy swoje trzy: `hook-unregistered`, `permanent-failure` i `handler-failed`. Kod, którego nikt nie
+tłumaczy, jest pokazywany bez zmian.
 
 ## Cofanie zmian
 
@@ -108,7 +350,9 @@ uzasadnienia.
 `scripts/check-command-coverage.ts` statycznie wskazuje — dla każdej metody **i każdego handlera
 trasy**, w każdym pliku `.ts` w katalogach, w których może leżeć kod modułu (każdy pakiet modułu,
 drzewo aplikacji i drzewo nakładki, wyznaczane przez `resolveModuleLayout()`) — wrażliwą zmianę
-(`persist*`, `nativeUpdate`, `nativeDelete`, `remove*`, `flush`), która nie jest ani audytowana,
+(`persist*`, `nativeUpdate`, `nativeDelete`, `remove*`, `flush`, `create`, `upsert`, `upsertMany`
+— cztery ostatnie tylko na EntityManagerze, bo `remove`, `create` i `upsert` są też zwykłymi
+nazwami metod serwisów), która nie jest ani audytowana,
 ani jawnie wyłączona, a także **podwójny audyt** (jednostkę, która jednocześnie wykonuje polecenie
 i audytuje ręcznie). Jednostka jest uznawana za pokrytą, gdy wykonuje polecenie, definiuje literał
 polecenia, zapisuje audyt (`auditLog.record`/`recordWithin`, `recordAuditFromContext` albo

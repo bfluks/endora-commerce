@@ -13,6 +13,7 @@ import {
   type EmailBlockSummary,
   type PatchEmailBlockRequest,
   type PutEmailBlockContentRequest,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import type { PuckDataTree } from '@endora-commerce/email-components/schema/envelope';
 import {
@@ -23,6 +24,7 @@ import {
 import { HttpError } from '@endora-commerce/platform/http';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
+import { assertEmailAssetsLinkable, type EmailAssetVisibility } from './linkable-assets.js';
 import { EmailBlock } from '../entities/email-block.entity.js';
 import { EmailBlockSalesChannel } from '../entities/email-block-sales-channel.entity.js';
 
@@ -39,6 +41,8 @@ export class EmailBlockService {
     private readonly auditLog?: AuditPort,
     /** The block names saved content may hold; the first-party set when not composed. */
     private readonly emailSafeNames: EmailSafeNames = FIRST_PARTY_EMAIL_NAMES,
+    /** Issue #1354 — asked before a save stores an asset id the block did not already hold. */
+    private readonly assets?: EmailAssetVisibility,
   ) {}
 
   #audit(
@@ -94,6 +98,7 @@ export class EmailBlockService {
   }
 
   private async loadOrThrow(em: EntityManager, id: string): Promise<EmailBlock> {
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, `Email block ${id} not found.`);
     const b = await em.findOne(EmailBlock, { id });
     if (!b) throw new HttpError(404, ERROR_CODES.NOT_FOUND, `Email block ${id} not found.`);
     return b;
@@ -126,7 +131,7 @@ export class EmailBlockService {
       isSystem: false,
       version: 1,
     });
-    await em.persistAndFlush(block);
+    await em.persist(block).flush();
     for (const scId of req.salesChannelIds ?? []) {
       em.persist(em.create(EmailBlockSalesChannel, { blockId: block.id, salesChannelId: scId, code: block.code }));
     }
@@ -146,7 +151,7 @@ export class EmailBlockService {
     if (req.active !== undefined && !b.isSystem) b.active = req.active;
     if (req.salesChannelIds !== undefined && !b.isSystem) {
       const current = await em.find(EmailBlockSalesChannel, { blockId: b.id });
-      await em.removeAndFlush(current);
+      await em.remove(current).flush();
       for (const scId of req.salesChannelIds) {
         em.persist(em.create(EmailBlockSalesChannel, { blockId: b.id, salesChannelId: scId, code: b.code }));
       }
@@ -163,6 +168,7 @@ export class EmailBlockService {
     if (req.expectedVersion !== b.version) {
       throw new HttpError(409, ERROR_CODES.VERSION_CONFLICT, 'Block was modified by someone else.');
     }
+    await assertEmailAssetsLinkable(this.assets, req.content, [b.content]);
     const env = (b.content as { schema_version?: number; languages?: Record<string, unknown> }) ?? {};
     const languages = { ...(env.languages ?? {}), [language]: req.content };
     b.content = { schema_version: env.schema_version ?? 1, languages };
@@ -176,9 +182,16 @@ export class EmailBlockService {
   async delete(id: string): Promise<void> {
     const em = this.emFactory();
     const b = await this.loadOrThrow(em, id);
-    if (b.isSystem) throw new HttpError(409, ERROR_CODES.VALIDATION_FAILED, 'System blocks cannot be deleted.');
+    // `blockCode`, not `code`: the error envelope reads `details.code` as the
+    // refusal token that picks the sentence (issue #638).
+    if (b.isSystem) {
+      throw new HttpError(409, ERROR_CODES.TRANSACTIONAL_EMAIL_SYSTEM_BLOCK, 'System blocks cannot be deleted.', {
+        blockId: b.id,
+        blockCode: b.code,
+      });
+    }
     const bridges = await em.find(EmailBlockSalesChannel, { blockId: b.id });
     this.#audit(em, 'email_block.delete', b.id, { code: b.code }, null);
-    await em.removeAndFlush([...bridges, b]);
+    await em.remove([...bridges, b]).flush();
   }
 }

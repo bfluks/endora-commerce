@@ -99,16 +99,22 @@ export type SelectionAvailabilityPort = (
   salesChannelId: string,
 ) => Promise<Map<string, { inStock: boolean }>>;
 
-/** Net unit price per product, in the feed's currency and price basis. */
+/** Net unit price per product, in the feed's currency and price basis, as a decimal string. */
 export type SelectionPricePort = (input: {
   productIds: string[];
   salesChannelId: string;
   currencyCode: string;
   priceListId: string | null;
-}) => Promise<Map<string, number>>;
+}) => Promise<Map<string, string>>;
 
 export interface SelectionScope {
   salesChannelId: string;
+  /**
+   * Feature 163 — the feed's language. The eligibility floor is effective
+   * availability at (channel, this language) for the anonymous reader, now;
+   * `catalog` resolves it against the channel's languages (absent = default).
+   */
+  languageCode?: string | null;
   selectionRule: ProductSelectionRule;
   /**
    * Needed only by a rule with a price criterion. Absent ⇒ such a rule matches
@@ -194,6 +200,8 @@ export class ProductSelectionService {
         filter: compiled.filter,
         afterId: cursor,
         limit: ID_PAGE_SIZE,
+        // Feature 163 — the floor is availability where the feed sells.
+        scope: { channelId: salesChannelId, languageTag: scope.languageCode ?? null },
       });
       if (rows.length === 0) return;
       const matched = await this.refine(compiled, rows, scope);
@@ -222,6 +230,7 @@ export class ProductSelectionService {
       return this.deps.productFilter.countSellable({
         productIds: channelIds,
         filter: compiled.filter,
+        scope: { channelId: salesChannelId, languageTag: scope.languageCode ?? null },
       });
     }
     let total = 0;
@@ -244,7 +253,7 @@ export class ProductSelectionService {
   async sampleProducts(
     scope: SelectionScope,
     limit: number,
-  ): Promise<Array<{ id: string; sku: string; name: Record<string, string> }>> {
+  ): Promise<Array<{ id: string; sku: string; name: string }>> {
     if (limit <= 0) return [];
     const ids: string[] = [];
     for await (const page of this.iterateProductIds(scope)) {
@@ -307,7 +316,7 @@ export class ProductSelectionService {
             currencyCode: scope.currencyCode,
             priceListId: scope.priceListId ?? null,
           })
-        : new Map<string, number>();
+        : new Map<string, string>();
 
     const matched: string[] = [];
     for (const row of rows) {

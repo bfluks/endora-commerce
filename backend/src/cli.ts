@@ -48,8 +48,15 @@
  *
  * ## Usage
  *
+ * This file is this repository's; in a checkout of it:
+ *
  *   pnpm --filter backend run cli -- --list
  *   pnpm --filter backend run cli -- <module id> <command> [args…]
+ *
+ * An instance renders its own `backend/src/cli.ts` and reaches it from its
+ * root as `pnpm run cli --list` and `pnpm run cli <module id> <command>` —
+ * the repository form matches no project there, prints `No projects matched
+ * the filters` and exits 0 having run nothing (issue #133).
  *
  * The named aliases in `backend/package.json` — `search:reindex`,
  * `admin:create`, `i18n:reload` and the rest — are thin wrappers over this.
@@ -69,7 +76,13 @@ import { runCli } from '@endora-commerce/platform/cli';
 
 import { composeApp } from './composition.js';
 import { resolvedManifestEntries } from './lifecycle/registered-manifests.js';
-import { deploymentRoot } from './overlay/overlay-roots.js';
+import { deploymentRoot, deploymentSourceRoot } from './overlay/overlay-roots.js';
+
+/** The sources the compiled overlays are judged against (#1848, FR-016); none under `tsx`'s. */
+const sourceRoot = (): { deploymentSourceRoot?: string } => {
+  const root = deploymentSourceRoot();
+  return root === undefined ? {} : { deploymentSourceRoot: root };
+};
 
 await runCli({
   deploymentRoot: deploymentRoot(),
@@ -86,7 +99,7 @@ await runCli({
     // composition performs, kept off a one-shot command's critical path
     // (D-157.2).
     process.env['BACKEND_ROLE'] = 'api';
-    return await composeApp({ deploymentRoot: deploymentRoot() });
+    return await composeApp({ deploymentRoot: deploymentRoot(), ...sourceRoot() });
   },
   demoComposition: async (input) => ({ found: true, composition: createDemoComposition(input) }),
 });

@@ -100,6 +100,9 @@ export const manifest = defineModuleManifest({
     { code: 'INVOICE_LEDGER_VENDOR_ALREADY_ACTIVE' },
     { code: 'INVOICE_LEDGER_CREDENTIALS_MISSING' },
     { code: 'INVOICE_LEDGER_DELIVERY_NOT_RETRYABLE' },
+    // Issue #644 — a numbering mode change sent without `confirm: true`. No
+    // token: one refusal, and the modes travel as `details.from` / `to`.
+    { code: 'INVOICE_LEDGER_NUMBERING_CHANGE_UNCONFIRMED' },
   ],
   permissions: [
     {
@@ -122,7 +125,8 @@ export const manifest = defineModuleManifest({
       icon: 'ClipboardList',
       targetRoute: '/invoice-ledger/deliveries',
       requiredPermission: INVOICE_LEDGER_READ_PERMISSION,
-      keywords: ['ledger', 'deliveries', 'invoices', 'faktury'],
+      keywords: ['ledger', 'deliveries', 'invoices'],
+      keywordsKey: 'actions.openDeliveries.keywords',
       weight: 245,
     },
   ],

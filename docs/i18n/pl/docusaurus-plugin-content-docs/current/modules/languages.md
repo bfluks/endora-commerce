@@ -1,9 +1,9 @@
 ---
-title: languages
+title: Języki
 description: Lista obsługiwanych znaczników języków BCP-47 i reguła wartości zastępczej dla tłumaczeń
 ---
 
-# `languages`
+# Języki (`languages`)
 
 Lista znaczników języków BCP-47 obsługiwanych w danej instalacji. Moduł udostępnia publiczny odczyt
 `i18n/config`, na podstawie którego storefront i panel administracyjny budują wybór języka, oraz
@@ -36,8 +36,11 @@ unikalny na `(is_default) WHERE is_default = true`. Ustawienie nowego języka do
 zdjęcie oznaczenia ze starego i nadanie go nowemu w jednej transakcji MikroORM, aby indeks nie
 został naruszony w trakcie.
 
-`LanguageService.setDefault()` odrzuca wiersze z `isActive=false` (`409 VALIDATION_FAILED`), a
-`remove()` odmawia usunięcia wiersza, który jest obecnie domyślny.
+`LanguageService.setDefault()` odrzuca wiersze z `isActive=false`
+(`409 DICTIONARY_DEFAULT_ENTRY_INACTIVE`, `details.code: "language"` i kod języka w
+`details.entryCode`; do zgłoszenia #643 `409 VALIDATION_FAILED`), a `remove()` odmawia usunięcia
+wiersza, który jest obecnie domyślny. Utworzenie języka o istniejącym kodzie kończy się odpowiedzią
+`409 DICTIONARY_ENTRY_CODE_TAKEN`.
 
 ## Dane początkowe
 
@@ -63,22 +66,23 @@ kolejności:
 3. pierwsza wartość obecna w rekordzie;
 4. pusty string.
 
-`resolveRequestLocale(acceptLanguageHeader, activeLocales)` odczytuje nagłówek `Accept-Language`
-(z wagami q) i zwraca najlepiej dopasowany język spośród aktywnych, z dopasowaniem po samym języku,
-dzięki któremu `en-GB` pasuje do `en-US`. Gdy nic nie pasuje, zwraca skonfigurowany język domyślny.
+`LocaleService` nie odczytuje nagłówka `Accept-Language`. Język treści żądania wyznacza względem
+jego kanału sprzedaży funkcja `requestScopeLanguage` z `@endora-commerce/contracts` (z wagami q,
+dopasowanie dokładne, potem po samym języku, w przeciwnym razie język domyślny kanału), a język
+komunikatu backendu — `request.responseLanguage()`.
 
 Odczyt języka domyślnego jest przechowywany w pamięci podręcznej przez 60 sekund; zmiany w panelu
 wywołują `invalidateDefault()`, aby pamięć podręczna została wyczyszczona od razu po zmianie.
 
 ## Encje
 
-`Language` — naturalny klucz główny w postaci kodu BCP-47; `label`, `isDefault`, `isActive`,
-`sortOrder`.
+`Language` — naturalny klucz główny w postaci kodu BCP-47; `label`, `nativeLabel`, `isRtl`,
+`fallbackCode` (odwołanie do innego języka, `languages_fallback_fk`), `isDefault`, `isActive`,
+`sortOrder`. Kolumny `native_label`, `is_rtl`, `fallback_code` i klucz obcy ten moduł tworzy sam,
+w `20261114T003519_languages_dictionary_columns.ts` (issue #611); wcześniej robiła to tylko
+migracja początkowa modułu `dictionaries`. W bazie, która już je ma, migracja niczego nie zmienia.
 
 ## Punkty rozszerzenia
 
-- **Język domyślny dla kanału sprzedaży** — gdy kanał sprzedaży ma własny język, wstaw przed
-  `LocaleService.resolveRequestLocale()` mechanizm wyznaczania i używaj języka domyślnego kanału
-  zamiast globalnego.
 - **Wymiana tłumaczeń z systemami zewnętrznymi** — emituj zdarzenie domenowe przy zmianie
   przetłumaczonego pola i pozwól integracji przekazywać je do zewnętrznego procesu tłumaczeń.

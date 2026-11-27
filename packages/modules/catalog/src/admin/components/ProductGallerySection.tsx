@@ -1,0 +1,297 @@
+import { useEffect, useState, type ReactNode } from 'react';
+import { ArrowDown, ArrowUp, Plus } from 'lucide-react';
+import type { AssetDetail, AssetSummary } from '@endora-commerce/contracts';
+import { ApiError, apiClient, toAbsoluteAssetUrl } from '@endora-commerce/admin-kit/lib';
+import { Alert, AlertDescription, Button, EditorSection, Input, Label } from '@endora-commerce/admin-kit/ui';
+import { AssetPicker, ModalDialog, ScopedFieldGrid } from '@endora-commerce/admin-kit/components';
+import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { EditorField, useProductEditor } from './editor/editor-context.js';
+import { sectionTitle } from './editor/SectionBadge.js';
+import { RowRemoveButton } from './editor/RowRemoveButton.js';
+import { BooleanControl, SelectControl, TextControl } from './editor/scoped-controls.js';
+
+/**
+ * Feature 174 (T101, T147; `contracts/editor-ui.md` §3, §4, §11) — the product's images at the
+ * editor scope.
+ *
+ * The image set and its order are Global: adding, removing and reordering run at once as their
+ * own audited Commands ("Applies immediately") and are offered at Global only. Alt text,
+ * visibility and the three roles are scoped values (`gallery:<id>:altText`,
+ * `gallery:<id>:hidden`, `galleryRole:<label>`) staged with the editor's one Save. After an
+ * immediate action only the gallery family is re-read; staged changes stay, and a staged change
+ * of a removed image is dropped and announced by the page.
+ */
+
+const ROLE_LABELS = ['base_image', 'small_image', 'thumbnail'] as const;
+const ROLE_KEY = { base_image: 'baseImage', small_image: 'smallImage', thumbnail: 'thumbnail' } as const;
+
+function fileOf(url: string): string {
+  const last = url.split('?')[0]?.split('/').filter(Boolean).pop() ?? '';
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
+}
+
+type FocusTarget = { id: string; dir: 'up' | 'down' } | 'heading';
+
+export function GallerySection(): ReactNode {
+  const t = useTranslation('catalog');
+  const ctx = useProductEditor();
+  const data = ctx.state.data;
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [status, setStatus] = useState('');
+  /**
+   * Where focus goes once the list is re-read (WCAG 2.4.3): the moved image, or the heading after
+   * a removal. State set when the action has ended, not a ref set when it starts: an effect still
+   * pending from an earlier commit would otherwise take the target before the list is re-read and
+   * focus the button where it was (issue #841). A new object per action, so the same target twice
+   * is applied twice.
+   */
+  const [focusAfter, setFocusAfter] = useState<{ target: FocusTarget } | null>(null);
+  useEffect(() => {
+    if (focusAfter === null) return;
+    const { target } = focusAfter;
+    if (target === 'heading') {
+      const heading = document.getElementById('product-gallery-title');
+      heading?.setAttribute('tabindex', '-1');
+      heading?.focus();
+      return;
+    }
+    const row = document.querySelector(`[data-gallery-item="${target.id}"]`);
+    const same = row?.querySelector<HTMLElement>(`[data-move="${target.dir}"]`);
+    const other = row?.querySelector<HTMLElement>(`[data-move="${target.dir === 'up' ? 'down' : 'up'}"]`);
+    (same && same.getAttribute('aria-disabled') !== 'true' ? same : (other ?? same))?.focus();
+  }, [focusAfter]);
+  if (!data) return null;
+  const atGlobal = ctx.state.scope.level === 'global';
+  const structural = atGlobal && !ctx.readOnly;
+  const items = [...data.gallery.items].sort((a, b) => a.position - b.position);
+  const itemName = (id: string): string => {
+    const index = items.findIndex((i) => i.id === id);
+    const item = items[index];
+    return t('productEditor.gallery.itemOption', {
+      item: t('productEditor.gallery.itemName', { n: String(index + 1) }),
+      file: item ? fileOf(item.url) : '',
+    });
+  };
+  const base = `/api/v1/admin/catalog/products/${encodeURIComponent(ctx.productId)}/gallery`;
+
+  const immediate = async (run: () => Promise<unknown>, done: string, failed: string, focus: FocusTarget | null = null): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    try {
+      await run();
+      await ctx.refreshFamily('gallery');
+      setStatus(done);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.envelope.error.message : failed);
+    } finally {
+      setBusy(false);
+      if (focus !== null) setFocusAfter({ target: focus });
+    }
+  };
+
+  const move = (from: number, to: number): void => {
+    if (busy || to < 0 || to >= items.length) return;
+    const next = items.map((i) => i.id);
+    const [moved] = next.splice(from, 1);
+    if (moved === undefined) return;
+    next.splice(to, 0, moved);
+    void immediate(
+      () => apiClient.put(`${base}/order`, { orderedGalleryItemIds: next }),
+      t('productEditor.gallery.success.moved'),
+      t('productEditor.gallery.error.save'),
+      { id: moved, dir: to < from ? 'up' : 'down' },
+    );
+  };
+
+  const roleOptions = items.map((i) => ({ value: i.id, label: itemName(i.id) }));
+
+  return (
+    // `EditorSection` names its heading `${id}-title`: the focus target after a removal.
+    <EditorSection
+      id="product-gallery"
+      title={sectionTitle(t('productEditor.gallery.title'), structural, atGlobal ? undefined : t('productEditor.gallery.setGlobalOnly'))}
+      contentClassName="space-y-4"
+    >
+      <p role="status" className="sr-only">
+        {status}
+      </p>
+      {error ? (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
+      {items.length === 0 ? <p className="text-sm text-muted-foreground">{t('productEditor.gallery.empty')}</p> : null}
+      {/* Issue #1488 (CAT-06): rows divided by a rule, not a bordered box per image. */}
+      <ul className="divide-y divide-border">
+        {items.map((item, index) => {
+          const name = itemName(item.id);
+          return (
+            <li key={item.id} className="py-3 first:pt-0 last:pb-0" data-gallery-item={item.id}>
+              <div className="mb-3 flex flex-wrap items-center gap-3">
+                <img src={toAbsoluteAssetUrl(item.url)} alt="" className="h-16 w-16 rounded border object-cover" />
+                <span className="flex-1 text-sm font-medium">{name}</span>
+                {structural ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      // aria-disabled, not disabled: the pressed button keeps focus while the move runs.
+                      aria-disabled={busy || index === 0 ? true : undefined}
+                      data-move="up"
+                      className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50 max-lg:min-h-11"
+                      aria-label={t('productEditor.gallery.moveUp', { item: name })}
+                      onClick={(): void => move(index, index - 1)}
+                    >
+                      <ArrowUp className="size-4" aria-hidden="true" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      aria-disabled={busy || index === items.length - 1 ? true : undefined}
+                      data-move="down"
+                      className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50 max-lg:min-h-11"
+                      aria-label={t('productEditor.gallery.moveDown', { item: name })}
+                      onClick={(): void => move(index, index + 1)}
+                    >
+                      <ArrowDown className="size-4" aria-hidden="true" />
+                    </Button>
+                    <RowRemoveButton
+                      label={t('productEditor.gallery.action.removeItem', { item: name })}
+                      disabled={busy}
+                      onClick={(): void => setRemoving(item.id)}
+                    />
+                  </>
+                ) : null}
+              </div>
+              <ScopedFieldGrid>
+                <EditorField<string>
+                  fieldPath={`gallery:${item.id}:altText`}
+                  label={t('productEditor.gallery.field.altTextFor', { item: name })}
+                  textField
+                  emptyMeaning={t('productEditor.gallery.altEmptyMeaning')}
+                  note={item.assetAltText ? t('productEditor.gallery.assetAltFallback', { alt: item.assetAltText }) : undefined}
+                  render={(p): ReactNode => <TextControl {...p} maxLength={255} />}
+                />
+                <EditorField<boolean>
+                  fieldPath={`gallery:${item.id}:hidden`}
+                  label={t('productEditor.gallery.field.visibilityFor', { item: name })}
+                  render={(p): ReactNode => (
+                    <BooleanControl {...p} trueLabel={t('productEditor.visibility.hidden')} falseLabel={t('productEditor.visibility.shown')} />
+                  )}
+                />
+              </ScopedFieldGrid>
+            </li>
+          );
+        })}
+      </ul>
+
+      {items.length > 0 ? (
+        <EditorSection as="h3" title={t('productEditor.gallery.roles.title')}>
+          <ScopedFieldGrid>
+            {ROLE_LABELS.map((label) => (
+              <EditorField<string>
+                key={label}
+                fieldPath={`galleryRole:${label}`}
+                label={t(`productEditor.gallery.role.${ROLE_KEY[label]}`)}
+                emptyMeaning={t('productEditor.gallery.roles.emptyMeaning')}
+                render={(p): ReactNode => <SelectControl {...p} options={roleOptions} noneLabel={t('productEditor.gallery.roles.none')} />}
+              />
+            ))}
+          </ScopedFieldGrid>
+        </EditorSection>
+      ) : null}
+
+      {structural ? (
+        <AddGalleryItem
+          disabled={busy}
+          onAdd={(assetId): Promise<void> =>
+            immediate(
+              () => apiClient.post(base, { assetId, labels: [] }),
+              t('productEditor.gallery.success.add'),
+              t('productEditor.gallery.error.add'),
+            )
+          }
+        />
+      ) : null}
+
+      {removing ? (
+        <ModalDialog
+          title={t('productEditor.gallery.removeTitle', { item: itemName(removing) })}
+          busy={busy}
+          onClose={(): void => setRemoving(null)}
+          footer={
+            <>
+              <Button type="button" variant="outline" disabled={busy} onClick={(): void => setRemoving(null)}>
+                {t('productEditor.gallery.removeCancel')}
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={busy}
+                onClick={(): void => {
+                  const id = removing;
+                  setRemoving(null);
+                  void immediate(
+                    () => apiClient.delete(`${base}/${id}`),
+                    t('productEditor.gallery.success.remove'),
+                    t('productEditor.gallery.error.delete'),
+                    'heading',
+                  );
+                }}
+              >
+                {t('productEditor.gallery.removeConfirm')}
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm">{t('productEditor.gallery.removeBody')}</p>
+        </ModalDialog>
+      ) : null}
+    </EditorSection>
+  );
+}
+
+function AddGalleryItem({ disabled, onAdd }: { disabled: boolean; onAdd(assetId: string): Promise<void> }): ReactNode {
+  const t = useTranslation('catalog');
+  const [picked, setPicked] = useState<{ id: string; filename: string } | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const onPick = (asset: AssetSummary | AssetDetail): void => {
+    setPicked({ id: asset.id, filename: asset.filename });
+    setPickerOpen(false);
+  };
+  return (
+    <div className="space-y-2 border-t pt-4" role="group" aria-label={t('productEditor.gallery.addTitle')}>
+      {pickerOpen ? (
+        <AssetPicker acceptMimePrefix="image/" allowUpload onSelect={onPick} onClose={(): void => setPickerOpen(false)} />
+      ) : null}
+      <Label htmlFor="gallery-new-asset">{t('productEditor.gallery.field.asset')}</Label>
+      <div className="flex flex-wrap items-center gap-2">
+        <Input id="gallery-new-asset" readOnly value={picked?.filename ?? ''} placeholder={t('productEditor.gallery.field.noAsset')} />
+        <Button type="button" variant="outline" size="sm" className="max-lg:min-h-11" onClick={(): void => setPickerOpen(true)}>
+          {t('productEditor.gallery.action.pickOrUpload')}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          className="max-lg:min-h-11"
+          disabled={disabled || !picked}
+          onClick={(): void => {
+            if (!picked) return;
+            void onAdd(picked.id).then(() => setPicked(null));
+          }}
+        >
+          <Plus aria-hidden="true" />
+          {t('productEditor.gallery.action.add')}
+        </Button>
+      </div>
+    </div>
+  );
+}

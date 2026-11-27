@@ -1,9 +1,9 @@
 ---
-title: webhooks
+title: Webhooki
 description: Subskrypcje zdarzeń wychodzących podpisywanych HMAC
 ---
 
-# `webhooks`
+# Webhooki (`webhooks`)
 
 Subskrypcje zdarzeń wychodzących podpisywanych HMAC. Zdarzenia domenowe z działającej w procesie
 szyny zdarzeń są przekazywane do kolejki BullMQ; worker podpisuje każdą wysyłkę i wysyła ją
@@ -33,6 +33,28 @@ sekcja *Subscribing to webhooks* w przewodniku po integracjach Endory.
 Do 8 prób na wysyłkę, z wykładniczo rosnącym odstępem od 1 s i limitem czasu 10 s na próbę. Po
 ostatniej próbie wysyłka przechodzi w stan `dead_lettered`. Endpoint ponowienia kopiuje wiersz
 `failed` / `dead_lettered` jako nową wysyłkę `pending`.
+
+## Przechowywanie historii wysyłek
+
+Każdy wiersz wysyłki przechowuje treść zdarzenia w postaci, w jakiej została wysłana, oraz
+odpowiedź odbiorcy. Treść może zawierać dane osobowe, na przykład powód zablokowania organizacji
+podany przez operatora, dlatego historia jest przechowywana przez ograniczony czas. Raz dziennie
+usuwana jest każda zakończona wysyłka (`succeeded`, `failed` lub `dead_lettered`) starsza niż
+`webhooks.delivery_retention_days`. Domyślnie jest to 365 dni, tyle samo co okres przechowywania
+usuniętego konta klienta, więc gdy usunięty klient zostaje zanonimizowany, wysyłki zapisane przed
+usunięciem już nie istnieją. Wartość spoza zakresu 1–3650 pełnych dni jest traktowana jak
+domyślna. Wysyłka `pending` ani `in_flight` nigdy nie jest usuwana, bez względu na wiek. Usuniętej
+wysyłki nie można już ponowić. Sprawdzenie działa w procesie workera i tylko wtedy, gdy moduł jest
+włączony; gdy jest wyłączony, nic nie jest usuwane, a pierwszy przebieg po ponownym włączeniu usuwa
+to, czemu w tym czasie upłynął termin.
+
+Kolejka wysyłek przechowuje w Redis własną kopię każdego zakończonego zadania, z treścią zdarzenia
+i sekretem podpisu subskrypcji. Ta kopia podlega temu samemu okresowi: zakończone zadanie jest
+usuwane, gdy jest starsze niż `webhooks.delivery_retention_days`, a kolejka przechowuje też nie
+więcej niż 500 ostatnich udanych i 5 000 ostatnich nieudanych zadań. Codzienne sprawdzenie usuwa
+również przeterminowane zadania, więc znikają nawet wtedy, gdy nie kończy się żadna nowa wysyłka.
+Zmieniony okres dotyczy zadań dodanych do kolejki po zmianie, a przy najbliższym codziennym
+sprawdzeniu także zadań już zakończonych.
 
 ## Które zdarzenia są dostarczane
 

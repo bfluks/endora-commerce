@@ -31,7 +31,7 @@ const onlyPresent =
     ids.includes(id);
 
 describe('acknowledgedPortEdgesFrom — the withheld edges, from the manifests', () => {
-  it('reads the twenty real edges the manifests deliberately keep out of `dependencies`', () => {
+  it('reads the twenty-three real edges the manifests deliberately keep out of `dependencies`', () => {
     // Two arrived with issue #90, when `check-port-dependencies` learned to
     // follow a module-local cradle alias and two edges that had always been
     // resolved through one became visible: the lifecycle admin surfaces
@@ -90,6 +90,27 @@ describe('acknowledgedPortEdgesFrom — the withheld edges, from the manifests',
     // `organizations:creditLimitReadPort` moved there. The behaviour is
     // unchanged in every case: the gate refused before and refuses now.
     //
+    // One more arrives with `specs/170-organization-roles/` WP-02b, in the same
+    // mutual pair: `organizations` deletes a role its members hold by running
+    // `customer_accounts`' `customer_account.change_role` as a child Command
+    // per holder, resolved as `customerAccountRoleCommandPort`.
+    //
+    // And one with WP-12: `admin_users`' impersonation start names the role the
+    // session acts under through `organizations`' `organizationRoleReadPort`,
+    // and `organizations` declares `admin_users`.
+    //
+    // And one with `specs/176-command-hooks-outbox/` P1, in the same mutual
+    // pair: a registration creates its first account as a child
+    // `customer_account.create` of `organization.register`, resolved as
+    // `customerAccountMemberCommandPort`.
+    //
+    // And one with `specs/186-aggregate-ports/` US3 (issue #1822), in the same
+    // pair: the operator member panel writes through `customerAccountCommandPort`.
+    //
+    // And one with issue #332: `assets_library` pushes its retention-days write
+    // validator into `settings`' `settingWriteValidatorRegistry`, and `settings`
+    // declares `assets_library`.
+    //
     // What makes the acknowledgement honest is that the edge is in the refusal
     // graph either way: withholding it from `dependencies` withdraws the
     // ordering claim and nothing else, so no owner becomes switchable-off
@@ -105,17 +126,23 @@ describe('acknowledgedPortEdgesFrom — the withheld edges, from the manifests',
       '_lifecycle:requireAdmin',
       'admin_roles:adminUserReadPort',
       'admin_users:customerAccountReadPort',
+      'admin_users:organizationRoleReadPort',
+      'assets_library:settingWriteValidatorRegistry',
       'auth:customerOrgResolver',
       'carts:promotionCodePort',
       'carts:promotionService',
       'catalog:organizationDetailsPort',
+      'catalog:organizationTaxProfilePort',
       'catalog:pricingService',
       'orders:cartPlacementApplyPort',
       'orders:cartReadPort',
       'orders:cartWritePort',
       'organizations:addressServicePort',
+      'organizations:customerAccountCommandPort',
+      'organizations:customerAccountMemberCommandPort',
       'organizations:customerAccountMemberWritePort',
       'organizations:customerAccountReadPort',
+      'organizations:customerAccountRoleCommandPort',
       'organizations:customerAuthPort',
       'organizations:customerRolePort',
       'organizations:passwordResetService',

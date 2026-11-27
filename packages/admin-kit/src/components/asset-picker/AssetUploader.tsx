@@ -11,6 +11,7 @@ import type { AssetDetail } from '@endora-commerce/contracts';
 import { Button } from '../../ui/button.js';
 import { Alert, AlertDescription } from '../../ui/alert.js';
 import { useTranslation } from '../../i18n/useTranslation.js';
+import { ApiError } from '../../lib/index.js';
 import { uploadAsset, type AssetUploadFields } from './assets-api.js';
 
 export interface AssetUploaderProps {
@@ -22,6 +23,17 @@ export interface AssetUploaderProps {
   onUploaded: (asset: AssetDetail) => void;
   /** Optional inline label for the trigger button. */
   triggerLabel?: string;
+  /**
+   * Replaces the default upload request — the Library's replace action passes
+   * one that replaces an existing asset's file. Optional; without it the file
+   * is uploaded as a new asset.
+   */
+  upload?: (file: File) => Promise<AssetDetail>;
+  /**
+   * The whole `accept` attribute (e.g. `application/pdf`). Without it,
+   * `acceptPrefix` decides it.
+   */
+  accept?: string;
 }
 
 export function AssetUploader({
@@ -29,6 +41,8 @@ export function AssetUploader({
   defaults,
   onUploaded,
   triggerLabel,
+  upload,
+  accept: acceptOverride,
 }: AssetUploaderProps): ReactNode {
   const t = useTranslation('core');
   const [busy, setBusy] = useState(false);
@@ -49,10 +63,12 @@ export function AssetUploader({
     }
     setBusy(true);
     try {
-      const asset = await uploadAsset(file, defaults ?? {});
+      const asset = upload ? await upload(file) : await uploadAsset(file, defaults ?? {});
       onUploaded(asset);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // The server's own sentence for a refusal (issue #354: a failed upload
+      // is an `ApiError` now, whose `message` is prefixed with its code).
+      setError(e instanceof ApiError ? e.envelope.error.message : e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -71,7 +87,8 @@ export function AssetUploader({
     if (f) void handleFile(f);
   };
 
-  const accept = acceptPrefix ? (acceptPrefix === 'image/' ? 'image/*' : 'video/*') : undefined;
+  const accept =
+    acceptOverride ?? (acceptPrefix ? (acceptPrefix === 'image/' ? 'image/*' : 'video/*') : undefined);
 
   return (
     <div className="space-y-2">
@@ -91,6 +108,9 @@ export function AssetUploader({
           ref={fileInput}
           type="file"
           className="hidden"
+          // Named like its trigger: hidden from view, but not from every
+          // assistive technology or audit that reads the markup.
+          aria-label={triggerLabel ?? t('assetPicker.upload.trigger')}
           accept={accept}
           onChange={onChange}
         />

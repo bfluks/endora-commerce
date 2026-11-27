@@ -1,9 +1,9 @@
 ---
-title: customers
+title: Customers
 description: Customer lifecycle over `customer_accounts` — company and personal Organizations, sales-rep assignment and the admin customer surface
 ---
 
-# `customers`
+# Customers (`customers`)
 
 Customer (Klienci) lifecycle business logic layered on top of the
 `customer_accounts` data module. **Every customer belongs to an
@@ -11,43 +11,122 @@ Organization** — a company for B2B, a single-member *personal* organization fo
 an individual, and `customer_accounts.organization_id` is
 `NOT NULL`. "Standalone" throughout this page means *outside a company
 organization*, never *without one*: such a customer is their own tenant, and the
-organization-scoped features a company offers (shared addresses, invitations,
-credit limit, a sales-rep assignment) are simply absent for them rather than
+organization-scoped features a company offers (invitations, credit limit, a
+sales-rep assignment) are simply absent for them rather than
 switched off by a special case.
 
 ## Capabilities
 
 **Storefront (self-service)**
 
-- Standalone registration, gated by the
-  `customers.allow_registration_without_organization` setting. On success the
+- Standalone registration, gated per sales channel by the
+  `customers.allow_registration_without_organization` setting: the value set
+  for the channel the request resolves to applies, then the all-channels value.
+  On success the
   account and its personal organization are written in one transaction and the
-  new account is logged in automatically.
-- A personal address book (billing/delivery), one default per kind, plus the
-  ability to select the Organization's shared addresses (org-bound customers).
-- Default payment method, delivery method, and default addresses.
+  new account is logged in automatically. While the setting is off, the
+  storefront's `/register-customer` page shows a notice with a link to the
+  organization registration instead of the form, so a visitor does not fill
+  it in only to be refused.
+- A first sign-in through an external identity provider (for example Google)
+  creates an account under the same setting, read for the sales channel the
+  sign-in was started on. Where the setting is off for that channel, no
+  account is created and the visitor is sent back to the sign-in page with a
+  prompt to create an account first.
+- One address book for every customer: their Organization's. An individual sees
+  it as *My addresses* (`/addresses`), a company member as *Organization
+  addresses* (`/organization/addresses`). Checkout offers and saves to the same
+  book. It is served by `organizations` over `addresses`, not by this module,
+  so it keeps working while this module is switched off.
+- Default payment method and delivery method. The default addresses are read
+  from the Organization book, where they are set.
 - Change password; read-only history of own orders and quote requests.
+- **E-mail language.** The account page (`/account`) shows the language the
+  customer's e-mails are written in, under *Two-step verification*, as a list
+  of the store's languages named in their own language, with *Save*. The
+  account records a language on its own when it is created and, if it has
+  none yet, at the next sign-in (see `customer_accounts`); this is how the
+  customer changes it, and only this replaces it. A language the store does not
+  offer is refused (`422 PREFERRED_LANGUAGE_NOT_OFFERED`). If the stored
+  language is no longer offered by the store, the page says so and preselects
+  the language its e-mails are sent in instead. On a store with one language,
+  and while this module is switched off, the row only names the language and
+  offers no control.
 
 **Admin (oversight)**
 
 - Customer list (search + status/organization/group filters) and a detail view
-  showing creation date, customer group, organization, blocked status, and last
-  login.
+  showing creation date, customer group, organization, blocked status, last
+  login and the customer's **e-mail language** — read-only, named in the
+  admin's language with the tag beside it (for example *English (US)* `en-US`),
+  and *Not set — the store's default language is used* while the account has none. Staff with
+  `customers:read` see it; only the customer changes it.
 - Block / unblock and soft-delete / restore, with role-based authority: a
   Platform Administrator may act on anyone; otherwise the authorized salesperson
   is the one inherited from the customer's Organization. A personal organization
   never carries a sales-rep assignment, so the unassigned-organization fallback
-  leaves a standalone customer open to any salesperson. An org-owner depletion
-  guard refuses blocking or deleting the last organization administrator.
-- Impersonation; audited as `impersonation.start` / `impersonation.end`.
-- Admin-triggered password reset (emails a set-password link).
+  leaves a standalone customer open to any salesperson — on the customer list,
+  the customer screen and every tenant-scoped read as well as for these actions,
+  since the reach rule is one rule on every surface (issue #305). An org-owner depletion
+  guard refuses blocking, deleting or detaching the last active holder of a
+  company organization's Administrator role (`409 ORG_OWNER_DEPLETION`);
+  blocked administrators do not count. It
+  does not apply to a personal organization, whose sole member is its
+  Administrator: blocking or deleting that customer is allowed.
+- Impersonation; audited as `impersonation.start` / `impersonation.end`. The
+  answer names the customer's `organizationRole`, and the impersonation acts
+  with exactly that customer's organization permissions. On the customer
+  detail, *Impersonate* first asks for an optional reason (for example a ticket
+  number), stored with the session record rather than in the audit log. Once the
+  support session starts, the screen links to the storefront, where you act as
+  the customer in the same browser, and offers *End support session*; the
+  storefront's banner ends it too. While that session is open the screen offers
+  no second start. A refused start is shown in the dialog.
+- Admin-triggered password reset (emails a set-password link). The e-mail is the
+  `customer_password_reset_by_admin` transactional e-mail, which a store edits under
+  **Transactional emails** like any other; it is sent in the language of the default sales
+  channel, and its link opens the reset page under that language's prefix. It cannot be
+  switched off, because it is how the customer gets back into the account.
 - NIP/VAT validation (VIES / Biała lista port).
 - Organization assign, and detach-from-organization, which moves the customer to
   their own personal organization rather than leaving them without one.
   Direct customer-group assignment (overrides the Organization's group when
   resolving pricing and promotions).
-- Read-only orders, quote-requests, and (current + abandoned) carts panels.
+- Read-only orders, quote requests, and (current + abandoned) carts, on the screen's
+  **Activity** tab.
 - An "online customers" view backed by recent session activity.
+
+**One Save on the customer screen.** The customer screen (`/customers/:id`) has one Save in its
+header (kept in reach at the bottom of a narrow screen). It covers the customer's **custom fields**
+and the panels other modules contribute, each while its module is on: the **ordering defaults**
+(Quick order) and the **price negotiation** override (Quote requests). None of them saves on its
+own any more. Save reads "Save 2 changes" once there is something to save.
+
+- Everything is checked first; if any part is refused, nothing is written.
+- The custom fields are written first. If they are refused, no panel is written, and the reason
+  is shown at the field.
+- If the custom fields are saved and a panel is not, a summary under the header names what was
+  saved and what was not ("Saved: Customer. Not saved: Ordering defaults — *reason*"); the next
+  Save writes only the panel.
+- While a price-negotiation change is unsaved, the panel hides its "Effective: …" line, which
+  describes the stored value; it comes back once the change is saved.
+- Leaving the page — a link elsewhere in the admin, or closing or reloading the browser tab — with
+  unsaved changes asks first.
+
+Save is shown to an operator with `customers:manage`, or one who may change one of the panels.
+**Two tabs.** The screen is one card with two tabs. **Profile** holds the account information
+with the **Organization** and **Customer group** fields, the addresses, the panels other modules
+add, and the custom fields; **Activity** holds the orders, quote requests and carts. A link can
+open Activity directly (`/customers/:id?tab=activity`). While something on Profile is unsaved, its
+tab says so, and switching to Activity keeps the change.
+
+The account actions — block, password reset, two-factor reset, impersonate and delete — are in the
+header's **More** menu, with Delete last and set apart. A blocked customer shows **Unblock** beside
+it, and a deleted one shows **Restore** instead of the menu. These actions, the Organization and
+the Customer group are not part of the Save: they apply the moment you use them — the account
+section carries an **Applies immediately** badge — and the result of an action is said beside the
+header's buttons. Block, two-factor reset and delete ask for confirmation first, naming the
+customer and what the action does; a refusal is shown in the confirmation.
 
 ## Deletion & anonymization
 
@@ -56,7 +135,111 @@ are revoked, while orders, quote requests, and audit history are retained.
 Within a configurable retention window (`customers.deletion_retention_days`,
 default 365) an authorized actor can restore the account. After the window the
 anonymization sweep (`AnonymizationSweepWorker`) irreversibly scrubs personal
-data, and restore is no longer possible.
+data, and restore is no longer possible: from the moment the window elapses,
+restore answers `409 CUSTOMER_RESTORE_WINDOW_ELAPSED`, even if the sweep has
+not reached the account yet. The account loses its e-mail, name, password and
+all custom field values. For an individual, the sweep also scrubs their
+personal organization: its name, registered address, legal name,
+order-confirmation e-mails and all custom field values are cleared, and all
+its saved addresses, including the ones the customer had already deleted, are
+blanked (`-`, no phone, country kept) and soft-deleted (a deleted one keeps its
+deletion date), one `address.anonymized` audit entry each. This happens
+even if an operator has
+already deleted that organization. Placed orders keep their address snapshots.
+The anonymization audit entries record that the data was erased, not the data
+itself.
+
+Reasons that operators wrote about the customer are erased too: the account's
+block reason and, for an individual, the block and rejection reasons on their
+personal organization. A company organization keeps its reasons. The block or
+rejection itself stays, so the customer screens still show the status and its
+date, without a reason. The anonymization audit entries record only that a
+reason existed.
+
+The audit history written earlier about the customer is erased in place as
+well. This covers the entry for the block with its reason, profile edits, and
+address changes. It applies to the rows about the account and, for an
+individual, about their personal organization, that organization's addresses
+(including the ones the customer deleted earlier) and their retired personal
+addresses. Every row keeps its action, actors, time and object, and every
+recorded field keeps its name. Names, e-mails, addresses, free text and every
+custom field value become `[erased]`, which the audit viewer shows as *Erased*.
+On the rows the customer wrote for themselves, the IP address and user agent
+are erased too. Rows about other records, such as the customer's orders, keep
+their own history. Each anonymized customer gets one `audit.redacted` entry,
+written by the system, that holds only counts and ids. The rule itself is
+described in the audit log module's documentation, under *Redaction on
+anonymisation*. The history is erased before the account itself, so an account
+counts as anonymized only once its history is erased too.
+
+The sweep also erases the reasons operators and approvers gave for rejecting
+the account's carts, keeping each cart's status; the carts module documents
+what it erases and what it keeps (*Audit retention*).
+
+It also scrubs the platform's record of every e-mail sent to the account's
+address. On each record the address, the subject, the message context (which
+can hold a rejection reason) and the mail server's error text are erased. The
+record keeps which e-mail it was, when it was attempted and whether it was sent,
+so an operator can still answer whether a message went out. Each record changed
+gets one `email_delivery.anonymized` audit entry, written by the system, with
+nothing else in it. The address is matched without regard to letter case.
+Records of e-mails sent to an account anonymized before this release are not
+reached, because that account's address is already erased.
+
+The sweep runs once a day, in the worker process and only while this module is
+on, so an account is anonymized up to a day after its window elapses. While the
+module is off no run happens; the accounts that came due meanwhile are
+anonymized by the first run after it is switched back on. A run first checks
+whether any account is due or any earlier scrub is left to finish, and when
+none is it does nothing and writes no audit entry. If that check cannot be
+answered, the run goes ahead. Two runs that overlap anonymize an account once.
+
+The sweep scrubs the personal organization and its addresses first and the
+account last. If a run is interrupted, the account is picked up again on the
+next run, which completes the remaining steps without repeating the audit
+entries of the steps already done. An account that cannot be anonymized does
+not hold up the others: the run anonymizes the rest and then reports the failed
+account ids.
+
+The same holds when what the sweep erases grows. Anything a run under an earlier
+release left on an anonymized account or on its personal organization, such as
+custom field values, a legal name, order-confirmation e-mails or a block or
+rejection reason, is erased by the next run, whatever the retention window is
+set to now. That run records one more audit entry for each record it changes,
+keeps the original anonymization date, and does not announce the anonymization
+again, so what other modules do on anonymization, such as Forms erasing the
+customer's entries, does not run a second time.
+
+## The personal address book is retired
+
+Until release 1 of this change, this module kept a second, *personal* address
+book (`customer_addresses`). No order could be placed to one of its addresses.
+It is retired for everyone, in two releases:
+
+- **Release 1 (this one).** Every former personal-book endpoint answers
+  `410 Gone` with `CUSTOMER_ADDRESS_BOOK_RETIRED`, in Polish or English. A
+  one-time background job, run by the worker process while this module is on,
+  processes the remaining rows:
+  - an individual's rows are **moved** into their personal organization's book.
+    An address the book already holds is not copied twice, and an existing
+    default stays the default. Each row is audited `customer_address.merge`;
+  - every other row (a company member's, an individual's whose personal
+    organization was already anonymized, or an account whose organization cannot
+    be found) is **erased**: blanked, soft-deleted and audited
+    `customer_address.erased`;
+  - a row the address book refuses — for example a country that is no longer
+    active — stays, marked with the reason (`customer_address.merge_refused`).
+    Only the operator sees it, in the customer's *Addresses* section.
+- **Release 2.** The table and the remaining code are removed. The upgrade
+  refuses while any row is left.
+
+The upgrade note *Personal address book retired (release 1 of 2)* covers the
+operator's side.
+
+When the anonymization sweep anonymizes an account, it also blanks every row of
+that account in this book the same way, whether the row was moved, erased,
+deleted by the customer or refused, with one `customer_address.anonymized`
+audit entry each. This applies to every account, a company member's included.
 
 ## Public surface
 
@@ -66,15 +249,17 @@ Admin routes are gated by `customers:read` (reads), `customers:manage`
 | Verb + Path | Audience | Purpose |
 | --- | --- | --- |
 | `POST /api/v1/customers/register` | anon | Standalone registration (setting-gated) |
-| `GET /api/v1/me/customer` | customer | Own profile |
+| `GET /api/v1/storefront/settings/customer-registration` | anon | Whether standalone registration is offered (`allowRegistrationWithoutOrganization`) |
+| `GET /api/v1/me/customer` | customer | Own profile, with `organizationRole`, the effective `permissions` and `preferredLanguage` (`null` while unknown) |
+| `PATCH /api/v1/me/customer/preferred-language` | customer | Body `{ preferredLanguage }`: the customer's e-mail language. A language the request's sales channel offers, matched without regard to case and stored as the channel spells it; answers `{ data: { preferredLanguage } }`. Otherwise `422 PREFERRED_LANGUAGE_NOT_OFFERED`. Audited as `customer_account.set_preferred_language`, without the language |
 | `POST /api/v1/me/customer/change-password` | customer | Change password. A successful change signs the account out of every other session (the one the request was made from is kept), retires its outstanding reset tokens and withdraws any sign-in it had begun and not finished. |
-| `GET /api/v1/me/customer/addresses` | customer | Personal + org-shared addresses |
-| `POST/PATCH/DELETE /api/v1/me/customer/addresses[/:id]` | customer | Manage personal addresses |
-| `PUT /api/v1/me/customer/addresses/:id/default` | customer | Set a default address |
-| `GET/PUT /api/v1/me/customer/defaults` | customer | Default payment/delivery method + addresses |
+| `GET/POST /api/v1/me/customer/addresses` · `PATCH/DELETE .../:id` · `PUT .../:id/default` | customer | Retired: `410 CUSTOMER_ADDRESS_BOOK_RETIRED`. Use `/api/v1/organizations/mine/addresses` |
+| `GET /api/v1/me/customer/defaults` | customer | Default payment/delivery method, and the Organization book's default addresses |
+| `PUT /api/v1/me/customer/defaults` | customer | Set the default payment/delivery method. A body naming `billingAddressId` or `shippingAddressId` answers `410 CUSTOMER_ADDRESS_BOOK_RETIRED` |
 | `GET /api/v1/me/customer/orders` | customer | Own order history |
 | `GET /api/v1/me/customer/quote-requests` | customer | Own RFQ history |
-| `GET /api/v1/admin/customers` | admin | List (authority-scoped) |
+| `GET /api/v1/admin/customers` | admin | List (authority-scoped). `customFieldFilters` — the Customer custom fields marked as list filters, as JSON, the shape the Orders and Projects lists take; a field the list does not offer answers `400 CUSTOM_FIELD_FILTER_UNAVAILABLE`, naming it. A filter narrows what the caller reaches, never widens it |
+| `GET /api/v1/admin/customers/custom-field-filters` | admin (`customers:read`) | `{ data: CustomFieldListFilterField[] }` — the Customer custom fields marked as list filters |
 | `GET /api/v1/admin/customers/:id` | admin | Detail |
 | `POST /api/v1/admin/customers/:id/block` · `/unblock` | admin | Block / unblock |
 | `DELETE /api/v1/admin/customers/:id` · `POST .../restore` | admin | Soft-delete / restore |
@@ -82,7 +267,9 @@ Admin routes are gated by `customers:read` (reads), `customers:manage`
 | `POST /api/v1/admin/customers/:id/password-reset` | admin | Email a set-password link |
 | `POST/DELETE /api/v1/admin/customers/:id/organization` | admin | Assign / unassign organization |
 | `PUT /api/v1/admin/customers/:id/customer-group` | admin | Set / clear customer group |
-| `GET/POST/PATCH/DELETE /api/v1/admin/customers/:id/addresses[/:addressId]` | admin | Manage addresses |
+| `PATCH /api/v1/admin/customers/:id/custom-fields` | admin | Merge the customer's custom-field values (`customers:manage`); a refused value answers `422 CUSTOM_FIELD_VALUE_INVALID` and writes nothing |
+| `GET /api/v1/admin/customers/:id/addresses` | admin | Read-only: `{ organization, personal }` — the Organization book, and the personal-book rows the retirement job refused, each with `mergeRefusal` |
+| `POST /api/v1/admin/customers/:id/addresses` | admin | Retired: `410 CUSTOMER_ADDRESS_BOOK_RETIRED` |
 | `POST /api/v1/admin/customers/:id/vat-validate` | admin | Validate a NIP/VAT number |
 | `GET /api/v1/admin/customers/:id/orders` · `/quote-requests` · `/carts` | admin | Read-only history panels |
 | `GET /api/v1/admin/customers/online` | admin | Currently-online customers |
@@ -91,7 +278,7 @@ Admin routes are gated by `customers:read` (reads), `customers:manage`
 
 | Code | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `customers.allow_registration_without_organization` | boolean | `false` | Gate standalone registration |
+| `customers.allow_registration_without_organization` | boolean | `false` | Gate standalone registration, per sales channel |
 | `customers.deletion_retention_days` | number | `365` | Restore window before permanent anonymization |
 | `customers.presence_freshness_minutes` | number | `10` | "Online" threshold |
 
@@ -102,7 +289,10 @@ Admin routes are gated by `customers:read` (reads), `customers:manage`
   deletion/anonymization state (`deletion_requested_by_admin_user_id`,
   `anonymized_at`) to `customer_accounts`.
 - `20260611T140404_customers_customer_addresses_init.ts` — the `customer_addresses` table (one default
-  per `(customer, kind)`).
+  per `(customer, kind)`), the retired personal address book.
+- `20261105T180317_customers_address_book_retirement.ts` — the retirement job's provenance columns
+  (`merged_into_address_id`, `merged_at`, `merge_refusal`) and an index over the rows it has yet to
+  process. Release 2 drops the table.
 
 Default payment/delivery preferences reuse the `quick_order_default_preferences`
 table; no new table is introduced for them.

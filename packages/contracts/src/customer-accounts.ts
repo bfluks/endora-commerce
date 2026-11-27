@@ -19,6 +19,30 @@
 
 import { z } from 'zod';
 import { isoDateTimeSchema, uuidSchema } from './common.js';
+import type { AggregateCommandOptions, CustomFieldMerge } from './aggregate-ports.js';
+import type { CustomFieldListFilterCondition } from './custom-fields.js';
+import type { EntityExtensionReadOptions, WithEntityExtensions } from './entity-extensions.js';
+
+// --- the anonymisation event ---------------------------------------------------
+//
+// `specs/170-forms-module/` research R-17, contracts/events-and-webhook.md §3.
+// `CustomerAccountCommandPort.anonymize` announces the irreversible step
+// once, after its write and its audit row, so a module holding data attributed
+// to the account can erase it within the same sweep step. Ids only: the account
+// has just been scrubbed, and the event says which one, never what it held. Not
+// offered to outbound webhooks.
+
+export const CUSTOMER_ACCOUNT_ANONYMIZED_EVENT = 'customer_account.anonymized.v1';
+
+export const CustomerAccountAnonymizedEventV1Schema = z
+  .object({
+    eventId: z.string().min(1),
+    occurredAt: isoDateTimeSchema,
+    customerAccountId: z.string().uuid(),
+    organizationId: z.string().uuid(),
+  })
+  .strict();
+export type CustomerAccountAnonymizedEventV1 = z.infer<typeof CustomerAccountAnonymizedEventV1Schema>;
 
 // --- customer groups ---------------------------------------------------------
 //
@@ -37,6 +61,12 @@ export const customerGroupSchema = z.object({
   updatedAt: isoDateTimeSchema,
 });
 export type CustomerGroup = z.infer<typeof customerGroupSchema>;
+
+/** `GET /api/v1/admin/customer-groups` — every group (issue #599). */
+export const customerGroupListResponseSchema = z.object({
+  data: z.array(customerGroupSchema),
+});
+export type CustomerGroupListResponse = z.infer<typeof customerGroupListResponseSchema>;
 
 export const upsertCustomerGroupRequestSchema = z.object({
   code: z.string().min(1).max(64),
@@ -77,9 +107,21 @@ export interface CustomerGroupReadPort {
 
 // --- records -----------------------------------------------------------------
 
-export type CustomerAccountRole = 'organization_admin' | 'regular_user';
-
 export type CustomerAccountBlockSource = 'staff' | 'org_owner';
+
+/**
+ * The codes a redacted `customer_account` audit row keeps (issue #844).
+ *
+ * Owner: `customer_accounts`; **codes only**. When an anonymised subject's
+ * audit history is erased, the platform's rule keeps ids, timestamps, booleans
+ * and a few global code keys, and erases every other value. These are the keys
+ * this module's audit snapshots record a *code* under that the rule would not
+ * otherwise keep — `blockSource` (`staff` / `org_owner`) and `via` (how a
+ * password was changed: `reset_token` / `self_service`). A value under one of
+ * them is still erased unless it has a code's shape. Adding a key here keeps it
+ * in every erased history, so add a key only when its values are codes.
+ */
+export const CUSTOMER_ACCOUNT_AUDIT_KEEP_KEYS: readonly string[] = ['blockSource', 'via'];
 
 /**
  * A customer account as it crosses a module boundary — a plain shape, never
@@ -101,7 +143,12 @@ export interface CustomerAccountRecord {
   email: string;
   firstName: string;
   lastName: string;
-  role: CustomerAccountRole;
+  /**
+   * The organization role the account holds — a role of {@link organizationId}
+   * (`specs/170-organization-roles/` data-model §2; a composite foreign key in
+   * the database). Never `null`: every account holds exactly one.
+   */
+  organizationRoleId: string;
   emailVerifiedAt: Date | null;
   /** Whether a confirmed TOTP enrolment exists. The secret itself never travels. */
   twoFactorEnabled: boolean;
@@ -119,6 +166,25 @@ export interface CustomerAccountRecord {
   blockedByCustomerAccountId: string | null;
   deletionRequestedByAdminUserId: string | null;
   anonymizedAt: Date | null;
+  /**
+   * Issue #652 (D-292) — the language the account's owner reads: one BCP-47
+   * content-language tag, spelled as the sales channel that captured it spells
+   * it (`pl-PL`, `en-US`). Captured at account creation and, while still
+   * `null`, at sign-in, from the request's channel and its `Accept-Language`;
+   * overwritten only by the owner's own choice on the storefront account page.
+   *
+   * A message composed outside a request resolves it against the channel it
+   * is rendered for — `scopeLanguageOf(renderChannel, preferredLanguage)`:
+   * the exact language, else one of the same base language, else that
+   * channel's default — so a value the channel no longer offers falls back
+   * rather than failing. Inside a request the `Accept-Language` header still
+   * decides the response language (D-131).
+   *
+   * `null` means unknown: the account predates the field and has not signed in
+   * since, or was created by an operator. Personal data (D-288 list 2): never
+   * written into an audit state, cleared by the anonymisation sweep.
+   */
+  preferredLanguage: string | null;
 }
 
 /**
@@ -151,15 +217,21 @@ export interface CustomerAccountLookupOptions {
  * say, not this line's: a module declaring `nonDeactivatable` never enters one.
  */
 export interface CustomerAccountReadPort {
+  /**
+   * `options.include` (`specs/187-side-table-extensions/` FR-058) names the
+   * side-table extensions to attach as `extensions.<moduleId>`; absent or
+   * empty, the answer is exactly what it was without it. The same holds for
+   * {@link findByIds}, {@link searchByEmail} and {@link listAll}.
+   */
   findById(
     id: string,
-    options?: CustomerAccountLookupOptions,
-  ): Promise<CustomerAccountRecord | null>;
+    options?: CustomerAccountLookupOptions & EntityExtensionReadOptions,
+  ): Promise<WithEntityExtensions<CustomerAccountRecord> | null>;
 
   findByIds(
     ids: readonly string[],
-    options?: CustomerAccountLookupOptions,
-  ): Promise<CustomerAccountRecord[]>;
+    options?: CustomerAccountLookupOptions & EntityExtensionReadOptions,
+  ): Promise<WithEntityExtensions<CustomerAccountRecord>[]>;
 
   findByEmail(
     email: string,
@@ -178,21 +250,25 @@ export interface CustomerAccountReadPort {
     options?: CustomerAccountLookupOptions,
   ): Promise<CustomerAccountRecord | null>;
 
-  /** Members of an organisation, ordered by role then creation date. */
+  /** Members of an organisation: its *Administrator* holders first, then by creation date. */
   listByOrganization(
     organizationId: string,
     options?: CustomerAccountLookupOptions,
   ): Promise<CustomerAccountRecord[]>;
 
   /**
-   * How many accounts in the organisation hold the role, optionally ignoring
-   * one id and optionally counting only unblocked accounts. This is the shape
-   * the "an organisation may not lose its last admin" rule is spelled with, in
-   * three modules, three slightly different ways.
+   * How many accounts of the organisation hold its *Administrator* role — the
+   * predicate the "an organisation keeps at least one administrator" rule is
+   * spelled with since `specs/170-organization-roles/`
+   * (`contracts/commands-audit-events.md` §3): optionally ignoring one id, and
+   * optionally counting only active or only unblocked accounts.
+   *
+   * A count, not a guard: it takes no lock. The member Commands that must not
+   * race (`customer_account.change_role`, `customer_account.remove_member`)
+   * lock the holders themselves before counting.
    */
-  countByOrganizationRole(
+  countAdministrators(
     organizationId: string,
-    role: CustomerAccountRole,
     options?: {
       excludeCustomerAccountId?: string;
       activeOnly?: boolean;
@@ -209,7 +285,11 @@ export interface CustomerAccountReadPort {
    * answer: a picker that loads every account to keep 200 of them is a
    * full-table read wearing a port.
    */
-  searchByEmail(query: string, limit: number): Promise<CustomerAccountRecord[]>;
+  searchByEmail(
+    query: string,
+    limit: number,
+    options?: EntityExtensionReadOptions,
+  ): Promise<WithEntityExtensions<CustomerAccountRecord>[]>;
 
   /**
    * Ids of accounts whose e-mail, first name or last name contains `query`,
@@ -229,7 +309,32 @@ export interface CustomerAccountReadPort {
   searchIdsByName(query: string): Promise<string[]>;
 
   /** Every account, for the bulk export adapter. Ordered by email. */
-  listAll(): Promise<CustomerAccountRecord[]>;
+  listAll(options?: EntityExtensionReadOptions): Promise<WithEntityExtensions<CustomerAccountRecord>[]>;
+
+  /**
+   * Soft-deleted accounts whose retention window elapsed before `cutoff` and
+   * that have not been anonymised yet — the retention sweep's work list. It
+   * also lists, whatever the cutoff, an anonymised account that an earlier
+   * scrub left a block reason (before issue #843), custom field values (before
+   * #802) or a preferred language (before #652) on, until
+   * {@link CustomerAccountCommandPort.anonymize} has finished it.
+   *
+   * Moved here from `CustomerAccountLifecycleWritePort` with
+   * `specs/186-aggregate-ports/` (issue #1822): a read belongs on the read port.
+   */
+  listDueForAnonymization(cutoff: Date): Promise<CustomerAccountRecord[]>;
+
+  /**
+   * Whether {@link listDueForAnonymization} at `cutoff` would list anything —
+   * **yes or no, and nothing else** (issue #857).
+   *
+   * The sweep's scheduled tick asks this with no tenant context, before it
+   * enters the system scope, so that a tick with no account due writes no
+   * `tenant.escape_hatch` audit row. It is the work list's own predicate, so
+   * `false` means the sweep would anonymise nobody. No id, row or count of any
+   * account leaves it.
+   */
+  hasDueForAnonymization(cutoff: Date): Promise<boolean>;
 }
 
 /**
@@ -248,13 +353,31 @@ export interface CustomerAccountCreateInput {
   password: string;
   firstName: string;
   lastName: string;
-  role: CustomerAccountRole;
+  /**
+   * The organization role the account will hold, a role of
+   * {@link organizationId}. Required: no production path relies on the
+   * database's default (research R-28).
+   */
+  organizationRoleId: string;
   /**
    * Whether the address is already confirmed. Accepting an invitation implies
    * it — the invitation was delivered to that address; self-registration and
    * the admin direct-create do not.
    */
   emailVerified?: boolean;
+  /**
+   * Feature 175 — the account's custom-field values, ALREADY VALIDATED by the
+   * caller through custom_fields' value port (the caller owns the surface and
+   * must validate before its first write). Stored as given; `{}` when absent.
+   */
+  customFieldValues?: Record<string, unknown>;
+  /**
+   * Issue #652 (D-292) — the language captured from the creating request:
+   * `requestScopeLanguage(requestChannel, Accept-Language)`, so a
+   * tag the channel spells. Absent or `null` stores `null` — the admin
+   * direct-create, which has no buyer request to read it from.
+   */
+  preferredLanguage?: string | null;
 }
 
 /** Absent fields are left unchanged. */
@@ -267,6 +390,39 @@ export interface CustomerAccountProfilePatch {
   email?: string;
   firstName?: string;
   lastName?: string;
+}
+
+/** Where a preferred-language write comes from (issue #652, D-292). */
+export type CustomerPreferredLanguageSource = 'self_service' | 'sign_in';
+
+/**
+ * Container name: `customerAccountPreferencePort`. Owner: `customer_accounts`.
+ *
+ * Issue #652 (D-292) — the account's preferred language, the customer twin of
+ * `AdminUserPreferencePort`. Two methods, because there are two writers:
+ *
+ * - `setPreferredLanguage` — the owner's explicit choice on the storefront
+ *   account page (`customers`' `PATCH /api/v1/me/customer/preferred-language`),
+ *   the only write that overwrites a stored value. The caller has already
+ *   checked the tag against the request channel's languages and passes it in
+ *   that channel's spelling; this port stores it as given. Throws HTTP 404
+ *   `NOT_FOUND` for an id no live account has.
+ * - `captureIfUnset` — a sign-in's capture (federated sign-in through `mfa`):
+ *   writes only while the account has no value, and does nothing at all —
+ *   no write, no audit entry — when it already has one or the id is unknown.
+ *
+ * Both run `customer_account.set_preferred_language` on the Command Bus. Its
+ * audit entry names the field and the source and never the tag (D-288 list 2):
+ * `{ changedFields: ['preferredLanguage'], source }`.
+ *
+ * **Owner off:** the seam fails closed — resolving this port throws
+ * `ModuleDisabledError` and the call answers 503 `MODULE_DISABLED`. Whether
+ * `customer_accounts` has an off state at all is its manifest's `activation` to
+ * say, not this line's: a module declaring `nonDeactivatable` never enters one.
+ */
+export interface CustomerAccountPreferencePort {
+  setPreferredLanguage(customerAccountId: string, preferredLanguage: string): Promise<CustomerAccountRecord>;
+  captureIfUnset(customerAccountId: string, preferredLanguage: string): Promise<void>;
 }
 
 /**
@@ -292,7 +448,7 @@ export interface CustomerAccountProfilePatch {
  * organisation panel" rather than "this account's e-mail changed" — and both
  * are kept, which is what the role endpoint has always recorded.
  *
- * `changeRole` is **not** here: {@link CustomerRolePort} already owns it, with
+ * A role change is **not** here: {@link CustomerAccountRoleCommandPort} owns it, with
  * the "an organisation keeps at least one admin" guard.
  * {@link CustomerAccountMemberWritePort.promoteToOrganizationAdmin} is a
  * different question — the break-glass path an operator reaches *because* an
@@ -309,30 +465,44 @@ export interface CustomerAccountMemberWritePort {
    * address is taken — the check is inside the write, so a caller that races
    * its own pre-check still gets the right code rather than a constraint
    * violation.
+   *
+   * @deprecated since 0.113.0; use {@link CustomerAccountCommandPort.create} instead.
    */
   create(input: CustomerAccountCreateInput): Promise<CustomerAccountRecord>;
 
   /**
    * Throws HTTP 404 `NOT_FOUND` when no live account has that id, and HTTP 409
    * `EMAIL_ALREADY_REGISTERED` when the new address belongs to another one.
+   *
+   * @deprecated since 0.113.0; use {@link CustomerAccountCommandPort.updateProfile} instead.
    */
   updateProfile(
     customerAccountId: string,
     patch: CustomerAccountProfilePatch,
   ): Promise<CustomerAccountRecord>;
 
-  /** Feature 056 — the customer-side subtree roll-up capability. */
+  /**
+   * Feature 056 — the customer-side subtree roll-up capability.
+   *
+   * @deprecated since 0.113.0; use {@link CustomerAccountCommandPort.setSubtreeRollup} instead.
+   */
   setSubtreeRollup(
     customerAccountId: string,
     enabled: boolean,
   ): Promise<CustomerAccountRecord>;
 
-  /** The break-glass promotion. Idempotent on an account that already holds it. */
+  /**
+   * The break-glass promotion. Idempotent on an account that already holds it.
+   *
+   * @deprecated since 0.113.0; use {@link CustomerAccountCommandPort.promoteToOrganizationAdmin} instead.
+   */
   promoteToOrganizationAdmin(customerAccountId: string): Promise<CustomerAccountRecord>;
 
   /**
    * Stamps `emailVerifiedAt`, idempotently — a second call keeps the first
    * timestamp, so a retried verification does not move it.
+   *
+   * @deprecated since 0.113.0; use {@link CustomerAccountCommandPort.markEmailVerified} instead.
    */
   markEmailVerified(customerAccountId: string, verifiedAt: Date): Promise<CustomerAccountRecord>;
 
@@ -340,10 +510,15 @@ export interface CustomerAccountMemberWritePort {
    * Feature 051 — binds an org-less account to the organisation just
    * provisioned for it. Throws HTTP 404 `NOT_FOUND` when no account has that
    * id.
+   *
+   * `organizationRoleId` is a role **of `organizationId`**, written in the same
+   * statement: the composite foreign key refuses the previous Organization's
+   * role (`specs/170-organization-roles/` data-model §2, research R-34).
    */
   attachToOrganization(
     customerAccountId: string,
     organizationId: string,
+    organizationRoleId: string,
   ): Promise<CustomerAccountRecord>;
 }
 
@@ -374,6 +549,14 @@ export interface CustomerLoginInput extends CustomerAuthenticationOrigin {
   ip?: string;
   userAgent?: string;
   salesChannelId?: string | null;
+  /**
+   * Issue #652 (D-292) — the sign-in request's language, already resolved
+   * against its channel (`scopeLanguageOf`). Stored on the account only while
+   * the account has none, and only once the password, the block and the
+   * channel access have been accepted; a refused sign-in stores nothing.
+   * Absent or `null` stores nothing.
+   */
+  language?: string | null;
 }
 
 /** Where a customer's attempt came from, as far as the caller knows. */
@@ -639,12 +822,145 @@ export interface CustomerRollupScopePort {
  */
 export interface CustomerRolePort {
   listMembers(organizationId: string): Promise<CustomerAccountRecord[]>;
-  changeRole(
-    organizationId: string,
-    targetCustomerAccountId: string,
-    newRole: CustomerAccountRole,
-  ): Promise<CustomerAccountRecord>;
   removeMember(organizationId: string, targetCustomerAccountId: string): Promise<void>;
+}
+
+// --- organization role assignment (`specs/170-organization-roles/`) -----------
+
+/**
+ * Announced on commit whenever an account's organization role changes —
+ * `customer_account.change_role` (also as a child of `organization_role.delete`)
+ * and `customer_account.promote_organization_admin` (data-model §7). `carts`
+ * resets the approval state of a member who gained
+ * `carts.order_without_approval` from it (FR-034).
+ */
+export const CUSTOMER_ACCOUNT_ORGANIZATION_ROLE_CHANGED_EVENT =
+  'customer_account.organization_role_changed.v1' as const;
+
+export interface CustomerAccountOrganizationRoleChangedEventV1 {
+  readonly eventId: string;
+  readonly occurredAt: string;
+  readonly organizationId: string;
+  readonly customerAccountId: string;
+  readonly fromRoleId: string;
+  readonly toRoleId: string;
+}
+
+/** `customer_account.change_role`'s input: the member and the role of its own Organization it moves to. */
+export interface CustomerAccountRoleChangeInput {
+  readonly organizationId: string;
+  readonly customerAccountId: string;
+  readonly roleId: string;
+  /**
+   * Also move a **removed** (soft-deleted) member. Only the reassignment of a
+   * deleted role's holders asks for it: the foreign key counts removed accounts
+   * as holders, so they must move too. Every other caller leaves it unset, and a
+   * removed member answers `404` as an unknown one does.
+   */
+  readonly includeRemoved?: boolean;
+}
+
+/** What `customer_account.change_role` answers. `fromRoleId === toRoleId` when nothing changed. */
+export interface CustomerAccountRoleChangeResult {
+  readonly organizationId: string;
+  readonly customerAccountId: string;
+  readonly fromRoleId: string;
+  readonly toRoleId: string;
+}
+
+/**
+ * A Command as the platform's Command Bus runs it, named structurally because
+ * this package depends on no platform code and may name no `EntityManager`.
+ * The platform's `Command<TResult>` is assignable to it and it to that, so a
+ * caller hands it to `commandBus.run` or, as a child, to `ctx.run` unchanged.
+ * Its `run` belongs to the bus; a caller never invokes it.
+ */
+export interface CustomerAccountRoleChangeCommand {
+  readonly action: string;
+  readonly objectType: string;
+  readonly objectId: string;
+  run(ctx: never): Promise<{ readonly result: CustomerAccountRoleChangeResult }>;
+}
+
+/**
+ * Container name: `customerAccountRoleCommandPort`. Owner: `customer_accounts`.
+ *
+ * The role assignment as a **Command factory** (`specs/170-organization-roles/`
+ * `contracts/commands-audit-events.md` §2; research R-22): `organizations`
+ * deletes a held role by running one `changeRole` Command per holder as a
+ * **child** of `organization_role.delete`, through `ctx.run` — on the parent's
+ * transaction, each with its own audit entry, all committing or none. No
+ * `EntityManager` crosses: the child runs on the one the bus hands it.
+ *
+ * `changeRole` refuses `404 NOT_FOUND` for an account that is not a live member
+ * of the Organization or a role the Organization does not have, and `409
+ * CANNOT_DEMOTE_LAST_ADMIN` when it would leave the Organization without an
+ * active administrator — counted under a `for update` lock on the holders
+ * (research R-29).
+ *
+ * `holdersOf` lists every account holding the role — blocked and soft-deleted
+ * ones included, because the foreign key does not distinguish them.
+ *
+ * **Owner off:** the seam fails closed — resolving this port throws
+ * `ModuleDisabledError` and the call answers 503 `MODULE_DISABLED`. Whether
+ * `customer_accounts` has an off state at all is its manifest's `activation` to
+ * say, not this line's: a module declaring `nonDeactivatable` never enters one.
+ */
+export interface CustomerAccountRoleCommandPort {
+  changeRole(input: CustomerAccountRoleChangeInput): CustomerAccountRoleChangeCommand;
+  holdersOf(organizationId: string, roleId: string): Promise<string[]>;
+}
+
+/**
+ * `customer_account.create` as the platform's Command Bus runs it, named
+ * structurally for the reason {@link CustomerAccountRoleChangeCommand} is: the
+ * platform's `Command<CustomerAccountRecord>` is assignable to it and it to
+ * that, so a caller hands it to `commandBus.run` or, as a child, to `ctx.run`
+ * unchanged. Its `run` belongs to the bus.
+ */
+export interface CustomerAccountCreateCommand {
+  readonly action: string;
+  readonly objectType: string;
+  readonly objectId: string;
+  run(ctx: never): Promise<{ readonly result: CustomerAccountRecord }>;
+}
+
+/**
+ * What {@link CustomerAccountMemberCommandPort.prepareCreate} takes: an account's
+ * creation input without the two ids a caller may only know inside its own
+ * transaction — a registration learns its Organization's *Administrator* role
+ * id from the row the Organization's insert wrote.
+ */
+export type CustomerAccountCreatePreparation = Omit<CustomerAccountCreateInput, 'organizationId' | 'organizationRoleId'>;
+
+/** A prepared account creation: the password is hashed, the Command not yet built. */
+export interface PreparedCustomerAccountCreate {
+  /** The `customer_account.create` Command for that Organization and role. */
+  command(target: { organizationId: string; organizationRoleId: string }): CustomerAccountCreateCommand;
+}
+
+/**
+ * Container name: `customerAccountMemberCommandPort`. Owner: `customer_accounts`.
+ *
+ * The account creation as a **Command factory** (`specs/176-command-hooks-outbox/`
+ * FR-002, FR-005, `contracts/registration-command.md`): `organizations` creates
+ * a registration's first account as a **child** of `organization.register`
+ * through `ctx.run`, so the Organization and its administrator commit together
+ * or not at all, each with its own audit entry. No `EntityManager` crosses.
+ *
+ * `prepareCreate` hashes the password **now**, outside any transaction — the
+ * hash's cost is deliberate and must never run while a transaction holds the
+ * caller's rows — and the Command it later builds only writes. The Command
+ * refuses `409 EMAIL_ALREADY_REGISTERED` from its pre-check and from the unique
+ * index, inside its run.
+ *
+ * {@link CustomerAccountMemberWritePort.create} runs this same Command,
+ * top-level, so the creation has one implementation (FR-004).
+ *
+ * **Owner off:** the seam fails closed, as {@link CustomerAccountRoleCommandPort} does.
+ */
+export interface CustomerAccountMemberCommandPort {
+  prepareCreate(input: CustomerAccountCreatePreparation): Promise<PreparedCustomerAccountCreate>;
 }
 
 // --- the lifecycle surface `customers` runs ----------------------------------
@@ -670,6 +986,8 @@ export interface CustomerAccountStandaloneCreateInput {
   password: string;
   firstName: string;
   lastName: string;
+  /** Issue #652 — as {@link CustomerAccountCreateInput.preferredLanguage}. */
+  preferredLanguage?: string | null;
 }
 
 /**
@@ -684,6 +1002,22 @@ export interface CustomerAccountWriteRequestMeta {
   ipAddress?: string | null;
   userAgent?: string | null;
   requestId?: string | null;
+}
+
+/**
+ * Who moves an account between Organizations, and the role it holds there
+ * (`specs/170-organization-roles/` research R-34).
+ *
+ * `organizationRoleId` is a role of the **destination** Organization and is
+ * written in the same statement as the Organization: the composite foreign key
+ * refuses the previous Organization's role. The caller resolves it — the
+ * destination's *Administrator* for a personal Organization (from the
+ * provisioning answer), else the destination's predefined role of the kind the
+ * account held (owner ruling PR-11).
+ */
+export interface CustomerAccountOrganizationMoveInput {
+  actorAdminUserId: string;
+  organizationRoleId: string;
 }
 
 /** Which lifecycle bucket the admin customer list is asking for. */
@@ -725,6 +1059,15 @@ export interface CustomerAccountAdminSearchCriteria {
   organizationId?: string | undefined;
   customerGroupId?: string | undefined;
   allowedOrganizationIds: readonly string[] | null;
+  /**
+   * Issue #1903 — the admin list's custom-field filters, as the one id
+   * sub-select `custom_fields`' {@link CustomFieldListFilterCondition} port
+   * built over this module's table. The caller resolves it (`customers`
+   * declares the edge to `custom_fields`; this module does not), and this
+   * search intersects it with its own tenant-scoped statement, so it narrows
+   * the reachable set and never widens it. Absent or `null` ⇒ no narrowing.
+   */
+  customFieldCondition?: CustomFieldListFilterCondition | null | undefined;
   page: number;
   pageSize: number;
 }
@@ -775,7 +1118,7 @@ export interface CustomerAccountAdminSearchPort {
  * staff member may act on this customer, and whether blocking them would
  * strand an organisation without an administrator, are `customers`' questions
  * and stay there — the counting half of the second one is
- * {@link CustomerAccountReadPort.countByOrganizationRole}, which already
+ * {@link CustomerAccountReadPort.countAdministrators}, which already
  * exists. What moves is the write and the one audit row that describes it, so
  * that a row on this table is never written by a module that does not own it
  * and never written without being recorded. Unlike
@@ -800,6 +1143,8 @@ export interface CustomerAccountLifecycleWritePort {
    * when the address is taken — the check is inside the write, so a caller
    * that races its own pre-check still gets the right code rather than a
    * constraint violation.
+   *
+   * @deprecated since 0.113.0; use {@link CustomerAccountCommandPort.createStandalone} instead.
    */
   createStandalone(input: CustomerAccountStandaloneCreateInput): Promise<CustomerAccountRecord>;
 
@@ -807,6 +1152,13 @@ export interface CustomerAccountLifecycleWritePort {
    * Idempotent: an account that is already blocked is returned unchanged and
    * nothing is recorded. Throws HTTP 404 `CUSTOMER_NOT_FOUND` for an id no
    * live account has.
+   *
+   * Since 0.113.0 it runs `customerAccountCommandPort.block`: the actor is the
+   * ambient one (`actorAdminUserId` is ignored, Principle XIII), the request
+   * metadata is the bus's (`audit` is ignored), and the account's sessions are
+   * ended after the commit, which `customers` used to do itself.
+   *
+   * @deprecated since 0.113.0; use {@link CustomerAccountCommandPort.block} instead.
    */
   block(
     customerAccountId: string,
@@ -817,7 +1169,11 @@ export interface CustomerAccountLifecycleWritePort {
     },
   ): Promise<CustomerAccountRecord>;
 
-  /** Idempotent, the same way round. */
+  /**
+   * Idempotent, the same way round.
+   *
+   * @deprecated since 0.113.0; use {@link CustomerAccountCommandPort.unblock} instead.
+   */
   unblock(
     customerAccountId: string,
     input: { actorAdminUserId: string; audit?: CustomerAccountWriteRequestMeta },
@@ -827,6 +1183,8 @@ export interface CustomerAccountLifecycleWritePort {
    * Soft-delete. Throws HTTP 409 `CUSTOMER_ALREADY_DELETED` when the account
    * already carries one — the caller's own refusal, kept here because the
    * check and the write have to see the same row.
+   *
+   * @deprecated since 0.113.0; use {@link CustomerAccountCommandPort.softDelete} instead.
    */
   softDelete(
     customerAccountId: string,
@@ -837,6 +1195,8 @@ export interface CustomerAccountLifecycleWritePort {
    * Throws HTTP 409 `CUSTOMER_NOT_DELETED` when there is nothing to restore,
    * and HTTP 409 `CUSTOMER_RESTORE_WINDOW_ELAPSED` once the account has been
    * anonymised, which is irreversible.
+   *
+   * @deprecated since 0.113.0; use {@link CustomerAccountCommandPort.restore} instead.
    */
   restore(
     customerAccountId: string,
@@ -856,7 +1216,7 @@ export interface CustomerAccountLifecycleWritePort {
   setOrganization(
     customerAccountId: string,
     organizationId: string,
-    input: { actorAdminUserId: string },
+    input: CustomerAccountOrganizationMoveInput,
   ): Promise<CustomerAccountRecord>;
 
   /**
@@ -875,10 +1235,14 @@ export interface CustomerAccountLifecycleWritePort {
   detachToPersonalOrganization(
     customerAccountId: string,
     personalOrganizationId: string,
-    input: { actorAdminUserId: string },
+    input: CustomerAccountOrganizationMoveInput,
   ): Promise<CustomerAccountRecord>;
 
-  /** `null` clears the direct group; the organisation's own group still applies. */
+  /**
+   * `null` clears the direct group; the organisation's own group still applies.
+   *
+   * @deprecated since 0.113.0; use {@link CustomerAccountCommandPort.setCustomerGroup} instead.
+   */
   setCustomerGroup(
     customerAccountId: string,
     customerGroupId: string | null,
@@ -899,6 +1263,8 @@ export interface CustomerAccountLifecycleWritePort {
    *
    * `merge` may throw; `custom_fields`' validation failure propagates to the
    * caller unchanged, which is what the admin surface turns into a 422.
+   *
+   * @deprecated since 0.113.0; use {@link CustomerAccountCommandPort.setCustomFieldValues} instead.
    */
   setCustomFieldValues(
     customerAccountId: string,
@@ -907,14 +1273,293 @@ export interface CustomerAccountLifecycleWritePort {
 
   /**
    * Soft-deleted accounts whose retention window elapsed before `cutoff` and
-   * that have not been anonymised yet — the sweep's work list.
+   * that have not been anonymised yet — the sweep's work list. It also lists,
+   * whatever the cutoff, an anonymised account that an earlier scrub left a
+   * block reason (before issue #843) or custom field values (before #802) on,
+   * until {@link anonymize} has finished it.
+   *
+   * @deprecated since 0.113.0; use {@link CustomerAccountReadPort.listDueForAnonymization} instead.
    */
   listDueForAnonymization(cutoff: Date): Promise<CustomerAccountRecord[]>;
 
   /**
+   * Whether {@link listDueForAnonymization} at `cutoff` would list anything —
+   * **yes or no, and nothing else** (issue #857).
+   *
+   * The sweep's scheduled tick asks this with no tenant context, before it
+   * enters the system scope, so that a tick with no account due writes no
+   * `tenant.escape_hatch` audit row. It is the work list's own predicate, so
+   * `false` means the sweep would anonymise nobody. No id, row or count of any
+   * account leaves it.
+   *
+   * @deprecated since 0.113.0; use {@link CustomerAccountReadPort.hasDueForAnonymization} instead.
+   */
+  hasDueForAnonymization(cutoff: Date): Promise<boolean>;
+
+  /**
    * Irreversibly scrubs the account's personal data. Returns the account
-   * unchanged when it was already anonymised, and throws HTTP 404
-   * `CUSTOMER_NOT_FOUND` for an id nothing matches.
+   * unchanged when it was already fully anonymised, and throws HTTP 404
+   * `CUSTOMER_NOT_FOUND` for an id nothing matches. The row is locked before
+   * `anonymizedAt` is read (issue #857), so two concurrent calls for one
+   * account scrub, audit and announce it once.
+   *
+   * It is the anonymisation cascade's **last** write (issue #800): the
+   * `anonymizedAt` it stamps is what takes the account off
+   * {@link listDueForAnonymization}, so it is the commit marker for the
+   * organisation and address scrubs that run before it.
+   *
+   * The scrub clears the e-mail, both names, the credentials, **every**
+   * custom field value and the operator's block reason (issue #843; the block
+   * itself stays), and commits in one transaction with its
+   * `customer_account.anonymized` audit row, which records none of the erased
+   * data (issue #802). `customer_account.anonymized.v1` is announced after
+   * that commit, only on the transition.
+   *
+   * An account an earlier scrub left a block reason or custom field values on
+   * is finished once: those are cleared, `anonymizedAt` is kept, and one more
+   * `customer_account.anonymized` row is written, with no second announcement.
+   * The rows tell the two apart by `stateBefore.anonymizedAt`: `null` on the
+   * first scrub, the original ISO timestamp on a finish. On both,
+   * `stateBefore` is `{ anonymizedAt, customFieldKeys, hadBlockReason }` and
+   * `stateAfter.anonymizedAt` is the time of the first scrub.
+   *
+   * @deprecated since 0.113.0; use {@link CustomerAccountCommandPort.anonymize} instead.
    */
   anonymize(customerAccountId: string): Promise<CustomerAccountRecord>;
+}
+
+// --- the CustomerAccount aggregate port (`specs/186-aggregate-ports/` US3) -----
+
+/**
+ * Container name: `customerAccountCommandPort`. Owner: `customer_accounts`
+ * (`specs/186-aggregate-ports/`, D-293, issue #1822).
+ *
+ * The CustomerAccount aggregate's write port: each method runs one audited
+ * Command, the one the admin route for the same operation runs, with the
+ * ambient actor — an administrator inside an admin request (or under
+ * `withSystemScopeActingFor`), the `system` actor under `withSystemScope` in a
+ * worker. **No permission is checked** — the caller is the gate; never resolve
+ * it for a customer-facing route. Call it after your own commit: each call is a
+ * transaction of its own.
+ *
+ * The admin surface over accounts belongs to two other modules — `customers`
+ * (`/api/v1/admin/customers/…`) and `organizations`
+ * (`/api/v1/admin/organizations/:id/members/…`) — and both run their writes
+ * through this port, so an operator's click and a server-side call record the
+ * same entry and fire the same command hooks.
+ *
+ * What the route does beside its write happens here too: `block` and
+ * `softDelete` end the account's sessions once the write has committed (best
+ * effort: a failure is logged, the write stands), and `anonymize` announces
+ * `customer_account.anonymized.v1` after its commit, on the transition only.
+ * The admin routes' own gates are not here: the `customers:manage` permission,
+ * the sales representative's reach over the account's Organization, the
+ * member routes' `expectedUpdatedAt`, and `customers`' restore window
+ * (`customers.deletion_retention_days`, which refuses a restore before the
+ * sweep has reached the account) are the caller's.
+ *
+ * **Refusals** are the platform's `HttpError` with its `code`: `422
+ * VALIDATION_FAILED` for an input outside the admin route's limits, a `404` for
+ * an unknown, removed or malformed id (`CUSTOMER_NOT_FOUND` on the methods
+ * `customers` serves, `NOT_FOUND` on the ones `organizations` serves — each the
+ * code its route has always answered), and each method's own below. A block or
+ * a deletion that would leave a company Organization without an active,
+ * unblocked *Administrator* is refused `409 ORG_OWNER_DEPLETION`, counted under
+ * a lock on the holders; a personal Organization's sole member may be blocked
+ * and deleted (owner ruling PR-3).
+ *
+ * **Options** ({@link AggregateCommandOptions}): an account has no `version`
+ * column, so `expectedVersion` is ignored by every method. `source` is
+ * recorded on the audit entry beside the actor; a code outside
+ * `aggregateCommandSourceSchema` is refused `422 VALIDATION_FAILED` before
+ * anything is read or written. `extensions` reaches the command hooks of the
+ * action; a key no present hook module claims is refused
+ * `422 COMMAND_EXTENSION_UNCLAIMED` before anything is written (no
+ * CustomerAccount action is declared hookable yet, so today every key is).
+ *
+ * **Not offered, deliberately**: moving an account between Organizations —
+ * `setOrganization`, `detachToPersonalOrganization`, `attachToOrganization` —
+ * is the Membership concern (`membershipPort`,
+ * `specs/191-membership-join-requests/`); password change and reset, sign-in
+ * and its throttle, and federated sign-up are authentication flows, not
+ * lifecycle writes an integration performs; a sign-in's preferred-language
+ * capture stays `customerAccountPreferencePort.captureIfUnset`.
+ *
+ * **Owner off:** the seam fails closed — resolving this port throws
+ * `ModuleDisabledError` and the call answers 503 `MODULE_DISABLED`. Whether
+ * `customer_accounts` has an off state at all is its manifest's `activation` to
+ * say, not this line's: a module declaring `nonDeactivatable` never enters one.
+ */
+export interface CustomerAccountCommandPort {
+  /**
+   * `customer_account.create` — an account of `organizationId` holding
+   * `organizationRoleId`, the password hashed here, before the transaction.
+   * Refusals: `409 EMAIL_ALREADY_REGISTERED`.
+   */
+  create(input: CustomerAccountCreateInput, options?: AggregateCommandOptions): Promise<CustomerAccountRecord>;
+  /**
+   * `customer_account.register_standalone` — an individual's account and its
+   * personal Organization, in one transaction (D-178); the Organization's
+   * channel is the current request's sales channel, the default one outside a
+   * request. Refusals: `409 EMAIL_ALREADY_REGISTERED`.
+   */
+  createStandalone(
+    input: CustomerAccountStandaloneCreateInput,
+    options?: AggregateCommandOptions,
+  ): Promise<CustomerAccountRecord>;
+  /**
+   * `customer_account.update_profile` — an absent field is left as it is; a
+   * changed e-mail clears `emailVerifiedAt`. Refusals: `404 NOT_FOUND`,
+   * `409 EMAIL_ALREADY_REGISTERED`.
+   */
+  updateProfile(
+    id: string,
+    patch: CustomerAccountProfilePatch,
+    options?: AggregateCommandOptions,
+  ): Promise<CustomerAccountRecord>;
+  /**
+   * `customer_account.blocked` — then the account's sessions end. Idempotent:
+   * an account already blocked is answered unchanged and nothing is recorded.
+   * `reason` is at most 1000 characters. Refusals: `404 CUSTOMER_NOT_FOUND`,
+   * `409 ORG_OWNER_DEPLETION`.
+   */
+  block(
+    id: string,
+    input: { readonly reason?: string | null },
+    options?: AggregateCommandOptions,
+  ): Promise<CustomerAccountRecord>;
+  /** `customer_account.unblocked` — idempotent, the same way round. Refusals: `404 CUSTOMER_NOT_FOUND`. */
+  unblock(id: string, options?: AggregateCommandOptions): Promise<CustomerAccountRecord>;
+  /**
+   * `customer_account.deleted` — the soft delete; then the account's sessions
+   * end. Refusals: `404 CUSTOMER_NOT_FOUND`, `409 CUSTOMER_ALREADY_DELETED`,
+   * `409 ORG_OWNER_DEPLETION`.
+   */
+  softDelete(id: string, options?: AggregateCommandOptions): Promise<CustomerAccountRecord>;
+  /**
+   * `customer_account.restored`. Refusals: `404 CUSTOMER_NOT_FOUND`,
+   * `409 CUSTOMER_NOT_DELETED`, `409 CUSTOMER_RESTORE_WINDOW_ELAPSED` once the
+   * account is anonymised.
+   */
+  restore(id: string, options?: AggregateCommandOptions): Promise<CustomerAccountRecord>;
+  /**
+   * `customer_account.group_assigned` — `null` clears the direct group; the
+   * Organization's own group still applies. Refusals: `404 CUSTOMER_NOT_FOUND`.
+   */
+  setCustomerGroup(
+    id: string,
+    input: { readonly customerGroupId: string | null },
+    options?: AggregateCommandOptions,
+  ): Promise<CustomerAccountRecord>;
+  /**
+   * `customer.custom_fields.update` — the caller's read-modify-write over the
+   * bag, between this module's load and its write ({@link CustomFieldMerge});
+   * the entry names the keys that changed. Refusals: `404 NOT_FOUND`, and
+   * whatever `merge` throws, unchanged.
+   */
+  setCustomFieldValues(id: string, merge: CustomFieldMerge, options?: AggregateCommandOptions): Promise<CustomerAccountRecord>;
+  /** `customer_account.set_subtree_rollup`. Refusals: `404 NOT_FOUND`. */
+  setSubtreeRollup(
+    id: string,
+    input: { readonly enabled: boolean },
+    options?: AggregateCommandOptions,
+  ): Promise<CustomerAccountRecord>;
+  /**
+   * `customer_account.promote_organization_admin`, recorded against the
+   * Organization — the break-glass path, with no last-administrator guard.
+   * Idempotent. Refusals: `404 NOT_FOUND`.
+   */
+  promoteToOrganizationAdmin(id: string, options?: AggregateCommandOptions): Promise<CustomerAccountRecord>;
+  /**
+   * `customer_account.email_verified` — idempotent: a second call keeps the
+   * first timestamp and records nothing. Refusals: `404 NOT_FOUND`.
+   */
+  markEmailVerified(
+    id: string,
+    input: { readonly verifiedAt: Date },
+    options?: AggregateCommandOptions,
+  ): Promise<CustomerAccountRecord>;
+  /**
+   * `customer_account.change_role`, recorded against the Organization — a role
+   * of the account's own Organization; holding it already records nothing.
+   * Refusals: `404 NOT_FOUND` (the member, or a role the Organization does not
+   * have), `409 CANNOT_DEMOTE_LAST_ADMIN`.
+   */
+  changeRole(
+    id: string,
+    input: { readonly organizationRoleId: string },
+    options?: AggregateCommandOptions,
+  ): Promise<CustomerAccountRecord>;
+  /**
+   * `customer_account.set_preferred_language` — overwrites the stored value
+   * with `language`, a BCP-47 tag the caller has checked against the sales
+   * channel it means and passes in that channel's spelling; stored as given.
+   * The entry names the field and `source`, never the tag. Refusals:
+   * `404 NOT_FOUND`.
+   */
+  setPreferredLanguage(
+    id: string,
+    input: { readonly language: string },
+    options?: AggregateCommandOptions,
+  ): Promise<CustomerAccountRecord>;
+  /**
+   * `customer_account.remove_member`, recorded against the Organization — the
+   * member's soft delete. Refusals: `404 NOT_FOUND`,
+   * `409 CANNOT_REMOVE_LAST_ADMIN`.
+   */
+  removeMember(id: string, options?: AggregateCommandOptions): Promise<void>;
+  /**
+   * `customer_account.anonymized` — irreversibly scrubs the account's personal
+   * data; the retention sweep's last step (issue #800), whose `anonymizedAt`
+   * takes the account off {@link CustomerAccountReadPort.listDueForAnonymization}.
+   * The row is locked before `anonymizedAt` is read (issue #857), so two
+   * concurrent calls scrub, record and announce it once.
+   *
+   * It clears the e-mail, both names, the credentials, every custom field
+   * value, the operator's block reason (the block itself stays) and the
+   * preferred language, and records `stateBefore: { anonymizedAt: null,
+   * customFieldKeys, hadBlockReason }` — none of the erased data (#802, #843).
+   * `customer_account.anonymized.v1` is announced after the commit, on the
+   * transition only. An account an earlier scrub left residue on is finished
+   * once, with one more entry whose `stateBefore.anonymizedAt` is the first
+   * scrub's time, and no second announcement; a fully anonymised account is
+   * answered unchanged and nothing is recorded. Refusals:
+   * `404 CUSTOMER_NOT_FOUND`.
+   */
+  anonymize(id: string, options?: AggregateCommandOptions): Promise<CustomerAccountRecord>;
+}
+
+// --- effective customer group ------------------------------------------------
+
+/**
+ * D-287 P0 — the one customer-group rule every pricing path applies, and the
+ * one the megamenu's customer-group audience reads (feature 168, plan R-5):
+ *
+ *     effective group = explicit ?? customer.customerGroupId ?? organization.customerGroupId ?? null
+ *
+ * `explicit` is a group a caller already resolved for the customer (the quote
+ * reference price and the admin order preview pass one); otherwise the signed-in
+ * customer's own group overrides the organisation's (feature 040 R6). Before
+ * this, listings, the product page and the cart passed the organisation alone
+ * and priced on its group while quotes and the admin preview honoured the
+ * customer's — the same buyer met different winning lists
+ * (`specs/pricing/read-paths-and-performance.md` §2.2).
+ *
+ * The customer's group counts only when the account belongs to the
+ * organisation the resolution is for. An account named beside another tenant's
+ * organisation is ignored rather than allowed to price that tenant's lists on
+ * its group (the same mismatch `BuyerLinePriceService` refuses outright).
+ */
+export function effectiveCustomerGroupId(input: {
+  explicit?: string | null;
+  customer?: { organizationId?: string | null; customerGroupId?: string | null } | null;
+  organization?: { id: string; customerGroupId?: string | null } | null;
+}): string | null {
+  if (input.explicit) return input.explicit;
+  const organization = input.organization ?? null;
+  const customer = input.customer ?? null;
+  if (customer && (customer.organizationId ?? null) === (organization?.id ?? null)) {
+    if (customer.customerGroupId) return customer.customerGroupId;
+  }
+  return organization?.customerGroupId ?? null;
 }

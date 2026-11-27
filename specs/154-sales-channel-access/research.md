@@ -124,9 +124,9 @@ session-expired flow).
 | `_lifecycle` (platform) | `GET /api/v1/storefront/module-presence` (`packages/platform/src/lifecycle/routes.storefront.ts`) |
 | platform HTTP | `GET /api/v1/_openapi.json` |
 | `dictionaries` | `GET /api/v1/dictionary`, `GET /api/v1/dictionary/by-code` (registration form) |
-| `seo` | `GET /api/v1/storefront/seo/robots-policy` |
+| `seo` | `GET /api/v1/storefront/seo/robots-policy`, `GET /api/v1/storefront/seo/crawler-files` (added after PR A: `robots.txt` and `llms.txt` are served on every store — on a closed one, `Disallow: /` and an `llms.txt` that names the store and lists nothing; the answer carries `anonymousAccess`) |
 | `product_feeds` | `GET /api/v1/public/product-feeds/:token` |
-| `newsletter` | `/api/v1/newsletter/confirm`, `/c/:token`, `/o/:token.gif`, `/unsubscribe` |
+| `newsletter` | `/api/v1/newsletter/confirm`, `/click`, `/open.gif`, `/unsubscribe` |
 
 Held by `backend/test/contract/sales_channels/channel-access-open-routes.test.ts`, which enumerates
 the composed test server's routes (an `onRoute` collector) and compares the set declaring `'open'`
@@ -247,6 +247,7 @@ creating transaction:
 | --- | --- |
 | Storefront business registration (`RegistrationService.registerOrganization`) | exactly the request's resolved channel (`getResolvedChannel()`) |
 | Storefront individual registration (`customer_accounts.createStandalone` → `PersonalOrganizationProvisionApi`) | exactly the request's resolved channel, passed by `customer_accounts` into the provisioning call |
+| Federated sign-in that creates an account (`mfa` callback → `customerSocialLoginPort.autoCreate` → `PersonalOrganizationProvisionApi`) | exactly the channel the sign-in was started on (`tx.salesChannelId`; the provider's redirect carries none); refused on a channel closed to anonymous visitors, as individual self-registration is |
 | Admin *New organization* (new, R-10) | the operator's selection (≥ 1); form pre-selects the system default |
 | Any other path (personal-Organization provisioning without a request channel, demo seed, imports, test helpers) | the system default (`bindToDefaultIfEmpty`) |
 | Invitation acceptance | no change (joins an existing Organization) |
@@ -260,7 +261,10 @@ write). Additive change to a published port.
 and assigns that channel — under manual moderation (the default) this is an application flow, under
 automatic moderation it is a self-service trade store, and the toggle's hint says so (confirmed, Q2; spec edge
 case). Individual self-registration is refused there (`SALES_CHANNEL_SIGN_IN_REQUIRED`) because it
-signs the visitor in immediately.
+signs the visitor in immediately. So is a federated sign-in that would *create* an individual account there,
+for the same reason: it creates nothing and redirects to `<storefront>/login?error=sales_channel_sign_in_required`
+(added 2026-10-19). An existing account signing in through a provider is decided by the assignment
+rule like any other sign-in.
 
 **Rationale**: D6(b) — the buyer can use the store they registered on, and on a single-channel shop
 the request channel *is* the default, so nothing changes there. Binding inside the transaction means
@@ -344,6 +348,8 @@ a Setting for the default selection on create (YAGNI — the default channel is 
    `sales_channels.storefront_url` channel setting) instead of the page, with a sign-out form.
 4. **Sign-in refused**: the login server action maps the code to `auth.login.channelNotPermitted`.
    Federated refusal redirects with `?error=sales_channel_not_permitted`, mapped the same way.
+   A federated sign-up refused on a closed store redirects with
+   `?error=sales_channel_sign_in_required`, mapped to `auth.login.signInRequired`.
 5. Any other component that meets either code (a client-side cart add after a revoke) shows the same
    translated sentence through the existing error mapping.
 

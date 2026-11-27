@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { isoDateTimeSchema, uuidSchema } from './common.js';
+import { twoDecimalAmountString } from './money-input.js';
+import { paginationSchema } from './pagination.js';
 
 /**
  * Invoices (FR-080 + feature 047-invoices-module). Produces proforma, VAT
@@ -89,6 +91,10 @@ export const invoiceLineSchema = z.object({
   ordinal: z.number().int().positive(),
   name: z.string().max(512),
   unit: z.string().max(32),
+  /**
+   * On a correction, a goods line with quantity 0 is a price reduction (issue
+   * #885): its value changed, not its quantity.
+   */
   quantity: z.number().finite(),
   unitNetPrice: z.number().finite(),
   taxRate: z.number().finite().describe('Fractional VAT rate, e.g. 0.23 for 23%'),
@@ -122,7 +128,10 @@ export const invoiceSchema = z.object({
   taxTotal: z.number().finite(),
   grossTotal: z.number().finite(),
   paidTotal: z.number().finite(),
+  /** What is still to pay: `max(0, grossTotal − paidTotal)` — never negative (issue #428). */
   amountDue: z.number().finite(),
+  /** What was paid above the gross: `max(0, paidTotal − grossTotal)` (issue #428). */
+  overpayment: z.number().finite(),
   /** Legacy alias of grossTotal kept for back-compat with the original schema. */
   total: z.number().finite(),
   originalInvoiceId: uuidSchema.nullable(),
@@ -142,6 +151,58 @@ export const invoiceDetailSchema = invoiceSchema.extend({
   buyer: invoiceBuyerSchema,
 });
 export type InvoiceDetail = z.infer<typeof invoiceDetailSchema>;
+
+/**
+ * One row of `GET /api/v1/admin/invoices` (issue #599). A platform invoice
+ * carries its order; an ERP-imported sale document may have none, and then
+ * `orderId` and `orderBusinessId` are both `null`.
+ */
+export const adminInvoiceListItemSchema = z.object({
+  id: uuidSchema,
+  orderId: uuidSchema.nullable(),
+  /** Human-readable order business id (e.g. `ORD-…`); null without an order or when it is gone. */
+  orderBusinessId: z.string().nullable(),
+  salesChannelId: uuidSchema.nullable(),
+  kind: invoiceKindSchema,
+  number: z.string(),
+  issuedAt: isoDateTimeSchema,
+  currency: z.string().length(3),
+  /** The gross total. */
+  total: z.number().finite(),
+  status: invoiceStatusSchema,
+  /** `status === 'ready'`: the PDF can be downloaded. */
+  pdfReady: z.boolean(),
+  createdAt: isoDateTimeSchema,
+  updatedAt: isoDateTimeSchema,
+});
+export type AdminInvoiceListItem = z.infer<typeof adminInvoiceListItemSchema>;
+
+export const adminInvoiceListResponseSchema = z.object({
+  data: z.array(adminInvoiceListItemSchema),
+  pagination: paginationSchema,
+});
+export type AdminInvoiceListResponse = z.infer<typeof adminInvoiceListResponseSchema>;
+
+/**
+ * One row of `GET /api/v1/orders/:id/invoices` — a `ready` invoice of an order
+ * the buyer may read (issue #599). `downloadHref` is the API path of its PDF.
+ */
+export const orderInvoiceListItemSchema = z.object({
+  id: uuidSchema,
+  kind: invoiceKindSchema,
+  number: z.string(),
+  issuedAt: isoDateTimeSchema,
+  currency: z.string().length(3),
+  /** The gross total. */
+  total: z.number().finite(),
+  downloadHref: z.string(),
+});
+export type OrderInvoiceListItem = z.infer<typeof orderInvoiceListItemSchema>;
+
+export const orderInvoiceListResponseSchema = z.object({
+  data: z.array(orderInvoiceListItemSchema),
+});
+export type OrderInvoiceListResponse = z.infer<typeof orderInvoiceListResponseSchema>;
 
 /**
  * What `invoices` hands the document render port
@@ -349,6 +410,17 @@ export interface InvoicePdfLine {
  * of Node types — it is imported by the admin SPA and the storefront too.
  */
 export interface InvoicePdfPort {
+  /**
+   * The PDF of one issued document, rendered from its invoice template — the
+   * same path the admin and the per-invoice customer downloads take
+   * (issue #1341). Rejects when no document has that id.
+   */
+  renderInvoice(invoiceId: string): Promise<Uint8Array>;
+  /**
+   * A stub one-page PDF carrying the number and the total only.
+   *
+   * @deprecated No route serves it since issue #1341; use `renderInvoice`.
+   */
   renderMinimal(params: { invoiceNumber: string; total: string; currency: string }): Uint8Array;
   renderBulk(invoices: readonly InvoicePdfLine[]): Uint8Array;
 }
@@ -595,10 +667,12 @@ export const erpSaleDocumentUpsertInputSchema = z.object({
   saleDate: z.string().nullable().optional(),
   paymentDueDate: z.string().nullable().optional(),
   paymentMethod: z.string().max(64).nullable().optional(),
-  netTotal: z.string().nullable().optional(),
-  taxTotal: z.string().nullable().optional(),
-  grossTotal: z.string(),
-  paidTotal: z.string().optional(),
+  // An integration's amounts: decimal strings with at most two places (issue #417),
+  // trimmed first — surrounding whitespace was accepted before and is stored trimmed.
+  netTotal: twoDecimalAmountString(z.string().trim()).nullable().optional(),
+  taxTotal: twoDecimalAmountString(z.string().trim()).nullable().optional(),
+  grossTotal: twoDecimalAmountString(z.string().trim()),
+  paidTotal: twoDecimalAmountString(z.string().trim()).optional(),
   buyerSnapshot: invoiceBuyerSchema.nullable().optional(),
   attachments: z.array(erpSaleDocumentAttachmentInputSchema).optional(),
 });
@@ -632,6 +706,12 @@ export const erpSaleDocumentListItemSchema = z.object({
   attachments: z.array(erpSaleDocumentAttachmentListItemSchema),
 });
 export type ErpSaleDocumentListItem = z.infer<typeof erpSaleDocumentListItemSchema>;
+
+/** `GET /api/v1/account/organization/invoices` — the Organization's ERP-imported sale documents (issue #599). */
+export const erpSaleDocumentListResponseSchema = z.object({
+  data: z.array(erpSaleDocumentListItemSchema),
+});
+export type ErpSaleDocumentListResponse = z.infer<typeof erpSaleDocumentListResponseSchema>;
 
 /**
  * Container name: `erpSaleDocumentWritePort`. Owner: `invoices`.

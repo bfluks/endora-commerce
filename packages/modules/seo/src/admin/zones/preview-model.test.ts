@@ -13,6 +13,75 @@ import {
 } from './preview-model.js';
 
 /**
+ * The CPU time this process has spent, in milliseconds — not the wall clock.
+ *
+ * Issue #250: under load the wall clock also counts the time the scheduler gave
+ * to other processes, and a timing of a millisecond or two can absorb a whole
+ * time slice. On a loaded CI runner the linear function below read `16× the
+ * text, 6.05× the time`, and pinned to one core shared with three busy
+ * processes it read 7.27× in one run of twenty. The process's own CPU time does
+ * not advance while it is not scheduled, so what it measures is the work.
+ */
+const cpuNow = (): number => {
+  // This file runs under Node (the package's `environment: 'node'`), while the
+  // admin program it is type-checked in carries no Node types, so the one call
+  // it needs is declared here rather than pulling `@types/node` into the UI.
+  const { process } = globalThis as unknown as {
+    readonly process: { cpuUsage(): { readonly user: number; readonly system: number } };
+  };
+  const used = process.cpuUsage();
+  return (used.user + used.system) / 1000;
+};
+
+/**
+ * Issue #612: the cost is compared across sizes, not against a budget. `run` is
+ * timed once on an input of `length` against {@link GROWTH} calls on inputs
+ * {@link GROWTH} times shorter, every call on an input of its own built outside
+ * the timed region. Linear code does the same work on both sides, so the ratio
+ * is about 1; a quadratic path makes it grow with {@link GROWTH}.
+ *
+ * Issue #250 made it hold under load as well as on an idle machine: CPU time
+ * rather than the wall clock ({@link cpuNow}); both sides warmed up before
+ * anything is kept, so neither is timed before the compiler has reached it; and
+ * {@link SAMPLES} timings per side, taken in turns, of which the fastest is
+ * kept, so a pause lands on both sides or on neither.
+ */
+const GROWTH = 64;
+/**
+ * Between the worst linear reading and the best quadratic one, measured on
+ * 2026-11-08 under load — 40 cold runs of this file, half pinned to one core
+ * shared with three busy processes, half beside 32 busy processes at load ~55:
+ * 0.36-1.41 for this file's function, and 9.48-19.65 over 21 runs with the
+ * #612 quadratic (a group's agent list copied per line and searched per rule)
+ * planted in its place. About 2.5 times clear of each.
+ */
+const LINEAR_BOUND = 4;
+const SAMPLES = 15;
+const WARM_UP = 3;
+function growthRatio<T>(run: (input: T) => unknown, input: (length: number) => T, length: number): number {
+  const timed = (batch: readonly T[]): number => {
+    const start = cpuNow();
+    for (const value of batch) run(value);
+    return cpuNow() - start;
+  };
+  const one = (): T[] => [input(length)];
+  const many = (): T[] => Array.from({ length: GROWTH }, () => input(Math.ceil(length / GROWTH)));
+  for (let round = 0; round < WARM_UP; round += 1) {
+    timed(one());
+    timed(many());
+  }
+  let fastestOne = Number.POSITIVE_INFINITY;
+  let fastestMany = Number.POSITIVE_INFINITY;
+  for (let sample = 0; sample < SAMPLES; sample += 1) {
+    const longer = one();
+    const shorter = many();
+    fastestOne = Math.min(fastestOne, timed(longer));
+    fastestMany = Math.min(fastestMany, timed(shorter));
+  }
+  return fastestOne / fastestMany;
+}
+
+/**
  * What the `robots.txt` preview shows — one case per row of
  * `specs/144-seo-search-engine-robots/contracts/admin-surfaces.md` §4.
  *
@@ -544,12 +613,16 @@ describe('closesSiteToEveryCrawler', () => {
     expect(closesSiteToEveryCrawler(text)).toBe(false);
   });
 
-  it('is linear in the text: 64 KiB of line breaks, or of colons, is immediate', () => {
-    const started = performance.now();
-    closesSiteToEveryCrawler('\n'.repeat(65_536));
-    closesSiteToEveryCrawler(':'.repeat(65_536));
-    closesSiteToEveryCrawler('User-agent: *\n'.repeat(4_000));
-    expect(performance.now() - started).toBeLessThan(500);
+  it('is linear in the text: 64 KiB of line breaks, of colons, or of one group’s User-agent lines', () => {
+    const shapes: ReadonlyArray<readonly [string, (size: number) => string]> = [
+      ['line breaks', (size) => '\n'.repeat(size)],
+      ['colons', (size) => ':'.repeat(size)],
+      ['User-agent lines', (size) => 'User-agent: *\n'.repeat(size / 14)],
+    ];
+    for (const [label, shape] of shapes) {
+      const ratio = growthRatio(closesSiteToEveryCrawler, shape, 65_536);
+      expect(ratio, `${label}: ${GROWTH}× the text, ${ratio.toFixed(2)}× the time`).toBeLessThan(LINEAR_BOUND);
+    }
   });
 });
 

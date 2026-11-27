@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import { zoneComponent, type AdminContributions } from '@endora-commerce/admin-kit/contributions';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
+import { markup } from '../../helpers/react-ids';
 
 /**
  * `order.detail.after` — the stack of panels an order's screen ends with
@@ -113,11 +114,6 @@ async function renderDetail(options: {
   return container;
 }
 
-/** The screen's markup with React's per-render ids taken out, so two renders compare. */
-function markup(container: HTMLElement): string {
-  return container.innerHTML.replace(/(id|for|aria-[a-z]+)="(:r[0-9a-z]+:|«r[0-9a-z]+»)"/g, '$1="_"');
-}
-
 beforeEach(() => {
   getSpy.mockReset();
 });
@@ -177,7 +173,7 @@ describe('OrderDetail — the order.detail.after zone', () => {
       resolve(process.cwd(), '../packages/modules/orders/src/admin/pages/OrderDetail.tsx'),
       'utf8',
     );
-    expect(source).toContain('<AdminZone name="order.detail.after" props={{ orderId: id }} />');
+    expect(source).toContain('<AdminZone name="order.detail.after" props={{ orderId: id }} chrome="card" />');
     expect(source).not.toMatch(/mod-crm|crm:|opportunit/i);
   });
 });

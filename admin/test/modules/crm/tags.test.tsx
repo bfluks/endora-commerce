@@ -140,7 +140,7 @@ async function tick(control: HTMLElement, ...names: string[]): Promise<void> {
 
 describe('TagsPage', () => {
   async function renderPage(): Promise<void> {
-    renderCrm(<TagsPage />, { path: '/crm/tags', pattern: '/crm/tags' });
+    renderCrm(<TagsPage />, { path: '/crm/workflow/tags', pattern: '/crm/workflow/tags' });
     await screen.findByRole('heading', { level: 1, name: en('tags.title') });
   }
 
@@ -153,11 +153,34 @@ describe('TagsPage', () => {
     expect(within(row('Tender')).getByText('0')).toBeInTheDocument();
   });
 
-  it('says there are no tags yet, with the way to add the first', async () => {
+  it('says there are no tags yet, with the one way to add the first (issue #1562)', async () => {
     tags = [];
     await renderPage();
-    expect(await screen.findByText(en('tags.empty'))).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: en('tags.add') }).length).toBeGreaterThan(0);
+    const empty = await screen.findByText(en('tags.empty'));
+    expect(empty.closest('[data-empty-state="no-data"]')).not.toBeNull();
+    expect(screen.getByText(en('tags.emptyBody'))).toBeInTheDocument();
+    // While the list is empty the empty state's Add is the view's one primary;
+    // the header's goes away (Von Restorff).
+    const add = screen.getAllByRole('button', { name: en('tags.add') });
+    expect(add).toHaveLength(1);
+    expect(add[0]!.closest('header')).toBeNull();
+  });
+
+  it('puts the one filled Add in the page header while tags exist (issue #1562)', async () => {
+    await renderPage();
+    await screen.findByText('Key account');
+    const add = screen.getAllByRole('button', { name: en('tags.add') });
+    expect(add).toHaveLength(1);
+    expect(add[0]!.closest('header')).not.toBeNull();
+    expect(add[0]!.className.split(/\s+/)).toContain('bg-primary');
+  });
+
+  it('draws a row’s Delete as a ghost button in the destructive tone, naming the tag', async () => {
+    await renderPage();
+    await screen.findByText('Key account');
+    const remove = within(row('Key account')).getByRole('button', { name: en('tags.delete', { name: 'Key account' }) });
+    expect(remove).toHaveClass('text-destructive');
+    expect(remove).not.toHaveClass('bg-destructive');
   });
 
   it('says the list could not be loaded and tries again', async () => {
@@ -295,6 +318,12 @@ describe('tags on an opportunity', () => {
   });
 });
 
+/** Opens the toolbar's *More filters* panel unless it is open (issue #1505: these filters are folded away). */
+async function openMoreFilters(): Promise<void> {
+  const toggle = screen.queryByRole('button', { name: /^(More filters|Więcej filtrów)/ });
+  if (toggle && toggle.getAttribute('aria-expanded') === 'false') await userEvent.click(toggle);
+}
+
 describe('tags elsewhere', () => {
   it('shows an opportunity\'s tags on the list and filters by every tag chosen', async () => {
     renderCrm(<OpportunitiesList />, { path: '/crm/opportunities' });
@@ -303,6 +332,7 @@ describe('tags elsewhere', () => {
     expect(within(row).getByText('Tender')).toBeInTheDocument();
     expect(lastQuery(LIST_PATH).has('tagId')).toBe(false);
 
+    await openMoreFilters();
     await tick(screen.getByRole('button', { name: en('tags.filter.label') }), 'Key account', 'Tender');
     await waitFor(() => expect(lastQuery(LIST_PATH).getAll('tagId')).toEqual([KEY.id, TENDER.id]));
   });
@@ -310,6 +340,7 @@ describe('tags elsewhere', () => {
   it('filters the board by tag', async () => {
     renderCrm(<OpportunityBoardPage />, { path: '/crm/board', pattern: '/crm/board' });
     await screen.findByRole('group', { name: en('board.column.label', { status: 'New' }) });
+    await openMoreFilters();
     await tick(screen.getByRole('button', { name: en('tags.filter.label') }), 'Tender');
     await waitFor(() => expect(lastQuery(BOARD_PATH).getAll('tagId')).toEqual([TENDER.id]));
   });

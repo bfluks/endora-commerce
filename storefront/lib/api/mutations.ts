@@ -3,7 +3,8 @@
  *
  * Mirrors `apiGet` but for POST/PATCH/DELETE. The wrapper:
  *   - threads the active Sales Channel + locale through every request via
- *     the same headers as `apiGet`.
+ *     the same headers as `apiGet` — the caller's channel, or the request's
+ *     stamped one when it passed none (`activeChannelHeaders`).
  *   - forwards the caller's `b2b_session` cookie so authenticated mutations
  *     reach the backend with the right identity.
  *   - returns parsed JSON plus the raw `Set-Cookie` header so server actions
@@ -15,6 +16,7 @@
 import type { RequestContext } from './client';
 import { StorefrontApiError } from './client';
 import { backendBaseUrl } from '../env.mjs';
+import { activeChannelHeaders } from './channel-headers';
 
 /**
  * The backend's origin, read per call.
@@ -48,7 +50,7 @@ function throwFromErrorEnvelope(status: number, envelope: unknown): never {
         .join('; ');
       message = `${message} (${hint})`;
     }
-    throw new StorefrontApiError(status, err.code, message, err.requestId);
+    throw new StorefrontApiError(status, err.code, message, err.requestId, err.details);
   }
   throw new StorefrontApiError(status, 'INTERNAL', `HTTP ${status}`);
 }
@@ -81,7 +83,7 @@ export interface MutateResult<T> {
 export async function apiMutate<T>(opts: MutateOptions): Promise<MutateResult<T>> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
-  if (opts.ctx?.salesChannelCode) headers['X-Sales-Channel'] = opts.ctx.salesChannelCode;
+  Object.assign(headers, await activeChannelHeaders(opts.ctx));
   if (opts.ctx?.locale) headers['Accept-Language'] = opts.ctx.locale;
   if (opts.rawCookieHeader) {
     headers['Cookie'] = opts.rawCookieHeader;
@@ -124,11 +126,24 @@ export async function apiGetAuthed<T>(opts: {
   sessionCookie: string;
   ctx?: RequestContext;
 }): Promise<T> {
+  return (await apiGetAuthedEnvelope<{ data: T }>(opts)).data;
+}
+
+/**
+ * {@link apiGetAuthed} answering the whole response body rather than its `data` — for a list
+ * whose envelope carries more than `data`, such as a cursor-paged list's `pagination`, which
+ * `apiGetAuthed` drops.
+ */
+export async function apiGetAuthedEnvelope<E extends { data: unknown }>(opts: {
+  path: string;
+  sessionCookie: string;
+  ctx?: RequestContext;
+}): Promise<E> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
     Cookie: `b2b_session=${opts.sessionCookie}`,
+    ...(await activeChannelHeaders(opts.ctx)),
   };
-  if (opts.ctx?.salesChannelCode) headers['X-Sales-Channel'] = opts.ctx.salesChannelCode;
   if (opts.ctx?.locale) headers['Accept-Language'] = opts.ctx.locale;
 
   const response = await fetch(`${backendBaseUrl()}${opts.path}`, {
@@ -140,8 +155,7 @@ export async function apiGetAuthed<T>(opts: {
     const envelope = await response.json().catch(() => null);
     throwFromErrorEnvelope(response.status, envelope);
   }
-  const payload = (await response.json()) as { data: T };
-  return payload.data;
+  return (await response.json()) as E;
 }
 
 function collectSetCookie(headers: Headers): string[] {

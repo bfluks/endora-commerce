@@ -1,8 +1,8 @@
 ---
-title: Queue Consumers & Background Processing
+title: Queue consumers & background processing
 ---
 
-# Queue Consumers & Background Processing
+# Queue consumers & background processing
 
 Asynchronous work on the B2B Platform — bulk edits, search re-indexing,
 webhook delivery — runs through durable, Redis-backed queues consumed by
@@ -39,8 +39,13 @@ by the `BACKEND_ROLE` environment variable:
 For a single VPS, run only the API process — it co-locates the workers:
 
 ```bash
-pnpm --filter backend run start      # production (built)
-pnpm --filter backend run dev        # development (tsx watch)
+# In the root of an instance:
+pnpm run start      # production (built)
+pnpm run dev        # development (watch)
+
+# In a checkout of the Endora Commerce repository:
+pnpm --filter backend run start
+pnpm --filter backend run dev
 ```
 
 This is the posture the rule allows for low-volume work: the worker
@@ -53,13 +58,22 @@ When bulk edits, imports, or re-indexing get heavy enough to contend with
 request latency, split the workers into their own process(es):
 
 ```bash
+# In the root of an instance.
 # Web tier — HTTP only, no in-process consumers.
-BACKEND_ROLE=api pnpm --filter backend run start
+BACKEND_ROLE=api pnpm run start
 
 # Worker tier — consumers only, no HTTP listener.
+pnpm run worker
+
+# In a checkout of the Endora Commerce repository:
+BACKEND_ROLE=api pnpm --filter backend run start
 pnpm --filter backend run worker          # production (built)
 pnpm --filter backend run worker:dev      # development (tsx watch)
 ```
+
+An instance has no watch-mode worker: `pnpm run dev` runs the API with the workers co-located,
+which is what a development machine needs. An instance scaffolded before its root declared
+`worker` has no `pnpm run worker`; `pnpm -C backend run worker` is the same command there.
 
 Scale the worker tier **horizontally** by starting more worker processes (or
 containers). BullMQ's atomic job claim guarantees a job is processed by exactly
@@ -87,7 +101,7 @@ queue:
   threshold (50 products). The admin request persists a `pending`
   `BulkOperation` row, enqueues its id, and returns `202` immediately.
 - **`search_reindex`** — a full Meilisearch re-index (the CLI
-  `pnpm search:reindex` equivalent), enqueued automatically when an attribute's
+  `pnpm run cli search reindex` equivalent), enqueued automatically when an attribute's
   `searchable` flag is flipped.
 
 The consumer claims a row by flipping it `pending → running` with a conditional
@@ -109,6 +123,102 @@ replayable from the admin **Webhooks → Deliveries** view. See the
 [webhooks module](../modules/webhooks.md) for the delivery contract and retry
 model.
 
+### Price surface refresh — `price_lists.surface`
+
+Keeps the prices that **price-sorted and price-filtered** product listings are
+ordered by up to date. Those listings cannot be ordered from the search index —
+every buyer may have their own prices — so the `price_lists` module precomputes
+each product's price per group of buyers that share the same price books (a
+*pricing profile*). Every committed price change — a price book, its rows,
+channels or members, base prices, a status change by the sweep below, a product,
+category or attribute change, a change to a sales channel — marks what it can
+move: the products it concerns in the profiles it reaches, or whole profiles
+when it concerns every product of them (a sales-channel change, a line for all
+products or for an attribute value alone, more than 10 000 products at once). It
+then enqueues **one coalesced job** (a fixed job id, so a burst of writes costs
+one job; three attempts with exponential backoff).
+
+Each pass of the consumer builds never-built and wholly marked profiles in full
+and re-resolves only the marked products of the others, the everyone profiles
+before the buyer ones, and swaps each change in one transaction. Passes repeat
+while writes keep marking, so a change made during a pass is picked up by the
+next. A request never waits for it: a marked profile keeps serving its previous
+order, and the prices on the product cards are always resolved live, so only the
+**order** of a price-sorted listing lags a change — by the consumer's
+turnaround, about half a second for a single change in the platform's
+measurements and under about a minute and a half, with some 200 profiles, for a change that
+rebuilds many profiles whole (85 s at 202 profiles on 50 000 products, issue #416). The job
+is idempotent (a refresh recomputes from source), so a retry or a second worker
+instance is harmless.
+
+**If no worker consumes this queue** — a process tier without consumers, or no
+Redis — the profiles are never built: price-sorted listings are then ordered
+from a live resolution when they are narrowed to at most 5 000 products (a
+category, a search), and otherwise served in the catalogue's default order with
+correct prices on the cards. Run the worker wherever price sorting matters.
+
+### Table maintenance after bulk writes — `catalog.table-maintenance`, `price_lists.table-maintenance`
+
+Right after a bulk write, Postgres has no fresh statistics and no visibility map for the rows it
+wrote until autovacuum's first pass — and for a write below autovacuum's scale factor that pass may
+not come. Until then the admin's index-only reads (the product list's ordered walk, a price book's
+lines and searches) fetch every row from the table, which on a 50 000-product catalogue costs the
+broadest searches about 25 ms each (issue #409). So each module asks for `VACUUM (ANALYZE)` of its
+own tables once a bulk write of them has committed: `catalog` for `products` and
+`product_variants` after a products import (*Import / Export*, `catalogBulkImportPort`), and
+`price_lists` for `price_list_matrix_entries` and `price_list_product_lines` after a price-book row
+batch (the editor's save, a CSV import), a base-price write (the PIM price import) and a book
+duplicate. `VACUUM` cannot run inside a transaction, so it is a job, never part of the write.
+
+Each request is a job **delayed by one minute and deduplicated by its table**: every write while it
+waits is absorbed (the vacuum still runs after them), and a write while it runs keeps exactly one
+follow-up. One consumer per module runs them one at a time; a failed job is logged, retried once,
+and dropped. **If no worker consumes these queues**, nothing breaks — autovacuum remains the floor,
+and the reads above are slower until its first pass.
+
+### Command outbox — `command_outbox.drain`
+
+Delivers the `afterCommit` handlers that installed modules register on another
+module's write — telling an ERP that an Organization registered, say. Each
+handler's delivery is a row written in the same transaction as the write, so a
+committed write never loses it. A job scheduler drains the rows every 10
+seconds, and a write that produced rows also wakes the drain at once. A failed
+delivery is retried with a growing delay, up to 10 attempts, and is then
+**dead**; a handler may also give up on a delivery at once.
+
+Dead deliveries are listed in the admin under **Platform → Command hooks →
+Outbox** (`platform.command_outbox.read`), with the handler, the attempts and the
+failure's code — never the data the delivery carried. An administrator holding
+`platform.command_outbox.manage` retries one there, and the retry is recorded in
+the audit log. A delivery whose handler's module is switched off waits, without
+spending an attempt, until the module is switched back on. Delivered rows are
+removed after 7 days, dead ones after 90. See
+[the Command Bus](../architecture/command-bus.md#aftercommit-outbox) for the
+delivery contract.
+
+**If no worker consumes this queue**, nothing is lost: the rows wait in the
+database and are delivered once a worker runs.
+
+### Cart abandonment sweep — `carts.abandonment.sweep`
+
+Marks active carts idle past `carts.abandonment.inactivity_minutes` as abandoned (and sends the
+abandonment notification a deployment supplies), and removes working baskets left behind by an
+order placement that never finished. A job scheduler runs it every 15 minutes. A tick first asks
+whether any cart is due and runs a pass only when one is, so an idle instance does no work and
+writes no audit row for it. A pass works in batches of 500, committing each batch's status flips
+together with the audit rows for them, so an interrupted pass leaves whole batches behind rather
+than a partial one; the next tick picks up the rest. Passes are idempotent, so a second worker
+instance is harmless. While `carts` is unavailable on the platform no tick runs.
+
+To run one pass by hand, use `pnpm run cli carts abandonment-sweep` in the root of an instance
+(`pnpm --filter backend run cart:abandonment-sweep` in a checkout of the Endora Commerce
+repository). The command reads module presence from `module_registrations` before it does anything
+and exits non-zero with `MODULE_DISABLED` when `carts` is not installed on the deployment.
+
+**If no worker consumes this queue**, carts are not marked abandoned and orphaned working baskets
+stay in the database — harmlessly, since nothing reads them — until a worker runs or the command is
+run by hand.
+
 ## Other background jobs (not yet on a shared queue)
 
 A few periodic/maintenance jobs still run as in-process timers or manual
@@ -117,10 +227,12 @@ to the same worker model; document and operate them as follows in the meantime:
 
 | Job | How it runs today | Invocation |
 | --- | --- | --- |
-| Cart abandonment sweep | Manual / cron script | `pnpm --filter backend run cart:abandonment-sweep` |
-| Full search re-index | Manual CLI | `pnpm --filter backend run search:reindex` |
-| Price-list status sweep | In-process `setInterval` (every 5 min) | starts with the API process |
+| Full search re-index | Manual CLI | `pnpm run cli search reindex` |
+| Price-book status sweep (moves *Scheduled* books to *Active* and *Active* ones to *Expired* for the admin's display; prices follow a book's dates at the exact instant regardless) | In-process `setInterval` (every 5 min) | starts with the API process |
 | RFQ expiry | Service method, invoked on a schedule | `RfqExpiryWorker.sweep()` |
+
+The command is run in the root of an instance. In a checkout of the Endora Commerce repository it
+is `pnpm --filter backend run search:reindex`.
 
 :::note
 The in-process `setInterval` sweepers above are the legacy pattern the
@@ -128,13 +240,6 @@ scalable queue consumer rule replaces. New asynchronous, queue-backed work
 MUST use the durable-queue + separable-worker model described here, never a
 request-process timer.
 :::
-
-The cart abandonment sweep reads module presence from `module_registrations`
-before it does anything and exits non-zero with `MODULE_DISABLED` when `carts`
-is not installed on the deployment — the same answer an HTTP route would give,
-for an entry point that has no route to gate. It sweeps in batches of 500,
-committing each batch's status flips together with the audit rows for them, so
-an interrupted run leaves whole batches behind rather than a partial one.
 
 ## Monitoring & troubleshooting
 

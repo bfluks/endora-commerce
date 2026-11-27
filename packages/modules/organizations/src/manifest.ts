@@ -1,6 +1,9 @@
 import {
+  ORGANIZATION_HOOKABLE_ACTIONS,
   defineModuleManifest,
   defineModuleSettingsManifest,
+  toHookableActionDeclaration,
+  type CustomFieldWriteDeclaration,
   type ModuleDemoManifest,
 } from '@endora-commerce/contracts';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
@@ -40,6 +43,11 @@ export const ORGANIZATIONS_SETTING_CODES = {
   // Feature 056 — platform-wide factory default for credit inheritance across the
   // organization tree; a per-org `credit_inheritance_mode` column overrides it.
   CREDIT_INHERITANCE_MODE: 'organizations.hierarchy.credit_inheritance_mode',
+  // Feature 173 — the company registry lookup at storefront registration
+  // (`specs/173-registration-registry-lookup/`, data-model §4).
+  REGISTRY_LOOKUP_ENABLED: 'organizations.registration.registry_lookup_enabled',
+  GUS_CREDENTIALS: 'organizations.registration.gus_credentials',
+  REGISTRY_LOOKUP_PL_SOURCES: 'organizations.registration.registry_lookup_pl_sources',
 } as const;
 
 const settings = defineModuleSettingsManifest({
@@ -73,6 +81,39 @@ const settings = defineModuleSettingsManifest({
       valueType: 'string',
       defaultValue: 'shared_pool',
     },
+    // Feature 173 (`contracts/admin-surfaces.md` §2). Platform-wide: the
+    // registries a business is looked up in are the deployment's choice, not a
+    // storefront's (owner decision OD-2). Off by default (OD-6), so merging
+    // sends no tax ID to a public registry before an operator decides to.
+    {
+      code: ORGANIZATIONS_SETTING_CODES.REGISTRY_LOOKUP_ENABLED,
+      name: 'Registration — company registry lookup',
+      description:
+        'Lets a business registering on the storefront pre-fill its company data from public registries by tax ID.',
+      groupCode: 'organizations',
+      valueType: 'boolean',
+      defaultValue: false,
+    },
+    {
+      code: ORGANIZATIONS_SETTING_CODES.GUS_CREDENTIALS,
+      name: 'Registration — GUS REGON credentials',
+      description:
+        'Optional GUS REGON key (Credentials screen) for Polish NIPs. Without it, only the VAT White List is asked.',
+      groupCode: 'organizations',
+      valueType: 'credential_ref',
+      configurationType: 'organizations_gus_bir',
+      defaultValue: '',
+    },
+    {
+      code: ORGANIZATIONS_SETTING_CODES.REGISTRY_LOOKUP_PL_SOURCES,
+      name: 'Registration — registries for Polish NIPs',
+      description:
+        'Which public registries the lookup asks for a Polish NIP. Other EU VAT numbers always use VIES.',
+      groupCode: 'organizations',
+      valueType: 'string',
+      enumOptions: ['gus_mf', 'gus', 'mf'],
+      defaultValue: 'gus_mf',
+    },
   ],
 });
 
@@ -81,6 +122,72 @@ const settings = defineModuleSettingsManifest({
  * extended by feature 026 with two settings keys (moderation mode + new
  * registration email recipients).
  */
+/**
+ * Feature 175 (`specs/175-buyer-input-custom-fields/` research R-11) — every
+ * write of this module's two custom-field hosts, for `check:custom-field-writes`:
+ * the Organization create and update, the member direct-create (the `customer`
+ * create; its values are `customers`' values patch), the member profile update
+ * (a `customer` update without values, which that values patch covers), the
+ * invitation exemption, and the buyer input surface `organization.register` for
+ * both groups. Read as a literal by the check: keep every entry a literal object.
+ */
+export const customFieldWrites = [
+  {
+    entityType: 'organization',
+    kind: 'create',
+    method: 'POST',
+    path: '/api/v1/admin/organizations',
+    body: 'AdminOrganizationCreateBodySchema',
+  },
+  {
+    entityType: 'organization',
+    kind: 'update',
+    method: 'PATCH',
+    path: '/api/v1/admin/organizations/:id',
+    body: 'adminPatchOrganizationRequestSchema',
+  },
+  {
+    entityType: 'customer',
+    kind: 'create',
+    method: 'POST',
+    path: '/api/v1/admin/organizations/:id/members',
+    body: 'adminDirectMemberToRoleRequestSchema',
+  },
+  {
+    entityType: 'customer',
+    kind: 'update',
+    method: 'PATCH',
+    path: '/api/v1/admin/organizations/:id/members/:customerAccountId',
+    body: 'adminPatchMemberProfileRequestSchema',
+  },
+  {
+    entityType: 'customer',
+    kind: 'create',
+    exempt:
+      'POST /api/v1/admin/organizations/:id/members/invite creates no account; the invited person creates it on acceptance, a buyer action.',
+  },
+  {
+    entityType: 'organization',
+    kind: 'buyer-input',
+    surface: 'organization.register',
+    method: 'POST',
+    path: '/api/v1/organizations/register',
+    body: 'registerOrganizationRequestSchema',
+    at: 'organization.customFieldValues',
+    test: 'backend/test/contract/organizations/register-custom-fields.contract.test.ts',
+  },
+  {
+    entityType: 'customer',
+    kind: 'buyer-input',
+    surface: 'organization.register',
+    method: 'POST',
+    path: '/api/v1/organizations/register',
+    body: 'registerOrganizationRequestSchema',
+    at: 'firstUser.customFieldValues',
+    test: 'backend/test/contract/organizations/register-custom-fields.contract.test.ts',
+  },
+] satisfies CustomFieldWriteDeclaration[];
+
 export const manifest = defineModuleManifest({
   id: 'organizations',
   name: 'Organizations',
@@ -205,6 +312,33 @@ export const manifest = defineModuleManifest({
         'the audit rows stayed here. Same mutual pair, same trade.',
     },
     {
+      moduleId: 'customer_accounts',
+      port: 'customerAccountMemberCommandPort',
+      reason:
+        '`specs/176-command-hooks-outbox/` FR-002: a registration creates its first account ' +
+        "as a child `customer_account.create` Command of this module's `organization.register`, " +
+        'so the Organization and its administrator commit in one transaction; the Command and ' +
+        "the table are that module's. Same mutual pair, same trade.",
+    },
+    {
+      moduleId: 'customer_accounts',
+      port: 'customerAccountCommandPort',
+      reason:
+        '`specs/186-aggregate-ports/` US3 (issue #1822): the operator member panel — create, role, ' +
+        'roll-up, profile, removal and the break-glass recovery — writes through the CustomerAccount ' +
+        "aggregate port, so a server-side caller and an operator run that module's one Command per " +
+        'operation. Same mutual pair, same trade.',
+    },
+    {
+      moduleId: 'customer_accounts',
+      port: 'customerAccountRoleCommandPort',
+      reason:
+        '`specs/170-organization-roles/` WP-02b: deleting a role its members hold moves ' +
+        "each holder as a child `customer_account.change_role` Command of this module's " +
+        '`organization_role.delete`, in one transaction (research R-22); the Command and ' +
+        "the column are that module's. Same mutual pair, same trade.",
+    },
+    {
       moduleId: 'price_lists',
       port: 'priceListReadPort',
       reason:
@@ -230,6 +364,27 @@ export const manifest = defineModuleManifest({
    * to the **edge**, not to the owner, and the two consumers answer differently.
    */
   nonBindingDependencies: [
+    {
+      moduleId: 'credentials',
+      name: 'configurationTypeRegistry',
+      kind: 'contributes-to',
+      reason:
+        'Feature 173. A push, from a contribution-only boot hook, of the GUS REGON credential type ' +
+        'this module owns. The registry enumerates only types whose owner is present; nothing is read back. ' +
+        'Not `dependencies`: this module is the non-deactivatable tenancy root, so the edge would make ' +
+        '`credentials.enabled` a dead switch.',
+    },
+    {
+      moduleId: 'credentials',
+      name: 'credentialsService',
+      kind: 'degrades-without',
+      whenAbsent:
+        'the registration company lookup cannot use GUS; Polish lookups use the Ministry of Finance VAT White List alone',
+      reason:
+        'Feature 173 (research R-12). The lookup asks whether `credentials` is present, then resolves ' +
+        'the GUS credential through this port per lookup; an absent owner or an unresolvable credential ' +
+        'is the documented "GUS not configured" path (owner decision OD-1). The `cms` translation precedent.',
+    },
     {
       moduleId: 'admin_search',
       name: 'adminSearchProviderRegistry',
@@ -336,6 +491,38 @@ export const manifest = defineModuleManifest({
     },
     { code: 'customers:read', label: 'View customers' },
     { code: 'customers:manage', label: 'Manage customer organizations' },
+    // Feature 170 (`specs/170-organization-roles/` `contracts/operator-api.md`
+    // §1, owner ruling OR-7) — an Organization's roles on the operator's
+    // *Roles* tab. Assigning a role to a member stays `customers:manage`
+    // (FR-062). No palette action: the tab lives on `/organizations/:id`, a
+    // detail screen no action can target.
+    { code: 'organizations:read-roles', label: 'View organization roles' },
+    {
+      code: 'organizations:manage-roles',
+      label: 'Manage organization roles',
+      requires: ['organizations:read-roles'],
+    },
+    // `specs/177-tax-id-scope/` FR-017 — the installation's tax-ID scope. The
+    // routes also refuse a scoped administrator holding it (D-260).
+    {
+      code: 'organizations:manage-tax-id-scope',
+      label: 'Manage the tax-ID scope',
+      requires: ['customers:read'],
+    },
+    // `specs/177-tax-id-scope/` FR-031 — the personal → company conversion,
+    // an operator's action only (admin route, its screen and the detail button).
+    {
+      code: 'organizations:convert-to-company',
+      label: 'Convert personal organizations to companies',
+      requires: ['customers:read'],
+    },
+    // Issue #1040 — correcting a live company's tax ID (admin route, its screen
+    // and the detail button); an operator's action only.
+    {
+      code: 'organizations:change-tax-id',
+      label: "Change a company organization's tax ID",
+      requires: ['customers:read'],
+    },
   ],
   settings,
   /**
@@ -369,8 +556,76 @@ export const manifest = defineModuleManifest({
       icon: 'Building2',
       targetRoute: '/organizations',
       requiredPermission: 'customers:read',
-      keywords: ['org', 'orgs', 'customer', 'organization', 'organizacja', 'klient'],
+      keywords: ['org', 'orgs', 'customer', 'organization'],
+      keywordsKey: 'actions.openOrganizations.keywords',
       weight: 220,
+    },
+    // Feature 154 — the deep link to *New organization*, gated on the code its
+    // route and its write enforce.
+    {
+      id: 'new-organization',
+      labelKey: 'actions.newOrganization.label',
+      descriptionKey: 'actions.newOrganization.description',
+      icon: 'Building2',
+      targetRoute: '/organizations/new',
+      requiredPermission: 'customers:manage',
+      keywords: ['organization', 'new', 'create'],
+      keywordsKey: 'actions.newOrganization.keywords',
+      weight: 210,
+    },
+    // `specs/177-tax-id-scope/` (`contracts/admin-surfaces.md` §2, Principle XVI) —
+    // the Tax-ID scope screen, gated on the code its route and its API enforce.
+    {
+      id: 'open-tax-id-scope',
+      labelKey: 'actions.openTaxIdScope.label',
+      descriptionKey: 'actions.openTaxIdScope.description',
+      icon: 'Settings',
+      targetRoute: '/organizations/tax-id-scope',
+      requiredPermission: 'organizations:manage-tax-id-scope',
+      keywords: ['tax', 'nip', 'vat', 'scope', 'unique', 'branch'],
+      keywordsKey: 'actions.openTaxIdScope.keywords',
+      weight: 190,
+    },
+    // `specs/177-tax-id-scope/` (`contracts/admin-surfaces.md` §2) — the
+    // personal → company conversion screen, gated on the code its route and API enforce.
+    {
+      id: 'convert-personal-organization',
+      labelKey: 'actions.convertPersonalOrganization.label',
+      descriptionKey: 'actions.convertPersonalOrganization.description',
+      icon: 'Building2',
+      targetRoute: '/organizations/convert-to-company',
+      requiredPermission: 'organizations:convert-to-company',
+      keywords: ['convert', 'personal', 'company', 'b2c', 'b2b'],
+      keywordsKey: 'actions.convertPersonalOrganization.keywords',
+      weight: 185,
+    },
+    // Issue #1040 (Principle XVI) — the tax-ID correction screen, gated on the
+    // code its route and API enforce.
+    {
+      id: 'change-organization-tax-id',
+      labelKey: 'actions.changeOrganizationTaxId.label',
+      descriptionKey: 'actions.changeOrganizationTaxId.description',
+      icon: 'Edit',
+      targetRoute: '/organizations/change-tax-id',
+      requiredPermission: 'organizations:change-tax-id',
+      keywords: ['tax', 'nip', 'vat', 'change', 'correct', 'fix', 'company'],
+      keywordsKey: 'actions.changeOrganizationTaxId.keywords',
+      weight: 180,
+    },
+    // Feature 173 (`contracts/admin-surfaces.md` §5, Principle XVI) — the three
+    // registration-lookup settings. The generic Settings screen has no
+    // per-group address (the cms / google_tag_manager precedent), so the action
+    // opens `/settings`, under the code that screen enforces.
+    {
+      id: 'open-registration-registry-lookup-settings',
+      labelKey: 'actions.openRegistrationRegistryLookupSettings.label',
+      descriptionKey: 'actions.openRegistrationRegistryLookupSettings.description',
+      icon: 'Settings',
+      targetRoute: '/settings',
+      requiredPermission: 'settings:read',
+      keywords: ['registration', 'registry', 'lookup', 'vat', 'vies', 'company', 'tax'],
+      keywordsKey: 'actions.openRegistrationRegistryLookupSettings.keywords',
+      weight: 200,
     },
   ],
   // Feature 047 — admin-editable transactional emails owned by this module.
@@ -396,6 +651,21 @@ export const manifest = defineModuleManifest({
         { key: 'expiresOn', label: 'Expiry date', sampleValue: '2026-07-15' },
       ],
     },
+    // Issue #1371 — the self-service reset (`POST /api/v1/auth/password-reset/request`)
+    // minted a token and mailed nothing. `customers` owns the operator-started
+    // twin, `customer_password_reset_by_admin`.
+    {
+      code: 'customer_password_reset',
+      name: 'Password reset (customer)',
+      group: 'organizations',
+      variables: [
+        {
+          key: 'resetUrl',
+          label: 'Set-password link',
+          sampleValue: 'https://shop.example/password-reset/confirm?token=…',
+        },
+      ],
+    },
     {
       code: 'new_org_registration',
       name: 'New organization registration (admin)',
@@ -403,7 +673,12 @@ export const manifest = defineModuleManifest({
       variables: [
         { key: 'organizationName', label: 'Organization name', sampleValue: 'Acme Sp. z o.o.' },
         { key: 'taxId', label: 'Tax ID', sampleValue: 'PL1234567890' },
-        { key: 'statusLabel', label: 'Status', sampleValue: 'Oczekuje na weryfikację' },
+        {
+          key: 'statusLabel',
+          label: 'Status',
+          sampleValue: 'Awaiting verification',
+          sampleValueKey: 'emails.newOrgRegistration.sample.statusLabel',
+        },
         { key: 'linkPath', label: 'Admin link', sampleValue: '/organizations/…' },
       ],
     },
@@ -537,7 +812,61 @@ export const manifest = defineModuleManifest({
     { code: 'ORGANIZATION_HAS_CHILDREN', tokens: ['has_children'] },
     { code: 'ORGANIZATION_SUSPENDED' },
     { code: 'ORGANIZATION_TAX_ID_EXISTS' },
-    { code: 'ORGANIZATION_TREE_INVALID', tokens: ['cycle', 'max_depth_exceeded', 'path_unreadable'] },
+    // `specs/177-tax-id-scope/` FR-015 — `{sharedTaxIdCount}` is always filled.
+    { code: 'ORGANIZATION_TAX_ID_SCOPE_DUPLICATES', tokens: ['shared_tax_ids'] },
+    // `specs/177-tax-id-scope/` FR-033 — every raise carries one of the three tokens.
+    // `specs/177-tax-id-scope/` review finding 2 — a lost lock, retryable.
+    { code: 'ORGANIZATION_WRITE_CONTENDED' },
+    {
+      code: 'ORGANIZATION_CONVERSION_REFUSED',
+      tokens: ['not_personal', 'deleted', 'owner_not_administrator'],
+    },
+    // Issue #1040 — every raise carries one of the two tokens.
+    { code: 'ORGANIZATION_TAX_ID_CHANGE_REFUSED', tokens: ['not_company', 'deleted'] },
+    {
+      code: 'ORGANIZATION_TREE_INVALID',
+      tokens: ['cycle', 'max_depth_exceeded', 'path_unreadable', 'tax_id_shared_across_trees'],
+    },
     { code: 'ORG_OWNER_DEPLETION' },
+    // Issue #629 (#86) — every raise carries one of the three tokens.
+    { code: 'ORGANIZATION_PERSONAL', tokens: ['add_member', 'invite', 'sales_rep'] },
+    // Issue #629 (#86) — `{currentStatusLabel}` and `{requiredStatusLabel}` are always filled.
+    { code: 'ORGANIZATION_STATUS_INVALID' },
+    // Feature 170 (`contracts/organization-permission-port.md` §3). The first is
+    // raised by this module's permission port on behalf of every module that
+    // gates a buyer action on an organization permission: the rule — what a
+    // role allows — is this module's, whichever module's action it refuses, the
+    // shape `ORG_OWNER_DEPLETION` set above. Its sentence names
+    // `{permissionLabel}`, which the raise always fills.
+    { code: 'ORGANIZATION_PERMISSION_REQUIRED' },
+    { code: 'ORGANIZATION_ROLE_NAME_TAKEN' },
+    { code: 'ORGANIZATION_ROLE_STALE' },
+    { code: 'ORGANIZATION_ROLE_LIMIT_REACHED' },
+    { code: 'ORGANIZATION_ROLE_PROTECTED' },
+    { code: 'ORGANIZATION_ROLE_REPLACEMENT_REQUIRED' },
+    { code: 'ORGANIZATION_PERMISSION_UNKNOWN' },
   ],
+  /**
+   * The Organization writes an instance may take part in through a command
+   * hook (`specs/176-command-hooks-outbox/` FR-024,
+   * `contracts/organization-hookable-actions.md`): the operator's create, the
+   * storefront self-registration, the operator's edit, the custom-field
+   * write, and — since issue #1057 — the personal → company conversion and the
+   * tax-ID correction. The refs are published in `@endora-commerce/contracts`, so this list
+   * and every hook author name one constant, and each Command's tests hold it
+   * to its ref with `expectHookableCommand`.
+   *
+   * None of the six is reversible, and each `run` is the complete write whose
+   * one audit entry a hook's noted changes merge into. The hierarchy moves are
+   * not declared: a declaration is a public contract, so each is added when
+   * something needs it.
+   */
+  hookableActions: [
+    ORGANIZATION_HOOKABLE_ACTIONS.create,
+    ORGANIZATION_HOOKABLE_ACTIONS.register,
+    ORGANIZATION_HOOKABLE_ACTIONS.adminPatch,
+    ORGANIZATION_HOOKABLE_ACTIONS.setCustomFieldValues,
+    ORGANIZATION_HOOKABLE_ACTIONS.convertToCompany,
+    ORGANIZATION_HOOKABLE_ACTIONS.changeTaxId,
+  ].map(toHookableActionDeclaration),
 });

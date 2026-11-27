@@ -5,11 +5,13 @@ import type { EventBus } from '@endora-commerce/platform/events';
 import { StorefrontRevalidator } from '@endora-commerce/platform/http';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type {
+  AssetReadPort,
+  AssetsLibraryPort,
   SettingsAdminPort,
   SettingsManifestCollectionPort,
 } from '@endora-commerce/contracts';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
-import { lazyPort } from '@endora-commerce/platform/kernel';
+import { lazyPort, rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
 import type { SettingsCacheInvalidation } from '@endora-commerce/platform/kernel';
 import type { SettingsReadPort } from '@endora-commerce/platform/kernel';
@@ -19,8 +21,11 @@ import {
   type ModulePresencePort,
 } from './services/settings-admin.service.js';
 import { SettingWriteValidatorRegistry } from './services/setting-write-validators.js';
+import { SettingNoticeRegistry } from './services/setting-notices.js';
 import { CacheAdminService } from './services/cache-admin.service.js';
 import { ShopInfoResolver } from './services/shop-info-resolver.js';
+import { createSocialProfilesValidator } from './services/social-profiles-validator.js';
+import { createShopLogoValidator } from './services/shop-logo-validator.js';
 import { HomepageResolver } from './services/homepage-resolver.js';
 import { ProductCardButtonsResolver } from './services/product-card-buttons-resolver.js';
 import { SpeculationRulesResolver } from './services/speculation-rules-resolver.js';
@@ -91,6 +96,7 @@ export interface SettingsCradle {
    * a pull with a failure mode.
    */
   readonly settingWriteValidatorRegistry: SettingWriteValidatorRegistry;
+  readonly settingNoticeRegistry: SettingNoticeRegistry;
   readonly settingsCacheAdminService: CacheAdminService;
   readonly settingsShopInfoResolver: ShopInfoResolver;
   readonly settingsHomepageResolver: HomepageResolver;
@@ -101,9 +107,24 @@ export interface SettingsCradle {
 export function registerModule(ctx: ModuleContext): void {
   ctx.di.register({
     settingWriteValidatorRegistry: ctx
+      .asFunction(({ settingsModulePresence }: SettingsCradle) => {
+        const registry = new SettingWriteValidatorRegistry(settingsModulePresence);
+        // Feature 163 (FR-035) — this module's own rule for its own setting:
+        // `shop.social_profiles` holds `https:` URLs only.
+        registry.register(createSocialProfilesValidator());
+        // Issue #544 — a newly set shop logo the administrator may not see in
+        // the asset library is refused as a missing one.
+        registry.register(createShopLogoValidator(lazyPort<AssetReadPort>(ctx, 'assetReadPort')));
+        return registry;
+      })
+      .singleton(),
+
+    // Issue #930 — the read-side twin of the validator registry: a module says
+    // when a setting's stored value is not what is in force.
+    settingNoticeRegistry: ctx
       .asFunction(
         ({ settingsModulePresence }: SettingsCradle) =>
-          new SettingWriteValidatorRegistry(settingsModulePresence),
+          new SettingNoticeRegistry(settingsModulePresence, ctx.log),
       )
       .singleton(),
 
@@ -123,7 +144,28 @@ export function registerModule(ctx: ModuleContext): void {
       .singleton(),
 
     settingsShopInfoResolver: ctx
-      .asFunction(() => new ShopInfoResolver(lazyPort<SettingsReadPort>(ctx, 'settingsReadPort')))
+      .asFunction(
+        () =>
+          new ShopInfoResolver(
+            lazyPort<SettingsReadPort>(ctx, 'settingsReadPort'),
+            // Feature 163 (FR-035) — `shop.logo_asset_id` as the public URL
+            // `Organization.logo` carries. The port is resolved per call, never
+            // captured. A private asset is not a logo a crawler can fetch, and
+            // an asset that is gone (`getAsset` answers 404) leaves the
+            // Organization without a logo rather than failing the public read —
+            // the narrow tolerance `cms`' embed resolver carries for the same
+            // call. An owner's refusal is not that, and goes through.
+            async (assetId) => {
+              try {
+                const asset = await lazyPort<AssetsLibraryPort>(ctx, 'assetsLibraryPort').getAsset(assetId);
+                return asset.visibility === 'public' ? asset.url : null;
+              } catch (err) {
+                rethrowIfModuleDisabled(err);
+                return null;
+              }
+            },
+          ),
+      )
       .singleton(),
 
     settingsHomepageResolver: ctx
@@ -219,6 +261,10 @@ export function registerModule(ctx: ModuleContext): void {
       requireAdmin,
       resolveAdminAuditContext: (req) =>
         ctx.cradle<SettingsCradle>().adminAuditActorResolver(req),
+      // Read per call: the registry is filled from other modules' boot hooks.
+      noticeFor: (input) => ctx.cradle<SettingsCradle>().settingNoticeRegistry.noticeFor(input),
+      confirmationFor: (input) =>
+        ctx.cradle<SettingsCradle>().settingNoticeRegistry.confirmationFor(input),
     });
     await registerSettingsStorefrontRoutes(app, {
       shopInfoResolver: cradle.settingsShopInfoResolver,

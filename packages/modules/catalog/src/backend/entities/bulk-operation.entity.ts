@@ -1,4 +1,5 @@
-import { Entity, Index, OptionalProps, PrimaryKey, Property } from '@mikro-orm/core';
+import { OptionalProps } from '@mikro-orm/core';
+import { Entity, Index, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import { GlobalEntity } from '@endora-commerce/platform/tenancy';
 import { randomUUID } from 'crypto';
 
@@ -48,7 +49,14 @@ export interface BulkOperationLogEntry {
   /** ISO-8601 timestamp of the event. */
   ts: string;
   level: 'info' | 'warn' | 'error';
+  /** The finished English sentence, for a reader that cannot resolve `messageKey`. */
   message: string;
+  /**
+   * The sentence as a key in `catalog`'s bundle and the params that fill it,
+   * translated by whoever reads the trail (issue #95). Absent on entries
+   * written before it existed.
+   */
+  messageKey?: { key: string; params?: Record<string, string | number> };
 }
 
 @GlobalEntity()

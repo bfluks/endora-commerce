@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { SITEMAP_STATIC_ROUTES } from '../../app/sitemap';
+// The shared linear-time protocol (issue #953): a test-only module of
+// `@endora-commerce/contracts`, reached through its source path and never published.
+import { GROWTH, LINEAR_BOUND, growthRatio } from '../../../packages/contracts/src/linear-time.cases.js';
 import {
   LLMS_TXT_CONDITIONAL_PAGES,
   LLMS_TXT_PAGE_TITLES,
@@ -180,12 +183,17 @@ describe('the generated llms.txt base — the shop’s name', () => {
     ).toBe('# shop.example');
   });
 
-  it('takes a name made to be slow no longer than any other', () => {
-    const shopName = `${' \n'.repeat(200_000)}x${' '.repeat(200_000)}`;
-    const start = performance.now();
-    const heading = renderLlmsTxtBase({ shopName, unservedPaths: [] }).split('\n')[0];
-    expect(performance.now() - start).toBeLessThan(250);
-    expect(heading).toBe('# x');
+  it('takes a name made to be slow no longer than any other', async () => {
+    // Runs of whitespace and line breaks around one character: what a
+    // backtracking trim or collapse re-scans from each of its positions. The
+    // cost is compared across sizes, not against a clock (issue #612).
+    const name = (length: number) => `${' \n'.repeat(length / 4)}x${' '.repeat(length / 2)}`;
+    const render = (shopName: string) => renderLlmsTxtBase({ shopName, unservedPaths: [] });
+    expect(render(name(600_000)).split('\n')[0]).toBe('# x');
+    const ratio = await growthRatio(render, name, 600_000);
+    expect(ratio, `${GROWTH}× the name took ${ratio.toFixed(2)}× the time per character`).toBeLessThan(
+      LINEAR_BOUND,
+    );
   });
 });
 
@@ -225,5 +233,14 @@ describe('the generated llms.txt base — a page this storefront does not serve 
       expect(SITEMAP_STATIC_ROUTES).toContain(path);
       expect(path).not.toBe('/');
     }
+  });
+});
+
+describe('the generated llms.txt base — a page served under another address (feature 171)', () => {
+  it('links the blog where the operator put it, under its own title', () => {
+    process.env['NEXT_PUBLIC_SITE_URL'] = 'https://shop.example';
+    const base = renderLlmsTxtBase({ shopName: 'Shop', unservedPaths: [], servedAt: { '/blog': '/aktualnosci' } });
+    expect(base).toContain('- [Blog](https://shop.example/aktualnosci)');
+    expect(linkedAddresses(base)).not.toContain('https://shop.example/blog');
   });
 });

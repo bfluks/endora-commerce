@@ -1,8 +1,9 @@
 import { LockMode } from '@mikro-orm/core';
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { ERROR_CODES, type OrderReadPort } from '@endora-commerce/contracts';
+import { ERROR_CODES, type OrderReadPort, isUuidShape } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { Payment } from '../entities/payment.entity.js';
+import { paymentsErrorCodes } from '../../manifest.js';
 
 /**
  * The two things "open a retry" can mean, kept apart because they are the
@@ -96,21 +97,31 @@ export class PaymentService {
       if (!latest) {
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'No payment exists for this order to retry.');
       }
+      // The payment's own state refuses the retry: a code each, where all
+      // three were `VALIDATION_FAILED` (issue #630). `PAYMENT_ALREADY_PAID` is
+      // shared with the settlement ingress, and its token says which caller.
       if (latest.status === 'paid') {
-        throw new HttpError(409, ERROR_CODES.VALIDATION_FAILED, 'Order is already paid; nothing to retry.');
+        throw new HttpError(409, paymentsErrorCodes.PAYMENT_ALREADY_PAID, 'Order is already paid; nothing to retry.', {
+          code: 'retry',
+          orderId,
+          paymentId: latest.id,
+          status: latest.status,
+        });
       }
       if (latest.status === 'refunded' || latest.status === 'partially_refunded') {
         throw new HttpError(
           409,
-          ERROR_CODES.VALIDATION_FAILED,
+          paymentsErrorCodes.PAYMENT_REFUNDED,
           'This payment has been refunded; it cannot be retried.',
+          { orderId, paymentId: latest.id, status: latest.status },
         );
       }
       if (latest.status === 'deferred') {
         throw new HttpError(
           409,
-          ERROR_CODES.VALIDATION_FAILED,
+          paymentsErrorCodes.PAYMENT_SETTLED_OUT_OF_BAND,
           'This order is settled out of band; there is nothing to retry.',
+          { orderId, paymentId: latest.id },
         );
       }
       // Still open: hand back the attempt that exists rather than opening a
@@ -126,7 +137,7 @@ export class PaymentService {
         currency: latest.currency,
         attemptNo: latest.attemptNo + 1,
       });
-      await tx.persistAndFlush(next);
+      await tx.persist(next).flush();
       return { payment: next, opened: true };
     });
   }
@@ -147,6 +158,7 @@ export class PaymentService {
     // mechanics `openRetry` above is exempted for.
     const em = this.emFactory();
     await em.transactional(async (tx) => {
+      if (!isUuidShape(paymentId)) return;
       const payment = await tx.findOne(Payment, { id: paymentId });
       if (!payment || payment.status !== 'awaiting_payment') return;
       payment.status = 'failed';

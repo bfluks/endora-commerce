@@ -2,15 +2,18 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   ERROR_CODES,
   type CampaignDetail,
+  type CampaignGroupResponse,
   type CampaignSummary,
   type CreateCampaignRequest,
   type UpdateCampaignRequest,
   type RenderedEmail,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { NewsletterCampaign } from '../entities/newsletter-campaign.entity.js';
 import { NewsletterCampaignSubscriber } from '../entities/newsletter-campaign-subscriber.entity.js';
 import { NewsletterSubscriber } from '../entities/newsletter-subscriber.entity.js';
+import type { NewsletterAudienceResolver } from './audience-resolver.js';
 import type { NewsletterCampaignDispatchService } from './campaign-dispatch.service.js';
 import type {
   NewsletterContentService,
@@ -23,6 +26,8 @@ import type { AuditPort } from '@endora-commerce/platform/kernel';
 
 export interface CampaignServiceDeps {
   emFactory: () => EntityManager;
+  /** Counts the audience a draft would reach — `CampaignDetail.audienceEstimate` (issue #1462). */
+  audience: Pick<NewsletterAudienceResolver, 'count'>;
   dispatch: NewsletterCampaignDispatchService;
   content: NewsletterContentService;
   isProviderConfigured: () => Promise<boolean>;
@@ -81,7 +86,12 @@ export class NewsletterCampaignService {
     const campaign = await this.load(em, id);
     this.assertVersion(campaign, input.expectedVersion);
     if (campaign.status !== 'draft' && campaign.status !== 'scheduled') {
-      throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'Only draft/scheduled campaigns can be edited.');
+      throw new HttpError(
+        422,
+        ERROR_CODES.NEWSLETTER_CAMPAIGN_NOT_EDITABLE,
+        'Only draft/scheduled campaigns can be edited.',
+        { campaignId: campaign.id, status: campaign.status },
+      );
     }
     if (input.name !== undefined) campaign.name = input.name;
     if (input.subject !== undefined) campaign.subject = input.subject;
@@ -93,7 +103,7 @@ export class NewsletterCampaignService {
     if (input.trackingEnabled !== undefined) campaign.trackingEnabled = input.trackingEnabled;
     campaign.version += 1;
     this.#audit(em, 'newsletter_campaign.update', campaign.id, { name: campaign.name });
-    await em.persistAndFlush(campaign);
+    await em.persist(campaign).flush();
     return this.toDetail(campaign);
   }
 
@@ -106,6 +116,20 @@ export class NewsletterCampaignService {
     const em = this.deps.emFactory();
     const rows = await em.find(NewsletterCampaign, {}, { orderBy: { createdAt: 'desc' } });
     return { items: rows.map((c) => this.toSummary(c)) };
+  }
+
+  /** The manual group's members, by e-mail (issue #1533). A missing campaign is a 404. */
+  async getGroup(id: string): Promise<CampaignGroupResponse> {
+    const em = this.deps.emFactory();
+    await this.load(em, id);
+    const links = await em.find(NewsletterCampaignSubscriber, { campaignId: id });
+    if (links.length === 0) return { items: [] };
+    const members = await em.find(
+      NewsletterSubscriber,
+      { id: { $in: links.map((link) => link.subscriberId) } },
+      { fields: ['id', 'email'], orderBy: { email: 'asc' } },
+    );
+    return { items: members.map((m) => ({ id: m.id, email: m.email })) };
   }
 
   async setGroup(id: string, subscriberIds: string[]): Promise<CampaignDetail> {
@@ -125,9 +149,13 @@ export class NewsletterCampaignService {
     const campaign = await this.load(em, id);
     this.assertVersion(campaign, expectedVersion);
     if (!(await this.deps.isProviderConfigured())) {
-      throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'No sending provider configured.', {
-        code: 'provider_not_configured',
-      });
+      // Issue #1334: on production this is "no usable e-mail credential"; a
+      // development or test instance answers configured through the console sink.
+      throw new HttpError(
+        422,
+        ERROR_CODES.NEWSLETTER_PROVIDER_NOT_CONFIGURED,
+        'No usable e-mail credential is chosen for the newsletter.',
+      );
     }
 
     const now = Date.now();
@@ -140,7 +168,7 @@ export class NewsletterCampaignService {
       campaign.scheduledAt = future ?? null;
       campaign.version += 1;
       this.#audit(em, 'newsletter_campaign.send', id, { status: campaign.status, scheduledAt: iso(campaign.scheduledAt) });
-      await em.persistAndFlush(campaign);
+      await em.persist(campaign).flush();
     } else {
       // Inline path (console fallback / tests): dispatch immediately.
       await this.deps.dispatch.dispatchCampaign(id);
@@ -155,12 +183,17 @@ export class NewsletterCampaignService {
     const campaign = await this.load(em, id);
     this.assertVersion(campaign, expectedVersion);
     if (campaign.status !== 'scheduled' && campaign.status !== 'draft') {
-      throw new HttpError(422, ERROR_CODES.VALIDATION_FAILED, 'Only draft/scheduled campaigns can be cancelled.');
+      throw new HttpError(
+        422,
+        ERROR_CODES.NEWSLETTER_CAMPAIGN_NOT_CANCELLABLE,
+        'Only draft/scheduled campaigns can be cancelled.',
+        { campaignId: campaign.id, status: campaign.status },
+      );
     }
     campaign.status = 'cancelled';
     campaign.version += 1;
     this.#audit(em, 'newsletter_campaign.cancel', id, { status: 'cancelled' });
-    await em.persistAndFlush(campaign);
+    await em.persist(campaign).flush();
     return this.toDetail(campaign);
   }
 
@@ -194,6 +227,7 @@ export class NewsletterCampaignService {
   }
 
   private async load(em: EntityManager, id: string): Promise<NewsletterCampaign> {
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Campaign not found.');
     const campaign = await em.findOne(NewsletterCampaign, { id });
     if (!campaign) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Campaign not found.');
     return campaign;
@@ -217,7 +251,17 @@ export class NewsletterCampaignService {
     };
   }
 
-  private toDetail(c: NewsletterCampaign): CampaignDetail {
+  /**
+   * `audienceEstimate` is who a send would reach *now*, so it is answered only
+   * while one is still possible — a draft or a scheduled campaign. Once a
+   * campaign has gone out its audience is its send records, which the stats
+   * report; a live count there would describe a send that never happened.
+   */
+  private async toDetail(c: NewsletterCampaign): Promise<CampaignDetail> {
+    const audienceEstimate =
+      c.status === 'draft' || c.status === 'scheduled'
+        ? await this.deps.audience.count({ type: c.targetType, tagIds: c.targetTagIds, campaignId: c.id })
+        : null;
     return {
       ...this.toSummary(c),
       content: c.content,
@@ -225,7 +269,7 @@ export class NewsletterCampaignService {
       language: c.language,
       targetTagIds: c.targetTagIds,
       trackingEnabled: c.trackingEnabled,
-      audienceEstimate: null,
+      audienceEstimate,
       stats: null,
       version: c.version,
       updatedAt: c.updatedAt.toISOString(),

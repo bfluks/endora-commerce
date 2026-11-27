@@ -10,6 +10,7 @@ import { seedAdHocOrganization } from '../../helpers/seed-organizations.js';
 import { CustomerAccount, Order } from '../../helpers/package-entities.js';
 import { CUSTOMER_COOKIES } from '../../helpers/test-actors.js';
 import { OrganizationTreeService } from '../../../../packages/modules/organizations/src/backend/services/organization-tree-service.js';
+import { predefinedRoleIdOf } from '../../helpers/seed-organization-roles.js';
 
 /**
  * A stored path the tree cannot read never widens anything.
@@ -43,7 +44,7 @@ async function seedOrder(em: EntityManager, orgId: string, customerId: string): 
     currency: 'PLN',
     placedAt: new Date(),
   });
-  await em.persistAndFlush(order);
+  await em.persist(order).flush();
 }
 
 describe('organizations — an unreadable stored path fails closed [real DB]', () => {
@@ -91,10 +92,10 @@ describe('organizations — an unreadable stored path fails closed [real DB]', (
       passwordHash: 'x',
       firstName: 'Roll',
       lastName: 'Up',
-      role: 'organization_admin',
+      organizationRoleId: await predefinedRoleIdOf(em, empty.id, 'administrator'),
       subtreeRollupEnabled: true,
     });
-    await em.persistAndFlush(account);
+    await em.persist(account).flush();
     for (const orgId of [empty.id, malformed.id, neighbour.id, child.id]) {
       await seedOrder(em, orgId, account.id);
     }

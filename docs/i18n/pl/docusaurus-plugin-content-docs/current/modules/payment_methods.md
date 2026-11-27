@@ -1,9 +1,9 @@
 ---
-title: payment_methods
+title: Metody płatności
 description: Skonfigurowane metody płatności
 ---
 
-# `payment_methods`
+# Metody płatności (`payment_methods`)
 
 Zarządzanie skonfigurowanymi metodami płatności, które klienci wybierają w checkoucie. Za każdym
 wierszem `PaymentMethod` stoi zarejestrowany **adapter** (zobacz *Mechanizm adapterów* niżej) oraz
@@ -40,7 +40,7 @@ uprawnienie do katalogu nie daje już dostępu do wspólnej listy.
 | `GET /api/v1/admin/order-statuses` | administrator | `payment_methods:read` **albo** `delivery_methods:read` | Statusy zamówienia do list wyboru `statusOn*`, tutaj i na ekranie metod dostawy |
 | `PUT /api/v1/admin/payment-methods/:code` | administrator | `payment_methods:write` | Utworzenie lub aktualizacja według kodu; `adapter` domyślnie przyjmuje wartość `kind`, a `statusOn*` jest sprawdzane względem rejestru statusów zamówienia |
 | `PATCH /api/v1/admin/payment-methods/:id/status` | administrator | `payment_methods:write` | Wyłącznie dostępność — jedyna zmiana, do której odsyłają cztery ekrany bramek płatności |
-| `DELETE /api/v1/admin/payment-methods/:id` | administrator | `payment_methods:write` | Usunięcie — zablokowane (409), gdy metoda jest używana przez płatność `Payment`; zamiast tego ustaw `inactive` |
+| `DELETE /api/v1/admin/payment-methods/:id` | administrator | `payment_methods:write` | Usunięcie — zablokowane odpowiedzią `409 PAYMENT_METHOD_IN_USE` (`details`: `paymentMethodId`, `paymentMethodCode`, `paymentCount`), gdy metoda jest używana przez płatność `Payment`, oraz odpowiedzią `409 PAYMENT_METHOD_USAGE_UNKNOWN` (`details`: `paymentMethodId`, `module: "payments"`), gdy moduł `payments` jest wyłączony; zamiast tego ustaw `inactive`. Do zgłoszenia #635 obie były odpowiedzią `409 VALIDATION_FAILED` |
 
 ## Encje
 
@@ -165,7 +165,7 @@ Przypisanie jest egzekwowane tam, gdzie spotyka je kupujący:
   `X-Sales-Channel`, a sklep utworzony z wcześniejszego wydania wymaga tej samej zmiany w
   `lib/api/methods.ts` — w przeciwnym razie otrzyma metody kanału domyślnego.
 - Złożenie zamówienia i podgląd jego sumy odrzucają metodę, która nie jest dostępna w kanale
-  sprzedaży zamówienia, odpowiedzią `400 VALIDATION_FAILED` z
+  sprzedaży zamówienia, odpowiedzią `400 ORDER_PAYMENT_METHOD_UNAVAILABLE` z
   `details.code = "payment_method_not_in_sales_channel"`. Dotyczy to zakupu w sklepie, zakupu
   jednym kliknięciem, zamówienia tworzonego przez administratora w imieniu klienta (kanał wybrany
   dla zamówienia) oraz zamówienia złożonego kluczem API (kanał klucza). Formularz tworzenia
@@ -219,3 +219,11 @@ usługę przypisań kanałów sprzedaży platformy.
 `organization_payment_methods` to **lista dozwolonych**: pusta ⇒ oferowane są wszystkie aktywne
 metody; niepusta ⇒ tylko wymienione. Służy do ograniczania metod, z których może korzystać dana
 organizacja. Zarządza nią usługa ograniczeń modułu organizacji i odpowiedni ekran w panelu.
+
+## Metody dla płatnika powiązanego {#methods-for-a-related-payer}
+
+`GET /api/v1/payment-methods?payerOrganizationId=` wyświetla metody dla zamówienia opłacanego przez
+płatnika powiązanego (moduł *Related payers*): port zasad modułu najpierw potwierdza, że kupujący może
+użyć tego płatnika, a potem obowiązuje lista dozwolonych **płatnika** zamiast listy kupującego. Gdy
+moduł jest wyłączony, żądanie wskazujące płatnika odpowiada `503 MODULE_DISABLED`; pozostałe listy
+metod działają bez zmian.

@@ -1,7 +1,8 @@
-import type {
-  AuditReferenceLabel,
-  AuditReferenceRegistryPort,
-  KnownIconName,
+import {
+  AUDIT_ERASED_MARKER,
+  type AuditReferenceLabel,
+  type AuditReferenceRegistryPort,
+  type KnownIconName,
 } from '@endora-commerce/contracts';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { AuditLogEntry } from '@endora-commerce/platform/kernel';
@@ -59,8 +60,13 @@ export interface RecentActivityItem {
    */
   icon: KnownIconName;
   labelKey: string;
+  /**
+   * Who acted, already labelled. For `customer` it is the bare customer label
+   * (issue #741): the card adds the translated "Customer:" prefix, which is
+   * what tells it apart from an admin's name.
+   */
   actorDisplayName: string;
-  actorKind: 'admin' | 'system';
+  actorKind: 'admin' | 'customer' | 'system';
   targetType: string;
   targetId: string;
   targetDisplayName: string;
@@ -147,7 +153,12 @@ export class RecentActivityService {
     const [customerNames, ...targetBuckets] = await Promise.all([
       this.references.resolve(
         'customer_account',
-        uniqueNonNull(rows.map((r) => r.impersonatedCustomerAccountId ?? null)),
+        uniqueNonNull(
+          rows.flatMap((r) => [
+            r.impersonatedCustomerAccountId ?? null,
+            r.actorCustomerAccountId ?? null,
+          ]),
+        ),
       ),
       ...TARGET_REFERENCE_TYPES.map((type) =>
         this.references.resolve(type, uniqueByType(rows, type)),
@@ -239,10 +250,19 @@ function buildItem(
   if (!descriptor) return null;
 
   // --- Actor ---
-  const actorKind: 'admin' | 'system' = r.actorAdminUserId ? 'admin' : 'system';
+  // A customer acting for themselves (feature 170, R-21; issue #741) is its
+  // own kind: the row has no admin id, and reading it as "System" names nobody.
+  const actorKind: RecentActivityItem['actorKind'] = r.actorAdminUserId
+    ? 'admin'
+    : r.actorCustomerAccountId
+      ? 'customer'
+      : 'system';
   let actorDisplayName: string;
   if (r.actorAdminUserId) {
     actorDisplayName = lookups.adminNames.get(r.actorAdminUserId) ?? 'Admin';
+  } else if (r.actorCustomerAccountId) {
+    actorDisplayName =
+      lookups.customerNames.get(r.actorCustomerAccountId)?.label ?? r.actorCustomerAccountId;
   } else {
     actorDisplayName = 'System';
   }
@@ -355,27 +375,37 @@ function resolveTarget(
 function pickProductLabel(snapshot: Record<string, unknown> | null): string | null {
   if (!snapshot) return null;
   const name = snapshot['name'];
-  if (typeof name === 'string' && name.length > 0) return name;
+  if (isLabel(name)) return name;
   if (name && typeof name === 'object') {
     const byLang = name as Record<string, unknown>;
     // Try common language fallbacks before iterating.
     for (const key of ['en', 'en-US', 'pl', 'pl-PL']) {
       const v = byLang[key];
-      if (typeof v === 'string' && v.length > 0) return v;
+      if (isLabel(v)) return v;
     }
     for (const v of Object.values(byLang)) {
-      if (typeof v === 'string' && v.length > 0) return v;
+      if (isLabel(v)) return v;
     }
   }
   const sku = snapshot['sku'];
-  if (typeof sku === 'string' && sku.length > 0) return sku;
+  if (isLabel(sku)) return sku;
   return null;
 }
 
 function pickStr(snapshot: Record<string, unknown> | null, key: string): string | null {
   if (!snapshot) return null;
   const v = snapshot[key];
-  return typeof v === 'string' && v.length > 0 ? v : null;
+  return isLabel(v) ? v : null;
+}
+
+/**
+ * A snapshot value the card may print. The erased marker (issue #844) is not
+ * one: an anonymised subject's history holds it where a name used to be, and
+ * the card reads it as *absent*, so the label falls back to the owner's live
+ * one or to the id — never "[erased]" on the home screen.
+ */
+function isLabel(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value !== AUDIT_ERASED_MARKER;
 }
 
 function extractSummary(r: AuditLogEntry): Record<string, unknown> | null {
@@ -406,7 +436,8 @@ function extractSummary(r: AuditLogEntry): Record<string, unknown> | null {
   ] as const;
   const out: Record<string, unknown> = {};
   for (const k of keys) {
-    if (k in after) out[k] = (after as Record<string, unknown>)[k];
+    // An erased value (issue #844) is left out, as an absent one is.
+    if (k in after && after[k] !== AUDIT_ERASED_MARKER) out[k] = after[k];
   }
   return Object.keys(out).length > 0 ? out : null;
 }

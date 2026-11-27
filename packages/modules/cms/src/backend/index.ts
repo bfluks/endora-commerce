@@ -3,10 +3,12 @@ import type { Redis } from 'ioredis';
 import { z } from 'zod';
 import type { ChannelMemberEntityType } from '@endora-commerce/contracts';
 import {
+  ASSET_CHANGED_EVENT,
   CMS_CONTENT_CHANGED_EVENT,
   cmsColorPaletteSchema,
+  type AssetChangedEvent,
   type AssetReferenceRegistryPort,
-  type AssetsLibraryPort,
+  type AssetReadPort,
   type CmsBlockSeedPort,
   type CmsColorPalette,
   type CmsContentChange,
@@ -15,22 +17,30 @@ import {
 } from '@endora-commerce/contracts';
 import { CMS_PAGE_BUILDER_SETTING_CODES, CMS_SETTING_CODES } from '../manifest.js';
 import type {
+  AdminI18nTranslatePort,
   CmsBlockReadPort,
   CmsPageReadPort,
   CredentialsPort,
+  EmailMailerPort,
   SettingWriteValidatorRegistryPort,
 } from '@endora-commerce/contracts';
 import type { FetchLike } from '@endora-commerce/llm-client';
 import { resolveTranslationConfig } from './services/translation/capability.js';
 import { createMaxSourceCharactersValidator } from './services/translation/max-source-characters-validator.js';
+import { createDefaultShareImageValidator } from './services/default-share-image-validator.js';
+import { ContactFormService } from './services/contact-form/contact-form.service.js';
+import { createContactFormRecipientsValidator } from './services/contact-form/recipients-validator.js';
+import { registerCmsContactFormRoute } from './routes.storefront.js';
 import { CmsBlockReadService } from './services/cms-block-read-port.js';
 import { CmsBlockSeedService } from './services/cms-block-seed-port.js';
 import { storefrontTagsFor } from './services/cms-content-invalidator.js';
 import { CmsPageReadService } from './services/cms-page-read-port.js';
 import { lazyPort, type ModuleContext } from '@endora-commerce/platform/kernel';
+import { CmsReservedSegmentRegistry } from './services/reserved-segment-registry.js';
 import { effectiveState } from '@endora-commerce/platform/kernel';
 import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
-import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import type { RequireAdminFactory, SalesChannelResolutionPort } from '@endora-commerce/platform/kernel';
+import { channelLanguagePrefixes } from './services/channel-language-prefixes.js';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { EventBase, EventBus } from '@endora-commerce/platform/events';
 import { StorefrontRevalidator } from '@endora-commerce/platform/http';
@@ -41,6 +51,7 @@ import { createAssetEmbedResolver } from './services/asset-embed-resolver.js';
 import { registerCmsAssetReferences } from './services/asset-references.js';
 import { registerCmsLanguageReferences } from './services/cms-language-reference.js';
 import { CmsBlock } from './entities/cms-block.entity.js';
+import { CmsBrandTokens } from './entities/cms-brand-tokens.entity.js';
 import { CmsHookBlockAttachment } from './entities/cms-hook-block-attachment.entity.js';
 import { CmsHook } from './entities/cms-hook.entity.js';
 import { CmsPage } from './entities/cms-page.entity.js';
@@ -173,6 +184,8 @@ export interface CmsCradle {
   readonly resolvedModuleRegistry: ReadonlyArray<{ manifest: ModuleManifest }>;
   readonly cms: CmsResult;
   readonly cmsReferenceRegistry: CmsResult['handle']['referenceRegistry'];
+  /** Feature 171 — first segments other modules serve, per channel. */
+  readonly cmsReservedSegmentRegistry: CmsReservedSegmentRegistry;
   /**
    * Feature 151 — the `fetch` the Page Builder translation calls its model
    * provider with. `undefined` (the platform's `fetch`) everywhere but a test
@@ -180,9 +193,14 @@ export interface CmsCradle {
    * real provider (research R19, the `promptActionsLlmFetch` pattern).
    */
   readonly cmsTranslationLlmFetch: FetchLike | undefined;
+  /** Feature 169 — the contact form's submission, behind `POST /api/v1/storefront/cms/contact-form`. */
+  readonly cmsContactFormService: ContactFormService;
 }
 
 const breakpointSchema = z.number().int().positive();
+
+/** `cms.default_share_image_asset_id` — an asset id, or `''` while unset. */
+const shareImageSettingSchema = z.string();
 
 /**
  * The reserved-segments Setting as it comes off the store.
@@ -195,6 +213,9 @@ const breakpointSchema = z.number().int().positive();
  * one entry at a time, in the module that reads it.
  */
 const reservedSegmentsSchema = z.array(z.unknown());
+
+/** `cms.contact_form_recipients` — the write validator keeps it a list of addresses. */
+const contactFormRecipientsSchema = z.array(z.string());
 
 /** The translation settings are judged by `resolveTranslationConfig`, value by value. */
 const anySettingSchema = z.unknown();
@@ -250,7 +271,7 @@ export function registerModule(ctx: ModuleContext): void {
      */
     cmsAssetResolver: ctx
       .asFunction((): CmsAssetResolver =>
-        createAssetEmbedResolver(lazyPort<AssetsLibraryPort>(ctx, 'assetsLibraryPort')),
+        createAssetEmbedResolver(lazyPort<AssetReadPort>(ctx, 'assetReadPort')),
       )
       .singleton(),
 
@@ -277,21 +298,56 @@ export function registerModule(ctx: ModuleContext): void {
 
     cmsTranslationLlmFetch: ctx.asFunction((): FetchLike | undefined => undefined).singleton(),
 
+    /**
+     * Feature 169 (research R-6, R-8) — the contact form. The mailer and the translator are
+     * `email`'s and `_i18n`'s registrations, both in this module's `dependencies` and both
+     * non-deactivatable, reached through `lazyPort` proxies that resolve per call. The
+     * recipients are read per request for the request's channel (Principle XII); the manifest
+     * declares `[]`, so an unset value answers without an error.
+     */
+    cmsContactFormService: ctx
+      .asFunction(
+        () =>
+          new ContactFormService({
+            mailer: lazyPort<EmailMailerPort>(ctx, 'emailMailer'),
+            translator: lazyPort<AdminI18nTranslatePort>(ctx, 'adminI18nService'),
+            readRecipients: (salesChannelId) =>
+              ctx
+                .cradle<CmsCradle>()
+                .settingsReadPort.get(
+                  CMS_SETTING_CODES.CONTACT_FORM_RECIPIENTS,
+                  salesChannelId,
+                  contactFormRecipientsSchema,
+                ),
+          }),
+      )
+      .singleton(),
+
     cms: ctx
       .asFunction(({ emFactory, commandBus, redis, resolvedModuleRegistry }: CmsCradle) => {
         const result = cmsModule({
           emFactory,
           commandBus,
           redis,
+          // Issue #544 — resolved per call: a save that newly stores an asset id
+          // asks whether the caller may see it in the library.
+          assets: lazyPort<AssetReadPort>(ctx, 'assetReadPort'),
           // Published on the bus rather than answered here, because this module
           // is not the only one caching CMS content: `megamenu` inlines a
           // block's tree into a menu payload and can learn that the block moved
           // from nowhere else. The bus is read per change, never captured.
-          publishContentChange: (change) => {
-            ctx.cradle<CmsCradle>().eventBus.emit(CMS_CONTENT_CHANGED_EVENT, {
-              eventId: randomUUID(),
-              occurredAt: new Date().toISOString(),
-              ...change,
+          //
+          // R19C (T271): dispatched in a bus scope, so the write awaits its
+          // handlers — the storefront revalidation below among them — and the
+          // request after a save or a publish reads the new content.
+          publishContentChange: async (change) => {
+            const bus = ctx.cradle<CmsCradle>().eventBus;
+            await bus.run(async () => {
+              bus.emit(CMS_CONTENT_CHANGED_EVENT, {
+                eventId: randomUUID(),
+                occurredAt: new Date().toISOString(),
+                ...change,
+              });
             });
           },
           // Feature 096, T209/T210. The declarations are fixed at composition;
@@ -305,6 +361,13 @@ export function registerModule(ctx: ModuleContext): void {
           // a captured guard would keep admitting requests after `auth` goes.
           requireAdmin: (permission) => async (req, reply) =>
             ctx.cradle<CmsCradle>().requireAdmin(permission)(req, reply),
+          // Issue #1809 — the seeded hooks' names in the reader's language,
+          // from this module's bundle. Resolved per call, so the gate stays live.
+          hookText: (key, language) =>
+            lazyPort<AdminI18nTranslatePort>(ctx, 'adminI18nService').translate('cms', key, language),
+          // Feature 163 — a committed brand-token write drops the storefront's
+          // `cms:brand` entries. Read per call, like the bus above.
+          revalidateStorefront: (tags) => ctx.cradle<CmsCradle>().cmsStorefrontRevalidator.revalidate(tags),
           // Feature 151 (research R11). Everything is read per request: the
           // three settings through the store (platform-wide, D-41's `null`),
           // presence of `credentials` before its port is touched, and the port
@@ -407,6 +470,18 @@ export function registerModule(ctx: ModuleContext): void {
          * that state anyway: the manifest declares `defaultValue: []`, so the
          * store answers the empty list without an error.
          */
+        // Feature 167 (FR-040) — every channel's language prefixes and split aliases,
+        // asked per save through the kernel's channel port, so a language added to a
+        // channel reserves its prefix at once.
+        // Feature 171 — segments another module serves in the page's channels.
+        result.handle.setClaimedSegmentsResolver((salesChannelIds) =>
+          ctx.cradle<CmsCradle>().cmsReservedSegmentRegistry.claimedIn(salesChannelIds),
+        );
+        result.handle.setLanguagePrefixesResolver(async () =>
+          channelLanguagePrefixes(
+            await lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort').listAll(),
+          ),
+        );
         result.handle.setReservedSlugSegmentsResolver(async () => {
           const { settingsReadPort } = ctx.cradle<CmsCradle>();
           return settingsReadPort.get(
@@ -421,9 +496,32 @@ export function registerModule(ctx: ModuleContext): void {
         // caring where in a composition that happens. The `undefined` branch
         // that used to stand here went with the contribution point (T118c):
         // there is no composition in which the name is unset any more.
-        result.handle.setAssetResolver(async (assetId) =>
-          ctx.cradle<CmsCradle>().cmsAssetResolver(assetId),
+        result.handle.setAssetResolver(async (assetIds) =>
+          ctx.cradle<CmsCradle>().cmsAssetResolver(assetIds),
         );
+
+        /**
+         * Feature 163 (FR-033) — the default sharing image, read for the
+         * **request's** channel the storefront route resolved (Constitution
+         * XII), so a channel may carry its own. The manifest declares `''`, so
+         * an unset value answers without an error; a settings store the
+         * platform refuses to serve is not that and goes through, while any
+         * other failure costs the page its image rather than the page.
+         */
+        result.handle.setDefaultShareImageResolver(async (salesChannelId) => {
+          const { settingsReadPort } = ctx.cradle<CmsCradle>();
+          try {
+            const assetId = await settingsReadPort.get(
+              CMS_SETTING_CODES.DEFAULT_SHARE_IMAGE_ASSET_ID,
+              salesChannelId,
+              shareImageSettingSchema,
+            );
+            return assetId.trim().length > 0 ? assetId.trim() : null;
+          } catch (err) {
+            rethrowIfModuleDisabled(err);
+            return null;
+          }
+        });
 
         return result;
       })
@@ -447,6 +545,13 @@ export function registerModule(ctx: ModuleContext): void {
     cmsReferenceRegistry: ctx
       .asFunction(({ cms }: CmsCradle) => cms.handle.referenceRegistry)
       .singleton(),
+    /**
+     * Feature 171 (research R5) — first segments other modules serve on the
+     * storefront, per channel (the blog's prefixes). An ungated contribution
+     * registry like the one above: a module pushes a contributor from a boot
+     * hook, and a switched-off contributor claims nothing.
+     */
+    cmsReservedSegmentRegistry: ctx.asFunction(() => new CmsReservedSegmentRegistry()).singleton(),
   });
 
   /**
@@ -516,6 +621,16 @@ export function registerModule(ctx: ModuleContext): void {
     lazyPort<SettingWriteValidatorRegistryPort>(ctx, 'settingWriteValidatorRegistry').register(
       createMaxSourceCharactersValidator(),
     );
+    // Feature 169 (T097) — the contact form's recipients are 0–10 addresses, in the same
+    // unprobed contribution hook.
+    lazyPort<SettingWriteValidatorRegistryPort>(ctx, 'settingWriteValidatorRegistry').register(
+      createContactFormRecipientsValidator(),
+    );
+    // Issue #544 — a newly set default sharing image the administrator may not
+    // see in the asset library is refused as a missing one.
+    lazyPort<SettingWriteValidatorRegistryPort>(ctx, 'settingWriteValidatorRegistry').register(
+      createDefaultShareImageValidator(lazyPort<AssetReadPort>(ctx, 'assetReadPort')),
+    );
   });
 
   ctx.onBoot(async () => {
@@ -564,12 +679,36 @@ export function registerModule(ctx: ModuleContext): void {
    * the module — a switched-off `cms` has no write route to publish from, and
    * no storefront surface left to refresh.
    *
-   * Not awaited: the save has already answered, and the storefront being slow
-   * or absent is not the operator's problem to wait on.
+   * Handed back to the bus (R19C, T271): the write dispatches the change in a
+   * bus scope and awaits it, so a save or a publish answers once the storefront
+   * has dropped the tags and the next storefront request reads the new
+   * content — before, the first request after a publish could still be served
+   * the previous render. The revalidator never throws and gives up on a slow
+   * storefront after its timeout, so an absent storefront delays a save by at
+   * most that and never fails it.
    */
   ctx.subscribe(CMS_CONTENT_CHANGED_EVENT, (payload) => {
     const change = payload as EventBase & CmsContentChange;
-    void ctx.cradle<CmsCradle>().cmsStorefrontRevalidator.revalidate(storefrontTagsFor(change));
+    return ctx.cradle<CmsCradle>().cmsStorefrontRevalidator.revalidate(storefrontTagsFor(change));
+  });
+
+  /**
+   * Issue #363 — an asset was written that a cached page, block or hook may
+   * embed. Every resolved answer carries its assets' URLs, and since feature 156
+   * each URL carries `?v=<contentVersion>`, cached as immutable: a page left in
+   * the cache after a replace kept serving the previous marker for up to five
+   * minutes, and a browser or CDN holding the old response kept the old image.
+   *
+   * An event and not a call, so this module holds nothing of `assets_library`
+   * for it: an absent or switched-off library announces nothing and nothing
+   * here waits for it. `ctx.subscribe` stops the handler with this module — a
+   * switched-off `cms` serves no page to refresh. The library dispatches the
+   * event in a bus scope and awaits it, so the asset write answers once both
+   * caches are dropped.
+   */
+  ctx.subscribe(ASSET_CHANGED_EVENT, (payload) => {
+    const event = payload as EventBase & AssetChangedEvent;
+    return ctx.cradle<CmsCradle>().cms.handle.assetsChanged(event.assetIds);
   });
 
   ctx.routes(async (app) => {
@@ -578,6 +717,9 @@ export function registerModule(ctx: ModuleContext): void {
     // it up here; until then a failed revalidation has nowhere to be logged.
     cradle.cmsStorefrontRevalidator.setLogger(app.log);
     await cradle.cms.plugin(app);
+    // Feature 169 — the contact form's public endpoint, gated with the rest of this module's
+    // routes (`cms` off → 503 `MODULE_DISABLED`).
+    await registerCmsContactFormRoute(app, { contactForm: () => ctx.cradle<CmsCradle>().cmsContactFormService });
   });
 
   /**
@@ -612,6 +754,7 @@ export function registerModule(ctx: ModuleContext): void {
  */
 export const entities = [
   CmsBlock,
+  CmsBrandTokens,
   CmsHookBlockAttachment,
   CmsHook,
   CmsPage,

@@ -30,6 +30,7 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 | Moduł | Wiążąca | Co to oznacza |
 | --- | --- | --- |
 | `auth` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
+| `settings` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 
 ## Uprawnienia
 
@@ -48,6 +49,7 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 | Kod | Nazwa | Typ |
 | --- | --- | --- |
 | `analytics.enabled` | Analytics enabled | `boolean` |
+| `analytics.reporting_time_zone` | Reporting time zone | `string` |
 
 ## Tłumaczenia
 

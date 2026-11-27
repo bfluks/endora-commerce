@@ -26,6 +26,7 @@ import {
   detail,
   en,
   renderCrm,
+  storedText,
 } from './crm-fixtures';
 
 /**
@@ -245,7 +246,8 @@ describe('Events tab — the list', () => {
     await renderTab();
     expect(within(rowOf('Site visit')).getByText('Thursday, October 8, 2026, 11:30 AM – 12:30 PM')).toBeInTheDocument();
     expect(within(rowOf('Trade fair')).getByText('Friday, October 9, 2026, all day')).toBeInTheDocument();
-    expect(within(rowOf('Site visit')).getByText(/Bring the samples/)).toHaveClass('line-clamp-2');
+    // Formatted text, cut to two lines (specs/158-crm-opportunity-inline-editing/).
+    expect(within(rowOf('Site visit')).getByText(/Bring the samples/).closest('.line-clamp-2')).not.toBeNull();
   });
 
   it.each([
@@ -425,7 +427,9 @@ describe('Event dialog — adding', () => {
     const dialog = await openAdd(await renderTab());
     expect(field(dialog, 'name')).toHaveFocus();
     expect(field(dialog, 'name')).toHaveAttribute('maxlength', '200');
-    expect(field(dialog, 'description')).toHaveAttribute('maxlength', '5000');
+    // A formatted field (specs/158-crm-opportunity-inline-editing/): its limit is the field's own, counted on the stored text.
+    expect(field(dialog, 'description')).toHaveAttribute('contenteditable', 'true');
+    expect(field(dialog, 'description')).toHaveTextContent('');
     expect(field(dialog, 'date')).toHaveValue('2026-10-08');
     expect(field(dialog, 'from')).toHaveValue('13:00');
     expect(field(dialog, 'to')).toHaveValue('14:00');
@@ -511,14 +515,14 @@ describe('Event dialog — adding', () => {
     const dialog = await openAdd(panel);
     const checkbox = within(dialog).getByRole('checkbox', { name: 'Set a reminder' });
     const hint = document.getElementById(checkbox.getAttribute('aria-describedby') ?? '')?.textContent ?? '';
-    expect(hint).toMatch(/assigned to the opportunity/);
-    expect(hint).toMatch(/nobody is assigned.*created the event/i);
+    expect(hint).toMatch(/goes to the assignee/i);
+    expect(hint).toMatch(/author if none/i);
 
     const polish = JSON.parse(
       readFileSync(resolve(process.cwd(), '../packages/modules/crm/i18n/pl.json'), 'utf8'),
     ) as Record<string, string>;
     expect(polish['events.field.remind']).toBe('Ustaw przypomnienie');
-    expect(polish['events.field.remindHint']).toMatch(/nikt nie jest przypisany.*autor/i);
+    expect(polish['events.field.remindHint']).toMatch(/przypisanej.*brak.*autora/i);
   });
 
   it('shows the reminder time with Set a reminder — set to the start, following it until it is edited, and not after', async () => {
@@ -662,7 +666,7 @@ describe('Event dialog — editing and deleting', () => {
     expect(field(dialog, 'date')).toHaveValue('2026-10-08');
     expect(field(dialog, 'from')).toHaveValue('11:30');
     expect(field(dialog, 'to')).toHaveValue('12:30');
-    expect(field(dialog, 'description')).toHaveValue('Bring the samples.\nAsk about the depot.\nThird line.');
+    expect(storedText(field(dialog, 'description'))).toBe('Bring the samples.\nAsk about the depot.\nThird line.');
   });
 
   it('sends only what changed, then reads the list and the Opportunity again', async () => {

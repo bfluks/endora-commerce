@@ -60,6 +60,21 @@ export type GateResolution =
   /** An argument the scanner could not resolve — reported, never dropped. */
   | 'unresolved';
 
+/**
+ * What a gate site decides.
+ *
+ * - `enforcement` — the server refuses a request without the code (a
+ *   `requireAdmin*` guard, a capability check in a service), or an Admin UI
+ *   declaration that decides whether a whole route renders. This is the site
+ *   D-173's foreign-gate sweep judges.
+ * - `admin-control` — an Admin UI permission check (`hasPermission`,
+ *   `hasAnyPermission`) in an admin layer, which decides whether a **control**
+ *   is shown: a button, a tile, a nav entry (issue #1105). The inventory's
+ *   grantability checks still read its codes; the sweep reports a foreign code
+ *   here as `admin-ui-control` rather than judging it.
+ */
+export type GateSurface = 'enforcement' | 'admin-control';
+
 export interface EnforcedGateSite {
   /** Path relative to `backend/src`, for a failure message that can be acted on. */
   readonly file: string;
@@ -70,6 +85,7 @@ export interface EnforcedGateSite {
   readonly resolution: GateResolution;
   /** Codes this site enforces; empty unless `resolution === 'code'`. */
   readonly codes: readonly string[];
+  readonly surface: GateSurface;
 }
 
 export interface PermissionScanResult {
@@ -91,7 +107,19 @@ export interface PermissionScanResult {
  */
 export interface PermissionScanRoot {
   readonly dir: string;
-  readonly moduleId?: string;
+  /**
+   * The module the directory is, or `null` for a **host** root — one no module
+   * owns, such as the admin shell (issue #1106). A host root's sites are
+   * attributed to no module, which is how the foreign-gate sweep reads a
+   * host-owned file.
+   */
+  readonly moduleId?: string | null;
+  /**
+   * The whole root is an Admin UI layer (the admin shell, issue #1106). Its UI
+   * permission checks are `admin-control` sites wherever the file sits, and its
+   * `requiredPermission:` data is read — see {@link collectRequiredPermissionData}.
+   */
+  readonly adminLayer?: boolean;
 }
 
 /**
@@ -197,7 +225,10 @@ function* walkSources(dir: string, seen: Set<string>): Generator<string> {
       yield* walkSources(path, seen);
       continue;
     }
-    if (!entry.isFile() || !/\.(ts|js)$/.test(entry.name)) continue;
+    // `.tsx` since issue #1105: the Admin UI writes most of its gates —
+    // `hasPermission('x')`, `hasAnyPermission([...])` — in component files, and
+    // a code enforced only there read as enforced by no gate at all.
+    if (!entry.isFile() || !/\.(tsx?|js)$/.test(entry.name)) continue;
     // **A test is not an enforcement site, and this exclusion had no subject
     // until feature 106.** Every test used to live under `backend/test`, which
     // no scan root reaches, so the walk could not meet one; 106 moved the
@@ -210,7 +241,7 @@ function* walkSources(dir: string, seen: Set<string>): Generator<string> {
     // and never a test, whichever directory the test now sits in. The predicate
     // is the suffix and not the substring: a module legitimately named for test
     // infrastructure keeps its gates.
-    if (/\.(test|spec)\.(ts|js)$/.test(entry.name)) continue;
+    if (/\.(test|spec)\.(tsx?|js)$/.test(entry.name)) continue;
     if (seen.has(path)) continue;
     seen.add(path);
     yield path;
@@ -238,15 +269,229 @@ function collectFromFile(
 ): void {
   const source = resolver.sourceOf(file);
   if (source === null) return;
-  if (!/requireAdmin|hasPermission/.test(source)) return;
+  // An Admin UI layer: the whole of a root marked `adminLayer` (the shell,
+  // issue #1106), or a module's `admin/` directory (issue #1123). Both write
+  // `requiredPermission` as data, so both have it read.
+  const inAdminLayer =
+    root.adminLayer === true ||
+    relative(root.dir, file).split(/[\\/]/).slice(0, -1).includes('admin');
+  // Each reader runs only on a file that names what it reads: most admin files
+  // carry `requiredPermission` data and no gate call, or the reverse.
+  const readsCalls = /requireAdmin|hasPermission|hasAnyPermission/.test(source);
+  const readsData = inAdminLayer && /\brequiredPermission\b/.test(source);
+  if (!readsCalls && !readsData) return;
   const moduleId = moduleIdFor(file, root);
   const relFile = relative(base, file);
-  for (const site of collectFromSource(source, file, resolver)) {
-    out.push({ ...site, file: relFile, moduleId });
+  if (readsCalls) {
+    for (const { uiCheck, ...site } of collectFromSource(source, file, resolver)) {
+      out.push({
+        ...site,
+        file: relFile,
+        moduleId,
+        surface: uiCheck && inAdminLayer ? 'admin-control' : 'enforcement',
+      });
+    }
+  }
+  if (!readsData) return;
+  for (const { routeElement, ...site } of collectRequiredPermissionData(source, file, resolver)) {
+    out.push({
+      ...site,
+      file: relFile,
+      moduleId,
+      surface: routeElement ? 'enforcement' : 'admin-control',
+    });
   }
 }
 
-type PartialSite = Omit<EnforcedGateSite, 'file' | 'moduleId'>;
+/**
+ * `requiredPermission:` written as **data** in an Admin UI layer — the shell's
+ * nav entries and dashboard tiles (issue #1106), and a module's nav entries,
+ * routes, zones, tabs and `isVisible({ … })` checks under its `admin/`
+ * directory (issue #1123). Each declaration is one site:
+ *
+ * - a string literal, or a constant resolving to one (module-local, imported,
+ *   or a member of a flat permission map), is one code;
+ * - an array is one any-of site carrying every member, as
+ *   `hasAnyPermission([...])` is read, so the foreign-gate sweep judges the
+ *   members as alternatives of one another (`sufficient-alternative`). A member
+ *   may be a literal, a constant, or a spread of a constant array
+ *   (`[...READ_PERMISSION]`), which contributes that array's members; an
+ *   identifier naming a constant array is read the same way;
+ * - a member read rooted in a runtime binding
+ *   (`{ requiredPermission: item.requiredPermission }`) is a declaration
+ *   forwarded from where it is written — a `runtime-value`;
+ * - a type annotation (`requiredPermission: PermissionRequirement | undefined`)
+ *   declares nothing and is not a site.
+ *
+ * Anything else — including an array with one member the scanner cannot read —
+ * is reported `unresolved` rather than dropped or read partially.
+ *
+ * An entry or a tile decides whether a **control** is shown. An object that
+ * also carries `element:` (the shell's route table) or `component:` (a module's
+ * route contribution) decides whether a route renders, and stays an
+ * `enforcement` site the sweep judges as before. `path:` alone is not that
+ * marker: the dashboard's KPI tiles carry the API path they read their figure
+ * from.
+ */
+function* collectRequiredPermissionData(
+  source: string,
+  file: string,
+  resolver: ConstantResolver,
+): Generator<Omit<EnforcedGateSite, 'file' | 'moduleId' | 'surface'> & { routeElement: boolean }> {
+  const re = /\brequiredPermission\s*:\s*/g;
+  // Both are whole-file passes, so each is computed once per file, and only
+  // when a value needs it.
+  let bound: Set<string> | null = null;
+  let types: Set<string> | null = null;
+  const context = {
+    isBound: (name: string): boolean => (bound ??= collectRuntimeBindings(source)).has(name),
+    isType: (name: string): boolean => (types ??= collectTypeNames(source)).has(name),
+  };
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    const value = readValue(source, re.lastIndex).trim();
+    if (value === '') continue;
+    const read = readRequirement(value, file, resolver, context);
+    if (read === null) continue;
+    const expression = value.replace(/\s+/g, ' ');
+    const routeElement = /\b(?:element|component)\s*:/.test(enclosingObject(source, m.index));
+    yield { expression, ...read, routeElement };
+  }
+}
+
+type RequirementRead = Pick<EnforcedGateSite, 'resolution' | 'codes'>;
+
+interface ValueContext {
+  isBound(name: string): boolean;
+  isType(name: string): boolean;
+}
+
+const UNRESOLVED: RequirementRead = { resolution: 'unresolved', codes: [] };
+
+/**
+ * What one `requiredPermission` value declares — see
+ * {@link collectRequiredPermissionData}. `null` for a type annotation.
+ */
+function readRequirement(
+  value: string,
+  file: string,
+  resolver: ConstantResolver,
+  context: ValueContext,
+): RequirementRead | null {
+  if (value.startsWith('[')) {
+    // Read up to the literal's own closing bracket, like a call's array
+    // argument: `as const` or a narrowing after it is not a member.
+    const codes: string[] = [];
+    for (const part of splitArguments(readBalanced(value, 0))) {
+      const element = part.trim();
+      if (element === '') continue;
+      const spread = /^\.\.\.\s*([A-Za-z_$][\w$]*)$/.exec(element);
+      const members = spread?.[1]
+        ? resolver.lookupArray(file, spread[1])
+        : readScalar(element, file, resolver);
+      if (members === null) return UNRESOLVED;
+      codes.push(...members);
+    }
+    return codes.length > 0 ? { resolution: 'code', codes } : UNRESOLVED;
+  }
+  const scalar = readScalar(value, file, resolver);
+  if (scalar !== null) return { resolution: 'code', codes: scalar };
+  const identifier = /^[A-Za-z_$][\w$]*$/.test(value) ? value : null;
+  if (identifier !== null) {
+    const members = resolver.lookupArray(file, identifier);
+    if (members !== null && members.length > 0) return { resolution: 'code', codes: members };
+  }
+  const leading = /^(?:readonly\s+)?([A-Za-z_$][\w$]*)/.exec(value)?.[1] ?? null;
+  if (leading !== null && context.isType(leading)) return null;
+  const member = /^([A-Za-z_$][\w$]*)\.[A-Za-z_$][\w$]*$/.exec(value);
+  const rootName = identifier ?? member?.[1] ?? null;
+  if (rootName !== null && context.isBound(rootName)) return { resolution: 'runtime-value', codes: [] };
+  return UNRESOLVED;
+}
+
+/** A string literal, a constant or a permission-map member as one code, else `null`. */
+function readScalar(value: string, file: string, resolver: ConstantResolver): string[] | null {
+  const literal = /^(['"])([^'"]*)\1$/.exec(value);
+  if (literal) return literal[2] ? [literal[2]] : null;
+  if (/^[A-Za-z_$][\w$]*$/.test(value)) {
+    const code = resolver.lookup(file, value, null);
+    return code !== null && code !== '' ? [code] : null;
+  }
+  const member = /^([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)$/.exec(value);
+  if (member?.[1] && member[2]) {
+    const code = resolver.lookup(file, member[1], member[2]);
+    return code !== null && code !== '' ? [code] : null;
+  }
+  return null;
+}
+
+/**
+ * The text of a property value starting at `start`: up to the first `,`, `;`,
+ * newline or closing bracket at its own depth, brackets and quotes respected.
+ * Linear in the value's length.
+ */
+function readValue(source: string, start: number): string {
+  let depth = 0;
+  let i = start;
+  for (; i < source.length; i += 1) {
+    const c = source[i];
+    if (c === '(' || c === '[' || c === '{') depth += 1;
+    else if (c === ')' || c === ']' || c === '}') {
+      if (depth === 0) break;
+      depth -= 1;
+    } else if (c === "'" || c === '"' || c === '`') i = skipString(source, i);
+    else if (depth === 0 && (c === ',' || c === ';' || c === '\n')) break;
+  }
+  return source.slice(start, i);
+}
+
+/**
+ * Names the file declares or imports as a type, plus the primitive type
+ * keywords — what a type annotation's value starts with. One pass per file.
+ */
+function collectTypeNames(source: string): Set<string> {
+  const names = new Set<string>([
+    'string',
+    'number',
+    'boolean',
+    'unknown',
+    'any',
+    'undefined',
+    'null',
+    'never',
+    'readonly',
+  ]);
+  let m: RegExpExecArray | null;
+  const declared = /\b(?:type|interface|enum)\s+([A-Za-z_$][\w$]*)/g;
+  while ((m = declared.exec(source)) !== null) if (m[1]) names.add(m[1]);
+  const typeImport = /\bimport\s+type\s*\{([^}]*)\}/g;
+  while ((m = typeImport.exec(source)) !== null) {
+    for (const part of (m[1] ?? '').split(',')) {
+      const named = /([A-Za-z_$][\w$]*)\s*$/.exec(part.trim());
+      if (named?.[1]) names.add(named[1]);
+    }
+  }
+  return names;
+}
+
+/** The body of the innermost object literal enclosing `index`, or `''`. */
+function enclosingObject(source: string, index: number): string {
+  let depth = 0;
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const c = source[i];
+    if (c === '}') depth += 1;
+    else if (c === '{') {
+      if (depth === 0) return readBalanced(source, i);
+      depth -= 1;
+    }
+  }
+  return '';
+}
+
+/** A site before attribution; `uiCheck` marks the Admin UI's own permission checks. */
+type PartialSite = Omit<EnforcedGateSite, 'file' | 'moduleId' | 'surface'> & {
+  readonly uiCheck: boolean;
+};
 
 /**
  * The enforcement shapes this recognises, all of them present in the tree:
@@ -258,7 +503,18 @@ type PartialSite = Omit<EnforcedGateSite, 'file' | 'moduleId'>;
  * - a constant argument, resolved module-locally, through a relative import, or
  *   through `@endora-commerce/contracts`, including a member read of a permission map;
  * - `permissionService.hasPermission(actor, 'code')` — the capability check a
- *   service uses where there is no route to hang a `preHandler` on.
+ *   service uses where there is no route to hang a `preHandler` on;
+ * - `hasAnyPermission(['a', 'b'])` — the Admin UI's any-of (issue #458), read
+ *   like `requireAdminAny`: **one** site carrying every member, so the
+ *   foreign-gate sweep judges the members as alternatives of one another. It
+ *   replaced `codes.some((code) => hasPermission(code))`, which this scanner
+ *   could only call a `runtime-value` and never judged.
+ *
+ * An array argument is read from its **leading array literal** and nothing
+ * after it. A narrowing applied to the literal at runtime —
+ * `hasAnyPermission(['a', 'b'].filter(inScope))` — therefore reads as the
+ * widest set the gate can ask for: every member is still checked for
+ * grantability, and a string inside the narrowing is not a member.
  *
  * Comments and regular-expression literals are blanked first: a doc comment
  * quoting a gate is not a gate, several files quote one, and this file's own
@@ -271,10 +527,14 @@ function* collectFromSource(
 ): Generator<PartialSite> {
   const bound = collectRuntimeBindings(source);
 
-  const callRe = /(?:[\w$]+\s*\??\.\s*)*(requireAdmin(?:Any)?|hasPermission)\s*(?:\?\.)?\s*\(/g;
+  const callRe =
+    /(?:[\w$]+\s*\??\.\s*)*(requireAdmin(?:Any)?|hasAnyPermission|hasPermission)\s*(?:\?\.)?\s*\(/g;
   let m: RegExpExecArray | null;
   while ((m = callRe.exec(source)) !== null) {
     const callee = m[1] ?? '';
+    // `hasPermission(actor, 'code')` on a service is a server check; the
+    // one-argument UI form is told apart by where the file sits.
+    const uiCheck = callee === 'hasPermission' || callee === 'hasAnyPermission';
     const open = source.indexOf('(', m.index + m[0].length - 1);
     if (open === -1) continue;
     const args = readBalanced(source, open);
@@ -286,8 +546,8 @@ function* collectFromSource(
     const expression = argument.replace(/\s+/g, ' ');
 
     if (argument === '') {
-      if (callee === 'hasPermission') continue;
-      yield { expression: '', resolution: 'authenticated-admin', codes: [] };
+      if (callee === 'hasPermission' || callee === 'hasAnyPermission') continue;
+      yield { expression: '', resolution: 'authenticated-admin', codes: [], uiCheck };
       continue;
     }
 
@@ -295,13 +555,28 @@ function* collectFromSource(
     const normalised = argument.replace(/\s*\?\?\s*(['"]).*?\1\s*$/, '').trim();
 
     if (/^['"[]/.test(normalised)) {
-      const codes = [...normalised.matchAll(/(['"])([^'"]*)\1/g)]
+      // An array is read up to its own closing bracket — see the note above.
+      const literal = normalised.startsWith('[') ? readBalanced(normalised, 0) : normalised;
+      const codes = [...literal.matchAll(/(['"])([^'"]*)\1/g)]
         .map((lit) => lit[2] ?? '')
         .filter((code) => code.length > 0);
       yield codes.length > 0
-        ? { expression, resolution: 'code', codes }
-        : { expression, resolution: 'unresolved', codes: [] };
+        ? { expression, resolution: 'code', codes, uiCheck }
+        : { expression, resolution: 'unresolved', codes: [], uiCheck };
       continue;
+    }
+
+    // `OWNER[kind].readPermission` — a module-local map keyed at runtime. It is
+    // read as the widest set, like a narrowed any-of: one site per value the
+    // map holds for that property, each a single code, because the gate asks
+    // for the code of one entry and never for any of them (issue #1105).
+    const lookup = /^([A-Za-z_$][\w$]*)\s*\[[^\]]+\]\s*\.\s*([A-Za-z_$][\w$]*)$/.exec(normalised);
+    if (lookup?.[1] && lookup[2]) {
+      const values = mapPropertyValues(source, lookup[1], lookup[2]);
+      if (values.length > 0) {
+        for (const code of values) yield { expression, resolution: 'code', codes: [code], uiCheck };
+        continue;
+      }
     }
 
     // Resolve before classifying: a constant that happens to share a name with
@@ -314,15 +589,33 @@ function* collectFromSource(
         ? resolver.lookup(file, member[1], member[2])
         : null;
     if (value !== null) {
-      yield { expression, resolution: 'code', codes: [value] };
+      yield { expression, resolution: 'code', codes: [value], uiCheck };
       continue;
     }
 
     const rootName = identifier ?? member?.[1] ?? null;
     yield rootName !== null && bound.has(rootName)
-      ? { expression, resolution: 'runtime-value', codes: [] }
-      : { expression, resolution: 'unresolved', codes: [] };
+      ? { expression, resolution: 'runtime-value', codes: [], uiCheck }
+      : { expression, resolution: 'unresolved', codes: [], uiCheck };
   }
+}
+
+/**
+ * Every string literal `name`'s object initialiser holds under `property`, in
+ * source order and distinct — `{ a: { p: 'x' }, b: { p: 'y' } }` answers
+ * `['x', 'y']`. Empty when the file declares no such object.
+ */
+function mapPropertyValues(source: string, name: string, property: string): string[] {
+  const declaration = new RegExp(`(?:const|let)\\s+${name.replace(/\$/g, '\\$')}\\b[^=]*=\\s*\\{`).exec(source);
+  if (!declaration) return [];
+  const body = readBalanced(source, declaration.index + declaration[0].length - 1);
+  const values: string[] = [];
+  const re = new RegExp(`\\b${property}\\s*:\\s*(['"])([^'"]*)\\1`, 'g');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) {
+    if (m[2] && !values.includes(m[2])) values.push(m[2]);
+  }
+  return values;
 }
 
 /** A leading `name:` or `name?:` marks a parameter list rather than arguments. */
@@ -432,6 +725,8 @@ interface FileFacts {
   readonly scalars: Map<string, string>;
   readonly objects: Map<string, Map<string, string>>;
   readonly imports: Map<string, { exportedAs: string; specifier: string }>;
+  /** Constant string arrays, read on first use — see {@link collectArrays}. */
+  arrays?: Map<string, readonly string[] | null>;
 }
 
 /**
@@ -476,6 +771,28 @@ export class ConstantResolver {
     return null;
   }
 
+  /**
+   * The members of a constant **array** of permission codes
+   * (`const READ = ['a', 'b'] as const`), followed through imports like
+   * {@link lookup} (issue #1123). `null` when no such constant is reachable, or
+   * when the one found holds a member that is not a string literal — a partial
+   * answer would drop a code without saying so.
+   */
+  lookupArray(file: string, name: string, depth = 0): readonly string[] | null {
+    if (depth > 4) return null;
+    const facts = this.#factsFor(file);
+    if (!facts) return null;
+    facts.arrays ??= collectArrays(facts.source);
+    if (facts.arrays.has(name)) return facts.arrays.get(name) ?? null;
+    const imported = facts.imports.get(name);
+    if (!imported) return null;
+    for (const target of this.#resolveSpecifier(file, imported.specifier)) {
+      const value = this.lookupArray(target, imported.exportedAs, depth + 1);
+      if (value !== null) return value;
+    }
+    return null;
+  }
+
   #factsFor(file: string): FileFacts | null {
     if (this.#facts.has(file)) return this.#facts.get(file) ?? null;
     let raw: string;
@@ -501,7 +818,14 @@ export class ConstantResolver {
     if (specifier === '@endora-commerce/contracts') return this.#contractsSources();
     if (!specifier.startsWith('.')) return [];
     const base = resolve(dirname(from), specifier);
-    const candidates = [base.replace(/\.js$/, '.ts'), `${base}.ts`, join(base, 'index.ts'), base];
+    const candidates = [
+      base.replace(/\.js$/, '.ts'),
+      base.replace(/\.js$/, '.tsx'),
+      `${base}.ts`,
+      `${base}.tsx`,
+      join(base, 'index.ts'),
+      base,
+    ];
     return candidates.filter((c) => existsSync(c) && statSync(c).isFile());
   }
 
@@ -538,7 +862,10 @@ function blankComments(source: string): string {
   while (i < source.length) {
     const c = source[i];
     const next = source[i + 1];
-    if (c === '/' && next !== '/' && next !== '*' && startsExpression(out)) {
+    // A `/` straight after a `<` is a JSX closing tag (`</span>`), never a
+    // regular expression: blanking it as one would blank the rest of the line,
+    // and with it a gate written after the tag (issue #1105).
+    if (c === '/' && next !== '/' && next !== '*' && source[i - 1] !== '<' && startsExpression(out)) {
       const end = skipRegex(source, i);
       out += '/';
       for (let k = i + 1; k < end; k += 1) out += source[k] === '\n' ? '\n' : ' ';
@@ -576,11 +903,18 @@ function blankComments(source: string): string {
 
 /** True when the last significant character allows an expression to start. */
 function startsExpression(emitted: string): boolean {
-  const trimmed = emitted.replace(/\s+$/, '');
-  if (trimmed.length === 0) return true;
-  const last = trimmed[trimmed.length - 1] ?? '';
+  // Walked back from the end rather than trimmed with a regular expression:
+  // trimming copied the whole emitted prefix on every `/`, which is quadratic in
+  // a file's length and made the admin shell's largest components dominate the
+  // walk (issue #1106).
+  let end = emitted.length;
+  while (end > 0 && /\s/.test(emitted[end - 1] ?? '')) end -= 1;
+  if (end === 0) return true;
+  const last = emitted[end - 1] ?? '';
   if ('([{,;:=!&|?+-*%~^<>'.includes(last)) return true;
-  return /\b(?:return|typeof|case|in|of|new|delete|void|do|else)$/.test(trimmed);
+  return /\b(?:return|typeof|case|in|of|new|delete|void|do|else)$/.test(
+    emitted.slice(Math.max(0, end - 8), end),
+  );
 }
 
 /** Index of the closing `/` of the regex literal starting at `i`. */
@@ -630,6 +964,38 @@ function collectObjects(source: string): Map<string, Map<string, string>> {
     if (entries.size > 0) objects.set(name, entries);
   }
   return objects;
+}
+
+/**
+ * `const NAME = ['a', 'b']` (optionally typed, `as const`), each member a string
+ * literal; a constant array holding anything else maps to `null`, so a reader
+ * reports it rather than reading part of it. One pass, each literal read once.
+ */
+function collectArrays(source: string): Map<string, readonly string[] | null> {
+  const arrays = new Map<string, readonly string[] | null>();
+  const re = /(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::\s*[^=;]+)?=\s*\[/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    const name = m[1];
+    if (!name) continue;
+    const open = m.index + m[0].length - 1;
+    const body = readBalanced(source, open);
+    const members: string[] = [];
+    let literal = true;
+    for (const part of splitArguments(body)) {
+      const element = part.trim();
+      if (element === '') continue;
+      const code = /^(['"])([^'"]*)\1$/.exec(element)?.[2];
+      if (!code) {
+        literal = false;
+        break;
+      }
+      members.push(code);
+    }
+    arrays.set(name, literal ? members : null);
+    re.lastIndex = open + body.length + 1;
+  }
+  return arrays;
 }
 
 function collectImports(source: string): Map<string, { exportedAs: string; specifier: string }> {

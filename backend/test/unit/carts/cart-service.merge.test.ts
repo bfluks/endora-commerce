@@ -14,6 +14,7 @@ import {
   TEST_CUSTOMER_RFQ_ID,
   TEST_ORGANIZATION_ID,
 } from '../../helpers/test-actors.js';
+import { systemDefaultSalesChannelId } from '../../helpers/sales-channel-fixtures.js';
 
 import {
   SEED_PRODUCT_101_ID,
@@ -39,9 +40,16 @@ import {
 
 describe('CartService.mergeAnonymousIntoCustomer', () => {
   let h: BackendServerHandle;
+  /**
+   * The sign-in channel of every merge here: the system default, which the
+   * HTTP adds below land on because they name no channel. A merge reads both
+   * baskets on the sign-in channel (`specs/154-sales-channel-access/`).
+   */
+  let defaultChannelId: string;
 
   beforeAll(async () => {
     h = await setupBackendServer();
+    defaultChannelId = await systemDefaultSalesChannelId(h.em());
   });
 
   afterAll(async () => {
@@ -92,6 +100,7 @@ describe('CartService.mergeAnonymousIntoCustomer', () => {
       const outcome = await cartService!.mergeAnonymousIntoCustomer(anonToken, {
         customerAccountId: TEST_CUSTOMER_EMPTY_ID,
         organizationId: TEST_ORGANIZATION_ID,
+        salesChannelId: defaultChannelId,
       });
 
       expect(outcome.outcome).toBe('adopted');
@@ -160,8 +169,9 @@ describe('CartService.mergeAnonymousIntoCustomer', () => {
         customerAccountId: TEST_CUSTOMER_RFQ_ID,
         organizationId: TEST_ORGANIZATION_ID,
         status: 'active',
+        salesChannelId: defaultChannelId,
       });
-      await em.persistAndFlush(custCart);
+      await em.persist(custCart).flush();
       em.persist(
         em.create(CartItem, {
           cartId: custCart.id,
@@ -205,6 +215,7 @@ describe('CartService.mergeAnonymousIntoCustomer', () => {
       const outcome = await cartService!.mergeAnonymousIntoCustomer(anonToken, {
         customerAccountId: TEST_CUSTOMER_RFQ_ID,
         organizationId: TEST_ORGANIZATION_ID,
+        salesChannelId: defaultChannelId,
       });
 
       expect(outcome.outcome).toBe('merged');
@@ -253,6 +264,7 @@ describe('CartService.mergeAnonymousIntoCustomer', () => {
         {
           customerAccountId: TEST_CUSTOMER_EMPTY_ID,
           organizationId: TEST_ORGANIZATION_ID,
+          salesChannelId: defaultChannelId,
         },
       );
       expect(outcome.outcome).toBe('noop_no_anon');
@@ -274,13 +286,15 @@ describe('CartService.mergeAnonymousIntoCustomer', () => {
       const anon = em.create(Cart, {
         anonymousCartToken: anonToken,
         status: 'active',
+        salesChannelId: defaultChannelId,
       });
-      await em.persistAndFlush(anon);
+      await em.persist(anon).flush();
       const anonId = anon.id;
 
       const outcome = await cartService!.mergeAnonymousIntoCustomer(anonToken, {
         customerAccountId: TEST_CUSTOMER_EMPTY_ID,
         organizationId: TEST_ORGANIZATION_ID,
+        salesChannelId: defaultChannelId,
       });
 
       expect(outcome.outcome).toBe('noop_empty');
@@ -332,8 +346,9 @@ describe('CartService.mergeAnonymousIntoCustomer', () => {
         customerAccountId: TEST_CUSTOMER_EMPTY_ID,
         organizationId: TEST_ORGANIZATION_ID,
         status: 'active',
+        salesChannelId: defaultChannelId,
       });
-      await em.persistAndFlush(destCart);
+      await em.persist(destCart).flush();
       em.persist(
         em.create(CartItem, {
           cartId: destCart.id,
@@ -364,8 +379,9 @@ describe('CartService.mergeAnonymousIntoCustomer', () => {
       const anonCart = em.create(Cart, {
         anonymousCartToken: anonToken,
         status: 'active',
+        salesChannelId: defaultChannelId,
       });
-      await em.persistAndFlush(anonCart);
+      await em.persist(anonCart).flush();
       em.persist(
         em.create(CartItem, {
           cartId: anonCart.id,
@@ -401,6 +417,7 @@ describe('CartService.mergeAnonymousIntoCustomer', () => {
       const outcome = await cartService!.mergeAnonymousIntoCustomer(anonToken, {
         customerAccountId: TEST_CUSTOMER_EMPTY_ID,
         organizationId: TEST_ORGANIZATION_ID,
+        salesChannelId: defaultChannelId,
       });
       expect(outcome.outcome).toBe('merged');
       expect(outcome.summedLineCount).toBe(2); // VARIANT_A and null both summed
@@ -440,9 +457,10 @@ describe('CartService.mergeAnonymousIntoCustomer', () => {
         customerAccountId: TEST_CUSTOMER_EMPTY_ID,
         organizationId: TEST_ORGANIZATION_ID,
         status: 'active',
+        salesChannelId: defaultChannelId,
         appliedPromotionCode: 'CUSTOMER_KEEPS_THIS',
       });
-      await em.persistAndFlush(destCart);
+      await em.persist(destCart).flush();
       em.persist(
         em.create(CartItem, {
           cartId: destCart.id,
@@ -457,9 +475,10 @@ describe('CartService.mergeAnonymousIntoCustomer', () => {
       const anonCart = em.create(Cart, {
         anonymousCartToken: anonToken,
         status: 'active',
+        salesChannelId: defaultChannelId,
         appliedPromotionCode: 'ANON_SHOULD_DROP',
       });
-      await em.persistAndFlush(anonCart);
+      await em.persist(anonCart).flush();
       em.persist(
         em.create(CartItem, {
           cartId: anonCart.id,
@@ -474,6 +493,7 @@ describe('CartService.mergeAnonymousIntoCustomer', () => {
       const outcome = await cartService!.mergeAnonymousIntoCustomer(anonToken, {
         customerAccountId: TEST_CUSTOMER_EMPTY_ID,
         organizationId: TEST_ORGANIZATION_ID,
+        salesChannelId: defaultChannelId,
       });
       expect(outcome.outcome).toBe('merged');
 
@@ -501,9 +521,10 @@ describe('CartService.mergeAnonymousIntoCustomer', () => {
         customerAccountId: TEST_CUSTOMER_EMPTY_ID,
         organizationId: TEST_ORGANIZATION_ID,
         status: 'active',
+        salesChannelId: defaultChannelId,
         appliedPromotionCode: 'DEST_COUPON',
       });
-      await em.persistAndFlush(destCart);
+      await em.persist(destCart).flush();
       em.persist(
         em.create(CartItem, {
           cartId: destCart.id,
@@ -517,9 +538,10 @@ describe('CartService.mergeAnonymousIntoCustomer', () => {
       const anonCart = em.create(Cart, {
         anonymousCartToken: anonToken,
         status: 'active',
+        salesChannelId: defaultChannelId,
         appliedPromotionCode: 'ANON_COUPON',
       });
-      await em.persistAndFlush(anonCart);
+      await em.persist(anonCart).flush();
       em.persist(
         em.create(CartItem, {
           cartId: anonCart.id,
@@ -534,6 +556,7 @@ describe('CartService.mergeAnonymousIntoCustomer', () => {
       const outcome = await cartService!.mergeAnonymousIntoCustomer(anonToken, {
         customerAccountId: TEST_CUSTOMER_EMPTY_ID,
         organizationId: TEST_ORGANIZATION_ID,
+        salesChannelId: defaultChannelId,
       });
       expect(outcome.outcome).toBe('merged');
 

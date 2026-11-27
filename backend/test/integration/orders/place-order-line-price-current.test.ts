@@ -1,6 +1,5 @@
-import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { ERROR_CODES, unitPriceHalfUp } from '@endora-commerce/contracts';
 
 import { Cart, CartItem, Order, OrderItem } from '../../helpers/package-entities.js';
 import {
@@ -11,11 +10,14 @@ import {
 import { SEED_PAYMENT_METHOD_ID } from '../../helpers/seed-commerce.js';
 import { cartWritePortOf } from '../../helpers/orders-neighbour-ports.js';
 import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
+import { systemDefaultSalesChannelId } from '../../helpers/sales-channel-fixtures.js';
 import {
   createTieredProduct,
   TIER_UNIT_PRICE,
   TIER_VOLUME_PRICE,
 } from '../../helpers/tiered-product-fixture.js';
+import { emptyCustomerBasket } from '../../helpers/customer-basket.js';
+import { acceptedQuoteRequest, whenOrderCreatedSettled } from '../../helpers/quote-conversion.js';
 
 /**
  * An order line is placed at the price its cart line may be ordered at **now**,
@@ -28,11 +30,17 @@ describe('POST /api/v1/orders — the line price is the price for its current qu
   let h: BackendServerHandle;
   let productId: string;
   const customer = { b2b_session: 'stub-customer-session' };
-  const customerCtx = { customerAccountId: TEST_CUSTOMER_ID, organizationId: TEST_ORGANIZATION_ID };
+  /** The basket of the system-default channel — the one `place()` (no channel named) uses. */
+  let customerCtx: { customerAccountId: string; organizationId: string; salesChannelId: string };
 
   beforeAll(async () => {
     h = await setupBackendServer();
     productId = await createTieredProduct(h, `order-${Date.now()}`);
+    customerCtx = {
+      customerAccountId: TEST_CUSTOMER_ID,
+      organizationId: TEST_ORGANIZATION_ID,
+      salesChannelId: await systemDefaultSalesChannelId(h.em()),
+    };
   });
 
   afterAll(async () => {
@@ -40,7 +48,7 @@ describe('POST /api/v1/orders — the line price is the price for its current qu
   });
 
   beforeEach(async () => {
-    await h.cartService()!.clearForCustomer(customerCtx);
+    await emptyCustomerBasket(h, customerCtx);
   });
 
   function place() {
@@ -56,6 +64,21 @@ describe('POST /api/v1/orders — the line price is the price for its current qu
         paymentMethodId: SEED_PAYMENT_METHOD_ID,
       },
     });
+  }
+
+  /**
+   * A quote of the test Organization for the agreed line — 10 of the tiered
+   * product at 5.00 — accepted and valid for another week. Placement checks
+   * that the quote a line is priced at still binds (#167), so an agreed line
+   * has to rest on a quote that exists and is in force, not on a made-up id.
+   */
+  async function inForceQuote(): Promise<string> {
+    const rfq = await acceptedQuoteRequest(h, { productId, quantity: 10, agreedUnitPrice: 5 });
+    await h
+      .em()
+      .getConnection()
+      .execute(`update "quote_requests" set "expires_at" = now() + interval '7 days' where "id" = ?`, [rfq.id]);
+    return rfq.id;
   }
 
   async function orderLine(orderId: string): Promise<{ quantity: number; unitPrice: string }> {
@@ -123,8 +146,9 @@ describe('POST /api/v1/orders — the line price is the price for its current qu
         productId,
         variantId: null,
         quantity: 1,
-        previousUnitPrice: TIER_VOLUME_PRICE,
-        currentUnitPrice: TIER_UNIT_PRICE,
+        // Unit prices at four places (owner ruling of 2026-10-25).
+        previousUnitPrice: unitPriceHalfUp(TIER_VOLUME_PRICE),
+        currentUnitPrice: unitPriceHalfUp(TIER_UNIT_PRICE),
         currency: 'PLN',
       },
     ]);
@@ -144,10 +168,10 @@ describe('POST /api/v1/orders — the line price is the price for its current qu
     await cartWritePortOf(h).replaceItemsForCustomer(
       customerCtx,
       [{ productId, quantity: 10, unitPrice: '5.00', currency: 'PLN' }],
-      { sourceQuoteRequestId: randomUUID() },
+      { sourceQuoteRequestId: await inForceQuote() },
     );
 
-    const res = await place();
+    const res = await whenOrderCreatedSettled(h, () => place());
     expect(res.statusCode, res.body).toBe(201);
     const orderId = (res.json() as { data: { id: string } }).data.id;
     expect(await orderLine(orderId)).toEqual({ quantity: 10, unitPrice: '5.00' });
@@ -157,7 +181,7 @@ describe('POST /api/v1/orders — the line price is the price for its current qu
     const seeded = await cartWritePortOf(h).replaceItemsForCustomer(
       customerCtx,
       [{ productId, quantity: 10, unitPrice: '5.00', currency: 'PLN' }],
-      { sourceQuoteRequestId: randomUUID() },
+      { sourceQuoteRequestId: await inForceQuote() },
     );
     const patched = await h.app.inject({
       method: 'PATCH',

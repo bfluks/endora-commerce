@@ -106,10 +106,10 @@ async function seedRows(em: EntityManager): Promise<{ productId: string; categor
     type: 'simple',
     sku: `INVCOL-${Date.now()}`,
     slug: `invcol-${Date.now()}`,
-    status: 'draft',
+    status: 'inactive',
     visibility: 'public',
-    name: { 'en-US': 'Inventory columns' },
-    description: {},
+    name: 'Inventory columns',
+    description: null,
     attributeValues: {},
     manageStock: false,
     backorderEnabled: true,
@@ -125,7 +125,7 @@ async function seedRows(em: EntityManager): Promise<{ productId: string; categor
     inventoryThresholdMedium: 10,
     inventoryThresholdLow: 2,
   });
-  await em.persistAndFlush([product, category]);
+  await em.persist([product, category]).flush();
   return { productId: product.id, categoryId: category.id };
 }
 

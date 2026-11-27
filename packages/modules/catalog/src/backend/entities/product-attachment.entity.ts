@@ -1,4 +1,5 @@
-import { Entity, Index, OptionalProps, PrimaryKey, Property } from '@mikro-orm/core';
+import { OptionalProps } from '@mikro-orm/core';
+import { Entity, Index, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import { GlobalEntity } from '@endora-commerce/platform/tenancy';
 import { randomUUID } from 'crypto';
 
@@ -14,7 +15,13 @@ import { randomUUID } from 'crypto';
 @GlobalEntity()
 @Entity({ tableName: 'product_attachments' })
 export class ProductAttachment {
-  [OptionalProps]?: 'id' | 'description' | 'position' | 'createdAt' | 'updatedAt';
+  [OptionalProps]?:
+    | 'id'
+    | 'description'
+    | 'position'
+    | 'hidden'
+    | 'createdAt'
+    | 'updatedAt';
 
   @PrimaryKey({ type: 'uuid' })
   id: string = randomUUID();
@@ -38,6 +45,13 @@ export class ProductAttachment {
 
   @Property({ type: 'integer' })
   position: number = 0;
+
+  /**
+   * Feature 174 (data-model §7) — hidden at Global. Channel and Channel × language values of the
+   * name, description and hidden flag live in `product_attachment_scope_overrides`.
+   */
+  @Property({ type: 'boolean' })
+  hidden: boolean = false;
 
   @Property({ type: 'datetime', onCreate: () => new Date() })
   createdAt: Date = new Date();

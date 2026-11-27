@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { TranslationProvider } from '../../../packages/admin-shell/src/i18n/TranslationProvider';
-import type { Bundle } from '../../../packages/admin-shell/src/i18n/types';
+import { TranslationProvider } from '@endora-commerce/admin-kit/i18n';
+import type { Bundle } from '@endora-commerce/admin-kit/i18n';
 import type { AdminNotificationItem } from '../../../packages/admin-shell/src/components/notifications/useAdminNotifications';
 
 /**
@@ -36,7 +36,11 @@ const { NotificationBell } =
   await import('../../../packages/admin-shell/src/components/notifications/NotificationBell');
 
 const EN: Bundle = {
-  core: { 'appShell.topbar.notifications': 'Notifications' },
+  core: {
+    'appShell.topbar.notifications': 'Notifications',
+    'appShell.topbar.notificationsUnread': 'Notifications, {count} unread',
+    'appShell.notifications.unread': 'Unread',
+  },
   crm: {
     'notifications.mention.title': '{author} mentioned you in opportunity {number}',
     'notifications.mention.body': 'Open opportunity {number} to read on',
@@ -45,7 +49,11 @@ const EN: Bundle = {
 };
 
 const PL: Bundle = {
-  core: { 'appShell.topbar.notifications': 'Powiadomienia' },
+  core: {
+    'appShell.topbar.notifications': 'Powiadomienia',
+    'appShell.topbar.notificationsUnread': 'Powiadomienia, nieprzeczytane: {count}',
+    'appShell.notifications.unread': 'Nieprzeczytane',
+  },
   crm: {
     'notifications.mention.title': '{author} wspomina o Tobie w szansie {number}',
     'notifications.mention.body': 'Otwórz szansę {number}, aby czytać dalej',
@@ -82,10 +90,16 @@ function openBell(language: 'en' | 'pl', feed: AdminNotificationItem[]): HTMLEle
       </MemoryRouter>
     </TranslationProvider>,
   );
-  fireEvent.click(
-    screen.getByRole('button', { name: language === 'pl' ? 'Powiadomienia' : 'Notifications' }),
+  // Radix opens the menu on `pointerdown`, not on `click` (#1783).
+  fireEvent.pointerDown(
+    // Every entry here is unread, so the name carries the count (#1492, S16).
+    screen.getByRole('button', { name: language === 'pl' ? /^Powiadomienia/ : /^Notifications/ }),
+    { button: 0, ctrlKey: false },
   );
-  return screen.getByRole('menuitem');
+  // One entry, before the footer's "Mark all read" — the feed's only row is first.
+  const entries = screen.getAllByRole('menuitem');
+  expect(entries).toHaveLength(2);
+  return entries[0]!;
 }
 
 const MENTION = {

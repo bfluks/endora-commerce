@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { setupTestDb, type TestDb } from '../../helpers/test-db.js';
 import { NewsletterTokenHelper } from '../../../../packages/modules/newsletter/src/backend/services/token.helper.js';
@@ -7,10 +8,20 @@ import { NewsletterContentService } from '../../../../packages/modules/newslette
 import { NewsletterCampaignDispatchService } from '../../../../packages/modules/newsletter/src/backend/services/campaign-dispatch.service.js';
 import { NewsletterCampaignService } from '../../../../packages/modules/newsletter/src/backend/services/campaign.service.js';
 import { InMemoryNewsletterProvider } from '../../../../packages/modules/newsletter/src/backend/services/provider/console-provider.js';
+import {
+  NO_USABLE_CREDENTIAL_ERROR,
+  UnconfiguredNewsletterProvider,
+} from '../../../../packages/modules/newsletter/src/backend/services/provider/provider-registry.js';
 import type { SettingsService } from '../../../src/kernel/settings/settings.service.js';
 import { SettingsService as KernelSettingsService } from '../../../src/kernel/settings/settings.service.js';
 import { BrandingService } from '../../../../packages/modules/transactional_emails/src/backend/services/branding.service.js';
-import { NewsletterSubscriber, NewsletterSubscriberTag, NewsletterTag } from '../../helpers/package-entities.js';
+import {
+  NewsletterSendRecord,
+  NewsletterSubscriber,
+  NewsletterSubscriberTag,
+  NewsletterSuppression,
+  NewsletterTag,
+} from '../../helpers/package-entities.js';
 
 function textTree(text: string): Record<string, unknown> {
   return { root: { props: {} }, content: [{ type: 'transactional_emails.EmailText', props: { id: 't', text } }], zones: {} };
@@ -67,6 +78,7 @@ describe('newsletter campaign service (US2)', () => {
     });
     service = new NewsletterCampaignService({
       emFactory: () => db.em(),
+      audience: new NewsletterAudienceResolver(() => db.em()),
       dispatch,
       content,
       isProviderConfigured: async () => providerConfigured,
@@ -125,6 +137,104 @@ describe('newsletter campaign service (US2)', () => {
     expect(provider.sent[0]?.to).toBe('1@x.test');
   });
 
+  it('fails every recipient with the reason when dispatch finds no usable credential (issue #1334)', async () => {
+    // A campaign scheduled while a credential was chosen, dispatched after it
+    // was removed: a production instance has no console sink to fall back to,
+    // so each send record is failed with the reason instead of marked sent.
+    const em = db.em();
+    const tag = em.create(NewsletterTag, { code: `t${randomUUID().slice(0, 8)}`, name: 'P' });
+    const s1 = em.create(NewsletterSubscriber, { email: `nocred-${randomUUID()}@x.test`, status: 'active' });
+    await em.flush();
+    em.create(NewsletterSubscriberTag, { subscriberId: s1.id, tagId: tag.id });
+    await em.flush();
+    const c = await service.create({
+      name: 'C',
+      language: 'en-US',
+      subject: 'Hi',
+      content: textTree('B'),
+      targetType: 'tag',
+      targetTagIds: [tag.id],
+    });
+
+    const dispatch = new NewsletterCampaignDispatchService({
+      emFactory: () => db.em(),
+      audience: new NewsletterAudienceResolver(() => db.em()),
+      content: new NewsletterContentService(),
+      optIn: new NewsletterOptInService({} as unknown as SettingsService, new NewsletterTokenHelper('s')),
+      links: { confirm: (t) => `c?${t}`, unsubscribe: (t) => `u?${t}` },
+      resolveProvider: async () => new UnconfiguredNewsletterProvider(),
+      resolveSender: async () => ({ fromEmail: 'n@s.test', fromName: '' }),
+    });
+    const result = await dispatch.dispatchCampaign(c.id);
+
+    expect(result).toEqual({ claimed: 1, sent: 0, failed: 1 });
+    const records = await db.em().find(NewsletterSendRecord, { campaignId: c.id });
+    expect(records.map((r) => [r.status, r.error])).toEqual([['failed', NO_USABLE_CREDENTIAL_ERROR]]);
+  });
+
+  it('reports the audience a draft would reach, so the send confirmation can name it (issue #1462)', async () => {
+    // A fresh tag keeps the count exact: `setupTestDb` truncates nothing, so an
+    // `all` audience also holds whatever subscribers other files left behind.
+    const em = db.em();
+    const tag = em.create(NewsletterTag, { code: `a${randomUUID().slice(0, 8)}`, name: 'A' });
+    const active = [1, 2, 3].map((n) =>
+      em.create(NewsletterSubscriber, { email: `aud${n}-${randomUUID()}@x.test`, status: 'active' }),
+    );
+    const pending = em.create(NewsletterSubscriber, { email: `aud-p-${randomUUID()}@x.test`, status: 'pending' });
+    const suppressedEmail = `aud-s-${randomUUID()}@x.test`;
+    const suppressed = em.create(NewsletterSubscriber, { email: suppressedEmail, status: 'active' });
+    em.create(NewsletterSuppression, { email: suppressedEmail, reason: 'bounce' });
+    await em.flush();
+    for (const s of [...active, pending, suppressed]) em.create(NewsletterSubscriberTag, { subscriberId: s.id, tagId: tag.id });
+    await em.flush();
+
+    const created = await service.create({
+      name: 'C',
+      language: 'en-US',
+      subject: 'S',
+      content: textTree('B'),
+      targetType: 'tag',
+      targetTagIds: [tag.id],
+    });
+    // Pending and suppressed subscribers are not reached, exactly as at dispatch.
+    expect(created.audienceEstimate).toBe(3);
+    expect((await service.get(created.id)).audienceEstimate).toBe(3);
+
+    const retargeted = await service.update(created.id, { targetType: 'tag', targetTagIds: [], expectedVersion: created.version });
+    expect(retargeted.audienceEstimate).toBe(0);
+
+    const grouped = await service.update(created.id, { targetType: 'group', expectedVersion: retargeted.version });
+    expect(grouped.audienceEstimate).toBe(0);
+    const withGroup = await service.setGroup(created.id, [active[0]!.id, pending.id]);
+    expect(withGroup.audienceEstimate).toBe(1);
+  });
+
+  it('answers a manual group\'s members by e-mail, so the editor can show who is in it (issue #1533)', async () => {
+    const em = db.em();
+    const [b, a] = ['b', 'a'].map((prefix) =>
+      em.create(NewsletterSubscriber, { email: `${prefix}-grp-${randomUUID()}@x.test`, status: 'active' }),
+    );
+    // A member who unsubscribed since is still in the group, and is still listed.
+    const gone = em.create(NewsletterSubscriber, { email: `c-grp-${randomUUID()}@x.test`, status: 'unsubscribed' });
+    await em.flush();
+    const c = await service.create({ name: 'G', language: 'en-US', subject: 'S', content: textTree('B'), targetType: 'group' });
+    expect((await service.getGroup(c.id)).items).toEqual([]);
+
+    await service.setGroup(c.id, [b!.id, gone.id, a!.id]);
+    expect((await service.getGroup(c.id)).items).toEqual([
+      { id: a!.id, email: a!.email },
+      { id: b!.id, email: b!.email },
+      { id: gone.id, email: gone.email },
+    ]);
+    await expect(service.getGroup(randomUUID())).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('reports no audience estimate once a campaign has left draft', async () => {
+    const c = await service.create({ name: 'C', language: 'en-US', subject: 'S', content: textTree('B'), targetType: 'all' });
+    const cancelled = await service.cancel(c.id, c.version);
+    expect(cancelled.audienceEstimate).toBeNull();
+  });
+
   it('cancels a draft campaign', async () => {
     const c = await service.create({ name: 'C', language: 'en-US', subject: 'S', content: textTree('B'), targetType: 'all' });
     const cancelled = await service.cancel(c.id, c.version);
@@ -152,6 +262,7 @@ describe('newsletter campaign service (US2)', () => {
       });
       branded = new NewsletterCampaignService({
         emFactory: () => db.em(),
+        audience: new NewsletterAudienceResolver(() => db.em()),
         dispatch,
         content,
         isProviderConfigured: async () => true,
@@ -174,7 +285,14 @@ describe('newsletter campaign service (US2)', () => {
     });
 
     it('sends with the default sales channel\'s branding', async () => {
-      db.em().create(NewsletterSubscriber, { email: '1@x.test', status: 'active' });
+      // A campaign targeting `all` reaches every active subscriber in the
+      // database, and `setupTestDb` truncates nothing, so the audience also
+      // holds whatever subscribers another file left behind
+      // (`tenancy/scoped-empty-explains-itself.test.ts` seeds two). The
+      // assertion is therefore about the subscriber this test wrote, under an
+      // address nothing else can have, and not about the size of the audience.
+      const email = `branded-${randomUUID()}@x.test`;
+      db.em().create(NewsletterSubscriber, { email, status: 'active' });
       await db.em().flush();
       const c = await branded.create({ name: 'C', language: 'en-US', subject: 'Hi', content: textTree('Body'), targetType: 'all' });
       db.em().clear();
@@ -182,8 +300,11 @@ describe('newsletter campaign service (US2)', () => {
       const sent = await branded.send(c.id, c.version);
 
       expect(sent.status).toBe('sent');
-      expect(provider.sent.map((m) => m.to)).toEqual(['1@x.test']);
-      expect(branding.asked).toEqual([db.systemDefaultChannelId]);
+      expect(provider.sent.filter((m) => m.to === email)).toHaveLength(1);
+      // Branding is read once per recipient, so the count follows the audience;
+      // what this case is about is *which* channel every read was made for.
+      expect(branding.asked.length).toBeGreaterThan(0);
+      expect([...new Set(branding.asked)]).toEqual([db.systemDefaultChannelId]);
     });
   });
 });

@@ -1,34 +1,223 @@
 ---
-title: invoices
-description: PDF invoice / proforma generation + asset linkage
+title: Invoices
+description: VAT invoices, proformas and corrective invoices issued against orders, with PDFs rendered from document templates
 ---
 
-# `invoices`
+# Invoices (`invoices`)
 
-Generates proforma and final invoice PDFs, registers them under the
-`assets` module, and links them from the originating Order.
+Issues VAT invoices, proformas and corrective invoices against an Order, and
+renders their PDFs on demand from the invoice document template. ERP-imported
+sale documents (`origin: erp_import`, including `wz` dispatch notes) are listed
+beside them.
 
 ## Public surface
 
-Admin list is gated by `orders:read`.
+Admin routes are gated by the module's own codes: `invoices:read` for reading
+and downloading, `invoices:write` for issuing, regenerating and e-mailing.
 
 | Verb + Path | Audience | Purpose |
 | --- | --- | --- |
-| `GET /api/v1/orders/:id/invoice` | customer | Download invoice PDF (404 `INVOICE_NOT_READY` until status='ready'; binary Content-Type once ready). Admin uses the same endpoint via the storefront origin to re-download. |
-| `GET /api/v1/admin/invoices` | admin | List all invoices with `filter[status]` / `filter[orderId]`; default limit 50, capped at 200 |
+| `GET /api/v1/admin/invoices` | admin (`invoices:read`) | List with `filter[status]`, `filter[kind]`, `filter[orderId]`, `filter[orderNumber]`, `filter[salesChannelId]`, `filter[issuedFrom]` / `filter[issuedTo]`, `filter[totalMin]` / `filter[totalMax]`; default limit 50, capped at 200; newest first, paged by the opaque `pagination.cursor` passed back as `?cursor=` |
+| `GET /api/v1/admin/invoices/:id` | admin (`invoices:read`) | Invoice detail |
+| `GET /api/v1/admin/invoices/:id/pdf` | admin (`invoices:read`) | Download the PDF, rendered on demand |
+| `POST /api/v1/admin/orders/:orderId/invoices` | admin (`invoices:write`) | Issue a VAT invoice or a proforma (`kind`, optional `saleDate`, `paymentDueDate`); `201` with the invoice and the e-mail outcome |
+| `POST /api/v1/admin/invoices/:id/regenerate-pdf` | admin (`invoices:write`) | Re-run the render to surface a template error; stores nothing |
+| `POST /api/v1/admin/invoices/:id/send-email` | admin (`invoices:write`) | (Re)send the invoice e-mail, optionally choosing `mode` (`attachment` / `link`) |
+| `GET /api/v1/orders/:id/invoices` | customer | The ready invoices of an order the customer may see |
+| `GET /api/v1/orders/:id/invoices/:invoiceId/pdf` | customer | Download one of them; `404 NOT_FOUND` until it is `ready` |
+| `GET /api/v1/account/organization/invoices` | customer | The Organization's ERP-imported sale documents, with their attachments |
+| `GET /api/v1/orders/:id/invoice` | customer | Single-invoice download, registered by `orders`: the order's newest `ready` document of kind `invoice`, rendered from the invoice template. A proforma or a correction is never served here, so `404 INVOICE_NOT_READY` until an invoice is `ready`. Every other document is at `…/invoices/:invoiceId/pdf` |
 
 ## Generation flow
 
-`invoice-service.ts#generate()` runs after `order.confirmed`: pulls the
-Order + items + buyer Address snapshot, renders a PDF via a small,
-dependency-light renderer, persists the bytes through the `assets` module,
-and writes the asset id back onto the Order. Failures emit
-`invoice.generation_failed.v1` for an admin retry queue.
+An invoice is issued by an operator, or automatically: when an order reaches
+the status named in `invoices.auto_issue.trigger_status` (empty by default,
+which means manual issuance only), the subscriber on `order.status_changed.v1`
+(`services/auto-issue-reactor.ts`) issues one VAT invoice per order. It is
+idempotent and best-effort: a failed automatic attempt is logged and leaves
+manual issuance available. Issuance snapshots the order's lines into
+`invoice_lines`, draws the number and emits `invoice.issued.v1` (a correction
+emits `invoice.corrected.v1`). With `invoices.email.send_on_issue` on (off by
+default) the invoice e-mail goes out, carrying the PDF as an attachment or a
+link to the customer panel (`invoices.email.delivery_mode`, default
+`attachment`). The PDF is not stored: every download is rendered from the
+document template (see *PDF templates*).
+
+### Unit prices and line values
+
+An invoice line carries the order line's **unit net price at up to four decimal places**
+(`invoice_lines.unit_net_price`, `numeric(14,4)`), and its net value is the unit price × the
+quantity rounded half-up to two places once — the order line's own net. The PDF's *Cena netto*
+column shows the unit price with its significant places, up to four (0,0125), and two when the third
+and fourth are zero; the value columns and the totals show two. A Polish invoice may state a unit
+price this precisely: the VAT Act names the unit net price without fixing its decimal places.
+
+### What a VAT invoice records as paid, and when it is not issued
+
+A VAT invoice records as paid what was received for the order and kept:
+each captured payment attempt, less everything refunded. An order recorded as
+paid with nothing captured (a confirmed bank transfer), or with `payments`
+absent, was received in its stored total. An order on credit terms is unpaid by
+arrangement when it is invoiced, and nothing of it is counted as paid.
+
+Every refund counts once, whichever way it was made:
+
+- a refund through the payment gateway, as `payments` recorded it;
+- a return settled with a **refund by bank transfer** (any order not paid
+  through a gateway — the operator makes the transfer) or with a **credit to
+  the credit limit**, as the return recorded it. A refund still waiting for a
+  person to make it is not counted;
+- an order an operator marked as **refunded** was refunded everything that was
+  received for it: its whole total when nothing was captured, and what was
+  captured otherwise — a refund settled by hand, for example after the gateway
+  reported an amount the payment could not record. The mark is never added to
+  refunds already recorded: a gateway refund on the payment counts once.
+
+With the `returns` module switched off, only the refunds `payments` recorded
+are deducted.
+
+An order **refunded in full before it was invoiced** — the refunds equal what
+was received and cover the whole order total — is not invoiced: there is no
+sale left to document. Issuing answers `422 INVOICE_ORDER_REFUNDED` and draws
+no number; automatic issuance skips the order and logs the reason. An order
+refunded only in part is invoiced, with what was kept as paid. An order
+**returned in full** before it was invoiced — every product line back through
+settled returns, nothing withheld on them, and no delivery or payment surcharge
+kept — counts the same,
+whether or not the refund has been paid out yet (one still waiting for a person
+to make it, or for the payment gateway to confirm it). When the delivery or the
+surcharge is kept, the invoice is issued with only that line. A consumer's
+withdrawal from the whole order refunds both (see *Returns*), so a B2C order
+returned in full usually has nothing left and is refused. A delivery the
+operator reduced to the standard price leaves the difference, which is invoiced
+alone.
+
+An invoice issued **after a return was settled** lists only what the buyer
+kept: there is no invoice yet to correct, so the invoice itself documents the
+sale that is left. Each order line is invoiced at its ordered quantity less the
+quantity of the order's settled returns (kind *return*, settled with a refund or
+a credit), whether or not the money has been paid out yet; a line returned in
+full is left off. A replacement, a repair and a complaint change no line. The
+delivery and payment-surcharge lines are the order's, less what a consumer's
+withdrawal refunded of them; a line with nothing left is left off. The discount line carries
+only the kept goods' share: the order discount less the part the settled returns
+carried back with their refunds, and it is left off when nothing remains. VAT is
+still calculated per rate on the sum of the nets, so the invoice equals what is
+left paid to the cent. A proforma lists the same kept lines, and is not refused
+for an order refunded in full. With the `returns` module switched off, every
+line is invoiced at its ordered quantity.
+
+An **amount withheld on a return** — the operator approved less than the
+default refund, for example to keep a handling fee — is part of the goods'
+price, at their VAT rate (owner ruling of 2026-11-07). The invoice charges it on
+a line of its own, *Retained on return: product* (`line_kind: retained`), one
+per order line something was withheld from, at that line's VAT rate. Its gross
+is what was withheld; its net is what makes the rate's VAT row the kept goods'
+gross plus that amount, under the same per-rate method. For example, of
+3 × 10.00 net at 23 % one unit comes back, its default refund is 12.30 and 10.00
+is approved: the invoice lists the two kept units and *Retained on return* at
+1.87 net and 2.30 gross, and the 23 % row is 41.87 net and 9.63 VAT — 51.50, what
+was left paid. For the few amounts no net produces under the rule (0.03 at
+23 %), the nearest net is used and the row is 0.01 off. The withheld amount
+carries no share of the order discount: the returned goods take their whole
+share back. An order whose every line came back is invoiced when something was
+withheld on it, with only those lines. When a complaint had already refunded
+part of a line and a return of it was refunded less for that reason, the
+difference is invoiced the same way, and the complaint refund still shows as
+amount due (below).
+
+A **complaint refunded before the order was invoiced** currently shows on the
+invoice as amount due: the invoice lists the goods in full, and the complaint
+refund is deducted from what was paid.
+
+### Corrective invoices
+
+A return or a complaint settled with a refund or a credit **after** the order
+was invoiced gets a corrective invoice (`kind: correction`), one per case. It
+credits gross amounts, at the VAT rate of the invoice line it corrects, and never
+more than is left of the invoice. A replacement or a repair moves no money and
+issues no correction.
+
+**A return** credits the goods that came back. On an invoice issued under the
+per-rate VAT method, the correction is worked out from what the invoice keeps:
+
+- When the case refunds its default amount, the invoice keeps, at each rate,
+  exactly the VAT on the sum of the nets of the kept quantities: the same
+  figures an invoice issued after the return would show. For example, returning
+  one unit of 3 × 10.01 net at 23 % (36.94 gross) refunds 12.32, and the
+  correction credits 10.01 net and 2.31 VAT, which leaves 20.02 net and 4.60 VAT.
+- When the operator approved a lower amount, the invoice keeps the rest of the
+  gross at that rate, split into net and VAT by the same rule. For a few amounts
+  no net gives that gross exactly (6.00 of 12.32 at 23 %, for example). The
+  correction itself then follows the rule, and what the invoice keeps may differ
+  from it by 0.01 at that rate until the next correction. The money is always
+  exact.
+- The share of the order discount that the returned goods carried is credited
+  back on a 0 % line.
+- The delivery and the payment surcharge are credited only on a consumer's
+  withdrawal: the return that completes the withdrawal from a B2C order. Each is
+  credited on a line of its own (`lineKind` `delivery` or `payment_surcharge`),
+  named like the invoice's line and at its VAT rate (0 % today), for the amount
+  the settlement refunded. After a full withdrawal the invoice nets to zero. A
+  correction that would credit more of a charge than the invoice still charges
+  for it is refused with `422 INVOICE_CORRECTION_EXCEEDS_CHARGE_REMAINING`
+  (`details.code` is the charge, `delivery` or `payment_surcharge`, with
+  `remaining` and `currency`), before any money moves.
+  Business customers' returns never credit them.
+
+**A complaint** settled with money is a **price reduction**: the buyer keeps the
+goods, so their price is reduced and no quantity comes back. The correction's
+line is named *Obniżka ceny (reklamacja RMA-…): product* and has quantity 0. Its
+net value is the reduction, and its unit price is the reduction spread over the
+units still on the invoice. It credits no discount, because the discount stays
+with the kept goods, and it does not lower the quantity a later return of the
+same line is credited from. For an integration that reads correction lines: a
+goods line with quantity 0 is a price reduction.
+
+A correction that would credit more goods at one VAT rate than the invoice still
+charges at that rate is refused with
+`422 INVOICE_CORRECTION_EXCEEDS_RATE_REMAINING` (`details`: `taxRate`,
+`vatRatePercent`, `remaining`, `currency`), before any money moves.
+
+The other refusals of issuance and correction (issue #633; each was
+`VALIDATION_FAILED` before):
+
+| Refusal | Code | `details` |
+| --- | --- | --- |
+| The seller's VAT number and company data are not configured | `422 INVOICE_SELLER_DATA_MISSING` | `setting` |
+| A correction in another currency than the corrected invoice's | `422 INVOICE_CORRECTION_CURRENCY_MISMATCH` | `requestedCurrency`, `invoiceCurrency`, `originalInvoiceId` |
+| A correction total above what its lines and charges credit, or (`details.code: below_charges`) below the charges alone | `400 INVOICE_CORRECTION_TOTAL_EXCEEDS_LINES` | `total`, `linesTotal`, `currency` |
+
+The **amount due** is the gross less what was paid, and never negative. When
+more was paid than the gross, the amount due is 0 and the invoice states the
+difference as the **overpayment** (`overpayment` in the API, the
+*Overpayment* row on the admin screen, *Nadpłata* on the PDF — the label is a
+setting of the totals block, and the row can be hidden there).
+
+## Orders paid by a related payer {#orders-paid-by-a-related-payer}
+
+An order placed with a related payer (the *Related payers* module) carries the payer's billing
+snapshot, so its invoice is issued to the payer. The invoice ledger records it under the payer —
+`payerOrganizationId ?? organizationId` — and the admin invoice list's reach and its
+*Billed organization* filter use the same expression, so such an invoice is listed under the payer and not
+under the buyer. The payer downloads it through its read-only view of the order.
 
 ## Entities
 
-`Invoice` (number, issued/dated timestamps, asset reference,
-`type ∈ {proforma, final}`).
+`Invoice` (number, `kind ∈ {invoice, proforma, correction, wz}`,
+`status ∈ {pending, ready, cancelled}`, `origin ∈ {platform, erp_import}`,
+issued/sale/due dates, currency and totals; immutable once `ready`, changed only
+by a correction).
+
+`InvoiceLine` (an immutable snapshot of one line at issuance). Its `lineKind`
+says what the line is: `goods`, `delivery`, `payment_surcharge` or `discount`
+on an invoice or a proforma, with `price_reduction` reserved for a
+correction's line. Every line of a document issued from this release records
+it, the 0 % delivery and surcharge lines included; it changes no amount. A line
+issued before, and a correction's goods and discount lines, carry `null` and are
+told apart as before, by whether they name an order line and by their sign. A
+correction's credited delivery or surcharge carries `delivery` or
+`payment_surcharge`.
 
 ## Numbering
 
@@ -86,6 +275,17 @@ stand between that and a customer's document:
 A deployment that is already configured into a collision is reported at boot,
 once per colliding pair, and is **not** blocked: a fixable invoicing
 misconfiguration must not become a storefront outage.
+
+## In the audit log
+
+Issuing an invoice and issuing a correction are each one entry in the
+platform-wide audit log (`invoice.issued`, `invoice.corrected`). That log is read
+by everybody holding `audit_log:read` whatever Organizations they may see, so an
+entry names the document and holds no amount: its number, kind, order, sales
+channel and — for a correction — the original invoice, how many lines reduced a
+price and which kinds of charges were credited (`chargeKinds`). The totals are on
+the invoice itself. Entries recorded before this change keep the amounts they
+were written with.
 
 ## Extension points
 

@@ -1,7 +1,22 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { randomUUID } from '@endora-commerce/admin-kit/lib';
-import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, PageHeader, Textarea } from '@endora-commerce/admin-kit/ui';
+import { useNavigate, useParams } from 'react-router-dom';
+import { isDraftEqual, randomUUID } from '@endora-commerce/admin-kit/lib';
+import { ImmediateBadge, UnsavedChangesHint, useUnsavedChangesGuard } from '@endora-commerce/admin-kit/components';
+import {
+  Alert,
+  AlertDescription,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  FormField,
+  InlineStatus,
+  Input,
+  PageHeader,
+  SaveButtonGroup,
+  Textarea,
+  useInlineStatus,
+} from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import type { MegamenuDetail, MegamenuItem, MegamenuItemKind } from '@endora-commerce/contracts';
 
@@ -51,9 +66,24 @@ function deleteSubtree(items: IndexedItem[], itemId: string): IndexedItem[] {
   return items.filter((i) => !toDelete.has(i.id));
 }
 
+/**
+ * The megamenu editor.
+ *
+ * **One Save** (issue #1512, UX audit CONTENT-09; owner decision DEC-08): the header's
+ * `SaveButtonGroup` saves the name and description and then the item tree — each only when it
+ * changed, the tree on the version the name answered with — and says the result in an
+ * `InlineStatus` beside it. The bindings are the one part that applies at once (each add, remove,
+ * activate and deactivate is its own write), so their section heading carries the kit's
+ * `ImmediateBadge` and their results are said in that section.
+ *
+ * **Layout** (issue #1534, CONTENT-16): two rows whose columns start at `lg` and stack below it —
+ * the metadata beside the bindings, then the tree beside the item panel that edits it.
+ */
 export function MegamenuEditor(): ReactNode {
   const t = useTranslation('megamenu');
   const { id } = useParams();
+  const navigate = useNavigate();
+  const saveStatus = useInlineStatus();
   const [menu, setMenu] = useState<MegamenuDetail | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -63,12 +93,18 @@ export function MegamenuEditor(): ReactNode {
   const [warnings, setWarnings] = useState<Array<{ code: string; message: string }>>([]);
   const [saving, setSaving] = useState(false);
 
-  const load = useCallback(async (): Promise<void> => {
+  /**
+   * `keepDrafts` re-reads the menu without touching what the operator is editing:
+   * a binding saves on its own and reloads, and that reload used to put the
+   * stored tree back over an unsaved one (issue #1461).
+   */
+  const load = useCallback(async (options: { keepDrafts?: boolean } = {}): Promise<void> => {
     if (!id) return;
     setError(null);
     try {
       const loaded = await megamenuClient.getMenu(id);
       setMenu(loaded);
+      if (options.keepDrafts) return;
       setName(loaded.name);
       setDescription(loaded.description ?? '');
       setItems(indexItems(loaded.items));
@@ -100,54 +136,92 @@ export function MegamenuEditor(): ReactNode {
       parentId,
       position: items.filter((i) => i.parentId === parentId).length,
       kind,
-      labels: { 'en-US': t('editor.newItemLabel') },
+      labels: { [languages[0] ?? 'en-US']: t('editor.newItemLabel') },
       target: defaultTargetFor(kind) as MegamenuItem['target'],
+      // Feature 168: a top-level item is a tab of the bar and needs a
+      // presentation; a new one starts as a plain link at the start.
+      ...(parentId === null ? { presentation: 'link' as const, alignment: 'start' as const } : {}),
     } as IndexedItem;
+    saveStatus.clear();
     setItems([...items, next]);
     setSelectedItemId(id);
   };
 
   const updateItem = (next: IndexedItem): void => {
+    saveStatus.clear();
     setItems((prev) => prev.map((i) => (i.id === next.id ? next : i)));
   };
 
-  const saveMetadata = async (): Promise<void> => {
-    if (!menu) return;
+  /** Saves the name and description on `base`; the menu as saved, or `null` when refused. */
+  const saveMetadata = async (base: MegamenuDetail | null = menu): Promise<MegamenuDetail | null> => {
+    if (!base) return null;
     setSaving(true);
     setError(null);
     try {
-      const updated = await megamenuClient.patchMenu(menu.id, {
+      const updated = await megamenuClient.patchMenu(base.id, {
         name,
         description: description || null,
-        version: menu.version,
+        version: base.version,
       });
       setMenu(updated);
+      return updated;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      return null;
     } finally {
       setSaving(false);
     }
   };
 
-  const saveTree = async (): Promise<void> => {
-    if (!menu) return;
+  /** Saves the item tree on `base`; the menu as saved, or `null` when refused. */
+  const saveTree = async (base: MegamenuDetail | null = menu): Promise<MegamenuDetail | null> => {
+    if (!base) return null;
     setSaving(true);
     setError(null);
     setWarnings([]);
     try {
-      const out = await megamenuClient.putItems(menu.id, {
+      const out = await megamenuClient.putItems(base.id, {
         items: items.map((i) => ({ ...i }) as MegamenuItem),
-        version: menu.version,
+        version: base.version,
       });
       setMenu(out.data);
       setItems(indexItems(out.data.items));
       if (out.meta?.warnings) setWarnings(out.meta.warnings);
+      return out.data;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      return null;
     } finally {
       setSaving(false);
     }
   };
+
+  // Issue #1461 (CONTENT-02) — each card's draft against the last saved menu.
+  const metadataDirty = menu !== null && (name !== menu.name || description !== (menu.description ?? ''));
+  const treeDirty = menu !== null && !isDraftEqual(items, indexItems(menu.items));
+  const dirty = metadataDirty || treeDirty;
+
+  /** The one Save: the name and description, then the tree, each only when changed and each on the version the previous one answered with. */
+  const save = async (): Promise<boolean> => {
+    saveStatus.clear();
+    let base = menu;
+    if (metadataDirty) base = await saveMetadata(base);
+    if (base && treeDirty) base = await saveTree(base);
+    if (base !== null) saveStatus.show(t('editor.saved'));
+    return base !== null;
+  };
+
+  const unsavedGuard = useUnsavedChangesGuard({
+    dirty,
+    // The leave dialog's Save is the header's Save.
+    onSave: save,
+    onDiscard: () => {
+      if (!menu) return;
+      setName(menu.name);
+      setDescription(menu.description ?? '');
+      setItems(indexItems(menu.items));
+    },
+  });
 
   if (!menu) {
     return <p className="px-2 py-6 text-sm text-muted-foreground">{t('common.loading')}</p>;
@@ -156,12 +230,23 @@ export function MegamenuEditor(): ReactNode {
   return (
     <div className="space-y-4">
       <PageHeader
+        back={{ label: t('list.title'), to: '/megamenu' }}
         title={menu.name || t('editor.fallbackTitle')}
-        description={t('editor.description')}
         actions={
-          <Button asChild variant="outline">
-            <Link to="/megamenu">{t('common.back')}</Link>
-          </Button>
+          <div data-save-actions className="flex flex-wrap items-center justify-end gap-2">
+            <UnsavedChangesHint dirty={dirty} />
+            <InlineStatus {...saveStatus.props} />
+            <SaveButtonGroup
+              onSave={() => void save()}
+              onSaveAndExit={async () => {
+                if (await save()) navigate('/megamenu');
+              }}
+              saving={saving}
+              saveLabel={t('common.save')}
+              savingLabel={t('common.saving')}
+              saveAndExitLabel={t('common.saveAndExit')}
+            />
+          </div>
         }
       />
       {error ? (
@@ -175,69 +260,82 @@ export function MegamenuEditor(): ReactNode {
         </Alert>
       ))}
 
-      <div className="grid grid-cols-12 gap-4">
-        <div className="col-span-4 space-y-4">
+      {/* What the menu is and where it shows. Columns from `lg`, stacked below (WCAG 1.4.10). */}
+      <div className="grid gap-4 lg:grid-cols-12">
+        <div className="lg:col-span-5">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">{t('sections.metadata')}</CardTitle>
+              <CardTitle>{t('sections.metadata')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="space-y-1">
-                <Label>{t('fields.name')}</Label>
-                <Input value={name} onChange={(event) => setName(event.target.value)} />
-              </div>
-              <div className="space-y-1">
-                <Label>{t('fields.description')}</Label>
+              <FormField label={t('fields.name')}>
+                <Input
+                  value={name}
+                  onChange={(event) => {
+                    saveStatus.clear();
+                    setName(event.target.value);
+                  }}
+                />
+              </FormField>
+              <FormField label={t('fields.description')}>
                 <Textarea
                   value={description}
-                  onChange={(event) => setDescription(event.target.value)}
+                  onChange={(event) => {
+                    saveStatus.clear();
+                    setDescription(event.target.value);
+                  }}
                 />
-              </div>
-              <div className="text-right">
-                <Button onClick={() => void saveMetadata()} disabled={saving}>
-                  {t('common.saveMetadata')}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">{t('sections.bindings')}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <BindingsPanel menuId={menu.id} bindings={menu.bindings} onChanged={() => void load()} />
+              </FormField>
             </CardContent>
           </Card>
         </div>
 
-        <div className="col-span-4">
+        <div className="lg:col-span-7">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">{t('sections.items')}</CardTitle>
+              {/* Each binding change is its own write, outside the header Save (DEC-08). */}
+              <CardTitle>
+                {t('sections.bindings')}
+                <ImmediateBadge className="align-middle" />
+              </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent>
+              <BindingsPanel menuId={menu.id} bindings={menu.bindings} onChanged={() => void load({ keepDrafts: true })} />
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      {/* The tree and the panel that edits its selected item, side by side (Proximity). */}
+      <div className="grid gap-4 lg:grid-cols-12">
+        <div className="lg:col-span-5">
+          <Card>
+            <CardHeader>
+              <CardTitle>{t('sections.items')}</CardTitle>
+            </CardHeader>
+            <CardContent>
               <MenuItemTree
                 items={items}
                 selectedItemId={selectedItemId}
                 onSelect={setSelectedItemId}
-                onMove={(itemId, direction) => setItems((prev) => move(prev, itemId, direction))}
-                onDelete={(itemId) => setItems((prev) => deleteSubtree(prev, itemId))}
+                onMove={(itemId, direction) => {
+                  saveStatus.clear();
+                  setItems((prev) => move(prev, itemId, direction));
+                }}
+                onDelete={(itemId) => {
+                  saveStatus.clear();
+                  setItems((prev) => deleteSubtree(prev, itemId));
+                }}
                 onAddChild={addChild}
               />
-              <div className="text-right">
-                <Button onClick={() => void saveTree()} disabled={saving}>
-                  {t('common.saveTree')}
-                </Button>
-              </div>
             </CardContent>
           </Card>
         </div>
 
-        <div className="col-span-4">
+        <div className="lg:col-span-7">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">{t('sections.item')}</CardTitle>
+              <CardTitle>{t('sections.item')}</CardTitle>
             </CardHeader>
             <CardContent>
               <MenuItemConfigPanel
@@ -249,6 +347,7 @@ export function MegamenuEditor(): ReactNode {
           </Card>
         </div>
       </div>
+      {unsavedGuard.dialog}
     </div>
   );
 }

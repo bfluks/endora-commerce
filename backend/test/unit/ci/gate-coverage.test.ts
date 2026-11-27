@@ -109,8 +109,10 @@ import {
  *
  * ## What this file does not answer
  *
- * *When* a job runs. `build:storefront` is `master`-only, so `check:themes` is
- * post-merge coverage; that is a second axis and would be a second rule. Nor
+ * *When* a job runs. `build:storefront` is `master`-only on GitLab, so there
+ * `check:themes` is post-merge coverage; that is a second axis and would be a
+ * second rule. On the canonical host it is pull-request coverage, held by
+ * `storefront-themes-gate.test.ts` (issue #109). Nor
  * does it judge whether a rule is any good — that is
  * `check-inventory.test.ts`' red proofs, one population over.
  */
@@ -226,6 +228,14 @@ const SCRIPTS_NO_JOB_RUNS: Readonly<Record<string, Verdict>> = {
       'into the site tree. A pipeline that ran it would repair the staleness it is meant to ' +
       'report and go green on a commit nobody can reproduce.',
   },
+  'backend::docs:translations:pin': {
+    kind: 'produces',
+    coveredBy: 'backend::check:docs-translations',
+    reason:
+      'It rewrites the translation pins under `docs/translation-cache/` to the current English ' +
+      'bodies (issue #671). A pipeline that ran it would mark every stale translation fresh — ' +
+      'repairing exactly the drift `check:docs-translations` exists to report.',
+  },
   'backend::manifest-index:generate': {
     kind: 'produces',
     coveredBy: 'backend::overlay:check',
@@ -255,6 +265,14 @@ const SCRIPTS_NO_JOB_RUNS: Readonly<Record<string, Verdict>> = {
       "It scaffolds a migration file into the owning module's `migrations/` directory on " +
       'demand, with a clamped UTC stamp and a derived class name. It answers no question about ' +
       'the tree; a pipeline running it would add a migration to the branch.',
+  },
+  'backend::codemod:persist-and-flush': {
+    kind: 'developer-tool',
+    reason:
+      'It rewrites `persistAndFlush` / `removeAndFlush` call sites and test doubles across the ' +
+      'tree on demand (issue #1863, before the MikroORM 7 switch) and is re-run by hand when a ' +
+      'branch carrying it is rebased. It answers no question about the tree; a pipeline running ' +
+      'it would rewrite source on the branch it is supposed to be judging.',
   },
   'backend::dev': {
     kind: 'developer-tool',

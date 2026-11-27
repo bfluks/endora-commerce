@@ -3,7 +3,9 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
+import { byId } from '../../helpers/developer-ids';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
+import { ORGANIZATION_CHANNEL_ID, organizationSalesChannelsAnswer } from '../../helpers/organization-sales-channels';
 
 /**
  * The create-quote-request screen opened from another screen (feature 143,
@@ -14,6 +16,8 @@ import { adminSession, modulePresence, withSession } from '../../helpers/render-
 
 const getSpy = vi.fn();
 const postSpy = vi.fn();
+/** The quote-request creations posted (the price explanation posts too, feature 160). */
+const creates = () => postSpy.mock.calls.filter(([path]) => path === '/api/v1/admin/quote-requests');
 const navigateSpy = vi.fn();
 
 vi.mock('@endora-commerce/admin-kit/lib', async () => {
@@ -52,14 +56,15 @@ const CUSTOMER = {
   organizationId: ORGANIZATION_ID,
   organizationName: 'Acme',
 };
-const PRODUCT = { id: 'prod-1', sku: 'SKU-1', slug: 'p1', status: 'active', type: 'simple', name: { 'en-US': 'Widget' } };
+const PRODUCT = { id: 'prod-1', sku: 'SKU-1', slug: 'p1', status: 'active', type: 'simple', name: 'Widget' };
 
 const BUNDLE = passthroughBundle('core', [
   'rfqCreate.submit',
-  'rfqCreate.back',
+  'rfq.list.title',
   'common.action.back',
   'rfqCreate.items.quickSearch',
   'rfqCreate.field.agreedUnitPrice',
+  'rfqCreate.field.customer',
 ]);
 
 beforeEach(() => {
@@ -67,19 +72,24 @@ beforeEach(() => {
   postSpy.mockReset();
   navigateSpy.mockReset();
   getSpy.mockImplementation((path: string) => {
+    const channels = organizationSalesChannelsAnswer(path);
+    if (channels) return channels;
     if (path === '/api/v1/admin/customers/cust-1') return Promise.resolve({ data: CUSTOMER });
     if (path.startsWith('/api/v1/admin/customers')) return Promise.resolve({ data: [CUSTOMER] });
     if (path.startsWith('/api/v1/admin/catalog/products')) return Promise.resolve({ data: [PRODUCT] });
-    if (path.includes('/resolved-price')) {
-      return Promise.resolve({ data: { resolvedPrice: { amount: '10.00' } } });
-    }
     return Promise.resolve({ data: [] });
   });
-  postSpy.mockResolvedValue({ data: { id: 'new-rfq-1' } });
+  postSpy.mockImplementation((path: string) =>
+    Promise.resolve(
+      path === '/api/v1/admin/price-books/resolve'
+        ? { data: [{ key: 'line', price: { amount: '10.00', currency: 'PLN', source: 'base' } }] }
+        : { data: { id: 'new-rfq-1' } },
+    ),
+  );
 });
 
-async function pick(comboLabel: string, optionLabel: string): Promise<void> {
-  await userEvent.click(screen.getByLabelText(comboLabel));
+async function pick(comboLabel: string | HTMLElement, optionLabel: string): Promise<void> {
+  await userEvent.click(typeof comboLabel === 'string' ? screen.getByLabelText(comboLabel) : comboLabel);
   await userEvent.click(await screen.findByRole('option', { name: new RegExp(optionLabel) }));
 }
 
@@ -113,6 +123,13 @@ async function addLineAndSubmit(): Promise<void> {
 }
 
 describe('RfqCreatePage opened with an origin', () => {
+  it('names the customer picker by its visible label, not a developer id (#1475)', async () => {
+    renderPage();
+    const picker = await screen.findByRole('combobox', { name: 'rfqCreate.field.customer' });
+    expect(picker).toHaveAttribute('id', 'customerAccountId');
+    expect(picker).not.toHaveAttribute('aria-label');
+  });
+
   it('preselects the customer, sends the origin, and returns to where it came from', async () => {
     renderPage({
       originType: 'crm_opportunity',
@@ -122,12 +139,13 @@ describe('RfqCreatePage opened with an origin', () => {
       returnTo: RETURN_TO,
     });
     // The picker is not touched: the customer arrives chosen, by name.
-    await waitFor(() => expect(screen.getByLabelText('customerAccountId')).toHaveValue('Jan Kowalski'));
+    await waitFor(() => expect(byId('customerAccountId')).toHaveValue('Jan Kowalski'));
     await addLineAndSubmit();
 
     expect(postSpy).toHaveBeenCalledWith('/api/v1/admin/quote-requests', {
       organizationId: ORGANIZATION_ID,
       customerAccountId: 'cust-1',
+      salesChannelId: ORGANIZATION_CHANNEL_ID,
       items: [{ productId: 'prod-1', quantity: 1, agreedUnitPrice: 10 }],
       origin: { type: 'crm_opportunity', id: ORIGIN_ID },
     });
@@ -145,7 +163,7 @@ describe('RfqCreatePage opened with an origin', () => {
         .map(([path]) => String(path))
         .filter((path) => path.startsWith('/api/v1/admin/customers?'));
     await waitFor(() => expect(searches().length).toBeGreaterThan(0));
-    await userEvent.type(screen.getByLabelText('customerAccountId'), 'Jan');
+    await userEvent.type(byId('customerAccountId'), 'Jan');
     await waitFor(() => expect(searches().some((path) => path.includes('q=Jan'))).toBe(true));
     for (const path of searches()) {
       expect(new URLSearchParams(path.split('?')[1]).get('organizationId')).toBe(ORGANIZATION_ID);
@@ -154,24 +172,24 @@ describe('RfqCreatePage opened with an origin', () => {
 
   it('leads back to where it came from', async () => {
     renderPage({ returnTo: RETURN_TO });
-    // Not "Back to quote requests": it does not lead there.
+    // Not "Quote requests": it does not lead there.
     expect(screen.getByRole('link', { name: /common.action.back/ })).toHaveAttribute('href', RETURN_TO);
-    expect(screen.queryByRole('link', { name: /rfqCreate.back/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: /rfq.list.title/ })).toBeNull();
   });
 
   it.each(['https://evil.example/x', '//evil.example/x'])(
     'does not follow a return address that leaves the application: %s',
     async (returnTo) => {
       renderPage({ returnTo });
-      expect(screen.getByRole('link', { name: /rfqCreate.back/ })).toHaveAttribute('href', '/quote-requests');
+      expect(screen.getByRole('link', { name: /rfq.list.title/ })).toHaveAttribute('href', '/quote-requests');
     },
   );
 
   it('sends no origin for one that is not well-formed', async () => {
     renderPage({ originType: 'crm_opportunity', originId: 'nope', customerAccountId: 'cust-1' });
-    await waitFor(() => expect(screen.getByLabelText('customerAccountId')).toHaveValue('Jan Kowalski'));
+    await waitFor(() => expect(byId('customerAccountId')).toHaveValue('Jan Kowalski'));
     await addLineAndSubmit();
-    const [, body] = postSpy.mock.calls[0] ?? [];
+    const [, body] = creates()[0] ?? [];
     expect(body).not.toHaveProperty('origin');
     await waitFor(() => expect(navigateSpy).toHaveBeenCalledWith('/quote-requests/new-rfq-1'));
   });
@@ -180,14 +198,15 @@ describe('RfqCreatePage opened with an origin', () => {
 describe('RfqCreatePage opened on its own', () => {
   it('sends the request it always sent, and goes to the new quote request', async () => {
     renderPage();
-    await userEvent.type(screen.getByLabelText('customerAccountId'), 'Jan');
-    await pick('customerAccountId', 'Jan Kowalski');
+    await userEvent.type(byId('customerAccountId'), 'Jan');
+    await pick(byId('customerAccountId'), 'Jan Kowalski');
     await addLineAndSubmit();
 
-    expect(postSpy).toHaveBeenCalledTimes(1);
+    expect(creates()).toHaveLength(1);
     expect(postSpy).toHaveBeenCalledWith('/api/v1/admin/quote-requests', {
       organizationId: ORGANIZATION_ID,
       customerAccountId: 'cust-1',
+      salesChannelId: ORGANIZATION_CHANNEL_ID,
       items: [{ productId: 'prod-1', quantity: 1, agreedUnitPrice: 10 }],
     });
     await waitFor(() => expect(navigateSpy).toHaveBeenCalledWith('/quote-requests/new-rfq-1'));

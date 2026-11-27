@@ -74,12 +74,11 @@ describe('PromotionService — the gates its optional arguments used to skip (is
       defaultCurrency: 'PLN',
       languages: ['en-US'],
       currencies: ['PLN'],
-      isPublic: false,
       active: true,
       systemDefault: false,
       version: 1,
     });
-    await em.persistAndFlush([blocked, otherChannel]);
+    await em.persist([blocked, otherChannel]).flush();
     blockedOrgId = blocked.id;
     otherChannelId = otherChannel.id;
     defaultChannelId = (await h.salesChannels.resolver.getSystemDefault()).id;

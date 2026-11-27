@@ -7,14 +7,14 @@ import {
 } from '../../helpers/test-server.js';
 import { TEST_CUSTOMER_ID, TEST_ORGANIZATION_ID } from '../../helpers/test-actors.js';
 import { AuditLogEntry } from '@endora-commerce/platform/kernel';
-import { oauthBinding } from '../../helpers/oauth-binding.js';
+import { customerOAuthStartUrl, oauthBinding, storefrontBinding } from '../../helpers/oauth-binding.js';
 
 /**
  * Feature 042 — audit coverage (FR-031). Exercises the security-relevant MFA
  * flows and asserts each action string is recorded.
  */
 const CUSTOMER = { b2b_session: 'stub-customer-session' };
-const ORG_ADMIN = CUSTOMER; // TEST_CUSTOMER is the organization_admin
+const ORG_ADMIN = CUSTOMER; // TEST_CUSTOMER holds Administrator
 const PLATFORM_ADMIN = { b2b_admin_session: 'stub-admin-session' };
 
 function totp(secret: string, offsetMs = 0): string {
@@ -117,7 +117,7 @@ describe('MFA — audit coverage', () => {
     // social account creation (new email auto-creates a standalone customer).
     const start = await h.app.inject({
       method: 'GET',
-      url: '/api/v1/auth/customer/oauth/google/start',
+      url: customerOAuthStartUrl(storefrontBinding()),
     });
     const state = new URL(start.headers['location'] as string).searchParams.get('state')!;
     await h.app.inject({
@@ -151,6 +151,15 @@ describe('MFA — audit coverage', () => {
       cookies: CUSTOMER,
       payload: { code: totp(secret) },
     });
+    // The case above leaves the organization requiring a second factor, and
+    // the last one cannot be switched off while it does (issue #935).
+    const lifted = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/account/organization/mfa-policy',
+      cookies: ORG_ADMIN,
+      payload: { enforceTotp: false },
+    });
+    expect(lifted.statusCode, lifted.body).toBe(200);
     await h.app.inject({
       method: 'POST',
       url: '/api/v1/account/mfa/disable',
@@ -159,7 +168,7 @@ describe('MFA — audit coverage', () => {
     });
 
     // social_linked — existing customer signs in via Google.
-    const start = await h.app.inject({ method: 'GET', url: '/api/v1/auth/customer/oauth/google/start' });
+    const start = await h.app.inject({ method: 'GET', url: customerOAuthStartUrl(storefrontBinding()) });
     const state = new URL(start.headers['location'] as string).searchParams.get('state')!;
     await h.app.inject({
       method: 'GET',

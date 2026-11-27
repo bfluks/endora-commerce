@@ -27,6 +27,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { readdirSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { isAbsolute, join, relative } from 'node:path';
@@ -36,6 +37,7 @@ import { platformSourceRootAt } from '../scripts/lib/platform-root.js';
 import type { RegisteredMigration } from '../src/db/configured-migrations.js';
 import type { MigrationOrigin } from '@endora-commerce/platform/db';
 import { templateDigest, type TemplateInputs, type TemplateSource } from '@endora-commerce/test-kit/database';
+import { TAX_ID_SCOPE_ENV, templateTaxIdScope } from './template-seed.js';
 
 /** `backend/`, the root every recorded path is relative to. */
 const BACKEND_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -86,7 +88,9 @@ export interface MigrationSourceRoot {
  * The `external` roots are not here and cannot be: an installed extension
  * package ships migrations (D-106.2) from a directory that exists only in the
  * instance that installed it, so that half is *discovered*, per run, by
- * {@link migrationSourceRoots}. This list used to say there could never be a
+ * {@link migrationSourceRoots}. So are the `overlay` roots
+ * (`specs/190-overlay-full-modules/` FR-039): which deployment's overlay
+ * modules a run migrates is a fact about the process, not the tree. This list used to say there could never be a
  * third root at all, citing the retired D-105 ("an overlay ships no
  * migration") — which D-106 narrowed and D-106.2 reversed.
  */
@@ -168,6 +172,11 @@ export async function migrationSourceRoots(
     readonly version: string;
     readonly migrationsDirectory: string | null;
   }[],
+  overlays: readonly {
+    readonly source: string;
+    readonly version: string;
+    readonly migrationsDirectory: string | null;
+  }[] = [],
 ): Promise<readonly MigrationSourceRoot[]> {
   return [
     ...MIGRATION_SOURCE_ROOTS,
@@ -180,7 +189,37 @@ export async function migrationSourceRoots(
         sourceExtension: '.js' as const,
         recordAs: `${contribution.packageName}@${contribution.version}`,
       })),
+    ...overlays
+      .filter((contribution) => contribution.migrationsDirectory !== null)
+      .map((contribution) => overlayMigrationRoot(contribution.migrationsDirectory as string, contribution)),
   ];
+}
+
+/**
+ * The root one overlay module's migrations are read from — their **own** origin,
+ * `overlay` (`specs/190-overlay-full-modules/` FR-039, R-7), so a deployment's
+ * migrations are floored on their own and a package's surplus cannot cover them.
+ *
+ * In this repository the directory is under `backend/src/apps/` and is recorded
+ * `backend/`-relative, as core's are. Anywhere else — a compiled tree, an
+ * instance — its absolute path is a fact about the checkout, so it is recorded
+ * under the overlay's own label and version, as a package's is. The extension is
+ * whichever the directory holds: `.ts` read from sources, `.js` compiled.
+ */
+function overlayMigrationRoot(
+  directory: string,
+  contribution: { readonly source: string; readonly version: string },
+): MigrationSourceRoot {
+  const inside = relative(BACKEND_ROOT, directory);
+  const compiled = !readdirSync(directory).some((name) => name.endsWith('.ts') && !name.endsWith('.d.ts'));
+  return {
+    origin: 'overlay',
+    kind: 'directory',
+    sourceExtension: compiled ? '.js' : '.ts',
+    ...(inside.startsWith('..') || isAbsolute(inside)
+      ? { path: directory, recordAs: `${contribution.source}@${contribution.version}` }
+      : { path: inside }),
+  };
 }
 
 /**
@@ -218,6 +257,8 @@ function isMigrationSource(name: string, extension: '.ts' | '.js'): boolean {
 export const TEMPLATE_SEED_SOURCES = [
   'test/template-seed.ts',
   '../packages/platform/src/kernel/sales-channels/default-channel-reconciler.ts',
+  // `specs/177-tax-id-scope/` — the statements `establishTaxIdScope` runs.
+  '../packages/modules/organizations/src/backend/services/tax-id-scope-service.ts',
 ] as const;
 
 /** One file read out of a migration root. */
@@ -365,6 +406,13 @@ export interface TemplateIdentityOptions {
   readonly migrations?: readonly RegisteredMigration[];
   /** Where sources are read from; `MIGRATION_SOURCE_ROOTS` unless supplied. */
   readonly sourceRoots?: readonly MigrationSourceRoot[];
+  /**
+   * The environment the configured order is read under — `process.env` unless
+   * supplied. A test that selects a deployment in-process passes
+   * `{ ...process.env, DEPLOYMENT: '<name>' }` and gets that deployment's
+   * identity, overlay migrations included (FR-039, FR-040).
+   */
+  readonly env?: NodeJS.ProcessEnv;
 }
 
 /** What one producer contributed, and what the walk found of it. */
@@ -387,6 +435,38 @@ export interface TemplateIdentity extends TemplateInputs {
 }
 
 /**
+ * The origins whose migrations no file holds: `generated` is the schema-extension
+ * step the platform synthesises per declaring module (`specs/178-extensible-columns/`
+ * FR-020), which this repository first registers through an overlay declarer
+ * (`specs/190-overlay-full-modules/` FR-065). Its name carries the hash of the
+ * normalised declarations, so a changed declaration is a changed name; what turns
+ * them into DDL is {@link GENERATED_STEP_SOURCES}, read into the digest whenever one
+ * is registered. There is nothing on disk to floor it against.
+ */
+const SYNTHESISED_ORIGINS: ReadonlySet<MigrationOrigin> = new Set(['generated']);
+
+/**
+ * The platform sources a generated step's `up()` and `down()` are, relative to the
+ * platform's source root: the step itself and the DDL it emits. A change to either
+ * under an unchanged declaration hash is a different template.
+ */
+const GENERATED_STEP_SOURCES: readonly string[] = ['db/schema-extension-migration.ts', 'db/schema-extension-sql.ts'];
+
+function generatedStepSources(): readonly { recorded: string; absolute: string }[] {
+  const platformRoot = platformSourceRootAt(join(BACKEND_ROOT, '..'));
+  if (platformRoot === null) {
+    throw new Error(
+      '[template-identity] a generated schema-extension step is registered, and no workspace ' +
+        'member declares `endora.type: "platform"`, so the code that writes it has no root.',
+    );
+  }
+  return GENERATED_STEP_SOURCES.map((file) => {
+    const absolute = join(platformRoot, file);
+    return { recorded: relative(BACKEND_ROOT, absolute), absolute };
+  });
+}
+
+/**
  * Reconciles the walk against the registry — **per origin, never as one total.**
  *
  * They are independent derivations of the same population, so a walk that came
@@ -406,6 +486,7 @@ function floorEachOrigin(
   roots: readonly MigrationSourceRoot[],
 ): void {
   for (const population of populations) {
+    if (SYNTHESISED_ORIGINS.has(population.origin)) continue;
     if (population.migrationFiles >= population.registered) continue;
     const paths = roots
       .filter((root) => root.origin === population.origin)
@@ -441,12 +522,16 @@ export async function templateIdentity(
   const configured =
     options.migrations !== undefined && options.sourceRoots !== undefined
       ? undefined
-      : await (await import('../src/db/configured-migrations.js')).configuredMigrations();
+      : await (await import('../src/db/configured-migrations.js')).configuredMigrations(
+          options.env ?? process.env,
+        );
   const registered = options.migrations ?? configured?.registered ?? [];
-  // The `external` roots come from the same answer the registrations did, so a
-  // package cannot be registered by one and unread by the other.
+  // The `external` and `overlay` roots come from the same answer the
+  // registrations did, so a package or an overlay module cannot be registered by
+  // one and unread by the other.
   const roots =
-    options.sourceRoots ?? (await migrationSourceRoots(configured?.packages ?? []));
+    options.sourceRoots ??
+    (await migrationSourceRoots(configured?.packages ?? [], configured?.overlays ?? []));
   const walked = await walkSources(root, roots);
 
   // The origins are derived from the two inputs on every call rather than
@@ -468,6 +553,9 @@ export async function templateIdentity(
   floorEachOrigin(populations, roots);
 
   const sources = await Promise.all(walked.map((source) => sha256Of(source.recordedPath, source.absolute)));
+  if (registered.some((entry) => SYNTHESISED_ORIGINS.has(entry.origin))) {
+    for (const source of generatedStepSources()) sources.push(await sha256Of(source.recorded, source.absolute));
+  }
   for (const declared of TEMPLATE_SEED_SOURCES) {
     const absolute = join(root, declared);
     try {
@@ -479,6 +567,17 @@ export async function templateIdentity(
           `identify one without it — fix the path in test/template-identity.ts.`,
       );
     }
+  }
+
+  // `specs/177-tax-id-scope/` R-16 — a template built in `per-tree-root` is a
+  // different template. Recorded only when set, so a `global` run's identity is
+  // its files' alone, as before.
+  const taxIdScope = templateTaxIdScope();
+  if (taxIdScope !== 'global') {
+    sources.push({
+      path: `env:${TAX_ID_SCOPE_ENV}`,
+      sha256: createHash('sha256').update(taxIdScope).digest('hex'),
+    });
   }
 
   const inputs: TemplateInputs = { migrations: registered.map((entry) => entry.name), sources };

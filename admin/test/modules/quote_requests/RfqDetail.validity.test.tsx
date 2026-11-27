@@ -3,10 +3,12 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
+import { answerConfirm } from '../../helpers/confirm-dialog';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
 
 const getSpy = vi.fn();
 const patchSpy = vi.fn();
+const postSpy = vi.fn();
 
 // The **kit's** barrel, not `@/lib/api-client`. The screen is
 // `@endora-commerce/mod-quote-requests/admin`'s since feature 091's batch 12
@@ -21,7 +23,7 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
     ...actual,
     apiClient: {
       get: (...args: unknown[]) => getSpy(...args),
-      post: vi.fn(),
+      post: (...args: unknown[]) => postSpy(...args),
       put: vi.fn(),
       patch: (...args: unknown[]) => patchSpy(...args),
       delete: vi.fn(),
@@ -56,6 +58,8 @@ const BUNDLE = passthroughBundle('core', [
   'rfq.detail.badge.validityEnded',
   'rfq.detail.cancelRfq',
   'rfq.detail.convert.placeOrder',
+  'rfq.detail.convert.confirm',
+  'rfq.detail.convert.success',
   'rfq.detail.copyHint',
   'rfq.detail.tabs.overview',
   'rfq.detail.tabs.modify',
@@ -172,15 +176,30 @@ beforeEach(() => {
   getSpy.mockReset();
   patchSpy.mockReset();
   patchSpy.mockResolvedValue({ data: {} });
+  postSpy.mockReset();
+  vi.restoreAllMocks();
 });
+
+function lapsedBanner(): HTMLElement {
+  const banner = screen.getByText(/validity ended on/).closest<HTMLElement>('[data-slot="alert"]');
+  if (banner === null) throw new Error('the lapsed-validity banner is not rendered');
+  return banner;
+}
+
+async function findLapsedBanner(): Promise<HTMLElement> {
+  await screen.findByText(/validity ended on/);
+  return lapsedBanner();
+}
 
 describe('RfqDetail — the operator sets and changes the validity deadline', () => {
   it('tells the operator a lapsed request is lapsed, and holds back the actions that can only be refused', async () => {
     renderDetail({ status: 'Pending', expiresAt: LAPSED_AT });
 
     expect(await screen.findByText('rfq.detail.badge.validityEnded')).toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent('validity ended on');
-    expect(screen.getByRole('alert')).toHaveTextContent(
+    // A static banner of the record's state: shown, not announced as an interruption (#1484).
+    expect(lapsedBanner()).not.toHaveAttribute('role');
+    expect(lapsedBanner()).toHaveTextContent('validity ended on');
+    expect(lapsedBanner()).toHaveTextContent(
       'remedy: set a new deadline under Modify',
     );
     // The header no longer promises a date the platform has stopped honouring:
@@ -197,7 +216,7 @@ describe('RfqDetail — the operator sets and changes the validity deadline', ()
 
     await screen.findByText('rfq.detail.tabs.overview');
     expect(screen.queryByText('rfq.detail.badge.validityEnded')).not.toBeInTheDocument();
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(document.querySelector('[data-slot="alert"]')).toBeNull();
     expect(screen.getByRole('button', { name: /rfq\.detail\.approve/ })).toBeEnabled();
   });
 
@@ -235,7 +254,8 @@ describe('RfqDetail — the operator sets and changes the validity deadline', ()
     await user.type(field, '14');
 
     const help = document.getElementById(field.getAttribute('aria-describedby') ?? '');
-    const expected = new Date(Date.now() + 14 * 86_400_000).toLocaleString().slice(0, 10);
+    // The kit's medium date in the admin language (#1776); the time is left out of the match.
+    const expected = new Intl.DateTimeFormat('en', { dateStyle: 'medium' }).format(new Date(Date.now() + 14 * 86_400_000));
     expect(help).toHaveTextContent('saving sets the deadline to');
     expect(help?.textContent ?? '').toContain(expected);
   });
@@ -277,7 +297,7 @@ describe('RfqDetail — the operator sets and changes the validity deadline', ()
     // The operator meets the lapse on the overview and takes the remedy the
     // banner offers, rather than having to know that "Modify" is where dates
     // live.
-    const banner = await screen.findByRole('alert');
+    const banner = await findLapsedBanner();
     await user.click(
       within(banner).getByRole('button', { name: /rfq\.detail\.validity\.lapsed\.setNewDeadline/ }),
     );
@@ -326,7 +346,7 @@ describe('RfqDetail — the operator sets and changes the validity deadline', ()
   it('does not offer a re-date on an approved request, because `modify` refuses one', async () => {
     renderDetail({ status: 'Approved', expiresAt: LAPSED_AT, awaitingCustomerRevisionAcceptance: false });
 
-    const banner = await screen.findByRole('alert');
+    const banner = await findLapsedBanner();
     expect(banner).toHaveTextContent('remedy: ask the customer to resubmit');
     expect(
       within(banner).queryByRole('button', {
@@ -343,6 +363,47 @@ describe('RfqDetail — the operator sets and changes the validity deadline', ()
 
     await screen.findByText('rfq.detail.tabs.overview');
     expect(screen.queryByText('rfq.detail.badge.validityEnded')).not.toBeInTheDocument();
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(document.querySelector('[data-slot="alert"]')).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // Issue #170 — the order action on an approved request
+  // -------------------------------------------------------------------------
+
+  it('prepares the customer\'s basket through the admin endpoint, after confirming', async () => {
+    const VALID_UNTIL = new Date(Date.now() + 30 * 86_400_000).toISOString();
+    postSpy.mockResolvedValue({
+      data: { cartId: '00000000-0000-4000-8000-0000000000c1', customerAccountId: 'cust-1', itemCount: 1 },
+    });
+    renderDetail({ status: 'Approved', expiresAt: VALID_UNTIL, awaitingCustomerRevisionAcceptance: false });
+
+    await userEvent.click(await screen.findByRole('button', { name: /rfq\.detail\.convert\.placeOrder/ }));
+
+    const dialog = await answerConfirm(true);
+    expect(dialog).toHaveTextContent('rfq.detail.convert.confirm');
+    // Not the storefront's `convert-to-order`: that route is customer-only and
+    // answers an administrator with 401, which signs the operator out.
+    await waitFor(() =>
+      expect(postSpy).toHaveBeenCalledWith(
+        `/api/v1/admin/quote-requests/${RFQ_ID}/prepare-customer-basket`,
+        {},
+      ),
+    );
+    expect(await screen.findByText('rfq.detail.convert.success')).toBeInTheDocument();
+  });
+
+  it('sends nothing when the operator does not confirm', async () => {
+    const VALID_UNTIL = new Date(Date.now() + 30 * 86_400_000).toISOString();
+    renderDetail({ status: 'Approved', expiresAt: VALID_UNTIL, awaitingCustomerRevisionAcceptance: false });
+
+    await userEvent.click(await screen.findByRole('button', { name: /rfq\.detail\.convert\.placeOrder/ }));
+    await answerConfirm(false);
+
+    // Only the basket endpoint: the reference-price probe is itself a POST
+    // (`/price-books/resolve`, feature 160), and it is a read, not a send.
+    expect(postSpy).not.toHaveBeenCalledWith(
+      `/api/v1/admin/quote-requests/${RFQ_ID}/prepare-customer-basket`,
+      expect.anything(),
+    );
   });
 });

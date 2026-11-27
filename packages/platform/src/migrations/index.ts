@@ -45,6 +45,13 @@
  * the platform applies them in.
  */
 export { BASELINE_MIGRATIONS } from './baseline-migrations.generated.js';
+/**
+ * The first-party migrations the runtime foreign-schema guard lets write a
+ * table another module owns (`specs/178-extensible-columns/` FR-071), rendered
+ * by `composer:generate` from R2's ledger. An instance installs this
+ * repository's modules as packages, and these are their recorded R2 writes.
+ */
+export { FIRST_PARTY_FOREIGN_WRITE_EXEMPTIONS } from './foreign-write-exemptions.generated.js';
 export {
   BASELINE_MIGRATION_INVENTORY,
   type BaselineMigrationIdentity,
@@ -77,3 +84,9 @@ export { Migration20260721T011510CoreSettingsCredentialRefValueType } from './20
 export { Migration20260816T203339CoreRetireCoreActivationSettings } from './20260816T203339_core_retire_core_activation_settings.js';
 export { Migration20260919T101500CoreModuleRegistrationsBootConverged } from './20260919T101500_core_module_registrations_boot_converged.js';
 export { Migration20261011T135250CoreSettingsMultiline } from './20261011T135250_core_settings_multiline.js';
+export { Migration20261018T101912CoreSalesChannelsAnonymousAccess } from './20261018T101912_core_sales_channels_anonymous_access.js';
+export { Migration20261028T173317CoreSalesChannelsRetireIsPublic } from './20261028T173317_core_sales_channels_retire_is_public.js';
+export { Migration20261029T152922CoreSalesChannelsPrefixDefaultLanguage } from './20261029T152922_core_sales_channels_prefix_default_language.js';
+export { Migration20261103T162518CoreAuditActorCustomerAccount } from './20261103T162518_core_audit_actor_customer_account.js';
+export { Migration20261110T140633CoreSchemaExtensionsLedger } from './20261110T140633_core_schema_extensions_ledger.js';
+export { Migration20261112T124348CoreCommandOutbox } from './20261112T124348_core_command_outbox.js';

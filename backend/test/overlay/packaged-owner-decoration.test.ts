@@ -1,8 +1,11 @@
+import { CommandMiddlewareRegistry, commandMiddlewareFrom } from '@endora-commerce/platform/composition';
+import { manifest as exampleOverlayManifest } from '../../src/apps/example/modules/example_overlay/manifest.js';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { MODULES } from '../../src/composition.generated.js';
+import { generatedListCommandHooks } from '../helpers/generated-list-command-hooks.js';
 import { EventBus } from '@endora-commerce/platform/events';
 import { composeModules, type ModuleEntry } from '@endora-commerce/platform/composition';
 import { createRootContainer } from '@endora-commerce/platform/composition';
@@ -195,6 +198,7 @@ function withDecoratedName(entry: ModuleEntry, extra: Partial<ModuleEntry> = {})
 
 function compose(entries: readonly ModuleEntry[]): { cradle: Record<string, unknown> } {
   const container = createRootContainer();
+  const hooks = generatedListCommandHooks();
   composeModules(entries, {
     container,
     eventBus: new EventBus(),
@@ -203,6 +207,17 @@ function compose(entries: readonly ModuleEntry[]): { cradle: Record<string, unkn
     // registry refuses that registration, which would make every case here fail
     // for a reason that is not the one under test.
     interceptorRegistry: new ApiInterceptorRegistry(),
+    // A module of the generated list registers command hooks (`related_payers`).
+    commandHookRegistry: hooks.registry,
+    commandHooks: hooks.data,
+    // `specs/189-command-middleware/` — the overlay module contributes an
+    // `observe` command middleware, which a root with no middleware registry
+    // refuses. Sealed against its own manifest's declaration.
+    commandMiddlewareRegistry: new CommandMiddlewareRegistry({ log: log() }),
+    commandMiddleware: {
+      declarations: commandMiddlewareFrom([exampleOverlayManifest]),
+      moduleDependencies: {},
+    },
   });
   return { cradle: container.cradle as unknown as Record<string, unknown> };
 }

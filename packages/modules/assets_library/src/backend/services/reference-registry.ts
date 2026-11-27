@@ -9,6 +9,7 @@
 import type {
   AssetReference,
   AssetReferenceDescriptor,
+  AssetReferenceHit,
   AssetReferenceRegistryPort,
 } from '@endora-commerce/contracts';
 
@@ -18,7 +19,7 @@ import type {
  * not an internal. Re-exported here for the length of Phase P, which cuts no
  * consumer.
  */
-export type { AssetReference, AssetReferenceDescriptor };
+export type { AssetReference, AssetReferenceDescriptor, AssetReferenceHit };
 
 /**
  * Enumeration policy: **honoured** while the contributing module is absent
@@ -53,7 +54,32 @@ export class AssetReferenceRegistry implements AssetReferenceRegistryPort {
     return this.descriptors.map((d) => d.ownerModuleId);
   }
 
-  async findReferences(assetId: string): Promise<AssetReference[]> {
+  /**
+   * The descriptors split by whether their references hide an asset from a
+   * reader who may not see the referencing record (feature 166, FR-003) —
+   * `AssetVisibility`'s question, which reads the descriptors through this
+   * class and never through the port. Registration order is kept in each half.
+   */
+  partition(): {
+    readonly restricted: readonly AssetReferenceDescriptor[];
+    readonly unrestricted: readonly AssetReferenceDescriptor[];
+  } {
+    return {
+      restricted: this.descriptors.filter((d) => d.readerRestriction !== undefined),
+      unrestricted: this.descriptors.filter((d) => d.readerRestriction === undefined),
+    };
+  }
+
+  /**
+   * Every descriptor, in registration order — the order `findReferences`
+   * answers in, which the detail's filtered "used by" list keeps (feature 166,
+   * US3), so a reader who sees every reference sees today's list.
+   */
+  inRegistrationOrder(): readonly AssetReferenceDescriptor[] {
+    return [...this.descriptors];
+  }
+
+  async findReferences(assetId: string): Promise<AssetReferenceHit[]> {
     const all = await Promise.all(
       this.descriptors.map((d) => d.findReferences([assetId])),
     );
@@ -62,23 +88,49 @@ export class AssetReferenceRegistry implements AssetReferenceRegistryPort {
 
   async findReferencesMany(
     assetIds: string[],
-  ): Promise<Map<string, AssetReference[]>> {
-    const out = new Map<string, AssetReference[]>();
+  ): Promise<Map<string, AssetReferenceHit[]>> {
+    const out = new Map<string, AssetReferenceHit[]>();
     for (const id of assetIds) out.set(id, []);
     if (assetIds.length === 0) return out;
-
     const perDescriptor = await Promise.all(
-      this.descriptors.map((d) => d.findReferences(assetIds)),
+      this.descriptors.map((d) => this.referencesOf(d, assetIds)),
     );
-    for (const refs of perDescriptor) {
-      for (const ref of refs) {
-        // Each descriptor is responsible for tagging every reference with the
-        // *original* asset id it found; the registry does not try to cross-
-        // correlate. Descriptors that batch via WHERE asset_id = ANY($1) get
-        // the asset_id back from the row trivially.
-        const list = out.get((ref as AssetReference & { __assetId?: string }).__assetId ?? '');
-        if (list) list.push(ref);
-      }
+    for (const answer of perDescriptor) {
+      for (const [id, hits] of answer) out.get(id)?.push(...hits);
+    }
+    return out;
+  }
+
+  /**
+   * One descriptor's references to these assets, attributed to each asset —
+   * every id asked for is a key (feature 166, research R-6; issue #535).
+   *
+   * The descriptor is asked **once** for the batch and its hits are attributed
+   * by `hit.assetId`. A descriptor that returns a hit without one (an
+   * overlay's, a package's written before the field existed) cannot be
+   * attributed from a batch of more than one asset, so that descriptor alone
+   * is asked again one asset at a time: the answer is right whatever the
+   * contributor did, and only the contributor that did not tag pays for it.
+   * A batch of one needs no second call — every hit is that asset's.
+   */
+  async referencesOf(
+    descriptor: AssetReferenceDescriptor,
+    assetIds: readonly string[],
+  ): Promise<Map<string, AssetReferenceHit[]>> {
+    const ids = [...new Set(assetIds)];
+    const out = new Map<string, AssetReferenceHit[]>(ids.map((id) => [id, []]));
+    if (ids.length === 0) return out;
+    const hits = await descriptor.findReferences([...ids]);
+    if (ids.length === 1) {
+      out.set(ids[0]!, hits);
+      return out;
+    }
+    if (hits.every((hit) => hit.assetId !== undefined)) {
+      for (const hit of hits) out.get(hit.assetId!)?.push(hit);
+      return out;
+    }
+    for (const id of ids) {
+      out.set(id, await descriptor.findReferences([id]));
     }
     return out;
   }

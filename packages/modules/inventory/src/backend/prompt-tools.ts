@@ -7,6 +7,7 @@ import {
   type SearchWarehousesParams,
   type SetStockLevelParams,
   type ToolContext,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -16,6 +17,7 @@ import { StockLevel } from './entities/stock-level.entity.js';
 import { Warehouse } from './entities/warehouse.entity.js';
 import { StockLevelService } from './services/stock-level-service.js';
 import { WarehouseService } from './services/warehouse-service.js';
+import type { InventoryProductVisibility } from './services/admin-product-visibility.js';
 
 /**
  * Inventory's contribution to the prompt-assistant tool catalogue
@@ -34,13 +36,17 @@ export interface InventoryPromptToolsDeps {
   catalogCategories: CatalogCategoryReadPort;
   eventBus?: EventBus;
   auditLogService?: AuditPort;
+  /**
+   * Spec 193 (T052, FR-081) — the invoking administrator's product visibility,
+   * resolved per call: a hidden product is answered as a missing one and never
+   * written. Absent (fixtures), nothing is narrowed.
+   */
+  productVisibility?: InventoryProductVisibility;
 }
 
 const RESULT_LIMIT = 20;
 
-function label(name: Record<string, string>): string {
-  return name['en'] ?? Object.values(name)[0] ?? '(unnamed)';
-}
+const productNotFound = () => new HttpError(404, 'PRODUCT_NOT_FOUND', 'Product not found.');
 
 export function inventoryPromptTools(deps: InventoryPromptToolsDeps): PromptActionTool[] {
   const warehouseService = new WarehouseService(deps.emFactory);
@@ -51,6 +57,11 @@ export function inventoryPromptTools(deps: InventoryPromptToolsDeps): PromptActi
     deps.eventBus,
     deps.auditLogService,
   );
+  /** Whether the product is hidden from the invoking administrator (FR-081). */
+  const hiddenFrom = async (adminUserId: string, productId: string): Promise<boolean> =>
+    deps.productVisibility
+      ? deps.productVisibility.productHidden(await deps.productVisibility.scopeFor(adminUserId), productId)
+      : false;
 
   const searchWarehouses: PromptActionTool<SearchWarehousesParams> = {
     id: 'inventory.search_warehouses',
@@ -81,13 +92,14 @@ export function inventoryPromptTools(deps: InventoryPromptToolsDeps): PromptActi
       'Set the ABSOLUTE on-hand stock quantity of a product in a warehouse. Resolve the product via catalog.search_products and the warehouse via inventory.search_warehouses first. This is captured into a plan the operator must confirm; it is not executed immediately.',
     requiredPermission: 'catalog:write',
     paramsSchema: SetStockLevelParamsSchema,
-    preview: async (params) => {
+    preview: async (params, ctx: ToolContext) => {
       // D-75 — this module's own fork, not the caller's manager. A preview
       // reads committed rows only, so a fresh fork sees exactly what the
       // request's manager saw.
       const em = deps.emFactory();
       const product = await deps.catalogProducts.findById(params.productId);
-      if (!product) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'Product not found.');
+      if (!product || (await hiddenFrom(ctx.adminUserId, product.id))) throw productNotFound();
+      if (!isUuidShape(params.warehouseId)) throw new HttpError(404, 'WAREHOUSE_NOT_FOUND', 'Warehouse not found.');
       const warehouse = await em.findOne(Warehouse, { id: params.warehouseId });
       if (!warehouse) throw new HttpError(404, 'WAREHOUSE_NOT_FOUND', 'Warehouse not found.');
       const level = await em.findOne(StockLevel, {
@@ -97,13 +109,15 @@ export function inventoryPromptTools(deps: InventoryPromptToolsDeps): PromptActi
       });
       const current = level?.onHand ?? 0;
       return {
-        headline: `Set stock of "${label(product.name)}" in warehouse "${warehouse.name}" to ${params.quantity}`,
+        headline: `Set stock of "${(product.name || product.sku)}" in warehouse "${warehouse.name}" to ${params.quantity}`,
         current: { onHand: current },
         affectedCount: 1,
-        sample: [{ id: product.id, label: label(product.name) }],
+        sample: [{ id: product.id, label: (product.name || product.sku) }],
       };
     },
     execute: async (params, ctx: ToolContext) => {
+      // Spec 193 (FR-081, TM-3 (2)) — checked again at execution, for the invoking admin.
+      if (await hiddenFrom(ctx.adminUserId, params.productId)) throw productNotFound();
       const result = await stockLevelService.setOnHand(
         {
           productId: params.productId,

@@ -58,6 +58,8 @@ export interface ModuleContext {
   worker<W extends Worker>(worker: W): W;
   subscribe(event: string, handler: (payload: unknown) => void): void;
   interceptors(entries: readonly InterceptorRegistration[]): void;
+  commandHooks(entries: readonly CommandHookEntry[]): void;
+  commandMiddleware(entries: readonly CommandMiddlewareEntry[]): void;
   onBoot(hook: ModuleBootHook): void;
   readonly log: PlatformLogger;
 }
@@ -66,17 +68,31 @@ export interface ModuleContext {
 /**
  * The fixture deployment's overlay module — every recorded seam, once.
  *
- * Nine kinds; seven of them appear here (`omission` comes from the declaration
- * and `port-consumed` from the `lazyPort` call below, which is in this same
- * file). The three `own-surface` seams are here too, deliberately: they must
+ * Twelve kinds; eight of them appear here as seam calls (`omission` comes from
+ * the declaration, `port-consumed` from the `lazyPort` call below, which is in
+ * this same file, `column-extension` from the exported
+ * `defineColumnExtension(…)` declaration — `specs/190-overlay-full-modules/`
+ * FR-047 — and `command-middleware` from the manifest declaration in
+ * {@link FIXTURE_MANIFEST}, `specs/189-command-middleware/` FR-034; the
+ * `ctx.commandMiddleware` call below registers its code and adds no entry). The three `own-surface` seams are here too, deliberately: they must
  * produce **no** entry, and a fixture without them cannot prove that.
  */
 export const FIXTURE_OVERLAY = `
 import type { ModuleContext } from '../../../../kernel/index.js';
 import { lazyPort } from '../../../../kernel/lazy-port.js';
+import { ORGANIZATION_HOOKABLE_ACTIONS } from '@endora-commerce/contracts';
 import { Worker } from 'bullmq';
+import { defineColumnExtension } from '@endora-commerce/platform/kernel';
 
 const REBATE_EVENT = 'orders.placed';
+
+export const schemaExtensions = [
+  defineColumnExtension({
+    host: 'organizations',
+    module: 'acme_overlay',
+    columns: { erpCode: { type: 'varchar', length: 32, nullable: true } },
+  }),
+];
 
 export function registerModule(ctx: ModuleContext): void {
   ctx.di.register({
@@ -101,6 +117,17 @@ export function registerModule(ctx: ModuleContext): void {
     },
   ]);
 
+  ctx.commandHooks([
+    {
+      id: 'stamp-erp-code',
+      on: ORGANIZATION_HOOKABLE_ACTIONS.create,
+      phase: 'beforeCommit',
+      handler: async (hook) => stamp(hook),
+    },
+  ]);
+
+  ctx.commandMiddleware([{ id: 'legal-hold', phase: 'admit', admit: (meta) => refuseHeld(meta) }]);
+
   ctx.rootPlugin('Acme stamps every response with its contract id.', acmePlugin);
 
   ctx.worker(new Worker('acme-rebate-sweep', async (job) => handleJob(job)));
@@ -121,6 +148,19 @@ export function registerModule(ctx: ModuleContext): void {
 }
 `;
 
+/** The fixture overlay module's manifest — where its command middleware is declared (189). */
+export const FIXTURE_MANIFEST = `
+import { defineModuleManifest } from '@endora-commerce/contracts';
+
+export const manifest = defineModuleManifest({
+  id: 'acme_overlay',
+  name: 'Acme overlay',
+  version: '1.0.0',
+  dependencies: ['organizations'],
+  commandMiddleware: [{ id: 'legal-hold', phase: 'admit', actions: ['organization.'] }],
+});
+`;
+
 /** Every route registration the fixture composition serves. */
 export const FIXTURE_ROUTES = `
 export function registerModule(ctx: ModuleContext): void {
@@ -130,7 +170,7 @@ export function registerModule(ctx: ModuleContext): void {
 }
 `;
 
-/** The nine keys the fixture's own tree derives, with a sentence each. */
+/** The twelve keys the fixture's own tree derives, with a sentence each. */
 export const FIXTURE_REASONS: Readonly<Record<string, string>> = {
   'registration:acme_overlay:acmeRebateService':
     'Core registers no rebate service; this one is Acme’s own and exists to hold the ' +
@@ -147,6 +187,12 @@ export const FIXTURE_REASONS: Readonly<Record<string, string>> = {
   'interceptor:acme_overlay:POST /api/v1/orders#pre':
     'Core accepts an order with no purchase-order number; Acme’s finance system cannot, so ' +
     'the interceptor refuses such a submission before the handler runs.',
+  'command-hook:acme_overlay:organization.create#stamp-erp-code':
+    'Core creates an Organization with no ERP code; Acme writes its own code into its own table ' +
+    'inside the same transaction, so an Organization never exists without one.',
+  'command-middleware:acme_overlay:legal-hold':
+    'Core admits every Command; Acme refuses an Organization write while that Organization is ' +
+    'under a legal hold, children of a bigger write included, before anything is written.',
   'root-plugin:acme_overlay:Acme stamps every response with its contract id.':
     'Core stamps no contract id; Acme’s gateway requires one on every response, and a root ' +
     'plugin is the only seam that reaches every module’s routes at once.',
@@ -156,6 +202,9 @@ export const FIXTURE_REASONS: Readonly<Record<string, string>> = {
   'port-consumed:acme_overlay:orderReadPort':
     'Core owns the orders read model and publishes it as a port; Acme reads it rather than ' +
     'querying the tables, so a schema change behind the port does not reach this deployment.',
+  'column-extension:acme_overlay:organizations':
+    'Core keys an Organization by its own id; Acme’s ERP keys it by a code, kept in one declared ' +
+    'column on the host so every Organization read can carry it.',
   'omission:core:blog':
     'Acme publishes its editorial content from its own CMS and ships no blog, so nothing in ' +
     'this deployment would ever create a post.',
@@ -191,6 +240,11 @@ export function fixtureDivergence(options: FixtureOptions = {}): DivergenceResul
       file: 'backend/src/apps/acme/modules/acme_overlay/backend.ts',
       text: FIXTURE_OVERLAY,
     },
+    {
+      moduleId: 'acme_overlay',
+      file: 'backend/src/apps/acme/modules/acme_overlay/manifest.ts',
+      text: FIXTURE_MANIFEST,
+    },
   ];
   const routeSources = options.routeSources ?? [
     { file: 'modules/orders/routes.ts', text: FIXTURE_ROUTES, moduleId: 'orders' },
@@ -203,6 +257,7 @@ export function fixtureDivergence(options: FixtureOptions = {}): DivergenceResul
     routes: routeIdentities(routeSources),
     owners: options.owners ?? DEFAULT_OWNERS,
     rootSupplied: options.rootSupplied ?? new Set(['commandBus', 'auditLogService']),
+    actionOwners: new Map([['organization.create', 'organizations']]),
     declaration: {
       omittedModules: options.omittedModules ?? [
         { moduleId: 'blog', reason: FIXTURE_REASONS['omission:core:blog'] as string },

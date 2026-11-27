@@ -44,6 +44,9 @@ export interface QuoteDocumentTexts {
     readonly siteValue: string;
     readonly packaging: string;
     readonly lineNote: string;
+    /** Feature 159 — the sample's two line groups. */
+    readonly groupFasteners: string;
+    readonly groupMounting: string;
   };
 }
 
@@ -69,6 +72,7 @@ export const QUOTE_DOCUMENT_TEXTS: Readonly<Record<QuoteDocumentLanguage, QuoteD
       lineVat: 'VAT',
       lineGross: 'Gross value',
       lineNote: 'Line note',
+      productUrl: 'Product page URL',
     },
     groups: { line: 'Line', pricing: 'Pricing', product: 'Product attributes' },
     totals: {
@@ -108,6 +112,8 @@ export const QUOTE_DOCUMENT_TEXTS: Readonly<Record<QuoteDocumentLanguage, QuoteD
       siteValue: 'Main warehouse',
       packaging: 'Box of 100',
       lineNote: 'Cut to 0.5 m',
+      groupFasteners: 'Fasteners',
+      groupMounting: 'Mounting',
     },
   },
   'pl-PL': {
@@ -131,6 +137,7 @@ export const QUOTE_DOCUMENT_TEXTS: Readonly<Record<QuoteDocumentLanguage, QuoteD
       lineVat: 'VAT',
       lineGross: 'Wartość brutto',
       lineNote: 'Uwagi do pozycji',
+      productUrl: 'Adres strony produktu',
     },
     groups: { line: 'Pozycja', pricing: 'Ceny', product: 'Atrybuty produktu' },
     totals: {
@@ -170,6 +177,8 @@ export const QUOTE_DOCUMENT_TEXTS: Readonly<Record<QuoteDocumentLanguage, QuoteD
       siteValue: 'Magazyn główny',
       packaging: 'Karton 100 szt.',
       lineNote: 'Cięte na 0,5 m',
+      groupFasteners: 'Elementy złączne',
+      groupMounting: 'Montaż',
     },
   },
 };

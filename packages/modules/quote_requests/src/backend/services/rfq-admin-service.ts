@@ -1,46 +1,64 @@
-import { randomUUID } from 'crypto';
-import type { EntityManager, Knex } from '@mikro-orm/postgresql';
+import { raw, type EntityManager } from '@mikro-orm/postgresql';
 import {
   ERROR_CODES,
   QUOTE_REQUEST_HISTORY_EVENT_WINDOW,
-  RFQ_CREATED_BY_ADMIN_EVENT,
   type AdminCreateQuoteRequest,
+  type AdminQuoteRequestListSort,
+  type AdminQuoteRequestWarning,
   type AdminPatchQuoteRequest,
   type QuoteRequest as RfqDto,
   type QuoteRequestHistory,
   type QuoteRequestSummary,
-  isCustomFieldValidationFailure,
+  customFieldFilterUnavailable,
   type AdminUserReadPort,
+  type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
   type CustomerAccountReadPort,
   type CustomerAccountRecord,
+  type CustomFieldFilters,
+  type CustomFieldListFilterField,
+  type CustomFieldListFilterPort,
   type CustomFieldValuePort,
+  organizationCompanyTaxId,
   type OrganizationDetailsPort,
   type RfqCreatedByAdminEventPayload,
   type SalesRepAssignmentPort,
+  isUuidShape,
 } from '@endora-commerce/contracts';
-import type { EventBase, EventBus } from '@endora-commerce/platform/events';
+import type { EventBase } from '@endora-commerce/platform/events';
 import { HttpError } from '@endora-commerce/platform/http';
-import { recordAuditFromContext } from '@endora-commerce/platform/commands';
+import { recordAuditFromContext, type Command, type CommandBus } from '@endora-commerce/platform/commands';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
-import { orgConstraintFor } from '@endora-commerce/platform/tenancy';
+import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
+import { orgConstraintFor, orgScopeSql, reachesNoOrganization } from '@endora-commerce/platform/tenancy';
 import type {
   QuoteRequestAdminSearchQuery,
   QuoteRequestAdminSearchRow,
 } from '../admin-search-provider.js';
+import {
+  makeApproveQuoteRequestCommand,
+  makeAssignQuoteRequestCommand,
+  makeCancelQuoteRequestCommand,
+  makeCreateOnBehalfCommand,
+  makeModifyQuoteRequestCommand,
+  onBehalfChannelId,
+  type QuoteRequestAdminCommandDeps,
+  type QuoteRequestOperator,
+} from '../commands/quote-request-admin-commands.js';
 import { QuoteRequest, type QuoteRequestStatus } from '../entities/quote-request.entity.js';
 import { QuoteRequestItem } from '../entities/quote-request-item.entity.js';
-import { underRowLock } from './transition-lock.js';
+import { QuoteRequestNotification } from '../entities/quote-request-notification.entity.js';
+import type { AssigneeEligibility } from './assignee-eligibility.js';
+import type { NotificationKick } from './notifications/kick.js';
 import type { RfqService} from './rfq-service.js';
-import { type RfqEventBus, type RfqEvents } from './rfq-service.js';
+import { rfqAudience, type RfqEventBus, type RfqEvents } from './rfq-service.js';
 import type { RfqEventService } from './rfq-event-service.js';
 import type { RfqRevisionService } from './rfq-revision-service.js';
 import type { RfqNotificationService } from './rfq-notification-service.js';
-import { raisedOnChannelId } from './raised-on-channel.js';
-import { hasUnpricedLine, quoteIncompleteError } from './agreed-price.js';
-import { pairLines } from './line-carry-over.js';
-import { storedReferenceColumns } from './reference-price.js';
-import { AUTOMATIC_ADMIN_CREATION_NOTE } from './history/constants.js';
+import { adminCanSeeOrganization } from './admin-org-visibility.js';
+import { listTotal } from './summarize.js';
+import { quoteRequestAmount } from './quote-amount.js';
+import { channelCurrencies, summaryCurrency } from './line-currency.js';
 import {
   adminActorDirectory,
   customerActorDirectory,
@@ -50,12 +68,14 @@ import {
   type HistoryEventInput,
   type HistoryRevisionInput,
 } from './history/history-projection.js';
+import { deliveriesByEvent, type HistoryDeliveryInput } from './history/history-deliveries.js';
+import { prepareBasketAuditState } from './quote-request-audit-state.js';
 
 /**
  * Admin-facing Quote Requests service — feature 008 workflow.
  *
  * Endpoints implemented:
- *   - listAll(scope)       (US2)
+ *   - listAll(filter)      (US2; one server-side page since issue #317)
  *   - getById              (US2)
  *   - approve              (US2)
  *   - cancel               (US2)
@@ -64,7 +84,12 @@ import {
  *   - createOnBehalf       (US4)
  *
  * Visibility scoping is centralised in `SalesRepAssignmentService.canSeeOrganization`
- * (research §R2). Platform admins skip the predicate.
+ * (research §R2), and only a `sales_representative` is narrowed by it (issue
+ * #957): every other role — `platform_admin` or a custom role — resolves a
+ * platform-wide tenant scope and sees every organization, as on every other
+ * surface. The reads apply it through the tenant filter, which for a
+ * representative *is* that rule (issue #305); the checks that name an
+ * organization directly use `adminCanSeeOrganization`.
  */
 
 /**
@@ -75,6 +100,10 @@ export const HISTORY_EVENT_WINDOW = QUOTE_REQUEST_HISTORY_EVENT_WINDOW;
 
 export interface AdminContext {
   adminUserId: string;
+  /**
+   * The literal `platform_admin` role. It no longer decides what this service
+   * lets the actor see — the tenant scope does (issue #957).
+   */
   isPlatformAdmin: boolean;
   /** Display label embedded in event records ('Sales representative', 'Platform administrator', …) */
   roleLabel: string;
@@ -86,6 +115,39 @@ export interface AdminListFilter {
   scope?: AdminAssignmentScope;
   status?: QuoteRequestStatus | QuoteRequestStatus[];
   organizationId?: string;
+  /** `specs/157-custom-fields-list-filters/` — filters on the list-filter Quote Request custom fields. */
+  customFieldFilters?: CustomFieldFilters;
+  /** Issue #317 — a fragment of the business id, the organization name or the customer's name, or a whole id. */
+  q?: string;
+  /** Issue #317 — default `updatedAt:desc`. */
+  sort?: AdminQuoteRequestListSort;
+  /** Issue #317 — one-based; default 1. */
+  page?: number;
+  /** Issue #317 — default 25, at most `ADMIN_QUOTE_REQUEST_LIST_PAGE_SIZE_MAX`. */
+  pageSize?: number;
+}
+
+/** One page of the admin list and how many requests its filters match (issue #317). */
+export interface AdminListPage {
+  rows: QuoteRequestSummary[];
+  total: number;
+}
+
+/**
+ * The amount the list shows, as SQL over a quote request row (issue #317): per
+ * line the agreed unit price, else the asked one, times the quantity, rounded
+ * to two places (`round` on a non-negative numeric is half-up, as
+ * `lineAmountHalfUp`), summed; a request without one sorts as zero, as the
+ * list did when it sorted in the browser. The lines are this module's table.
+ */
+function quoteAmountSql(alias: string): string {
+  return `coalesce((select sum(round(coalesce("qri"."agreed_unit_price", "qri"."desired_unit_price") * "qri"."quantity", 2))
+    from "quote_request_items" "qri" where "qri"."quote_request_id" = ${alias}."id"), 0)`;
+}
+
+/** `text` matched literally inside a LIKE pattern: `%`, `_` and `\` are not wildcards. */
+function likeLiteral(text: string): string {
+  return text.replace(/[\\%_]/g, (character) => `\\${character}`);
 }
 
 /**
@@ -104,11 +166,26 @@ export interface RfqAdminServiceDeps {
   eventService: RfqEventService;
   revisionService: RfqRevisionService;
   notificationService: RfqNotificationService;
+  /** As `RfqServiceDeps.notificationKick`: after a commit that recorded deliveries. */
+  notificationKick?: NotificationKick;
   salesRepAssignment: SalesRepAssignmentPort;
-  /** Feature 054 — audits RFQ admin writes co-transactionally when provided. */
+  /**
+   * Issue #1824 — the bus the operator's writes run on, as Commands
+   * (`commands/quote-request-admin-commands.ts`, Principle XIII).
+   */
+  commandBus: Pick<CommandBus, 'run'>;
+  /**
+   * Feature 054 — audits the one write still hand-audited here,
+   * `quote_request.prepare_customer_basket`, co-transactionally when provided.
+   */
   auditLog?: AuditPort;
   /** Feature 055 — validates + merges custom-field values on RFQ edit. */
   customFieldValues?: CustomFieldValuePort;
+  /**
+   * Feature 157 — `customFieldListFilterPort`: the custom fields the admin list
+   * offers as filters, and a request's filters as one condition.
+   */
+  customFieldListFilter?: CustomFieldListFilterPort;
   /**
    * Feature 075, Phase C — the three rows the admin list and detail read and
    * none of which this module owns. They were `em.find` calls against
@@ -116,9 +193,26 @@ export interface RfqAdminServiceDeps {
    * published ports the same reads fail closed with their owners.
    */
   catalogProducts: CatalogProductReadPort;
+  /**
+   * Feature 163 (FR-018) — `catalog`'s availability answer, asked about an
+   * operator's lines only to warn: `createOnBehalf` accepts them either way.
+   */
+  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveTexts'>;
+  /**
+   * Feature 163 (security review M1) — the kernel's membership port: the channels an
+   * Organization is assigned to, which an operator's on-behalf request may be raised on —
+   * the channel it names, or the one the admin request resolved when it names none.
+   */
+  channelMembership: Pick<SalesChannelMembershipPort, 'listChannelsForEntity'>;
   customerAccounts: CustomerAccountReadPort;
   organizations: OrganizationDetailsPort;
   adminUsers: AdminUserReadPort;
+  /**
+   * Issue #1906 — the one assignee rule (`assignee-eligibility.ts`): asked of
+   * the target of `quote_request.assign` and of every representative the
+   * assignee picker offers.
+   */
+  assigneeEligibility: AssigneeEligibility;
 }
 
 export class RfqAdminService {
@@ -147,37 +241,89 @@ export class RfqAdminService {
   // Read paths
   // -------------------------------------------------------------------------
 
-  async listAll(ctx: AdminContext, filter: AdminListFilter = {}): Promise<QuoteRequestSummary[]> {
+  /** The Quote Request custom fields the admin list offers as filters (feature 157). */
+  async customFieldFilterFields(): Promise<CustomFieldListFilterField[]> {
+    return (await this.deps.customFieldListFilter?.listFilterable('quote_request')) ?? [];
+  }
+
+  private async customFieldCondition(filters: CustomFieldFilters | undefined) {
+    if (filters === undefined || Object.keys(filters).length === 0) return null;
+    // A list asked to filter on custom fields it cannot read refuses rather
+    // than answering unfiltered.
+    if (!this.deps.customFieldListFilter) throw customFieldFilterUnavailable(Object.keys(filters));
+    return this.deps.customFieldListFilter.condition('quote_request', filters);
+  }
+
+  /**
+   * Issue #317 — one page of the admin list. Every filter is a condition of
+   * the one statement that reads the page and counts the matches: the scopes
+   * resolve their organizations once (`organizationId IN` / `NOT IN`), and the
+   * search resolves the organization and customer names once each through
+   * their owners' ports. Only the page's rows are then enriched.
+   *
+   * Visibility is the tenant filter's: a sales representative's scope is the
+   * `canSeeOrganization` rule, every other role's is every organization
+   * (issue #957). Nothing here widens it — each condition only narrows.
+   */
+  async listAll(ctx: AdminContext, filter: AdminListFilter = {}): Promise<AdminListPage> {
+    const page = filter.page ?? 1;
+    const pageSize = filter.pageSize ?? 25;
     const em = this.deps.emFactory();
     const where: Record<string, unknown> = {};
+    const and: unknown[] = [];
     if (filter.organizationId) where['organizationId'] = filter.organizationId;
-    if (filter.status) where['status'] = filter.status;
-
-    let rfqs: QuoteRequest[] = await em.find(QuoteRequest, where, {
-      orderBy: { createdAt: 'desc' },
-    });
-
-    // Visibility scoping (skipped for platform admin)
-    if (!ctx.isPlatformAdmin) {
-      const visible = await Promise.all(
-        rfqs.map((r) =>
-          this.deps.salesRepAssignment.canSeeOrganization(ctx.adminUserId, r.organizationId),
-        ),
-      );
-      rfqs = rfqs.filter((_, i) => visible[i]);
+    if (filter.status) {
+      where['status'] = Array.isArray(filter.status) ? { $in: filter.status } : filter.status;
+    }
+    // Feature 157 — one condition, a member of `$and`: it narrows the
+    // organization and status conditions above and never replaces them.
+    const customFieldCondition = await this.customFieldCondition(filter.customFieldFilters);
+    if (customFieldCondition !== null) {
+      and.push({
+        id: { $in: raw(`(${customFieldCondition.sql})`, [...customFieldCondition.params]) },
+      });
     }
 
     if (filter.scope === 'mine') {
-      const assigned = new Set(
-        await this.deps.salesRepAssignment.listAssignedOrganizationIds(ctx.adminUserId),
-      );
-      rfqs = rfqs.filter((r) => assigned.has(r.organizationId));
+      const assigned = await this.deps.salesRepAssignment.listAssignedOrganizationIds(ctx.adminUserId);
+      if (assigned.length === 0) return { rows: [], total: 0 };
+      and.push({ organizationId: { $in: assigned } });
     } else if (filter.scope === 'unassigned') {
-      const flagged = await Promise.all(rfqs.map((r) => this.isUnassigned(em, r.organizationId)));
-      rfqs = rfqs.filter((_, i) => flagged[i]);
+      // The flat rule `isUnassigned` answered per row: no assignment row.
+      const governed = await this.deps.salesRepAssignment.listOrganizationIdsWithAssignments();
+      if (governed.length > 0) and.push({ organizationId: { $nin: governed } });
     }
 
-    if (rfqs.length === 0) return [];
+    const q = filter.q?.trim();
+    if (q) {
+      const like = `%${likeLiteral(q)}%`;
+      const [orgIds, customerIds] = await Promise.all([
+        this.deps.organizations.searchIdsByName(q),
+        this.deps.customerAccounts.searchIdsByName(q),
+      ]);
+      and.push({
+        $or: [
+          { businessId: { $ilike: like } },
+          // A whole id, exactly: a fragment of a uuid matches almost every row.
+          ...(isUuidShape(q) ? [{ id: q }] : []),
+          ...(orgIds.length > 0 ? [{ organizationId: { $in: orgIds } }] : []),
+          ...(customerIds.length > 0 ? [{ customerAccountId: { $in: customerIds } }] : []),
+        ],
+      });
+    }
+    if (and.length > 0) where['$and'] = and;
+
+    const [field, direction] = (filter.sort ?? 'updatedAt:desc').split(':') as ['updatedAt' | 'total', 'asc' | 'desc'];
+    const primary =
+      field === 'total' ? { [raw((alias) => quoteAmountSql(alias))]: direction } : { updatedAt: direction };
+    const [found, total] = await em.findAndCount(QuoteRequest, where, {
+      // The id breaks ties, so a page boundary is stable.
+      orderBy: [primary, { id: 'asc' }] as never,
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
+    });
+    const rfqs: QuoteRequest[] = [...found];
+    if (rfqs.length === 0) return { rows: [], total };
 
     const items = await em.find(QuoteRequestItem, {
       quoteRequestId: { $in: rfqs.map((r) => r.id) },
@@ -197,22 +343,24 @@ export class RfqAdminService {
     for (const orgId of new Set(rfqs.map((r) => r.organizationId))) {
       taxRateByOrg.set(orgId, await this.deps.rfqService.taxRateForOrganization(orgId));
     }
+    // Issue #303 — a request with no lines speaks its channel's currency.
+    const currencyByChannel = await channelCurrencies(
+      em,
+      rfqs.filter((r) => !itemsByRfq.has(r.id)).map((r) => r.salesChannelId),
+    );
 
-    return rfqs.map((rfq) => {
+    const rows = rfqs.map((rfq): QuoteRequestSummary => {
       const rfqItems = itemsByRfq.get(rfq.id) ?? [];
       const customer = customerById.get(rfq.customerAccountId);
       const org = orgById.get(rfq.organizationId);
+      // Exact sums (issue #417), the customer list's helper. The list shows
+      // `amount` (issue #456); the two totals stay for API readers.
+      const { amount, agreement } = quoteRequestAmount(rfqItems);
       const totalAtAgreedPrice = rfqItems.every((it) => it.agreedUnitPrice != null)
-        ? rfqItems.reduce(
-            (sum, it) => sum + Number(it.agreedUnitPrice ?? 0) * it.quantity,
-            0,
-          )
+        ? listTotal(rfqItems.map((it) => ({ price: it.agreedUnitPrice ?? '0', quantity: it.quantity })))
         : null;
       const totalAtCustomerPrice = rfqItems.every((it) => it.desiredUnitPrice != null)
-        ? rfqItems.reduce(
-            (sum, it) => sum + Number(it.desiredUnitPrice ?? 0) * it.quantity,
-            0,
-          )
+        ? listTotal(rfqItems.map((it) => ({ price: it.desiredUnitPrice ?? '0', quantity: it.quantity })))
         : null;
       return {
         id: rfq.id,
@@ -224,8 +372,10 @@ export class RfqAdminService {
         lineCount: rfqItems.length,
         totalAtCustomerPrice,
         totalAtAgreedPrice,
+        amount,
+        agreement,
         taxRate: taxRateByOrg.get(rfq.organizationId) ?? 0,
-        currency: rfqItems[0]?.lineCurrency ?? 'PLN',
+        currency: summaryCurrency(rfq, rfqItems, currencyByChannel),
         submittedAt: rfq.submittedAt?.toISOString() ?? null,
         expiresAt: rfq.expiresAt?.toISOString() ?? null,
         createdAt: rfq.createdAt.toISOString(),
@@ -235,29 +385,23 @@ export class RfqAdminService {
         customerDisplayName: customer ? customerDisplayName(customer) : null,
       };
     });
+    return { rows, total };
   }
 
   /**
    * Global search over quote requests (`specs/150-admin-global-search/`, T032).
    *
-   * The list's visibility, **in the statement** — not `listAll`'s shape, which
-   * loads every row and filters the organization scope in memory. Two layers,
-   * the same two the list applies:
-   *
-   *  1. the request's tenant scope (`orgConstraintFor()`), the reach
-   *     `adminTenantScopePort` derives for this admin;
-   *  2. for any role other than the platform administrator, the sales
-   *     representative rule (`canSeeOrganization`: assigned, or an organization
-   *     nobody is assigned to). It is asked of the **distinct organizations
-   *     that have a matching quote request** — a bounded set — and the page is
-   *     then read with `organization_id in (visible)`.
+   * The list's visibility, **in the statement**: the request's tenant scope
+   * (`orgConstraintFor()`), the reach `adminTenantScopePort` derives for this
+   * admin. For a sales representative that is the `canSeeOrganization` rule
+   * (issue #305); every other role — `platform_admin` or a custom one —
+   * reaches every organization (issue #957).
    *
    * Matching, ranking and the `limit + 1` page follow the other providers:
    * literal `likeEscaped` patterns, exact → prefix → rest on the number, then
    * most recent change, then id.
    */
   async searchForAdmin(
-    ctx: AdminContext,
     query: QuoteRequestAdminSearchQuery,
   ): Promise<{ rows: QuoteRequestAdminSearchRow[]; hasMore: boolean }> {
     const fields = new Set(query.fields);
@@ -267,49 +411,30 @@ export class RfqAdminService {
       fields.has('organizationName') ? this.deps.organizations.searchIdsByName(query.text) : [],
       fields.has('customer') ? this.deps.customerAccounts.searchIdsByName(query.text) : [],
     ]);
-    const matches: Array<(qb: Knex.QueryBuilder) => void> = [];
-    if (fields.has('number')) matches.push((qb) => qb.orWhereRaw('"business_id" ilike ?', [contains]));
-    if (orgIds.length > 0) matches.push((qb) => qb.orWhereIn('organization_id', orgIds));
-    if (customerIds.length > 0) matches.push((qb) => qb.orWhereIn('customer_account_id', customerIds));
-    if (fields.has('customerNote')) matches.push((qb) => qb.orWhereRaw('"header_note" ilike ?', [contains]));
-    if (query.isUuid) matches.push((qb) => qb.orWhereRaw('"id" = ?::uuid', [query.text]));
+    // One predicate per selected field, OR-combined; every value is a `?`
+    // placeholder, an id set one placeholder per id.
+    const matches: Array<{ sql: string; params: readonly unknown[] }> = [];
+    if (fields.has('number')) matches.push({ sql: '"business_id" ilike ?', params: [contains] });
+    if (orgIds.length > 0) {
+      matches.push({ sql: `"organization_id" in (${orgIds.map(() => '?').join(', ')})`, params: orgIds });
+    }
+    if (customerIds.length > 0) {
+      matches.push({
+        sql: `"customer_account_id" in (${customerIds.map(() => '?').join(', ')})`,
+        params: customerIds,
+      });
+    }
+    if (fields.has('customerNote')) matches.push({ sql: '"header_note" ilike ?', params: [contains] });
+    if (query.isUuid) matches.push({ sql: '"id" = ?::uuid', params: [query.text] });
     if (matches.length === 0) return { rows: [], hasMore: false };
 
     const constraint = orgConstraintFor();
-    const tenantOrgIds =
-      constraint.kind === 'all'
-        ? null
-        : constraint.kind === 'set'
-          ? [...constraint.organizationIds]
-          : constraint.organizationId === null
-            ? []
-            : [constraint.organizationId];
-    if (tenantOrgIds !== null && tenantOrgIds.length === 0) return { rows: [], hasMore: false };
+    if (reachesNoOrganization(constraint)) return { rows: [], hasMore: false };
+    // The platform's predicate for the reach (issue #305): a sales
+    // representative's is every organization nobody else governs.
+    const tenantReach = constraint.kind === 'all' ? null : orgScopeSql('organization_id', constraint);
 
     const em = this.deps.emFactory();
-    const knex = em.getKnex();
-    const matching = (extraOrgIds: readonly string[] | null) =>
-      knex('quote_requests').where((qb) => {
-        if (tenantOrgIds !== null) qb.whereIn('organization_id', tenantOrgIds);
-        if (extraOrgIds !== null) qb.whereIn('organization_id', [...extraOrgIds]);
-        qb.andWhere((or) => {
-          for (const match of matches) match(or);
-        });
-      });
-
-    let visibleOrgIds: string[] | null = null;
-    if (!ctx.isPlatformAdmin) {
-      const candidates = (
-        (await em.execute(matching(null).distinct('organization_id'))) as Array<{ organization_id: string }>
-      ).map((r) => r.organization_id);
-      const visible = await Promise.all(
-        candidates.map((id) => this.deps.salesRepAssignment.canSeeOrganization(ctx.adminUserId, id)),
-      );
-      visibleOrgIds = candidates.filter((_, i) => visible[i]);
-      if (visibleOrgIds.length === 0) return { rows: [], hasMore: false };
-    }
-
-    const builder = matching(visibleOrgIds).select('id');
     const exact: string[] = [];
     const bindings: unknown[] = [];
     if (query.isUuid) {
@@ -320,13 +445,24 @@ export class RfqAdminService {
       exact.push('lower("business_id") = lower(?)');
       bindings.push(query.text);
     }
+    let rank = '';
     if (exact.length > 0) {
       const starts = fields.has('number') ? ' when "business_id" ilike ? then 1' : '';
       if (fields.has('number')) bindings.push(prefix);
-      builder.orderByRaw(`case when ${exact.join(' or ')} then 0${starts} else 2 end`, bindings as Knex.RawBinding[]);
+      rank = `case when ${exact.join(' or ')} then 0${starts} else 2 end, `;
     }
-    builder.orderBy('updated_at', 'desc').orderBy('id', 'asc').limit(query.limit + 1);
-    const ids = ((await em.execute(builder)) as Array<{ id: string }>).map((r) => r.id);
+    // The reach first, then the OR of the matches — in the statement.
+    const where = [
+      ...(tenantReach !== null ? [{ sql: `(${tenantReach.sql})`, params: tenantReach.params }] : []),
+      { sql: `(${matches.map((m) => m.sql).join(' or ')})`, params: matches.flatMap((m) => m.params) },
+    ];
+    const ids = (
+      await em.execute<Array<{ id: string }>>(
+        `select "id" from "quote_requests" where ${where.map((w) => w.sql).join(' and ')}
+          order by ${rank}"updated_at" desc, "id" asc limit ?`,
+        [...where.flatMap((w) => w.params), ...bindings, query.limit + 1],
+      )
+    ).map((r) => r.id);
     const page = ids.slice(0, query.limit);
     if (page.length === 0) return { rows: [], hasMore: false };
 
@@ -368,7 +504,8 @@ export class RfqAdminService {
             id: org.id,
             name: org.name,
             legalName: org.legalName ?? null,
-            taxId: org.taxId,
+            taxId: organizationCompanyTaxId(org),
+            isPersonal: org.isPersonal,
             vatStatus: org.vatStatus,
           }
         : null,
@@ -393,6 +530,11 @@ export class RfqAdminService {
    * revisions. One `findByIds` per actor port — customers `activeOnly`, so a
    * deleted account's PII is never read and its entries name an unknown user
    * (FR-018) — and one variant read for the labels.
+   *
+   * `specs/179-rfq-and-customer-notifications/` WP-06 (FR-070) — plus the
+   * notification delivery records of the window's events, one read on
+   * `(quote_request_id, source_event_id)`; their recipients join the actor
+   * reads, so each side is still one batched read.
    */
   async history(ctx: AdminContext, rfqId: string): Promise<QuoteRequestHistory> {
     const em = this.deps.emFactory();
@@ -424,10 +566,16 @@ export class RfqAdminService {
       ),
     );
 
-    const adminIds = unique(events.map((event) => event.actorAdminUserId));
-    const customerIds = unique(
-      events.filter((event) => !event.actorAdminUserId).map((event) => event.actorCustomerAccountId),
-    );
+    const deliveries = await this.#historyDeliveries(em, rfq.id, events.map((event) => event.id));
+
+    const adminIds = unique([
+      ...events.map((event) => event.actorAdminUserId),
+      ...deliveries.filter((d) => d.recipientKind === 'admin').map((d) => d.recipientId),
+    ]);
+    const customerIds = unique([
+      ...events.filter((event) => !event.actorAdminUserId).map((event) => event.actorCustomerAccountId),
+      ...deliveries.filter((d) => d.recipientKind === 'customer').map((d) => d.recipientId),
+    ]);
     const productIds = unique(
       revisions.flatMap((revision) =>
         revision.itemsSnapshot.filter((line) => line.variantId).map((line) => line.productId),
@@ -439,14 +587,70 @@ export class RfqAdminService {
       productIds.length > 0 ? this.deps.catalogProducts.listVariantsByProductIds(productIds) : [],
     ]);
 
+    const adminDirectory = adminActorDirectory(admins);
+    const customerDirectory = customerActorDirectory(customers);
     return {
-      entries: projectHistory(events, revisions, {
-        admins: adminActorDirectory(admins),
-        customers: customerActorDirectory(customers),
-        variantLabels: variantLabelDirectory(variants),
-      }),
+      entries: projectHistory(
+        events,
+        revisions,
+        {
+          admins: adminDirectory,
+          customers: customerDirectory,
+          variantLabels: variantLabelDirectory(variants),
+        },
+        deliveriesByEvent(deliveries, { admins: adminDirectory, customers: customerDirectory }),
+      ),
       truncated,
     };
+  }
+
+  /** The delivery records announcing any of `eventIds` — the History's window, never more. */
+  async #historyDeliveries(em: EntityManager, rfqId: string, eventIds: string[]): Promise<HistoryDeliveryInput[]> {
+    if (eventIds.length === 0) return [];
+    const records = await em.find(QuoteRequestNotification, { quoteRequestId: rfqId, sourceEventId: { $in: eventIds } });
+    return records.map((record) => ({
+      id: record.id,
+      sourceEventId: record.sourceEventId,
+      recipientKind: record.recipientKind,
+      recipientId: record.recipientId,
+      channel: record.channel,
+      status: record.status,
+      attempts: record.attempts,
+      lastError: record.lastError ?? null,
+      closedAt: record.closedAt ?? null,
+    }));
+  }
+
+  // -------------------------------------------------------------------------
+  // The operator's writes — Commands (issue #1824)
+  // -------------------------------------------------------------------------
+
+  /**
+   * What the operator's Commands (`commands/quote-request-admin-commands.ts`)
+   * read and write through. `quoteRequestCommandPort` builds its Commands from
+   * the same factories over the same dependencies, so the route and the port
+   * cannot write differently.
+   */
+  get commandDeps(): QuoteRequestAdminCommandDeps {
+    return this.deps;
+  }
+
+  /**
+   * Run one of the operator's Commands on the Command Bus — its one audit
+   * entry, its history and notification records and its event commit
+   * together — and then, for a write that recorded notifications, wake their
+   * delivery: after the commit, never before it. The admin routes and
+   * `quoteRequestCommandPort` both write through here.
+   */
+  async runWrite<T>(command: Command<T>, { notifies }: { notifies: boolean }): Promise<T> {
+    const result = await this.deps.commandBus.run(command);
+    if (notifies) this.kickNotificationDelivery();
+    return result;
+  }
+
+  /** The admin request's administrator, as the history names the writer. */
+  static operatorOf(ctx: AdminContext): QuoteRequestOperator {
+    return { adminUserId: ctx.adminUserId, roleLabel: ctx.roleLabel };
   }
 
   // -------------------------------------------------------------------------
@@ -459,60 +663,65 @@ export class RfqAdminService {
     expectedVersion: number | null,
     note: string | undefined,
   ): Promise<RfqDto> {
+    const rfq = await this.runWrite(
+      makeApproveQuoteRequestCommand(this.deps, {
+        quoteRequestId: rfqId,
+        operator: RfqAdminService.operatorOf(ctx),
+        expectedVersion,
+        note,
+      }),
+      { notifies: true },
+    );
+    return this.deps.rfqService.serializeFull(this.deps.emFactory(), rfq, true);
+  }
+
+  // -------------------------------------------------------------------------
+  // Prepare the customer's basket (issue #170)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Put an approved request's lines into the basket of the **customer who owns
+   * it**, at the agreed prices, for that customer to check out.
+   *
+   * The admin screen's order action used to post to the storefront's
+   * `convert-to-order`, which is `requireCustomer`-guarded: an administrator's
+   * session answered `401`, which the Admin UI reads as an expired session.
+   * Had it been accepted it would have seeded the *caller's* basket. This is
+   * the operator's version of the same conversion — the same rules, through
+   * `RfqService.seedBasketFromApproved` — aimed at the request's customer, for
+   * a request this administrator may see. Like the customer's conversion it
+   * replaces what that customer's basket held.
+   *
+   * A customer holds one basket per sales channel
+   * (`specs/154-sales-channel-access/`). The one seeded is the basket of the
+   * channel the quote was raised on — the store the customer agreed it in, and
+   * the one channel a conversion can honestly be judged against (see
+   * `seedBasketFromApproved`). A request that records no channel (raised before
+   * requests did) falls back to `fallbackChannelId`, the channel the admin
+   * request resolved to — the system default.
+   */
+  async prepareCustomerBasket(
+    ctx: AdminContext,
+    rfqId: string,
+    fallbackChannelId: string,
+  ): Promise<{ cartId: string; customerAccountId: string; itemCount: number }> {
     const em = this.deps.emFactory();
     const rfq = await this.findVisibleForAdmin(em, ctx, rfqId);
-    if (rfq.status !== 'Pending') {
-      throw new HttpError(409, ERROR_CODES.RFQ_NOT_QUOTED, 'Quote Request is not pending approval.');
-    }
-    this.assertVersion(rfq, expectedVersion);
-
-    // Approving is what lets the buyer order, at the agreed prices — so every
-    // line needs one. There is deliberately no "approve at the list price"
-    // here: which price an unpriced line would be sold at is a commercial
-    // decision, and the operator makes it by pricing the line (`modify`).
-    const lines = await em.find(QuoteRequestItem, { quoteRequestId: rfq.id });
-    if (hasUnpricedLine(lines)) throw quoteIncompleteError();
-
-    const now = new Date();
-    await underRowLock(em, rfq, async () => {
-      rfq.status = 'Approved';
-      rfq.approvedAt = now;
-      rfq.awaitingCustomerRevisionAcceptance = false;
-      rfq.assignedAdminUserId = ctx.adminUserId;
-      rfq.version += 1;
-      this.#audit(em, 'quote_request.approve', rfq.id, { status: 'Pending' }, { status: 'Approved' });
-      await em.flush();
-    });
-
-    if (note && note.trim().length > 0) {
-      await this.deps.eventService.append({
-        quoteRequestId: rfq.id,
-        eventType: 'note-added',
-        actor: { adminUserId: ctx.adminUserId, roleLabel: ctx.roleLabel },
-        payload: { type: 'note-added', note },
-      });
-    }
-    const evt = await this.deps.eventService.append({
-      quoteRequestId: rfq.id,
-      eventType: 'approved',
-      actor: { adminUserId: ctx.adminUserId, roleLabel: ctx.roleLabel },
-      payload: { type: 'approved', approvedBy: 'admin' },
-    });
-
-    await this.deps.notificationService.enqueue({
-      quoteRequestId: rfq.id,
-      sourceEventId: evt.id,
-      recipients: [{ customerAccountId: rfq.customerAccountId }],
-      channels: ['email', 'in_app'],
-    });
-
-    this.deps.events.emit('rfq.approved.v1', {
-      eventId: randomUUID(),
-      occurredAt: now.toISOString(),
-      rfqId: rfq.id,
-    });
-
-    return this.deps.rfqService.serializeFull(em, rfq, true);
+    const owner = {
+      customerAccountId: rfq.customerAccountId,
+      organizationId: rfq.organizationId,
+      salesChannelId: rfq.salesChannelId ?? fallbackChannelId,
+    };
+    const seeded = await this.deps.rfqService.seedBasketFromApproved(em, rfq, owner);
+    this.#audit(
+      em,
+      'quote_request.prepare_customer_basket',
+      rfq.id,
+      null,
+      prepareBasketAuditState({ cartId: seeded.cartId, customerAccountId: owner.customerAccountId, itemCount: seeded.itemCount }),
+    );
+    await em.flush();
+    return { cartId: seeded.cartId, customerAccountId: owner.customerAccountId, itemCount: seeded.itemCount };
   }
 
   // -------------------------------------------------------------------------
@@ -525,47 +734,16 @@ export class RfqAdminService {
     expectedVersion: number | null,
     reason: string | undefined,
   ): Promise<RfqDto> {
-    const em = this.deps.emFactory();
-    const rfq = await this.findVisibleForAdmin(em, ctx, rfqId);
-    if (rfq.status !== 'Pending' && rfq.status !== 'Created from admin') {
-      throw new HttpError(409, ERROR_CODES.RFQ_NOT_QUOTED, 'Quote Request cannot be canceled in its current state.');
-    }
-    this.assertVersion(rfq, expectedVersion);
-
-    const now = new Date();
-    await underRowLock(em, rfq, async () => {
-      rfq.status = 'Canceled';
-      rfq.canceledAt = now;
-      rfq.awaitingCustomerRevisionAcceptance = false;
-      if (reason) rfq.cancellationReason = reason;
-      rfq.assignedAdminUserId = ctx.adminUserId;
-      rfq.version += 1;
-      this.#audit(em, 'quote_request.cancel', rfq.id, null, { status: 'Canceled', reason: reason ?? null });
-      await em.flush();
-    });
-
-    const evt = await this.deps.eventService.append({
-      quoteRequestId: rfq.id,
-      eventType: 'canceled',
-      actor: { adminUserId: ctx.adminUserId, roleLabel: ctx.roleLabel },
-      payload: { type: 'canceled', canceledBy: 'admin', reason: reason ?? null },
-    });
-
-    await this.deps.notificationService.enqueue({
-      quoteRequestId: rfq.id,
-      sourceEventId: evt.id,
-      recipients: [{ customerAccountId: rfq.customerAccountId }],
-      channels: ['email', 'in_app'],
-    });
-
-    this.deps.events.emit('rfq.canceled.v1', {
-      eventId: randomUUID(),
-      occurredAt: now.toISOString(),
-      rfqId: rfq.id,
-      reason: reason ?? null,
-    });
-
-    return this.deps.rfqService.serializeFull(em, rfq, true);
+    const rfq = await this.runWrite(
+      makeCancelQuoteRequestCommand(this.deps, {
+        quoteRequestId: rfqId,
+        operator: RfqAdminService.operatorOf(ctx),
+        expectedVersion,
+        reason,
+      }),
+      { notifies: true },
+    );
+    return this.deps.rfqService.serializeFull(this.deps.emFactory(), rfq, true);
   }
 
   // -------------------------------------------------------------------------
@@ -573,18 +751,17 @@ export class RfqAdminService {
   // -------------------------------------------------------------------------
 
   async assign(ctx: AdminContext, rfqId: string, targetAdminUserId: string): Promise<RfqDto> {
-    const em = this.deps.emFactory();
-    const rfq = await this.findVisibleForAdmin(em, ctx, rfqId);
-    await underRowLock(em, rfq, async () => {
-      const previousAssignee = rfq.assignedAdminUserId;
-      rfq.assignedAdminUserId = targetAdminUserId;
-      rfq.version += 1;
-      this.#audit(em, 'quote_request.assign', rfq.id, { assignedAdminUserId: previousAssignee }, {
-        assignedAdminUserId: targetAdminUserId,
-      });
-      await em.flush();
-    });
-    return this.deps.rfqService.serializeFull(em, rfq, true);
+    const rfq = await this.runWrite(
+      makeAssignQuoteRequestCommand(this.deps, {
+        quoteRequestId: rfqId,
+        operator: RfqAdminService.operatorOf(ctx),
+        // The route reads no `If-Match` here, as before.
+        expectedVersion: null,
+        adminUserId: targetAdminUserId,
+      }),
+      { notifies: false },
+    );
+    return this.deps.rfqService.serializeFull(this.deps.emFactory(), rfq, true);
   }
 
   // -------------------------------------------------------------------------
@@ -597,325 +774,69 @@ export class RfqAdminService {
     expectedVersion: number | null,
     body: AdminPatchQuoteRequest,
   ): Promise<RfqDto> {
-    const em = this.deps.emFactory();
-    const rfq = await this.findVisibleForAdmin(em, ctx, rfqId);
-    if (rfq.status !== 'Pending' && rfq.status !== 'Created from admin') {
-      throw new HttpError(409, ERROR_CODES.RFQ_NOT_QUOTED, 'Quote Request is not editable.');
-    }
-    this.assertVersion(rfq, expectedVersion);
-
-    // Research R7 — a validity change is recorded on the event, since no
-    // revision snapshot carries `expiresAt`.
-    const recorded: { validity?: { before: string | null; after: string | null } } = {};
-    await underRowLock(em, rfq, async () => {
-      if (body.headerNote !== undefined) rfq.headerNote = body.headerNote ?? null;
-
-      // Feature 055 — validate + merge custom-field values (host owns the write).
-      if (body.customFieldValues !== undefined && this.deps.customFieldValues) {
-        try {
-          rfq.customFieldValues = await this.deps.customFieldValues.validateAndMerge(
-            'quote_request',
-            rfq.customFieldValues ?? {},
-            body.customFieldValues,
-          );
-        } catch (err) {
-          if (isCustomFieldValidationFailure(err)) {
-            throw new HttpError(
-              422,
-              ERROR_CODES.CUSTOM_FIELD_VALUE_INVALID,
-              'One or more custom fields are invalid.',
-              err.errors.map((e) => ({ path: e.field, issue: e.message })),
-            );
-          }
-          throw err;
-        }
-      }
-
-      if (body.items) {
-        const products = await this.deps.catalogProducts.findByIds(
-        body.items.map((it) => it.productId),
-      );
-        const productById = new Map(products.map((p) => [p.id, p]));
-        if (productById.size !== new Set(body.items.map((it) => it.productId)).size) {
-          throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'One or more products do not exist.');
-        }
-        const existing = await em.find(
-          QuoteRequestItem,
-          { quoteRequestId: rfq.id },
-          { orderBy: { createdAt: 'asc', id: 'asc' } },
-        );
-        // Feature 146, FR-034 (research R5.1, R5.2) — a body line is the stored
-        // row its `id` names (same product only), else the row the R6 rule
-        // pairs it with. A paired line keeps what the rep did not change:
-        // packaging unit, product name snapshot, the customer's proposal and the
-        // stored reference; variant and note too, unless the body carries the
-        // key (`lineNote: null` clears). A new line has no packaging unit and no
-        // reference — `modify` never prices a line.
-        const { paired } = pairLines(
-          existing,
-          body.items.map((line) => ({
-            id: line.id,
-            productId: line.productId,
-            variantId: line.variantId,
-          })),
-          'admin',
-        );
-        await em.removeAndFlush(existing);
-        const items: QuoteRequestItem[] = [];
-        for (const [index, lineInput] of body.items.entries()) {
-          const product = productById.get(lineInput.productId)!;
-          const row = paired[index] ?? null;
-          const variantId =
-            lineInput.variantId !== undefined ? lineInput.variantId : (row?.variantId ?? null);
-          items.push(
-            em.create(QuoteRequestItem, {
-              quoteRequestId: rfq.id,
-              productId: product.id,
-              productName: row?.productName ?? anyLocaleValue(product.name),
-              productSlug: product.slug,
-              variantId,
-              variantLabel:
-                row !== null && (row.variantId ?? null) === variantId ? (row.variantLabel ?? null) : null,
-              quantity: lineInput.quantity,
-              packagingUnitName: row?.packagingUnitName ?? null,
-              packagingUnitBaseQuantity: row?.packagingUnitBaseQuantity ?? null,
-              desiredUnitPrice: row?.desiredUnitPrice ?? null,
-              agreedUnitPrice:
-                lineInput.agreedUnitPrice !== undefined && lineInput.agreedUnitPrice !== null
-                  ? lineInput.agreedUnitPrice.toFixed(2)
-                  : null,
-              lineNote:
-                lineInput.lineNote !== undefined ? lineInput.lineNote : (row?.lineNote ?? null),
-              lineCurrency: row?.lineCurrency ?? 'PLN',
-              ...(row !== null
-                ? storedReferenceColumns(row)
-                : { referenceUnitPrice: null, referenceCurrency: null, referenceCapturedAt: null }),
-            }),
-          );
-        }
-        await em.persistAndFlush(items);
-      }
-
-      rfq.currentRevisionNumber += 1;
-      rfq.awaitingCustomerRevisionAcceptance = true;
-      rfq.assignedAdminUserId = ctx.adminUserId;
-      if (body.expiresInDays !== undefined) {
-        const before = rfq.expiresAt?.toISOString() ?? null;
-        rfq.expiresAt = new Date(Date.now() + body.expiresInDays * 86_400_000);
-        const after = rfq.expiresAt.toISOString();
-        if (before !== after) recorded.validity = { before, after };
-      }
-      rfq.version += 1;
-      this.#audit(em, 'quote_request.modify', rfq.id, null, {
-        currentRevisionNumber: rfq.currentRevisionNumber,
-        status: rfq.status,
-      });
-      await em.flush();
-    });
-
-    const items = await em.find(QuoteRequestItem, { quoteRequestId: rfq.id });
-    const previousRevision = await this.deps.revisionService.byNumber(
-      rfq.id,
-      rfq.currentRevisionNumber - 1,
+    const rfq = await this.runWrite(
+      makeModifyQuoteRequestCommand(this.deps, {
+        quoteRequestId: rfqId,
+        operator: RfqAdminService.operatorOf(ctx),
+        expectedVersion,
+        body,
+      }),
+      { notifies: true },
     );
-    const revision = await this.deps.revisionService.record({
-      rfq,
-      items,
-      actor: { adminUserId: ctx.adminUserId },
-      previousRevisionId: previousRevision?.id ?? null,
-    });
-
-    const diff = previousRevision
-      ? this.deps.revisionService.diffRevisions({
-          beforeHeaderNote: previousRevision.headerNoteSnapshot ?? null,
-          afterHeaderNote: rfq.headerNote ?? null,
-          beforeItems: previousRevision.itemsSnapshot,
-          afterItems: revision.itemsSnapshot,
-        })
-      : [];
-
-    const evt = await this.deps.eventService.append({
-      quoteRequestId: rfq.id,
-      eventType: 'modified',
-      actor: { adminUserId: ctx.adminUserId, roleLabel: ctx.roleLabel },
-      payload: { type: 'modified', diff, ...recorded },
-      revisionId: revision.id,
-    });
-
-    await this.deps.notificationService.enqueue({
-      quoteRequestId: rfq.id,
-      sourceEventId: evt.id,
-      recipients: [{ customerAccountId: rfq.customerAccountId }],
-      channels: ['email', 'in_app'],
-    });
-
-    this.deps.events.emit('rfq.modified.v1', {
-      eventId: randomUUID(),
-      occurredAt: new Date().toISOString(),
-      rfqId: rfq.id,
-      revisionNumber: rfq.currentRevisionNumber,
-    });
-
-    return this.deps.rfqService.serializeFull(em, rfq, true);
+    return this.deps.rfqService.serializeFull(this.deps.emFactory(), rfq, true);
   }
 
   // -------------------------------------------------------------------------
   // Create on behalf (US4)
   // -------------------------------------------------------------------------
 
+  /**
+   * Feature 163 (FR-018) — the lines of an operator-created request whose
+   * product is not available to the Organization at the request's channel, in
+   * the channel's default language (N2), now. Accepted regardless: this is a
+   * warning for the operator, never a refusal (the exemption of
+   * `quote_request.create_on_behalf` stands). The channel is
+   * {@link onBehalfChannelId}'s, the one the create checked and stored; a
+   * request with no channel was refused there, so the `[]` below only answers
+   * a direct caller (FR-007).
+   */
+  async onBehalfWarnings(
+    body: Pick<AdminCreateQuoteRequest, 'organizationId' | 'items' | 'salesChannelId'>,
+  ): Promise<AdminQuoteRequestWarning[]> {
+    const channelId = onBehalfChannelId(body);
+    if (channelId === null) return [];
+    const productIds = Array.from(new Set(body.items.map((it) => it.productId)));
+    if (productIds.length === 0) return [];
+    const available = await this.deps.catalogAvailability.filterAvailable(productIds, {
+      channelId,
+      languageCode: null,
+      // The customer the operator names: the request's own actor is the operator.
+      audience: rfqAudience({ organizationId: body.organizationId }),
+    });
+    return productIds
+      .filter((productId) => !available.has(productId))
+      .map((productId) => ({ productId, code: 'PRODUCT_UNAVAILABLE_IN_SCOPE' as const }));
+  }
+
   async createOnBehalf(
     ctx: AdminContext,
     body: AdminCreateQuoteRequest,
   ): Promise<RfqDto> {
-    const em = this.deps.emFactory();
-
-    // Visibility on the target organization (platform_admin always passes).
-    if (
-      !ctx.isPlatformAdmin &&
-      !(await this.deps.salesRepAssignment.canSeeOrganization(ctx.adminUserId, body.organizationId))
-    ) {
-      throw new HttpError(403, ERROR_CODES.FORBIDDEN, 'Not authorized for this organization.');
-    }
-
-    // The membership half of the old `findOne(CustomerAccount, { id,
-    // organizationId })` is asserted here rather than in the query: the record
-    // carries `organizationId`, so the port does not need a second lookup shape
-    // and the two failures still answer with one message, as they did.
-    const customer = await this.deps.customerAccounts.findById(body.customerAccountId);
-    if (!customer || customer.organizationId !== body.organizationId) {
-      throw new HttpError(
-        404,
-        ERROR_CODES.NOT_FOUND,
-        'Customer does not belong to the organization.',
-      );
-    }
-
-    // **Neither scoping axis is applied to these lines, and that is the
-    // decision rather than the gap.** `RfqService.createForCustomer` filters by
-    // `isProductVisibleTo` (issue #227) and by the request's channel assortment
-    // (issue #259); this path filters by neither.
-    //
-    // It is an operator surface. The admin names the organisation, the customer
-    // and the lines, having chosen them from an admin catalogue that shows the
-    // whole assortment — so there is no buyer whose audience could answer, and
-    // the channel the admin's own request happens to have resolved (the
-    // resolver's step-4 default, unless the SPA sent `X-Sales-Channel`) is not
-    // a statement about where this quote should be sellable. The
-    // `quote_requests:write` permission is the enforcement, exactly as
-    // `quick_order`'s `'unrestricted'` import arm says of itself.
-    //
-    // The channel this quote *is* raised on is recorded below and is the
-    // honest answer to "where did this come from", not a filter.
-    const products = await this.deps.catalogProducts.findByIds(
-      body.items.map((it) => it.productId),
+    const rfq = await this.runWrite(
+      makeCreateOnBehalfCommand(this.deps, { operator: RfqAdminService.operatorOf(ctx), body }),
+      { notifies: true },
     );
-    const productById = new Map(products.map((p) => [p.id, p]));
-    if (productById.size !== new Set(body.items.map((it) => it.productId)).size) {
-      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'One or more products do not exist.');
-    }
-
-    const businessId = await this.deps.rfqService.generateBusinessId(em);
-    const rfq = em.create(QuoteRequest, {
-      ...(businessId ? { businessId } : {}),
-      organizationId: body.organizationId,
-      customerAccountId: body.customerAccountId,
-      // The channel the admin's own request resolved to. Admin paths take the
-      // resolver's step-4 fallback unless the SPA sends `X-Sales-Channel`, so
-      // this is the system default until it does — which is the honest answer
-      // for "where was this raised", not a channel this module picked.
-      salesChannelId: raisedOnChannelId(),
-      createdByAdminUserId: ctx.adminUserId,
-      assignedAdminUserId: ctx.adminUserId,
-      status: 'Created from admin' satisfies QuoteRequestStatus,
-      headerNote: body.headerNote ?? null,
-      currentRevisionNumber: 1,
-      lastCustomerSeenRevisionNumber: 0,
-      // The customer must accept or reject the quote the admin prepared, so it
-      // surfaces the Accept/Reject controls on the storefront (the same flag the
-      // admin's later revisions set). Without this the customer had no way to
-      // act on an admin-created quote.
-      awaitingCustomerRevisionAcceptance: true,
-      expiresAt:
-        body.expiresInDays !== undefined
-          ? new Date(Date.now() + body.expiresInDays * 86_400_000)
-          : null,
-    });
-    await em.persistAndFlush(rfq);
-
-    const items: QuoteRequestItem[] = [];
-    for (const lineInput of body.items) {
-      const product = productById.get(lineInput.productId)!;
-      items.push(
-        em.create(QuoteRequestItem, {
-          quoteRequestId: rfq.id,
-          productId: product.id,
-          productName: anyLocaleValue(product.name),
-          productSlug: product.slug,
-          variantId: lineInput.variantId ?? null,
-          quantity: lineInput.quantity,
-          agreedUnitPrice: lineInput.agreedUnitPrice.toFixed(2),
-          lineNote: lineInput.lineNote ?? null,
-          lineCurrency: 'PLN',
-        }),
-      );
-    }
-    this.#audit(em, 'quote_request.create_on_behalf', rfq.id, null, {
-      status: rfq.status,
-      itemCount: items.length,
-      salesChannelId: rfq.salesChannelId ?? null,
-    });
-    await em.persistAndFlush(items);
-
-    const revision = await this.deps.revisionService.record({
-      rfq,
-      items,
-      actor: { adminUserId: ctx.adminUserId },
-    });
-
-    await this.deps.eventService.append({
-      quoteRequestId: rfq.id,
-      eventType: 'created',
-      actor: { adminUserId: ctx.adminUserId, roleLabel: ctx.roleLabel },
-      payload: { type: 'created' },
-      revisionId: revision.id,
-    });
-
-    const evt = await this.deps.eventService.append({
-      quoteRequestId: rfq.id,
-      eventType: 'note-added',
-      actor: { adminUserId: ctx.adminUserId, roleLabel: ctx.roleLabel },
-      payload: { type: 'note-added', note: AUTOMATIC_ADMIN_CREATION_NOTE },
-      revisionId: revision.id,
-    });
-
-    await this.deps.notificationService.enqueue({
-      quoteRequestId: rfq.id,
-      sourceEventId: evt.id,
-      recipients: [{ customerAccountId: rfq.customerAccountId }],
-      channels: ['email', 'in_app'],
-    });
-
-    // Announced last, once every row of the request is written: a subscriber
-    // may read it at once. This path does **not** emit `rfq.created.v1` — that
-    // is the customer's submission, and whatever listens to it must not start
-    // seeing requests an administrator prepared. `origin` is handed on as it
-    // came: this module validates its shape and reads nothing in it.
-    // The one bus, seen with the event only this path emits.
-    (this.deps.events as EventBus<RfqAdminEvents>).emit(RFQ_CREATED_BY_ADMIN_EVENT, {
-      eventId: randomUUID(),
-      occurredAt: new Date().toISOString(),
-      rfqId: rfq.id,
-      organizationId: rfq.organizationId,
-      adminUserId: ctx.adminUserId,
-      origin: body.origin ?? null,
-    });
-
-    return this.deps.rfqService.serializeFull(em, rfq, true);
+    return this.deps.rfqService.serializeFull(this.deps.emFactory(), rfq, true);
   }
 
   // -------------------------------------------------------------------------
   // Helpers
   // -------------------------------------------------------------------------
+
+  /** After a commit that recorded deliveries, never before it. */
+  private kickNotificationDelivery(): void {
+    this.deps.notificationKick?.();
+  }
 
   private async findVisibleForAdmin(
     em: EntityManager,
@@ -926,27 +847,13 @@ export class RfqAdminService {
     // organizations answers exactly as an unknown id does, so its existence
     // does not leak.
     const notFound = () => new HttpError(404, ERROR_CODES.NOT_FOUND, 'Quote Request not found.');
+    if (!isUuidShape(rfqId)) throw notFound();
     const rfq = await em.findOne(QuoteRequest, { id: rfqId });
     if (!rfq) throw notFound();
-    if (
-      !ctx.isPlatformAdmin &&
-      !(await this.deps.salesRepAssignment.canSeeOrganization(ctx.adminUserId, rfq.organizationId))
-    ) {
+    if (!(await adminCanSeeOrganization(this.deps.salesRepAssignment, ctx.adminUserId, rfq.organizationId))) {
       throw notFound();
     }
     return rfq;
-  }
-
-  private assertVersion(rfq: QuoteRequest, expectedVersion: number | null): void {
-    if (expectedVersion !== null && rfq.version !== expectedVersion) {
-      throw new HttpError(409, ERROR_CODES.VERSION_CONFLICT, 'Quote Request was updated concurrently.');
-    }
-  }
-
-  private async isUnassigned(em: EntityManager, organizationId: string): Promise<boolean> {
-    const reps = await this.deps.salesRepAssignment.listForOrganization(organizationId);
-    void em;
-    return reps.length === 0;
   }
 }
 
@@ -968,11 +875,6 @@ function toHistoryRevision(revision: {
 
 function unique(values: ReadonlyArray<string | null | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.length > 0))];
-}
-
-function anyLocaleValue(blob: Record<string, string>): string {
-  const k = Object.keys(blob)[0];
-  return k ? (blob[k] ?? '') : '';
 }
 
 function customerDisplayName(c: CustomerAccountRecord): string {

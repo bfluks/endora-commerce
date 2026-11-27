@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import {
+  RESOLVE_URL,
   renderRfqDetail,
   rfqPayloadWithLines,
   type ExtraLine,
+  type ProbeRequest,
 } from './rfq-reference-fixtures';
+import { answerConfirm } from '../../helpers/confirm-dialog';
 
 const getSpy = vi.fn();
 const postSpy = vi.fn();
@@ -47,15 +50,11 @@ function lines(count: number): ExtraLine[] {
 
 /** The probe calls asked so far, as `{ productId, quantity }`. */
 function probes(): Array<{ productId: string; quantity: string | null }> {
-  return getSpy.mock.calls
-    .map((c) => String(c[0]))
-    .filter((u) => u.includes('/resolved-price'))
-    .map((u) => {
-      const url = new URL(u, 'http://admin.test');
-      return {
-        productId: url.pathname.split('/')[5] ?? '',
-        quantity: url.searchParams.get('quantity'),
-      };
+  return postSpy.mock.calls
+    .filter((c) => c[0] === RESOLVE_URL)
+    .map((c) => {
+      const line = (c[1] as ProbeRequest).lines[0]!;
+      return { productId: line.productId, quantity: String(line.quantity) };
     });
 }
 
@@ -68,9 +67,16 @@ function priceFor(productId: string): { amount: string; currency: string } {
   return { amount: `${Number(productId.slice(-4)) - 2000}.00`, currency: 'PLN' };
 }
 
-function probeResponse(url: string): { data: { resolvedPrice: unknown } } {
-  const productId = new URL(url, 'http://admin.test').pathname.split('/')[5] ?? '';
-  return { data: { resolvedPrice: { ...priceFor(productId), isSale: false, priceListId: uuid(1) } } };
+function probeResponse(body: ProbeRequest): { data: unknown[] } {
+  const line = body.lines[0]!;
+  return { data: [{ key: line.key, price: { ...priceFor(line.productId), source: 'buyer' }, explanation: { tier: 'buyer', precedenceVersion: 1 } }] };
+}
+
+/** Approve and the other writes answer empty; the price explanation answers a price per product. */
+function installPost(): void {
+  postSpy.mockImplementation((url: string, body: ProbeRequest) =>
+    Promise.resolve(url === RESOLVE_URL ? probeResponse(body) : { data: {} }),
+  );
 }
 
 beforeEach(() => {
@@ -90,9 +96,11 @@ describe('RfqDetail current-price probe', () => {
     let inFlight = 0;
     let maxInFlight = 0;
     const pending: Array<() => void> = [];
-    getSpy.mockImplementation((url: string, init?: RequestInit) => {
-      if (url.startsWith('/api/v1/admin/quote-requests/')) return Promise.resolve({ data: structuredClone(payload) });
-      if (!url.includes('/resolved-price')) return Promise.resolve({ data: {} });
+    getSpy.mockImplementation((url: string) =>
+      Promise.resolve(url.startsWith('/api/v1/admin/quote-requests/') ? { data: structuredClone(payload) } : { data: {} }),
+    );
+    postSpy.mockImplementation((url: string, body: ProbeRequest, init?: RequestInit) => {
+      if (url !== RESOLVE_URL) return Promise.resolve({ data: {} });
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
       return new Promise((resolve, reject) => {
@@ -107,7 +115,7 @@ describe('RfqDetail current-price probe', () => {
         init?.signal?.addEventListener('abort', () =>
           settle(() => reject(new DOMException('Aborted', 'AbortError'))),
         );
-        pending.push(() => settle(() => resolve(probeResponse(url))));
+        pending.push(() => settle(() => resolve(probeResponse(body))));
       });
     });
 
@@ -134,11 +142,10 @@ describe('RfqDetail current-price probe', () => {
 
   it('a refresh with unchanged lines asks nothing again and keeps the prices shown', async () => {
     const payload = rfqPayloadWithLines(lines(2));
-    getSpy.mockImplementation((url: string) => {
-      if (url.startsWith('/api/v1/admin/quote-requests/')) return Promise.resolve({ data: structuredClone(payload) });
-      if (url.includes('/resolved-price')) return Promise.resolve(probeResponse(url));
-      return Promise.resolve({ data: {} });
-    });
+    getSpy.mockImplementation((url: string) =>
+      Promise.resolve(url.startsWith('/api/v1/admin/quote-requests/') ? { data: structuredClone(payload) } : { data: {} }),
+    );
+    installPost();
 
     renderRfqDetail(RfqDetail);
     await waitFor(() => expect(screen.getByText('1.00 PLN')).toBeInTheDocument());
@@ -146,6 +153,8 @@ describe('RfqDetail current-price probe', () => {
     const detailsBefore = detailCalls();
 
     fireEvent.click(screen.getByRole('button', { name: /rfq\.detail\.approve/ }));
+    // Approve asks first since #1497 (SALES-12).
+    await answerConfirm(true);
     await waitFor(() => expect(detailCalls()).toBe(detailsBefore + 1));
     await screen.findByText('Line 0');
     expect(screen.getByText('0.00 PLN')).toBeInTheDocument();
@@ -161,11 +170,10 @@ describe('RfqDetail current-price probe', () => {
     const original = lines(2);
     const changed = original.map((line, i) => (i === 1 ? { ...line, quantity: 7 } : line));
     let payload = rfqPayloadWithLines(original);
-    getSpy.mockImplementation((url: string) => {
-      if (url.startsWith('/api/v1/admin/quote-requests/')) return Promise.resolve({ data: structuredClone(payload) });
-      if (url.includes('/resolved-price')) return Promise.resolve(probeResponse(url));
-      return Promise.resolve({ data: {} });
-    });
+    getSpy.mockImplementation((url: string) =>
+      Promise.resolve(url.startsWith('/api/v1/admin/quote-requests/') ? { data: structuredClone(payload) } : { data: {} }),
+    );
+    installPost();
 
     renderRfqDetail(RfqDetail);
     await waitFor(() => expect(screen.getByText('1.00 PLN')).toBeInTheDocument());
@@ -173,6 +181,8 @@ describe('RfqDetail current-price probe', () => {
 
     payload = rfqPayloadWithLines(changed);
     fireEvent.click(screen.getByRole('button', { name: /rfq\.detail\.approve/ }));
+    // Approve asks first since #1497 (SALES-12).
+    await answerConfirm(true);
     await waitFor(() => expect(probes().length).toBe(before + 1));
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));

@@ -1,9 +1,9 @@
 ---
-title: transactional_emails
+title: Transactional emails
 description: Admin-editable transactional emails — subject, content and look, globally and per sales channel
 ---
 
-# `transactional_emails`
+# Transactional emails (`transactional_emails`)
 
 Admin-editable transactional emails. Lets operators change the **subject**,
 **content**, and **look** of every transactional email the platform sends —
@@ -31,6 +31,12 @@ substitutes at send time.
   palette (legacy trees still render). The seeded system blocks
   `default_email_header` (renders branding via `EmailLogo` / `{{var branding.logoUrl}}`) and `default_email_footer`
   are auto-included in the default content.
+  A system block or template cannot be deleted:
+  `DELETE /api/v1/admin/transactional-emails/blocks/:id` answers
+  `409 TRANSACTIONAL_EMAIL_SYSTEM_BLOCK` (`details`: `blockId`, `blockCode`) and
+  `DELETE /api/v1/admin/transactional-emails/templates/:id` answers
+  `409 TRANSACTIONAL_EMAIL_SYSTEM_TEMPLATE` (`details`: `templateId`, `templateCode`), with a
+  sentence in the operator's language. Both were `409 VALIDATION_FAILED` until issue #638.
 - **Branding** — header logo, accent color, and the default header/footer block
   codes, resolved per scope through the Settings module
   (`transactional_emails.*`). The resolved logo is exposed to every email as
@@ -64,12 +70,13 @@ The transactional (and newsletter) editors share `EmailEditorPane`:
   Use **Preview email** for a modal HTML render with sample variable data and
   **Desktop mail (600px)** / **Narrow (320px)** options (fluid `max-width:600px`
   shell so narrow preview does not overflow).
-  **Save as template** / **Apply template** reuse the CMS header actions against
+  **Save as template** / **Apply template** sit in the toolbar's **More** menu,
+  as in the CMS, together with **Clear canvas**, and work against
   transactional email templates (`email_templates`).
 - `EmailLogo` shows the branding logo (no URL field). `EmailImage` supports URL or
   asset library, same as CMS. Color fields use the shared CMS color palette.
-  Branding logo in Settings (`*_asset_id`) uses the Assets Library picker.
-- `EmailRichText` reuses the CMS Rich Content TipTap editor (plus Variable).
+  The logo itself is set on the **Email branding** screen (below).
+- `EmailRichText` reuses the CMS Rich content TipTap editor (plus Variable).
 - `EmailProductCard` picks a catalog product; `EmailOrderSummary` is column/totals
   toggles and appears in the palette only when the email declares `order.items`
   (today: **Order confirmation** only). Order confirmation also exposes labeled
@@ -81,6 +88,27 @@ The transactional (and newsletter) editors share `EmailEditorPane`:
   (`EmailImage`, `EmailLogo`), commerce (`EmailProductCard`, `EmailOrderSummary`
   and the order detail blocks above), `EmailSocial` (icons + labels + per-link
   enable), and `EmailInsertBlock`.
+
+## Email branding
+
+**Messaging → Email branding** (`/transactional-emails/branding`, also under ⌘K / CTRL+K)
+sets the two values every email renders with:
+
+- **Header logo** — an image from the Assets Library. The shared `default_email_header`
+  block and every `EmailLogo` block show it; with no logo the header has none.
+- **Accent color** — used by buttons and highlights that set no color of their own.
+
+The **Scope** select picks *All channels (default)* or one sales channel. A channel
+inherits the all-channels value of anything it does not override: a Save sends only the
+fields changed while that scope is selected, so changing the accent for one channel leaves
+it following the all-channels logo. A field the selected channel sets differently from all
+channels says **Set for this channel** and offers **Use all-channels value**: it shows the
+all-channels value, and the next Save removes the channel's own value, so the channel follows
+later all-channels changes again (`DELETE /api/v1/admin/transactional-emails/branding?salesChannelId=…&fields=…`).
+Switching the scope, or following a link elsewhere in
+the admin, with unsaved changes asks whether to save them, discard them or stay. Viewing needs `transactional_emails:read`; saving needs
+`transactional_emails:write`. The values are the `transactional_emails.logo_asset_id` and
+`transactional_emails.accent_color` settings, so they also appear on the Settings screen.
 
 ## Rendering
 
@@ -104,6 +132,13 @@ transactionalEmails: [
 emailDefaultsRegistry.register('order_confirmation', { defaultSubject, defaultContent });
 ```
 
+A variable's `sampleValue` is English. When the sample reads differently in another
+language — an address, a status — add `sampleValueKey`, a key in the declaring module's own
+bundles (relative to its namespace, like a palette action's `labelKey`) holding the sample in
+every shipped language, the English entry equal to `sampleValue`. The editor's variable list
+and live preview, and the server preview, show the sample in the language being edited; the
+manifest's `sampleValue` answers when the key does not resolve.
+
 The owning module sends through the `TransactionalEmailSender` port (injected by
 composition), preserving its existing idempotency `messageId`:
 
@@ -118,6 +153,14 @@ await sender.send({
 
 When the sender is not wired, modules fall back to their legacy in-code builders,
 so behavior is unchanged in environments without the module.
+
+A module that also keeps an in-code fallback resolves `templateEmailPort` instead, whose
+`trySend` answers `false` only when no definition exists for the code. It takes the same
+`code`, `to`, `messageId` and `variables`, and optionally the recipient's `salesChannelId` and
+`language`: the message is rendered from that channel's content in that language. A missing or
+deleted channel renders on the system-default channel, and a missing language in the channel's
+default language, so a caller that names neither gets the system-default channel in its default
+language. The back-in-stock e-mail passes the channel and language the subscription recorded.
 
 ## Preview
 
@@ -139,7 +182,8 @@ override and no per-channel customization. A deactivated email answers
 `{ status: 'deactivated' }` at send time and **no fallback mail goes out**.
 
 Emails required to create an account or to get back into one may not be switched
-off at all: today `email_verification` and `organization_invitation`. The
+off at all: today `email_verification`, `organization_invitation`,
+`customer_password_reset` and `customer_password_reset_by_admin`. The
 declaration lives on the owning module's registry entry
 (`EmailDefaults.nonDeactivatable`), not in a list held by this module or by the
 Admin UI, and a refused flip answers `409 TRANSACTIONAL_EMAIL_NOT_DEACTIVATABLE`
@@ -173,6 +217,14 @@ operator action, and a message lost between the business write and the transport
 call is lost. There is no admin screen over the table yet — it is read from the
 database.
 
+When a customer account is anonymised, the `customers` module asks `email`
+(`emailDeliveryAnonymizationPort`) to scrub every record addressed to that
+account's address, compared case-insensitively: the recipient becomes the
+anonymised marker and the subject, the envelope and the transport's error text
+are cleared, while the message id, email code, status, reason, sales channel,
+document reference and attempt time stay. Each scrubbed record gets one
+`email_delivery.anonymized` audit entry.
+
 ## Permissions
 
 - `transactional_emails:read` — view emails, blocks, templates, branding, preview.
@@ -182,7 +234,15 @@ database.
 
 All pre-existing transactional emails route through this mechanism: orders
 (confirmation, comment, reorder, admin-created), returns (authorized, rejected),
-organizations (verification, invitation, new-registration), and inventory
+organizations (verification, invitation, new-registration, approved, rejected), and inventory
 (low-stock, back-in-stock). Two net-new emails are also registered and dispatched
 via event subscribers: payments (`payment_status_changed`, on payment
 received/failed) and shipments (`shipment_created`, on shipment created).
+
+Other modules register their own: carts (`cart_approval_requested`,
+`cart_approved`, `cart_rejected`), invoices (`invoice_issued`), quote requests
+(`quote_request_pdf` and the eleven `quote_request_customer_*` /
+`quote_request_operator_*` notification emails), CRM (`crm_event_reminder`),
+projects (`projects_stage_deadline_alert`) and tasks (`tasks_task_reminder`,
+`tasks_daily_digest`). Which of them an instance lists depends on the modules it
+has installed.

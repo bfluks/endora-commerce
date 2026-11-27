@@ -12,10 +12,15 @@ import {
   resubmitQuoteRequestSchema,
   ERROR_CODES,
   OrganizationCannotTransactError,
+  organizationPermissionPreHandler,
   type Actor,
+  type OrganizationPermissionPort,
+  isUuidShape,
+  requestScopeLanguage,
 } from '@endora-commerce/contracts';
 import type { RfqService, CustomerContext } from './services/rfq-service.js';
 import { HttpError } from '@endora-commerce/platform/http';
+import { getResolvedChannel } from '@endora-commerce/platform/kernel';
 
 /**
  * Draft edits per quote request per minute (research R16).
@@ -37,8 +42,6 @@ const DRAFT_EDIT_RATE_LIMIT = {
   hook: 'preHandler' as const,
   keyGenerator: (request: FastifyRequest): string => draftEditRateLimitKey(request),
 };
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * The draft-edit bucket a request counts against (security review W3).
@@ -62,7 +65,7 @@ export function draftEditRateLimitKey(request: FastifyRequest): string {
   const actor = request.actor as Actor | undefined;
   const caller = actor?.kind === 'customer' ? actor.customerAccountId : request.ip;
   const id = (request.params as { id?: unknown } | undefined)?.id;
-  return typeof id === 'string' && UUID.test(id)
+  return typeof id === 'string' && isUuidShape(id)
     ? `quote-request-draft-edit:${caller}:${id}`
     : `quote-request-draft-edit:${caller}`;
 }
@@ -85,6 +88,12 @@ export interface QuoteRequestsCustomerDeps {
    * is not `active` (feature 026 US1 / US3).
    */
   assertOrganizationCanTransact?: (organizationId: string) => Promise<void>;
+  /**
+   * `organizations`' permission port, resolved on every request
+   * (`specs/170-organization-roles/`, FR-040): the route guards below judge
+   * the member's role through it.
+   */
+  organizationPermissions: () => OrganizationPermissionPort;
 }
 
 function parseIfMatch(request: FastifyRequest): number | null {
@@ -104,7 +113,18 @@ export async function registerQuoteRequestsCustomerRoutes(
   deps: QuoteRequestsCustomerDeps,
 ): Promise<void> {
   const { rfqService, requireCustomer, resolveCustomerContext } = deps;
-  const { assertOrganizationCanTransact } = deps;
+  const { assertOrganizationCanTransact, organizationPermissions } = deps;
+
+  // `specs/170-organization-roles/` FR-040 (`contracts/storefront-api.md` §5).
+  // Declared after `requireCustomer`, so an anonymous visitor is still 401;
+  // a member lacking the code is `403 ORGANIZATION_PERMISSION_REQUIRED`
+  // before the body is validated or the quote request is looked up.
+  const mayCreateQuoteRequest = organizationPermissionPreHandler(
+    organizationPermissions,
+    'quote_requests.create',
+  );
+  // Converting fills the buyer's basket, so it is the basket's code.
+  const mayFillCart = organizationPermissionPreHandler(organizationPermissions, 'carts.create');
 
   const guardCanTransact = async (organizationId: string): Promise<void> => {
     if (!assertOrganizationCanTransact) return;
@@ -126,7 +146,7 @@ export async function registerQuoteRequestsCustomerRoutes(
   // GET /api/v1/quote-requests — list visible Quote Requests for the caller
   app.get('/api/v1/quote-requests', { preHandler: requireCustomer }, async (request) => {
     const ctx = await resolveCustomerContext(request);
-    const data = await rfqService.listForCustomer(ctx);
+    const data = await rfqService.listVisibleForCustomer(ctx);
     return {
       data,
       pagination: { limit: 50, nextCursor: null, hasMore: false },
@@ -148,12 +168,17 @@ export async function registerQuoteRequestsCustomerRoutes(
   // POST /api/v1/quote-requests — create + submit a new Quote Request
   app.post(
     '/api/v1/quote-requests',
-    { preHandler: requireCustomer, schema: { body: createQuoteRequestSchema } },
+    { preHandler: [requireCustomer, mayCreateQuoteRequest], schema: { body: createQuoteRequestSchema } },
     async (request, reply) => {
       const ctx = await resolveCustomerContext(request);
       await guardCanTransact(ctx.organizationId);
       const body = createQuoteRequestSchema.parse(request.body);
-      const rfq = await rfqService.createForCustomer(ctx, body);
+      // Feature 163 — the channel this request resolved, named explicitly.
+      const rfq = await rfqService.createForCustomer(ctx, body, {
+        language: await request.responseLanguage(),
+        ...scopeLanguageTagOf(request),
+        salesChannelId: getResolvedChannel(request).id,
+      });
       setEtag(reply, rfq.version);
       reply.code(201);
       return { data: rfq };
@@ -177,7 +202,11 @@ export async function registerQuoteRequestsCustomerRoutes(
       const ctx = await resolveCustomerContext(request);
       const body = patchQuoteRequestSchema.parse(request.body);
       const expectedVersion = parseIfMatch(request);
-      const rfq = await rfqService.patchDraft(request.params.id, ctx, body, expectedVersion);
+      const rfq = await rfqService.patchDraft(request.params.id, ctx, body, expectedVersion, {
+        language: await request.responseLanguage(),
+        ...scopeLanguageTagOf(request),
+        salesChannelId: getResolvedChannel(request).id,
+      });
       setEtag(reply, rfq.version);
       return { data: rfq };
     },
@@ -221,10 +250,16 @@ export async function registerQuoteRequestsCustomerRoutes(
   // POST /api/v1/quote-requests/:id/convert-to-order — start checkout
   app.post<{ Params: { id: string } }>(
     '/api/v1/quote-requests/:id/convert-to-order',
-    { preHandler: requireCustomer },
+    { preHandler: [requireCustomer, mayFillCart] },
     async (request, reply) => {
       const ctx = await resolveCustomerContext(request);
-      const result = await rfqService.convertToOrder(request.params.id, ctx);
+      // Into the basket of the storefront the buyer converts on
+      // (`specs/154-sales-channel-access/`): a customer holds one per channel.
+      const result = await rfqService.convertToOrder(
+        request.params.id,
+        ctx,
+        getResolvedChannel(request).id,
+      );
       reply.code(200);
       return { data: result };
     },
@@ -233,14 +268,39 @@ export async function registerQuoteRequestsCustomerRoutes(
   // POST /api/v1/quote-requests/:id/resubmit — clone into a new Pending RFQ
   app.post<{ Params: { id: string } }>(
     '/api/v1/quote-requests/:id/resubmit',
-    { preHandler: requireCustomer, schema: { body: resubmitQuoteRequestSchema.optional() } },
+    {
+      preHandler: [requireCustomer, mayCreateQuoteRequest],
+      schema: { body: resubmitQuoteRequestSchema.optional() },
+    },
     async (request, reply) => {
       const ctx = await resolveCustomerContext(request);
       const body = resubmitQuoteRequestSchema.parse(request.body ?? {});
-      const rfq = await rfqService.resubmit(request.params.id, ctx, body);
+      const rfq = await rfqService.resubmit(request.params.id, ctx, body, {
+        language: await request.responseLanguage(),
+        ...scopeLanguageTagOf(request),
+        salesChannelId: getResolvedChannel(request).id,
+      });
       setEtag(reply, rfq.version);
       reply.code(201);
       return { data: rfq };
     },
   );
+}
+
+/**
+ * Feature 163 — the channel language the request's `Accept-Language` asks for, as
+ * `{ languageTag }` when the header is present: the lines' scope language, as the
+ * basket's is. Never `responseLanguage()`, which falls back to a bundle language
+ * (T155 finding §1.5b).
+ *
+ * Issue #1011 — `requestScopeLanguage` over the whole header, as the catalogue
+ * resolves it since #397: the tags in descending `q`, each matched against the
+ * resolved channel's languages (exactly, then by base language), the first one
+ * the channel offers winning, else the channel's default. This used to be the
+ * header's first tag alone, so `en;q=0.2, pl-PL;q=0.9` asked about English.
+ */
+function scopeLanguageTagOf(request: FastifyRequest): { languageTag?: string } {
+  const header = request.headers['accept-language'];
+  if (header === undefined || header.length === 0) return {};
+  return { languageTag: requestScopeLanguage(getResolvedChannel(request), header) };
 }

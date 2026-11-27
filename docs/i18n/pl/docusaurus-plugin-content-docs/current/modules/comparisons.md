@@ -111,8 +111,16 @@ działać.
 - **Produkt znika z katalogu** — gdy produkt zostanie wycofany, będąc w porównaniu, jego kolumna
   zostaje, ale jest oznaczona jako niedostępna, a przycisk *Add to cart* w tej kolumnie jest
   nieaktywny.
-- **Link otwarty w innym kanale sprzedaży** — odbiorca widzi ceny w walucie swojego kanału, a produkt
-  niesprzedawany w jego kanale nadal jest widoczny, ale oznaczony jako niedostępny.
+- **Link otwarty w innym kanale sprzedaży** — odbiorca widzi ceny w walucie swojego kanału. Produkt
+  niedostępny dla odbiorcy w jego kanale i języku (niesprzedawany tam, wyłączony, poza okresem
+  publikacji, zarchiwizowany) wygląda dla niego dokładnie tak jak produkt usunięty: kolumna
+  `(removed product)` bez nazwy, SKU, ceny, obrazu i wartości atrybutów. Tylko właściciel porównania
+  nadal widzi taką kolumnę ze szczegółami, oznaczoną jako niedostępna — i tylko wtedy, gdy powodem
+  jest cykl życia samego produktu: wyłączenie w tym kanale lub języku, archiwizacja, okres poza
+  oknem publikacji albo wycofanie produktu ze sprzedaży w kanale. Produkt, którego właściciel nie
+  może już widzieć ze względu na to, kto może go oglądać — kanał ogranicza go do innych klientów
+  albo organizacji właściciela nie ma już wśród klientów dopuszczonych do kanału — także dla
+  właściciela jest kolumną `(removed product)`.
 - **Link otwarty przez kupującego z innej organizacji** — ceny w kolumnach są wyznaczane według umów
   tego kupującego, a produkt, którego nie może widzieć, jest pomijany z informacją o tym.
 - **Atrybuty wielowartościowe** — dwa produkty są zgodne w atrybucie wielowartościowym (np. lista
@@ -157,6 +165,12 @@ w których klienci podają udostępniony link.
 
 ## API publiczne
 
+Trasy storefrontu (`/api/v1/comparisons/me…` i widok udostępnionego linku) oceniają dostępność i
+podają nazwy produktów w języku czytającego: tagi `Accept-Language` żądania od największej wagi `q`,
+każdy dopasowany do języków kanału sprzedaży (dokładnie, a potem po języku podstawowym), pierwszy,
+który kanał oferuje, w przeciwnym razie język domyślny kanału (`requestScopeLanguage` z
+`@endora-commerce/contracts`, issue #1011).
+
 | Metoda i ścieżka | Kto | Przeznaczenie |
 | --- | --- | --- |
 | `GET /api/v1/comparisons/me` | storefront (anonimowy lub zalogowany klient) | Odczyt porównania wywołującego; `204 No Content`, gdy go nie ma |
@@ -164,7 +178,7 @@ w których klienci podają udostępniony link.
 | `DELETE /api/v1/comparisons/me/products/:productId` | storefront | Usunięcie produktu; `404 PRODUCT_NOT_IN_COMPARISON`, gdy go nie ma |
 | `PATCH /api/v1/comparisons/me` | storefront | Zmiana zapisanego widoku (`all` / `common` / `differences`) |
 | `DELETE /api/v1/comparisons/me` | storefront | Trwałe usunięcie porównania; token udostępnienia przestaje działać dla wszystkich |
-| `GET /api/v1/comparisons/me/pdf` | storefront (tylko właściciel) | Eksport do PDF dla właściciela; PDF odzwierciedla aktywny widok i zawiera główne zdjęcia produktów; `Accept-Language` wybiera język PDF, a `?hideEmptyRows=true` pomija wiersze bez wartości; układ wyznacza szablon dokumentu Porównanie produktów; `409 COMPARISON_EMPTY` dla porównania bez produktów |
+| `GET /api/v1/comparisons/me/pdf` | storefront (tylko właściciel) | Eksport do PDF dla właściciela; PDF odzwierciedla aktywny widok i zawiera główne zdjęcia produktów; `Accept-Language` wybiera język PDF — jego tagi od największej wagi `q`, każdy dopasowany do języków kanału sprzedaży (dokładnie, a potem po języku podstawowym), w przeciwnym razie język domyślny kanału; to ten sam język, w którym widok porównania podaje nazwy produktów — a `?hideEmptyRows=true` pomija wiersze bez wartości; układ wyznacza szablon dokumentu Porównanie produktów; `409 COMPARISON_EMPTY` dla porównania bez produktów |
 | `GET /api/v1/comparisons/share/:token` | publiczny, bez uwierzytelniania | Widok dla odbiorcy; ta sama postać co odczyt właściciela, bez `maxProducts`, z `meta.viewerIsOwner`; ceny i filtrowanie dla *odbiorcy* (`data.pricedFor`, `data.hiddenProductCount`); `404 COMPARISON_NOT_FOUND` dla usuniętego lub nigdy nieistniejącego tokenu |
 | `GET /api/v1/admin/comparisons` | administrator (`comparisons:read`) | Lista wszystkich porównań z filtrami (kanał, rodzaj właściciela, okres) i stronicowaniem kursorowym |
 | `GET /api/v1/admin/comparisons/:id` | administrator (`comparisons:read`) | Szczegóły tylko do odczytu; pokazywane w kontekście kanału sprzedaży zapisanego w porównaniu, aby widok odpowiadał temu, co zgłosił klient |
@@ -174,10 +188,11 @@ w storefroncie wywołuje bezpośrednio istniejące `POST /api/v1/cart/items`.
 
 ## Ustawienia
 
-Jedno ustawienie w grupie `compare`, rejestrowane przez `packages/modules/comparisons/src/manifest.ts`:
+Dwa ustawienia w grupie `compare`, rejestrowane przez `packages/modules/comparisons/src/manifest.ts`:
 
 | Kod | Typ | Wartość domyślna | Przeznaczenie |
 | --- | --- | --- | --- |
+| `comparisons.enabled` | `boolean` | `true` | Włączanie i wyłączanie modułu przez operatora |
 | `compare.max_products` | `number` | `4` | Największa liczba produktów w jednym porównaniu; storefront odrzuca dodanie produktu ponad limit kanału. Rozsądny zakres to `1..16`. |
 
 Limit jest odczytywany w trakcie żądania w `ComparisonService.addProduct(...)`. Obniżenie limitu w
@@ -239,7 +254,7 @@ własnych połączeń sieciowych — każdy obraz trafia do dokumentu przez Asse
 | --- | --- | --- |
 | Odczyt | Produkty z katalogu i flaga `is_comparable` | `CatalogQueryService.comparableAttributeKeys()` i odczyty encji przez EntityManager |
 | Odczyt | `compare.max_products` | `SettingsService.get(...)` — tak samo jak w wyszukiwarce |
-| Odczyt | Kontekst kanału sprzedaży (waluta, flaga publiczności) | `getResolvedChannel()` — kanał, który warstwa pośrednia wyznaczania kanału umieściła w zakresie żądania |
+| Odczyt | Kontekst kanału sprzedaży (waluta, języki) | `getResolvedChannel()` — kanał, który warstwa pośrednia wyznaczania kanału umieściła w zakresie żądania |
 | Odczyt | E-mail klienta na liście w panelu | encja `CustomerAccount` — łączenie tylko do odczytu |
 | Zapis | Nic poza własnymi dwiema tabelami | — |
 

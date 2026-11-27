@@ -1,5 +1,18 @@
 import { z } from 'zod';
+import type { SupportedLanguage } from './platform-language.js';
 import { isoDateTimeSchema, OriginReferenceSchema, uuidSchema, type OriginReference } from './common.js';
+import {
+  lineGroupInputSchema,
+  lineGroupKeySchema,
+  lineGroupSchema,
+  newLineGroupInputSchema,
+  refineLineGrouping,
+} from './line-groups.js';
+import { customFieldCarrySkipSchema, customFieldValuesSchema } from './custom-fields.js';
+import { fourDecimalUnitPrice } from './money-input.js';
+import { lineQuantitySchema, REQUEST_LINE_ITEMS_MAX } from './line-bounds.js';
+import type { AggregateCommandOptions, CustomFieldMerge } from './aggregate-ports.js';
+import type { EntityExtensionReadOptions, WithEntityExtensions } from './entity-extensions.js';
 
 /**
  * Quote Requests (RFQ) module contracts — feature 008 workflow rewrite.
@@ -73,6 +86,28 @@ export const quoteRequestItemSchema = z.object({
   /** Feature 043 packaging-unit snapshot, already stored on the row; both replies. */
   packagingUnitName: z.string().nullable().optional(),
   packagingUnitBaseQuantity: z.number().int().positive().nullable().optional(),
+  /** Feature 155 — the resolved catalogue unit; admin and customer replies. */
+  packagingUnitId: uuidSchema.nullable().optional(),
+  /**
+   * Feature 155 (FR-030) — **admin replies only**: set when the line is below its
+   * product's current minimum. Informs only.
+   */
+  minimumWarning: z
+    .object({
+      kind: z.enum(['pieces', 'packaging_unit']),
+      minimum: z.number().int().positive(),
+      packagingUnitName: z.string().optional(),
+    })
+    .nullable()
+    .optional(),
+  /**
+   * Feature 159 — the line's group (`itemGroups[].id`), `null` = ungrouped.
+   * Admin and customer replies; defaulted so a reply written before the
+   * feature parses.
+   */
+  groupId: uuidSchema.nullable().default(null),
+  /** Feature 159 — 0-based order within the line's section (its group, or the ungrouped lines). */
+  position: z.number().int().nonnegative().default(0),
 });
 export type QuoteRequestItem = z.infer<typeof quoteRequestItemSchema>;
 
@@ -95,6 +130,9 @@ export const rfqEventTypeSchema = z.enum([
   // Feature 153 (owner answer Q4) — the quote PDF was e-mailed. Admin replies
   // only: a customer reply leaves these events out.
   'pdf-sent',
+  // Feature 162 — custom-field values a Sales Opportunity could not carry into
+  // this request. Admin replies only: it names keys of possibly internal fields.
+  'custom-field-carry-skipped',
 ]);
 export type RfqEventType = z.infer<typeof rfqEventTypeSchema>;
 
@@ -123,6 +161,12 @@ export const quoteRequestHistoryLineRefSchema = z.object({
   productName: z.string(),
   /** Resolved on read; `null` when the variant is gone. */
   variantLabel: z.string().nullable(),
+  /**
+   * Feature 159 (research N-32) — the line's group (`null` = ungrouped), present
+   * only where it tells the line apart: its product, variant and packaging unit
+   * sit on more than one line of either revision.
+   */
+  groupName: z.string().nullable().optional(),
 });
 export type QuoteRequestHistoryLineRef = z.infer<typeof quoteRequestHistoryLineRefSchema>;
 
@@ -175,6 +219,30 @@ export const quoteRequestHistoryChangeSchema = z.discriminatedUnion('kind', [
     before: isoDateTimeSchema.nullable(),
     after: isoDateTimeSchema.nullable(),
   }),
+  // Feature 159 — the grouping as recorded in the revision snapshots. Groups
+  // pair across snapshots by id; names are as recorded, `null` = ungrouped.
+  z.object({
+    kind: z.literal('group_added'),
+    group: z.object({ id: uuidSchema, name: z.string() }),
+  }),
+  z.object({
+    kind: z.literal('group_removed'),
+    group: z.object({ id: uuidSchema, name: z.string() }),
+  }),
+  z.object({
+    kind: z.literal('group_renamed'),
+    groupId: uuidSchema,
+    before: z.string(),
+    after: z.string(),
+  }),
+  z.object({
+    kind: z.literal('line_group'),
+    line: quoteRequestHistoryLineRefSchema,
+    before: z.string().nullable(),
+    after: z.string().nullable(),
+  }),
+  /** Lines or groups reordered with no other change explaining it; at most once per entry. */
+  z.object({ kind: z.literal('line_order') }),
 ]);
 export type QuoteRequestHistoryChange = z.infer<typeof quoteRequestHistoryChangeSchema>;
 
@@ -218,8 +286,60 @@ export const quoteRequestHistoryEntryKindSchema = z.enum([
   'note_added',
   // Feature 153 (owner answer Q4).
   'pdf_sent',
+  // Feature 162.
+  'custom_field_carry_skipped',
 ]);
 export type QuoteRequestHistoryEntryKind = z.infer<typeof quoteRequestHistoryEntryKindSchema>;
+
+/**
+ * `specs/179-rfq-and-customer-notifications/` — one notification delivery of a
+ * history entry (`contracts/delivery-and-ports.md` §4): who was told, through
+ * which channel, and with what outcome. Admin history only; the customer
+ * projection never carries it (FR-071). The recipient's address is never part
+ * of it — `displayName` is resolved at read, `''` when the person is gone.
+ */
+export const quoteRequestDeliveryChannelSchema = z.enum([
+  'admin_in_app',
+  'admin_email',
+  'customer_email',
+  'customer_in_app',
+  'customer_push',
+]);
+export type QuoteRequestDeliveryChannel = z.infer<typeof quoteRequestDeliveryChannelSchema>;
+
+export const quoteRequestDeliveryStatusSchema = z.enum([
+  'pending',
+  'sent',
+  'skipped_stale',
+  'skipped_module_off',
+  'skipped_deactivated',
+  'skipped_no_transport',
+  'skipped_logged',
+  'skipped_no_recipient',
+  'skipped_preference',
+  'skipped_no_subscription',
+  'failed',
+]);
+export type QuoteRequestDeliveryStatus = z.infer<typeof quoteRequestDeliveryStatusSchema>;
+
+export const quoteRequestDeliverySchema = z
+  .object({
+    id: uuidSchema,
+    channel: quoteRequestDeliveryChannelSchema,
+    recipient: z
+      .object({
+        kind: z.enum(['admin', 'customer']),
+        id: uuidSchema,
+        displayName: z.string(),
+      })
+      .strict(),
+    status: quoteRequestDeliveryStatusSchema,
+    attempts: z.number().int().nonnegative(),
+    lastError: z.string().nullable(),
+    closedAt: isoDateTimeSchema.nullable(),
+  })
+  .strict();
+export type QuoteRequestDelivery = z.infer<typeof quoteRequestDeliverySchema>;
 
 export const quoteRequestHistoryEntrySchema = z.object({
   /** Id of the first merged event. */
@@ -252,6 +372,26 @@ export const quoteRequestHistoryEntrySchema = z.object({
     })
     .nullable()
     .optional(),
+  /**
+   * Feature 162 — `custom_field_carry_skipped` entries only: the Sales
+   * Opportunity the values came from and every key not carried, with its reason.
+   */
+  customFieldCarry: z
+    .object({
+      source: z.object({
+        entityType: z.literal('opportunity'),
+        recordId: uuidSchema,
+        reference: z.string(),
+      }),
+      skipped: z.array(customFieldCarrySkipSchema).min(1),
+    })
+    .nullable()
+    .optional(),
+  /**
+   * Feature 179 — admin history only: the notification deliveries whose source
+   * event is one of `eventIds`. Absent on the customer route (FR-071).
+   */
+  deliveries: z.array(quoteRequestDeliverySchema).optional(),
 });
 export type QuoteRequestHistoryEntry = z.infer<typeof quoteRequestHistoryEntrySchema>;
 
@@ -277,6 +417,15 @@ export type QuoteRequestHistory = z.infer<typeof quoteRequestHistorySchema>;
 // Comparison view (rendered when awaitingCustomerRevisionAcceptance is true)
 // ---------------------------------------------------------------------------
 
+/**
+ * Feature 159 (research N-32) — the group of the line a comparison entry is
+ * about (`null` = ungrouped), present only where the product sits on more than
+ * one line of either revision (same variant and packaging unit), so "Bolt: 5 →
+ * 3" says which Bolt line. The
+ * group's name is one the customer was shown on that revision.
+ */
+const diffGroupNameSchema = z.string().nullable().optional();
+
 export const rfqDiffEntrySchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('header_note'),
@@ -289,11 +438,13 @@ export const rfqDiffEntrySchema = z.discriminatedUnion('kind', [
     productName: z.string(),
     quantity: z.number().int().positive(),
     agreedUnitPrice: z.number().nullable(),
+    groupName: diffGroupNameSchema,
   }),
   z.object({
     kind: z.literal('line_removed'),
     productId: uuidSchema,
     productName: z.string(),
+    groupName: diffGroupNameSchema,
   }),
   z.object({
     kind: z.literal('line_quantity'),
@@ -301,6 +452,7 @@ export const rfqDiffEntrySchema = z.discriminatedUnion('kind', [
     productName: z.string(),
     before: z.number().int().positive(),
     after: z.number().int().positive(),
+    groupName: diffGroupNameSchema,
   }),
   z.object({
     kind: z.literal('line_agreed_unit_price'),
@@ -308,7 +460,14 @@ export const rfqDiffEntrySchema = z.discriminatedUnion('kind', [
     productName: z.string(),
     before: z.number().nullable(),
     after: z.number().nullable(),
+    groupName: diffGroupNameSchema,
   }),
+  /**
+   * Feature 159 — the arrangement of the lines (group names, group order,
+   * membership, line order) differs. Carries no other key: it names nothing
+   * the customer reply does not already carry.
+   */
+  z.object({ kind: z.literal('grouping') }),
 ]);
 export type RfqDiffEntry = z.infer<typeof rfqDiffEntrySchema>;
 
@@ -355,6 +514,13 @@ export const quoteRequestSchema = z.object({
   cancellationReason: z.string().nullable(),
   /** Feature 055 — custom-field values captured on this quote request. */
   customFieldValues: z.record(z.string(), z.unknown()).default({}),
+  /**
+   * Feature 159 — the quote's line groups in display order. Admin replies:
+   * every group, empty ones included (the editor needs them). Customer
+   * replies: groups holding at least one line only.
+   */
+  itemGroups: z.array(lineGroupSchema).default([]),
+  /** In display order: each group's lines in order, then the ungrouped lines. */
   items: z.array(quoteRequestItemSchema),
   events: z.array(quoteRequestEventSchema),
   comparisonAgainstLastSeen: rfqComparisonAgainstLastSeenSchema.nullable(),
@@ -383,7 +549,10 @@ export const quoteRequestSchema = z.object({
       id: uuidSchema,
       name: z.string(),
       legalName: z.string().nullable(),
-      taxId: z.string(),
+      /** `null` for a personal (B2C) Organization, whose tax id is an internal placeholder (#767). */
+      taxId: z.string().nullable(),
+      /** A personal (B2C) Organization: the panel labels it an individual customer (#767). */
+      isPersonal: z.boolean(),
       vatStatus: z.string(),
     })
     .nullable()
@@ -408,6 +577,41 @@ export const quoteRequestSchema = z.object({
   version: z.number().int().nonnegative(),
 });
 export type QuoteRequest = z.infer<typeof quoteRequestSchema>;
+
+/**
+ * How far a quote request is agreed (issue #456, PO ruling of 2026-11-08):
+ * `agreed` — every line has an agreed price; `partial` — some lines do;
+ * `none` — no line does (a quote without a line included).
+ */
+export const quoteRequestAgreementSchema = z.enum(['agreed', 'partial', 'none']);
+export type QuoteRequestAgreement = z.infer<typeof quoteRequestAgreementSchema>;
+
+/**
+ * What a quote request is worth — **one rule**, owned by `quote_requests`
+ * (issue #456, owner ruling of 2026-11-07). The quote desk list, a CRM
+ * Opportunity's link and a Project's link all show this figure; none of them
+ * re-derives it. Read it from `quoteRequestReadPort.amountOf`.
+ *
+ * - **Per line**: quantity × (agreed unit price ?? the price the customer
+ *   asked for). The unit price keeps its four places; the line value is the
+ *   rounding point, half-up to two places once (`lineAmountHalfUp`,
+ *   `specs/conventions/pricing.md`), and the line values are summed exactly.
+ * - **A line with neither price adds nothing** — it is not a zero price, it is
+ *   no price. A quote none of whose lines has a price has **no amount**
+ *   (`null`, shown as `—`), not `0.00`.
+ * - Net of tax, in the currency of the first line (what the desk shows the
+ *   total in); `null` for a quote without a line.
+ *
+ * A consumer shows a marker only beside an amount: *Partially agreed* for
+ * `partial`, *Not yet agreed* for `none`.
+ */
+export const quoteRequestAmountSchema = z.object({
+  /** Two places, non-negative: `35.00`; `null` when no line has a price. */
+  amount: z.string().regex(/^\d+\.\d{2}$/).nullable(),
+  currency: z.string().length(3).nullable(),
+  agreement: quoteRequestAgreementSchema,
+});
+export type QuoteRequestAmount = z.infer<typeof quoteRequestAmountSchema>;
 
 export const quoteRequestSummarySchema = z.object({
   id: uuidSchema,
@@ -436,8 +640,102 @@ export const quoteRequestSummarySchema = z.object({
     .optional(),
   organizationName: z.string().optional(),
   customerDisplayName: z.string().nullable().optional(),
+  /**
+   * Issue #456 — the quote's amount and how far it is agreed
+   * ({@link quoteRequestAmountSchema}). **Admin list only**; the customer list
+   * keeps its two every-line-or-`null` totals.
+   */
+  amount: quoteRequestAmountSchema.shape.amount.optional(),
+  agreement: quoteRequestAgreementSchema.optional(),
+  /**
+   * Issue #455 — `status` named in the response language, in this module's
+   * own wording (`QuoteRequestReadPort.statusName`), for another module's link
+   * picker to show. **Admin list only**; declared by issue #1270.
+   */
+  statusName: z.string().optional(),
 });
 export type QuoteRequestSummary = z.infer<typeof quoteRequestSummarySchema>;
+
+// ---------------------------------------------------------------------------
+// Admin list query and envelope (issue #317)
+// ---------------------------------------------------------------------------
+
+/** The largest page `GET /api/v1/admin/quote-requests` answers. */
+export const ADMIN_QUOTE_REQUEST_LIST_PAGE_SIZE_MAX = 200;
+
+/**
+ * The orders the admin list can be read in — `field:direction`, the spelling a
+ * saved view of the list stores (`sort: { field, dir }`). `total` is the
+ * amount the list shows (`quoteRequestAmountSchema`); a request without one
+ * sorts as zero.
+ */
+export const ADMIN_QUOTE_REQUEST_LIST_SORTS = ['updatedAt:desc', 'updatedAt:asc', 'total:desc', 'total:asc'] as const;
+export type AdminQuoteRequestListSort = (typeof ADMIN_QUOTE_REQUEST_LIST_SORTS)[number];
+
+/**
+ * The statuses a list request names, comma-separated or repeated. A value
+ * that is not a status is dropped rather than refused, as the list has always
+ * done; none left is no status filter.
+ */
+const adminQuoteRequestListStatusParam = z
+  .union([z.string(), z.array(z.string())])
+  .optional()
+  .transform((value): RfqStatus[] | undefined => {
+    if (value === undefined) return undefined;
+    const statuses = (Array.isArray(value) ? value : [value])
+      .flatMap((entry) => entry.split(','))
+      .map((entry) => entry.trim())
+      .filter((entry): entry is RfqStatus => rfqStatusSchema.safeParse(entry).success);
+    return statuses.length > 0 ? statuses : undefined;
+  });
+
+/**
+ * `GET /api/v1/admin/quote-requests` — issue #317. The server applies every
+ * filter, the sort and the page; the vocabulary is the one the list's saved
+ * views store (scope, organization, status, search, sort). The custom-field
+ * filters (`customFieldFilters`, feature 157) are read beside it by the route.
+ *
+ * `q` matches a fragment of the business id, the organization name or the
+ * customer's name, or a whole request id.
+ */
+export const adminQuoteRequestListQuerySchema = z.object({
+  assignmentScope: z.enum(['mine', 'unassigned', 'all']).optional(),
+  organizationId: uuidSchema.optional(),
+  status: adminQuoteRequestListStatusParam,
+  q: z
+    .string()
+    .trim()
+    .max(200)
+    .optional()
+    .transform((value) => (value === undefined || value === '' ? undefined : value)),
+  sort: z.enum(ADMIN_QUOTE_REQUEST_LIST_SORTS).default('updatedAt:desc'),
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().positive().max(ADMIN_QUOTE_REQUEST_LIST_PAGE_SIZE_MAX).default(25),
+});
+export type AdminQuoteRequestListQuery = z.infer<typeof adminQuoteRequestListQuerySchema>;
+
+/**
+ * The admin list's pagination block: the page read, its size and how many
+ * requests the filters match (`page`, `pageSize`, `total`, as on the orders
+ * list). `limit` and `hasMore` are the envelope the list answered before
+ * issue #317, now true for the page; the list has no cursor, so `nextCursor`
+ * is always `null` — ask for the next `page`.
+ */
+export const adminQuoteRequestListPaginationSchema = z.object({
+  page: z.number().int().positive(),
+  pageSize: z.number().int().positive().max(ADMIN_QUOTE_REQUEST_LIST_PAGE_SIZE_MAX),
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().positive().max(ADMIN_QUOTE_REQUEST_LIST_PAGE_SIZE_MAX),
+  hasMore: z.boolean(),
+  nextCursor: z.null(),
+});
+export type AdminQuoteRequestListPagination = z.infer<typeof adminQuoteRequestListPaginationSchema>;
+
+export const adminQuoteRequestListResponseSchema = z.object({
+  data: z.array(quoteRequestSummarySchema),
+  pagination: adminQuoteRequestListPaginationSchema,
+});
+export type AdminQuoteRequestListResponse = z.infer<typeof adminQuoteRequestListResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // Customer-facing request schemas
@@ -446,12 +744,14 @@ export type QuoteRequestSummary = z.infer<typeof quoteRequestSummarySchema>;
 export const createQuoteRequestLineSchema = z.object({
   productId: uuidSchema,
   variantId: uuidSchema.optional(),
-  quantity: z.number().int().positive(),
-  desiredUnitPrice: z.number().finite().nonnegative().optional(),
+  quantity: lineQuantitySchema,
+  desiredUnitPrice: fourDecimalUnitPrice(z.number().finite().nonnegative()).optional(),
   lineNote: z.string().max(2000).optional(),
   /** Feature 043 — snapshot when the line was added as a packaging unit. */
   packagingUnitName: z.string().max(160).optional(),
   packagingUnitBaseQuantity: z.number().int().positive().optional(),
+  /** Feature 155 (FR-026) — the catalogue unit the line is ordered in. Wins over name/base quantity. */
+  packagingUnitId: uuidSchema.optional(),
 });
 export type CreateQuoteRequestLine = z.infer<typeof createQuoteRequestLineSchema>;
 
@@ -462,14 +762,14 @@ export type CreateQuoteRequestLine = z.infer<typeof createQuoteRequestLineSchema
  */
 export const createQuoteRequestSchema = z.object({
   headerNote: z.string().max(2000).optional(),
-  items: z.array(createQuoteRequestLineSchema).min(1).max(200),
+  items: z.array(createQuoteRequestLineSchema).min(1).max(REQUEST_LINE_ITEMS_MAX),
 });
 export type CreateQuoteRequest = z.infer<typeof createQuoteRequestSchema>;
 
 export const patchQuoteRequestSchema = z
   .object({
     headerNote: z.string().max(2000).nullable().optional(),
-    items: z.array(createQuoteRequestLineSchema).min(1).max(200).optional(),
+    items: z.array(createQuoteRequestLineSchema).min(1).max(REQUEST_LINE_ITEMS_MAX).optional(),
   })
   .strict();
 export type PatchQuoteRequest = z.infer<typeof patchQuoteRequestSchema>;
@@ -499,26 +799,64 @@ export type ResubmitQuoteRequest = z.infer<typeof resubmitQuoteRequestSchema>;
 export const adminCreateQuoteRequestLineSchema = z.object({
   productId: uuidSchema,
   variantId: uuidSchema.optional(),
-  quantity: z.number().int().positive(),
-  agreedUnitPrice: z.number().finite().nonnegative(),
+  quantity: lineQuantitySchema,
+  agreedUnitPrice: fourDecimalUnitPrice(z.number().finite().nonnegative()),
   lineNote: z.string().max(2000).optional(),
+  /** Feature 159 — the `groups[].key` this line belongs to; absent or `null` = ungrouped. */
+  groupKey: lineGroupKeySchema.nullable().optional(),
 });
 export type AdminCreateQuoteRequestLine = z.infer<typeof adminCreateQuoteRequestLineSchema>;
 
-export const adminCreateQuoteRequestSchema = z.object({
-  organizationId: uuidSchema,
-  customerAccountId: uuidSchema,
-  headerNote: z.string().max(2000).optional(),
-  items: z.array(adminCreateQuoteRequestLineSchema).min(1),
-  expiresInDays: z.number().int().nonnegative().optional(),
-  /**
-   * Where the request is being created from — opaque to `quote_requests`,
-   * which validates its shape and hands it on with `rfq.created_by_admin.v1`.
-   * Not stored and not returned.
-   */
-  origin: OriginReferenceSchema.optional(),
-});
+export const adminCreateQuoteRequestSchema = z
+  .object({
+    organizationId: uuidSchema,
+    customerAccountId: uuidSchema,
+    headerNote: z.string().max(2000).optional(),
+    /** Feature 159 — the new quote's groups in display order; lines name them by `groupKey`. */
+    groups: z.array(newLineGroupInputSchema).optional(),
+    /** In display order: each group's lines, then the ungrouped lines. */
+    items: z.array(adminCreateQuoteRequestLineSchema).min(1).max(REQUEST_LINE_ITEMS_MAX),
+    expiresInDays: z.number().int().nonnegative().optional(),
+    /**
+     * Feature 163 (FR-018) — the sales channel the operator raises the request on:
+     * the channel it is stored on, its lines' names are snapshotted at (in that
+     * channel's default language, N2) and its `warnings` speak about. Absent: the
+     * channel the admin request itself resolved. Either way the channel must be one
+     * of the Organization's active channels, else `422 RFQ_SALES_CHANNEL_NOT_ALLOWED`
+     * before anything is written (owner decision 2026-10-29 "A": the server is the
+     * sole enforcer, so omitting the id does not skip the check).
+     */
+    salesChannelId: uuidSchema.optional(),
+    /**
+     * Where the request is being created from — opaque to `quote_requests`,
+     * which validates its shape and hands it on with `rfq.created_by_admin.v1`.
+     * Not stored and not returned.
+     */
+    origin: OriginReferenceSchema.optional(),
+    /**
+     * Feature 175 (FR-019) — the request's custom-field values, validated with
+     * the administrator's rules inside the creating Command.
+     */
+    customFieldValues: customFieldValuesSchema.optional(),
+  })
+  .superRefine((body, ctx) => refineLineGrouping(ctx, body));
 export type AdminCreateQuoteRequest = z.infer<typeof adminCreateQuoteRequestSchema>;
+
+/**
+ * Feature 163 (FR-018) — what `POST /api/v1/admin/quote-requests` reports about
+ * a line it accepted although the product is not available to the request's
+ * Organization at the request's channel, in that channel's default language
+ * (N2): switched off there, outside its publication window, or outside the
+ * channel's audience rule. An operator surface, so the line is accepted and
+ * named (a buyer seam answers one not-found instead). Additive: the response
+ * carries `warnings` only when there is one.
+ */
+export const ADMIN_QUOTE_REQUEST_WARNING_CODES = ['PRODUCT_UNAVAILABLE_IN_SCOPE'] as const;
+export const adminQuoteRequestWarningSchema = z.object({
+  productId: uuidSchema,
+  code: z.enum(ADMIN_QUOTE_REQUEST_WARNING_CODES),
+});
+export type AdminQuoteRequestWarning = z.infer<typeof adminQuoteRequestWarningSchema>;
 
 /** The name of the event that announces a Quote Request an administrator created. */
 export const RFQ_CREATED_BY_ADMIN_EVENT = 'rfq.created_by_admin.v1';
@@ -529,11 +867,15 @@ export const RFQ_CREATED_BY_ADMIN_EVENT = 'rfq.created_by_admin.v1';
  * create path, after its rows are written; a customer's own submission is
  * `rfq.created.v1` and never this. `origin` is what the create request
  * carried, or `null`.
+ *
+ * `adminUserId` is the administrator who created it — `null` since issue #1824
+ * when `quoteRequestCommandPort.create` ran with no administrator present (a
+ * worker under `withSystemScope`).
  */
 export interface RfqCreatedByAdminEventPayload {
   rfqId: string;
   organizationId: string;
-  adminUserId: string;
+  adminUserId: string | null;
   origin: OriginReference | null;
 }
 
@@ -541,21 +883,39 @@ export const adminPatchQuoteRequestLineSchema = z.object({
   id: uuidSchema.optional(),
   productId: uuidSchema,
   variantId: uuidSchema.optional(),
-  quantity: z.number().int().positive(),
-  agreedUnitPrice: z.number().finite().nonnegative().nullable().optional(),
+  quantity: lineQuantitySchema,
+  agreedUnitPrice: fourDecimalUnitPrice(z.number().finite().nonnegative()).nullable().optional(),
   lineNote: z.string().max(2000).nullable().optional(),
+  /** Feature 159 — the `groups[].key` this line belongs to; `null` = ungrouped. */
+  groupKey: lineGroupKeySchema.nullable().optional(),
+  /**
+   * Feature 159 (research N-33) — a new line split off a stored line of this
+   * quote (*Split line*): with no `id`, it takes that line's variant, packaging
+   * unit, customer's proposal, note, currency and stored reference, as the
+   * line it was split from keeps them. A value naming no line of this quote is
+   * ignored — the line is a plain new line.
+   */
+  splitFromId: uuidSchema.optional(),
 });
 export type AdminPatchQuoteRequestLine = z.infer<typeof adminPatchQuoteRequestLineSchema>;
 
 export const adminPatchQuoteRequestSchema = z
   .object({
     headerNote: z.string().max(2000).nullable().optional(),
-    items: z.array(adminPatchQuoteRequestLineSchema).min(1).optional(),
+    /**
+     * Feature 159 — the whole grouping in display order; requires `items`.
+     * Absent with `items` present: every paired line keeps its group, new
+     * lines are ungrouped, no group is deleted (research R-14).
+     */
+    groups: z.array(lineGroupInputSchema).optional(),
+    /** In display order: each group's lines, then the ungrouped lines. */
+    items: z.array(adminPatchQuoteRequestLineSchema).min(1).max(REQUEST_LINE_ITEMS_MAX).optional(),
     expiresInDays: z.number().int().nonnegative().optional(),
     /** Feature 055 — custom-field values for this quote request (validated on write). */
     customFieldValues: z.record(z.string(), z.unknown()).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((body, ctx) => refineLineGrouping(ctx, body));
 export type AdminPatchQuoteRequest = z.infer<typeof adminPatchQuoteRequestSchema>;
 
 export const adminApproveQuoteRequestSchema = z
@@ -567,6 +927,18 @@ export const adminCancelQuoteRequestSchema = z
   .object({ reason: z.string().max(2000).optional() })
   .strict();
 export type AdminCancelQuoteRequest = z.infer<typeof adminCancelQuoteRequestSchema>;
+
+/**
+ * `POST /api/v1/admin/quote-requests/:id/prepare-customer-basket` (issue #170):
+ * the approved request's lines are in the basket of the customer who owns it,
+ * at the agreed prices, for that customer to check out.
+ */
+export const adminPrepareCustomerBasketResponseSchema = z.object({
+  cartId: uuidSchema,
+  customerAccountId: uuidSchema,
+  itemCount: z.number().int().nonnegative(),
+});
+export type AdminPrepareCustomerBasketResponse = z.infer<typeof adminPrepareCustomerBasketResponseSchema>;
 
 export const adminAssignQuoteRequestSchema = z.object({
   adminUserId: uuidSchema,
@@ -732,6 +1104,12 @@ export interface QuoteRequestLineRecord {
   quantity: number;
   packagingUnitName: string | null;
   packagingUnitBaseQuantity: number | null;
+  /**
+   * Feature 155 (FR-026) — the catalogue packaging unit the line resolved to;
+   * `null` for a plain-pieces line or one stored before the feature. Optional,
+   * so every structural stub of the port written before it still compiles.
+   */
+  packagingUnitId?: string | null;
   /** Present for ERP export callers; cart conversion ignores these (FR-017). */
   lineCurrency: string;
   agreedUnitPrice: string | null;
@@ -746,6 +1124,13 @@ export interface QuoteRequestLineRecord {
   referenceUnitPrice?: string | null;
   /** Currency of `referenceUnitPrice`; `null` exactly when it is `null`. */
   referenceCurrency?: string | null;
+  /**
+   * Feature 159 (FR-087) — 0-based order within the line's section. Optional,
+   * so every structural stub of the port written before it still compiles.
+   */
+  position?: number;
+  /** Feature 159 — the line's group, or `null` when ungrouped. Optional as above. */
+  group?: { id: string; name: string; position: number } | null;
 }
 
 /**
@@ -764,7 +1149,22 @@ export interface QuoteRequestLineRecord {
  * `nonDeactivatable` never enters one.
  */
 export interface QuoteRequestReadPort {
-  findById(id: string): Promise<QuoteRequestRecord | null>;
+  /**
+   * `options.include` (`specs/187-side-table-extensions/` FR-058) names the
+   * side-table extensions to attach as `extensions.<moduleId>`; absent or
+   * empty, the answer is exactly what it was without it. The same holds for
+   * {@link findByBusinessId} and {@link findByIds}.
+   */
+  findById(id: string, options?: EntityExtensionReadOptions): Promise<WithEntityExtensions<QuoteRequestRecord> | null>;
+  /**
+   * A status's name in `language`, in this module's own wording (the one its
+   * global-search results use); a code outside {@link rfqStatusSchema} answers
+   * as it is. Published for issue #455, so that a module showing a linked
+   * Quote Request names its status as `quote_requests` does rather than
+   * showing the stored code or keeping a copy of the wording. Reads no quote,
+   * so it checks no permission.
+   */
+  statusName(status: string, language: SupportedLanguage): Promise<string>;
   /**
    * Open quotes for the given organisations. Empty `organizationIds` answers
    * the empty array rather than every quote — a rep assigned nothing sees
@@ -774,7 +1174,9 @@ export interface QuoteRequestReadPort {
     organizationIds: readonly string[],
   ): Promise<QuoteRequestRecord[]>;
   /**
-   * The quote's lines, in insertion order. Added in `carts`' cut: the
+   * The quote's lines, in display order (feature 159: groups in order, each
+   * group's lines in order, then the ungrouped lines — insertion order for a
+   * quote never grouped). Added in `carts`' cut: the
    * quote-to-cart conversion read `QuoteRequestItem` directly, so it kept
    * re-stocking a cart from quotes belonging to a module an operator had
    * switched off.
@@ -788,18 +1190,167 @@ export interface QuoteRequestReadPort {
    * connector had been reading `quote_requests` with a raw statement to
    * resolve it.
    */
-  findByBusinessId(businessId: string): Promise<QuoteRequestRecord | null>;
+  findByBusinessId(
+    businessId: string,
+    options?: EntityExtensionReadOptions,
+  ): Promise<WithEntityExtensions<QuoteRequestRecord> | null>;
+  /**
+   * What the quote is worth, by the one rule of {@link quoteRequestAmountSchema},
+   * or `null` when the quote is missing or out of the caller's scope — the
+   * answer `findById` gives for it.
+   *
+   * Added for issue #456: `crm` and `projects` each kept a copy of the rule
+   * over `listItems`, and the quote desk list a third, different one.
+   */
+  amountOf(quoteRequestId: string): Promise<QuoteRequestAmount | null>;
+  /**
+   * The quotes of `ids` in the caller's tenant scope, in no particular order —
+   * what {@link findById} answers for each id, in one read. A missing,
+   * out-of-scope or malformed id is simply absent.
+   *
+   * Added for issue #457: `projects` read the Quote Requests linked to a
+   * Project one `findById` at a time.
+   */
+  findByIds(
+    ids: readonly string[],
+    options?: EntityExtensionReadOptions,
+  ): Promise<WithEntityExtensions<QuoteRequestRecord>[]>;
+  /**
+   * What each quote of `quoteRequestIds` is worth, keyed by quote id — what
+   * {@link amountOf} answers for each id, in a fixed number of reads. A quote
+   * `amountOf` answers `null` for (missing, out of scope, malformed id) has no
+   * entry.
+   *
+   * Added for issue #457, beside {@link findByIds}.
+   */
+  amountsOf(quoteRequestIds: readonly string[]): Promise<Map<string, QuoteRequestAmount>>;
+}
+
+/**
+ * Container name: `quoteRequestCommandPort`. Owner: `quote_requests`
+ * (`specs/186-aggregate-ports/`, D-293, issue #1824).
+ *
+ * The QuoteRequest aggregate's write port: each method runs one audited
+ * Command, the one the admin route for the same operation runs, with the
+ * ambient actor — an administrator inside an admin request (or under
+ * `withSystemScopeActingFor`), the `system` actor under `withSystemScope` in a
+ * worker. **No permission is checked** — the caller is the gate; never resolve
+ * it for a customer-facing route. Call it after your own commit: each call is a
+ * transaction of its own.
+ *
+ * What the route does beside its write happens here too, exactly once: the
+ * history entry, the revision, the buyer's and the team's notification records
+ * and their delivery, and the domain event (`rfq.created_by_admin.v1`,
+ * `rfq.modified.v1`, `rfq.approved.v1`, `rfq.canceled.v1`) dispatched on
+ * commit.
+ *
+ * **Inputs and refusals are the admin route's.** Each input is the body the
+ * route validates, parsed here with the same schema — an invalid one throws
+ * the validation error the route answers `400 VALIDATION_FAILED` with — and
+ * each refusal is the route's `HttpError` with its `code`: `404 NOT_FOUND` for
+ * an unknown, malformed or out-of-reach id, `409 RFQ_NOT_QUOTED` for a status
+ * the operation does not apply to, `409 VERSION_CONFLICT`, and the create's and
+ * update's own (`422 CUSTOM_FIELD_VALUE_INVALID`, `409 PRODUCT_ARCHIVED`,
+ * `422 RFQ_SALES_CHANNEL_NOT_ALLOWED`, …).
+ *
+ * **Options** ({@link AggregateCommandOptions}): `expectedVersion` is honoured
+ * by every method that changes the request — `update`, `approve` and `cancel`,
+ * whose routes read `If-Match`, and `assign` and `setCustomFieldValues`;
+ * `create` has no version to compare and `sendDocument` never touches the
+ * offer, so both ignore it. `source` is recorded on the audit entry beside the
+ * actor. `extensions` reaches the command hooks of the action; none of these
+ * actions is declared hookable (the module's one hookable action is the
+ * buyer's `quote_request.create`, issue #1906, which this port does not run),
+ * so any key is refused `422 COMMAND_EXTENSION_UNCLAIMED` before anything is
+ * written.
+ *
+ * **Not offered, deliberately**: `resubmit`, `acceptRevision`,
+ * `rejectRevision` and `convertToOrder`. They are the buyer's own decisions on
+ * their quote, taken in the storefront, and no server-side caller acts for the
+ * buyer in them (research R-9); a future case adds them additively. Customer
+ * negotiation policy (`quote_request_policy.*`) and the PDF template choice are
+ * configuration, not the aggregate.
+ *
+ * **Owner off:** fails closed — resolving the port throws `ModuleDisabledError`
+ * and the call answers 503 `MODULE_DISABLED`, so nothing half-executes.
+ * `quote_requests` is deactivatable: a consumer declares it in `dependencies`,
+ * or as a `nonBindingDependencies` edge `refuses-without`, and resolves the
+ * port per use with `lazyPort`.
+ */
+export interface QuoteRequestCommandPort {
+  /**
+   * `quote_request.create_on_behalf` — a request prepared for a customer of an
+   * Organization, status `Created from admin`, awaiting the customer's answer.
+   * Raised on `input.salesChannelId`, else on the channel of the ambient
+   * request; with neither (a worker) it is refused
+   * `422 RFQ_SALES_CHANNEL_NOT_ALLOWED` (`no_channel`), so a server-side caller
+   * names the channel. Emits `rfq.created_by_admin.v1`, whose `adminUserId` is
+   * `null` when no administrator was present.
+   */
+  create(input: AdminCreateQuoteRequest, options?: AggregateCommandOptions): Promise<QuoteRequestRecord>;
+  /**
+   * `quote_request.modify` — the operator's revision of a `Pending` or
+   * `Created from admin` request: lines, prices, groups, note, validity and
+   * custom-field values, as one new revision the customer is asked to accept.
+   * (`quote_request.patch_draft` is the buyer's draft edit; the admin route
+   * never runs it, so neither does this.)
+   */
+  update(id: string, patch: AdminPatchQuoteRequest, options?: AggregateCommandOptions): Promise<QuoteRequestRecord>;
+  /**
+   * `quote_request.custom_fields.update` — the request's custom-field values
+   * alone, in any status, as the caller's `merge` over the current bag (the
+   * owner does not validate: call `CustomFieldValuePort.validateAndMerge` inside
+   * it). Records no revision and notifies nobody; the entry names the keys that
+   * changed, never their values. A merge that changes nothing writes nothing.
+   */
+  setCustomFieldValues(
+    id: string,
+    merge: CustomFieldMerge,
+    options?: AggregateCommandOptions,
+  ): Promise<QuoteRequestRecord>;
+  /**
+   * `quote_request.assign` — the request's handling administrator; `null`
+   * clears it. Notifies nobody. A named administrator must be active, hold
+   * `rfqs:handle` and reach the request's Organization, else
+   * `422 RFQ_ASSIGNEE_NOT_ELIGIBLE` before anything is written (issue #1906,
+   * the rule `POST /api/v1/admin/quote-requests/:id/assign` applies too).
+   */
+  assign(
+    id: string,
+    input: { adminUserId: string | null },
+    options?: AggregateCommandOptions,
+  ): Promise<QuoteRequestRecord>;
+  /**
+   * `quote_request.approve` — a `Pending` request whose every line is priced
+   * (`409 QUOTE_INCOMPLETE` otherwise). The optional note becomes a history
+   * entry; the buyer is notified.
+   */
+  approve(id: string, input: AdminApproveQuoteRequest, options?: AggregateCommandOptions): Promise<QuoteRequestRecord>;
+  /**
+   * `quote_request.cancel` — a `Pending` or `Created from admin` request. The
+   * reason is kept on the request and its history entry, never in the audit
+   * entry; the buyer is notified.
+   */
+  cancel(id: string, input: { reason: string | null }, options?: AggregateCommandOptions): Promise<QuoteRequestRecord>;
+  /**
+   * `quote_request.send_document` — renders the quote PDF and e-mails it to
+   * each recipient, as `POST …/:id/pdf/send` does, and answers what was sent.
+   * Refusals are that route's (`409 QUOTE_REQUEST_PDF_EMAIL_UNAVAILABLE`,
+   * `422 QUOTE_REQUEST_PDF_TOO_LARGE`, `502 QUOTE_REQUEST_PDF_SEND_FAILED`), and
+   * with `document_templates` off it answers 503 `MODULE_DISABLED`. The
+   * per-administrator rate limit belongs to the route and does not apply here.
+   */
+  sendDocument(
+    id: string,
+    input: QuoteRequestPdfSendRequest,
+    options?: AggregateCommandOptions,
+  ): Promise<QuoteRequestPdfSendResult>;
 }
 
 /** Who is asking, on a customer-facing quote path. */
 export interface RfqCustomerContext {
   customerAccountId: string;
   organizationId: string;
-  /**
-   * True when the account holds the org-admin role on the current
-   * organisation (FR-011 — broader visibility).
-   */
-  isOrgAdmin: boolean;
 }
 
 /**
@@ -838,6 +1389,38 @@ export interface CreateForCustomerOptions {
    *   most two decimals, and its `currency` matches `/^[A-Z]{3}$/`.
    */
   lineReferencePrices?: ReadonlyArray<{ amount: string; currency: string } | null>;
+  /**
+   * Feature 155 (FR-012, FR-030) — `'enforce'` (default): a buyer is writing, minimums refuse.
+   * `'warn'`: a sales representative is writing through the buyer's path (admin clone-to-quote,
+   * admin quick-order build); nothing is refused for minimums and the admin read flags the lines.
+   * In-process only: no HTTP body can carry it (`createQuoteRequestSchema` has no such key and
+   * strips it). Packaging validation (FR-026) applies either way.
+   */
+  minimums?: 'enforce' | 'warn';
+  /**
+   * Feature 155 (D3/D4) — the language a refusal names a product in: the language the
+   * caller's response is answered in (`request.responseLanguage()`). Absent, the record's
+   * own fallback chain. A message language only: it never decides which (channel,
+   * language) a line is asked about — that is `languageTag`'s.
+   */
+  language?: string;
+  /**
+   * Feature 163 — the buyer request's language tag, which the scope language L of every
+   * line is resolved from against the channel's own languages (`scopeLanguageOf`), as the
+   * basket's is. The customer routes pass the channel language the whole `Accept-Language`
+   * asks for (`requestScopeLanguage`, issue #1011), which resolves to itself. Absent: the
+   * channel's default language. Distinct from `language`, which falls back to a
+   * bundle language the channel may switch a product off in. In-process only.
+   */
+  languageTag?: string;
+  /**
+   * Feature 163 — the sales channel the buyer's route resolved, named explicitly so
+   * a buyer's lines are always asked about at a channel (`catalogProductAvailabilityPort`)
+   * and never by audience alone. Absent only for a caller outside a request (a worker, a
+   * fixture), which reads the request scope and, finding none, falls back to the audience
+   * rule. In-process only, like `minimums`.
+   */
+  salesChannelId?: string;
 }
 
 export interface RfqCustomerPort {
@@ -975,6 +1558,9 @@ export const quoteRequestDocumentDataSchema = z.object({
   salesRep: z.object({ name: z.string(), email: z.string() }).nullable(),
   /** The quote's custom fields whose definition customers may see, with a value. */
   details: z.array(z.object({ label: z.string(), value: z.string() })),
+  /** Feature 159 — the groups holding at least one line, in display order. */
+  groups: z.array(lineGroupSchema).default([]),
+  /** In display order. */
   lines: z.array(
     z.object({
       id: z.string(),
@@ -993,6 +1579,16 @@ export const quoteRequestDocumentDataSchema = z.object({
       lineNote: z.string().nullable(),
       /** Attribute code → display text in the export language. */
       attributes: z.record(z.string(), z.string()),
+      /** Feature 159 — the line's group (`groups[].id`), `null` = ungrouped. */
+      groupId: z.string().nullable().default(null),
+      /** Feature 159 — order within the line's section. */
+      position: z.number().int().nonnegative().default(0),
+      /**
+       * Issue #1904 — the product's storefront page in the document's language,
+       * on the quote's channel's storefront; `null` for a product deleted since
+       * the quote was made, or where no storefront address is configured.
+       */
+      productUrl: z.string().nullable().default(null),
     }),
   ),
 });

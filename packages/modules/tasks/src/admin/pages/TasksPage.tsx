@@ -1,0 +1,325 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { ListChecks, Plus, SlidersHorizontal } from 'lucide-react';
+import { TASK_LIST_LIMIT_MAX, TASK_LIST_SORTS, type TaskSummary } from '@endora-commerce/contracts';
+import { useAuth, useListViewModePreference, usePageSizePreference } from '@endora-commerce/admin-kit/lib';
+import { Alert, AlertDescription, Button, EmptyState, PageHeader, Select } from '@endora-commerce/admin-kit/ui';
+import {
+  ListPage,
+  ResponsiveTable,
+  fitPageSize,
+  pageSizesUpTo,
+  SavedViewsControl,
+  ViewModeToggle,
+  customFieldFilterRefusal,
+  writeCustomFieldFilterParams,
+  withoutCustomFieldFilter,
+  type ListPageLoad,
+  type SavedViewState,
+} from '@endora-commerce/admin-kit/components';
+import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { tasksApi } from '../api.js';
+import { TaskBoard } from '../components/TaskBoard.js';
+import { TaskFilters } from '../components/TaskFilters.js';
+import { useTaskColumns } from '../components/task-columns.js';
+import { errorMessage } from '../lib/labels.js';
+import { BOARD_CARD_ANCHOR, TASK_WORKFLOW_PATH } from '../lib/settings-paths.js';
+import {
+  apiQuery,
+  customFilters,
+  fromSavedView,
+  hasFilters,
+  readSort,
+  toSavedFilters,
+  withFilter,
+} from '../lib/task-filters.js';
+import { useTaskVocabulary } from '../lib/use-task-vocabulary.js';
+
+const VIEWS_ENDPOINT = '/api/v1/admin/tasks/list-views';
+/** The list id the list/board choice is remembered under (`listViewModes`). */
+const LIST_ID = 'tasks';
+/** Custom-field filters are offered to a reader who may view custom fields. */
+const CUSTOM_FIELDS_READ_PERMISSION = 'custom_fields:read';
+
+/** Each sort in the directions a person reads it in first. */
+const SORT_OPTIONS = TASK_LIST_SORTS.flatMap((sort) =>
+  sort === 'created' || sort === 'updated'
+    ? [`${sort}:desc`, `${sort}:asc`]
+    : [`${sort}:asc`, `${sort}:desc`],
+);
+
+/**
+ * The Tasks screen (`specs/165-task-management/` User Story 3, FR-018 –
+ * FR-021; `contracts/admin-surfaces.md` §1) — **replaces** 163's `TasksList`.
+ *
+ * Every Task the operator may see — the server hides a Task whose context they
+ * may not see, and another admin's draft or private Task — shown as a list or
+ * as a board, the choice remembered for the admin across devices
+ * (`listViewModes.tasks`). **The filters live in the address**, so both views
+ * read the same ones, a filtered screen can be reloaded or sent on, and
+ * switching view carries them over. A saved view stores the filters and the
+ * list's sort, and applies to both views; a value it names that no longer
+ * exists is left out, and the screen says how many were.
+ *
+ * The list is keyset-paged and knows no total, so it pages by the cursors it
+ * was given; changing anything it asks for starts again from the first page.
+ *
+ * The list view is the kit's `ListPage` since issue #1749 — the filters a
+ * toolbar row rather than a card, the cursor pager the kit's footer, a refresh
+ * `busy` over the rows on screen, and a filter the server refuses an error
+ * whose way out is *Remove filter*. The board keeps the same header and
+ * filters above it.
+ */
+export function TasksPage(): ReactNode {
+  const t = useTranslation('tasks');
+  /** Where focus returns after *Clear filters* in the empty state (WCAG 2.4.3). */
+  const searchRef = useRef<HTMLInputElement>(null);
+  const { hasPermission } = useAuth();
+  const canWrite = hasPermission('tasks:write');
+  const canConfigure = hasPermission('tasks:configure');
+  const customFields = hasPermission(CUSTOM_FIELDS_READ_PERMISSION);
+  const columns = useTaskColumns();
+  const vocabulary = useTaskVocabulary();
+  const [mode, setMode] = useListViewModePreference(LIST_ID);
+  // The admin's rows per page for this list, kept across devices (feature 164); never above what the API returns.
+  const { pageSize, setPageSize } = usePageSizePreference(LIST_ID);
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Keyed by the address's own text, so the derived values are stable until it changes.
+  const address = searchParams.toString();
+  const params = useMemo(() => new URLSearchParams(address), [address]);
+  const sort = readSort(params);
+  const filtered = hasFilters(params);
+
+  /** The cursors that led to the page on screen; empty on the first page. */
+  const [trail, setTrail] = useState<string[]>([]);
+  const [rows, setRows] = useState<TaskSummary[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [refusedCustomField, setRefusedCustomField] = useState<string | null>(null);
+  const [viewsError, setViewsError] = useState<string | null>(null);
+  const [staleNotice, setStaleNotice] = useState<string | null>(null);
+  const sequence = useRef(0);
+
+  /** Replace the address's filters; the history keeps one entry for the screen. */
+  const navigate = useCallback(
+    (next: URLSearchParams): void => {
+      setTrail([]);
+      setSearchParams(next, { replace: true });
+    },
+    [setSearchParams],
+  );
+
+  const listQuery = useMemo(() => {
+    const query = apiQuery(params, { customFields, withSort: true });
+    const cursor = trail[trail.length - 1];
+    if (cursor) query.set('cursor', cursor);
+    query.set('limit', String(Math.min(pageSize, TASK_LIST_LIMIT_MAX)));
+    return query.toString();
+  }, [params, customFields, trail, pageSize]);
+  const boardQuery = useMemo(() => apiQuery(params, { customFields }).toString(), [params, customFields]);
+
+  const load = useCallback(async (): Promise<void> => {
+    const current = ++sequence.current;
+    setLoading(true);
+    setError(null);
+    setRefusedCustomField(null);
+    try {
+      const page = await tasksApi.listTasksBy(new URLSearchParams(listQuery));
+      // A slower, older answer must not overwrite a newer one.
+      if (current !== sequence.current) return;
+      setRows(page.items);
+      setNextCursor(page.nextCursor);
+      setLoaded(true);
+    } catch (failure) {
+      if (current !== sequence.current) return;
+      const refused = customFieldFilterRefusal(failure);
+      if (refused) setRefusedCustomField(refused);
+      else setError(errorMessage(failure, t('list.error')));
+    } finally {
+      if (current === sequence.current) setLoading(false);
+    }
+  }, [listQuery, t]);
+
+  useEffect(() => {
+    if (mode === 'list') void load();
+  }, [mode, load]);
+
+  const clear = (): void => navigate(new URLSearchParams());
+
+  const savedState = useMemo<SavedViewState>(
+    () => ({
+      filters: toSavedFilters(params),
+      sort: params.has('sort') ? { field: sort.sort, dir: sort.dir } : null,
+      visibleColumns: null,
+    }),
+    [params, sort.sort, sort.dir],
+  );
+
+  const applyView = (state: SavedViewState): void => {
+    const { params: next, dropped } = fromSavedView(state.filters, state.sort ?? null, {
+      statuses: vocabulary.workflow ? new Set(vocabulary.workflow.statuses.map((status) => status.code)) : null,
+      priorities: vocabulary.priorities ? new Set(vocabulary.priorities.map((priority) => priority.code)) : null,
+      tags: vocabulary.tags ? new Set(vocabulary.tags.map((tag) => tag.id)) : null,
+    });
+    setStaleNotice(dropped > 0 ? t('views.stale', { count: dropped }) : null);
+    navigate(next);
+  };
+
+  const newTask = (
+    <Button className="min-h-11 sm:min-h-9" asChild>
+      <Link to="/tasks/new">
+        <Plus aria-hidden="true" />
+        {t('list.new')}
+      </Link>
+    </Button>
+  );
+
+  const emptyState = filtered ? (
+    <EmptyState
+      variant="no-results"
+      title={t('list.noResults.title')}
+      description={t('list.noResults.body')}
+      onClearFilters={clear}
+      focusAfterClear={searchRef}
+    />
+  ) : (
+    <EmptyState
+      icon={<ListChecks size={20} />}
+      title={t('list.empty.title')}
+      description={canWrite ? t('list.empty.body') : t('list.empty.bodyReadOnly')}
+      action={canWrite ? newTask : null}
+    />
+  );
+
+  const showNewInHeader = canWrite && (mode === 'board' || rows.length > 0 || filtered || !loaded);
+
+  const headerActions = (
+    <>
+      <ViewModeToggle mode={mode} onChange={setMode} />
+      {canConfigure && mode === 'board' ? (
+        <Button variant="outline" className="min-h-11 sm:min-h-9" asChild>
+          <Link to={`${TASK_WORKFLOW_PATH}#${BOARD_CARD_ANCHOR}`}>
+            <SlidersHorizontal aria-hidden="true" />
+            {t('board.configureCard')}
+          </Link>
+        </Button>
+      ) : null}
+      {showNewInHeader ? newTask : null}
+    </>
+  );
+
+  const toolbar = (
+    <div className="min-w-0 flex-1 space-y-3">
+      {viewsError ? (
+        <Alert variant="destructive">
+          <AlertDescription>{viewsError}</AlertDescription>
+        </Alert>
+      ) : null}
+      {/* Mounted before it has text, so the notice is announced (WCAG 4.1.3). */}
+      <p id="tasks-views-notice" role="status" className={staleNotice ? 'text-sm text-muted-foreground' : 'sr-only'}>
+        {staleNotice ?? ''}
+      </p>
+      <TaskFilters
+        idPrefix="tasks"
+        searchRef={searchRef}
+        params={params}
+        onChange={navigate}
+        statuses={vocabulary.workflow?.statuses ?? []}
+        priorities={vocabulary.priorities ?? []}
+        customFields={customFields}
+        filtered={filtered}
+        onClear={clear}
+        actions={
+          <>
+            {mode === 'list' ? (
+              <Select
+                id="tasks-sort"
+                aria-label={t('list.sort.label')}
+                className="w-auto"
+                value={`${sort.sort}:${sort.dir}`}
+                onChange={(event): void => {
+                  const [field, dir] = event.target.value.split(':');
+                  navigate(withFilter(withFilter(params, 'sort', field ?? null), 'dir', dir ?? null));
+                }}
+              >
+                {SORT_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {t(`list.sort.${option.replace(':', '.')}`)}
+                  </option>
+                ))}
+              </Select>
+            ) : null}
+            <SavedViewsControl endpoint={VIEWS_ENDPOINT} current={savedState} onApply={applyView} onError={setViewsError} />
+          </>
+        }
+      />
+    </div>
+  );
+
+  if (mode === 'board') {
+    return (
+      <>
+        <PageHeader title={t('list.title')} actions={headerActions} />
+        <div className="mb-4">{toolbar}</div>
+        <TaskBoard query={boardQuery} workflow={vocabulary.workflow} filtered={filtered} />
+      </>
+    );
+  }
+
+  const removeRefused = (): void => {
+    if (refusedCustomField === null) return;
+    navigate(writeCustomFieldFilterParams(params, withoutCustomFieldFilter(customFilters(params), refusedCustomField)));
+  };
+  const listLoad: ListPageLoad = refusedCustomField
+    ? {
+        kind: 'error',
+        message: t('filter.customFieldRefused', { field: refusedCustomField }),
+        action: (
+          <Button className="min-h-11 sm:min-h-8" variant="outline" size="sm" onClick={removeRefused}>
+            {t('filter.customFieldRemove')}
+          </Button>
+        ),
+      }
+    : error
+      ? { kind: 'error', message: error }
+      : loaded
+        ? { kind: 'ready' }
+        : { kind: 'loading' };
+
+  return (
+    <ListPage
+      title={t('list.title')}
+      actions={headerActions}
+      toolbar={toolbar}
+      load={listLoad}
+      busy={loading && loaded}
+      onRetry={(): void => void load()}
+      pagination={{
+        mode: 'cursor',
+        page: trail.length,
+        pageSize: fitPageSize(pageSize, PAGE_SIZES),
+        pageSizes: PAGE_SIZES,
+        rowCount: rows.length,
+        hasNext: nextCursor !== null,
+        onPageSizeChange: (next): void => {
+          setPageSize(next);
+          setTrail([]);
+        },
+        onPrev: (): void => setTrail((previous) => previous.slice(0, -1)),
+        onNext: (): void => {
+          if (nextCursor && !loading) setTrail((previous) => [...previous, nextCursor]);
+        },
+      }}
+    >
+      <ResponsiveTable data={rows} columns={columns} keyExtractor={(row): string => row.id} emptyState={emptyState} />
+    </ListPage>
+  );
+}
+
+/** The rows-per-page choices the tasks endpoint serves (`TASK_LIST_LIMIT_MAX`). */
+const PAGE_SIZES = pageSizesUpTo(TASK_LIST_LIMIT_MAX);
+
+/** The default export the route declaration's dynamic-import factory resolves. */
+export default TasksPage;

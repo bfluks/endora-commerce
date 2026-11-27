@@ -95,6 +95,12 @@ async function renderList(permissions?: readonly string[]): Promise<void> {
   await screen.findByText('Fleet renewal');
 }
 
+/** Opens the toolbar's *More filters* panel unless it is open (issue #1505: these filters are folded away). */
+async function openMoreFilters(): Promise<void> {
+  const toggle = screen.queryByRole('button', { name: /^(More filters|Więcej filtrów)/ });
+  if (toggle && toggle.getAttribute('aria-expanded') === 'false') await userEvent.click(toggle);
+}
+
 describe('OpportunitiesList', () => {
   it('lists opportunities with number, title, organization, status and value', async () => {
     await renderList();
@@ -141,6 +147,7 @@ describe('OpportunitiesList', () => {
 
   it('filters by creation date and sorts', async () => {
     await renderList();
+    await openMoreFilters();
     await userEvent.type(screen.getByLabelText(en('opportunity.list.filter.createdFrom')), '2026-10-01');
     await waitFor(() => expect(lastQuery().get('createdFrom')).toBe('2026-10-01'));
     await userEvent.selectOptions(screen.getByLabelText(en('opportunity.list.sort')), 'value:desc');
@@ -156,7 +163,7 @@ describe('OpportunitiesList', () => {
     await renderList();
     await userEvent.selectOptions(screen.getByLabelText(en('opportunity.list.filter.state')), 'lost');
     await waitFor(() => expect(lastQuery().get('state')).toBe('lost'));
-    await userEvent.click(screen.getByRole('button', { name: en('opportunity.list.filter.clear') }));
+    await userEvent.click(screen.getByRole('button', { name: 'Clear all filters' }));
     await waitFor(() => expect(lastQuery().has('state')).toBe(false));
   });
 
@@ -164,7 +171,7 @@ describe('OpportunitiesList', () => {
     page.pagination = { cursor: 'next-cursor', hasMore: true, limit: 20 };
     await renderList();
     const previous = screen.getByRole('button', { name: core('common.pagination.previous') });
-    expect(previous).toBeDisabled();
+    expect(previous).toHaveAttribute('aria-disabled', 'true');
 
     await userEvent.click(screen.getByRole('button', { name: core('common.pagination.next') }));
     await waitFor(() => expect(lastQuery().get('cursor')).toBe('next-cursor'));
@@ -187,6 +194,10 @@ describe('OpportunitiesList', () => {
     await userEvent.selectOptions(screen.getByLabelText(en('opportunity.list.filter.state')), 'won');
     expect(await screen.findByText(en('opportunity.list.noResults.title'))).toBeInTheDocument();
     expect(screen.queryByText(en('opportunity.list.empty.title'))).toBeNull();
+    // Clearing from the empty state puts focus on the search box, not <body> (WCAG 2.4.3).
+    const block = document.querySelector<HTMLElement>('[data-empty-state="no-results"]')!;
+    await userEvent.click(within(block).getByRole('button', { name: 'Clear filters' }));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText(en('opportunity.list.filter.search'))));
   });
 
   it('hides "New opportunity" from an operator who may only read', async () => {
@@ -203,5 +214,30 @@ describe('OpportunitiesList', () => {
     renderCrm(<OpportunitiesList />, { path: '/crm/opportunities' });
     expect(await screen.findByText(en('opportunity.list.error'))).toBeInTheDocument();
     expect(screen.getByRole('button', { name: core('common.action.retry') })).toBeInTheDocument();
+  });
+});
+
+/**
+ * Issue #1808 (item 3) — two adjacent filters read "All states" / "All
+ * statuses", and nothing told the operator which was which. They filter
+ * different things: the state is the outcome (open, won, lost), the status the
+ * stage in the configured workflow. Each now says what it filters.
+ */
+describe('OpportunitiesList — the state and status filters say what they filter (issue #1808)', () => {
+  it('names the state filter by open/closed and the status filter by the workflow', async () => {
+    await renderList();
+    const state = screen.getByRole('combobox', { name: 'Open or closed' });
+    const status = screen.getByRole('combobox', { name: 'Workflow status' });
+    expect(within(state).getAllByRole('option')[0]).toHaveTextContent('Open and closed');
+    expect(within(status).getAllByRole('option')[0]).toHaveTextContent('All workflow statuses');
+  });
+
+  it('keeps the number and the organization on one line', async () => {
+    await renderList();
+    const row = screen.getByText('Fleet renewal').closest('tr') as HTMLElement;
+    const number = within(row).getByRole('link', { name: 'OPP-000001' }).closest('td') as HTMLElement;
+    const organization = within(row).getByText('Acme').closest('td') as HTMLElement;
+    expect(number).toHaveClass('whitespace-nowrap');
+    expect(organization).toHaveClass('whitespace-nowrap');
   });
 });

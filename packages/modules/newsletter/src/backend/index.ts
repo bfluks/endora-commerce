@@ -1,3 +1,4 @@
+import type { ChannelUrlFacts } from '@endora-commerce/contracts';
 import type { EmailBlockRendererRegistryPort } from '@endora-commerce/contracts';
 import type { EmailBlockRenderer } from '@endora-commerce/email-components/render/block-renderers';
 import { randomUUID } from 'node:crypto';
@@ -6,6 +7,7 @@ import type { Redis } from 'ioredis';
 import type { FastifyRequest } from 'fastify';
 import type { CmsBlockSeedPort, CustomerAccountReadPort } from '@endora-commerce/contracts';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { EventBus } from '@endora-commerce/platform/events';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import { lazyPort, resolvePublicApiBaseUrl } from '@endora-commerce/platform/kernel';
@@ -81,6 +83,7 @@ import { NewsletterTag } from './entities/newsletter-tag.entity.js';
 export interface NewsletterCradle {
   readonly emFactory: () => EntityManager;
   readonly auditLogService: AuditPort;
+  readonly commandBus: CommandBus;
   readonly requireAdmin: RequireAdminFactory;
   readonly requireCustomer: NonNullable<NewsletterModuleOptions['requireCustomer']>;
   readonly settingsReadPort: NonNullable<NewsletterModuleOptions['settings']>;
@@ -105,6 +108,7 @@ export interface NewsletterCradle {
   readonly eventBus: EventBus;
   readonly salesChannelResolutionPort: {
     getSystemDefault(): Promise<{ id: string }>;
+    getById(id: string): Promise<ChannelUrlFacts | null>;
   };
   readonly salesChannelCodeIdPort: { idByCode(code: string): Promise<string | null> };
   /** Contribution point: absent means campaign email renders with the neutral fallback. */
@@ -124,6 +128,7 @@ export function registerModule(ctx: ModuleContext): void {
         ({
           emFactory,
           auditLogService,
+          commandBus,
           moduleQueueRedis,
           newsletterTokenSecret,
           storefrontBaseUrl,
@@ -133,6 +138,7 @@ export function registerModule(ctx: ModuleContext): void {
         return newsletterModule({
           emFactory,
           auditLog: auditLogService,
+          commandBus,
           settings: lazyPort<NonNullable<NewsletterModuleOptions['settings']>>(
             ctx,
             'settingsReadPort',
@@ -175,6 +181,7 @@ export function registerModule(ctx: ModuleContext): void {
           resolveDefaultChannelId: async () =>
             (await cradle().salesChannelResolutionPort.getSystemDefault()).id,
           resolveChannelIdByCode: (code) => cradle().salesChannelCodeIdPort.idByCode(code),
+          resolveChannelUrlFacts: (id) => cradle().salesChannelResolutionPort.getById(id),
           resolveCustomerAccountId: (req) => cradle().customerAccountIdResolver(req),
           loadCustomerEmail: async (customerAccountId) =>
             (await lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort').findById(

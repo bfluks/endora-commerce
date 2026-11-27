@@ -13,7 +13,15 @@
 // two frontend helpers compensating for it, disagreeing.
 
 import { createReadStream, type ReadStream } from 'node:fs';
-import { mkdir, rename, stat, unlink, access, constants as fsConstants } from 'node:fs/promises';
+import {
+  mkdir,
+  rename,
+  stat,
+  unlink,
+  access,
+  copyFile,
+  constants as fsConstants,
+} from 'node:fs/promises';
 import { dirname, join, isAbsolute } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createWriteStream } from 'node:fs';
@@ -21,6 +29,7 @@ import { createWriteStream } from 'node:fs';
 import type {
   StorageAdapter,
   StorageAdapterSelfCheck,
+  StorageCopyInput,
   StorageNewLocatorInput,
   StoragePutInput,
   StorageResolveUrlInput,
@@ -61,6 +70,9 @@ export interface LocalFsAdapterOptions {
   /** Now-source — injectable for tests. */
   now?: () => Date;
 }
+
+/** Distinguishes the temporary files of concurrent copies within one process. */
+let copySequence = 0;
 
 export class LocalFsStorageAdapter implements StorageAdapter {
   readonly code = 'local' as const;
@@ -166,6 +178,29 @@ export class LocalFsStorageAdapter implements StorageAdapter {
       // need an explicit signal. Caller decides whether that's recoverable.
       throw new BackendUnavailableError(
         `LocalFsStorageAdapter.delete: cannot remove ${abs}`,
+        e,
+      );
+    }
+  }
+
+  /**
+   * Copies through a temporary file beside the destination and renames it into
+   * place, so a reader of `to` never sees a partial file. Visibility, type and
+   * the metadata headers are not stored on local — the route decides them.
+   */
+  async copy(input: StorageCopyInput): Promise<void> {
+    const from = this.toAbsolute(input.from);
+    const to = this.toAbsolute(input.to);
+    copySequence += 1;
+    const tmp = `${to}.tmp-${process.pid}-${copySequence}`;
+    try {
+      await mkdir(dirname(to), { recursive: true });
+      await copyFile(from, tmp);
+      await rename(tmp, to);
+    } catch (e) {
+      try { await unlink(tmp); } catch { /* ignore */ }
+      throw new BackendUnavailableError(
+        `LocalFsStorageAdapter.copy: cannot copy ${input.from} to ${input.to}`,
         e,
       );
     }

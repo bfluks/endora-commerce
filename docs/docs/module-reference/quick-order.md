@@ -16,7 +16,7 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | | |
 | --- | --- |
 | Module id | `quick_order` |
-| Name | Quick Order |
+| Name | Quick order |
 | Version | `2.0.0` |
 | Ships from | `@endora-commerce/mod-quick-order` |
 | Licence | `MIT` |
@@ -39,7 +39,6 @@ An operator switches this module on and off on **/platform/modules**. The choice
 | `payment_methods` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `quote_requests` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `settings` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
-| `customers` | no | degrades-without `customerAddressReadPort` — a personal (buyer-owned) address stops being an eligible ordering default; the organisation’s shared addresses still resolve, and one-click buy hides itself for buyers whose default was personal |
 
 ## Permissions
 

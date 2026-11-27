@@ -27,9 +27,10 @@ contracts in `@endora-commerce/contracts`.
 
 ## Authenticating with an API key
 
-Issue a key from **Admin Panel → API Keys → New Key**, choosing the scopes the
-key is allowed to use and, optionally, an **Organization binding** (see
-below). The full bearer token (`sk_live_…`) is shown **once**; only the last
+Issue a key from **Admin Panel → API keys → New API key**. Pick the key type
+first — **Platform key** (unbound) or **Organization key** (bound, see below) —
+then the scopes the key is allowed to use; each type offers only the scopes it
+may hold. The full bearer token (`sk_live_…`) is shown **once**; only the last
 four characters are stored after that. The platform stores the SHA-256 hash
 of the token, never the token itself.
 
@@ -64,7 +65,8 @@ catalog-sync guidance, bulk pricing, and idempotent ordering are documented in
 
 A key is granted one or more scopes from the typed catalog: `catalog:read`,
 `catalog:write` (unbound keys only), `orders:read`, `orders:write` (bound
-keys only). When a request hits a route gated by
+keys only), and `platform.api_description.read`, which lets the integration
+read the API description at `GET /api/v1/_openapi.json`. When a request hits a route gated by
 `requireApiKey('catalog:write')`, the platform:
 
 1. Resolves the bearer token to its `ApiKey` row by SHA-256 hash.
@@ -97,7 +99,7 @@ in support tickets to make logs traceable.
 
 ## Subscribing to webhooks
 
-Create a webhook subscription from **Admin Panel → Webhooks → New Webhook**
+Create a webhook subscription from **Admin Panel → Webhooks → New webhook**
 (or `POST /api/v1/admin/webhooks` with `integrations:manage` admin
 permission). The platform generates a 64-character hex `secret` per
 subscription; you receive it in the create response and **only then** — store
@@ -171,8 +173,10 @@ Outbound deliveries are processed by a BullMQ queue with exponential backoff:
 - Backoff starts at **1 s** and doubles each retry (1 s, 2 s, 4 s, …).
 - Each attempt has a **10 s** timeout.
 - After the final attempt, the delivery is marked `dead_lettered` in
-  `webhook_deliveries`. The admin panel's "Failed Deliveries" view replays
-  these on demand.
+  `webhook_deliveries`. The **Recent deliveries** list on the admin panel's
+  Webhooks screen replays these on demand.
+- Finished deliveries are kept for `webhooks.delivery_retention_days` (365 days
+  by default) and then deleted; a deleted delivery can no longer be replayed.
 
 Receivers must be **idempotent**: deduplicate on `X-Webhook-Event-Id` so a
 replayed delivery does not double-apply state changes. Webhook ordering is

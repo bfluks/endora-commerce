@@ -1,4 +1,5 @@
-import { Entity, Index, OptionalProps, PrimaryKey, Property } from '@mikro-orm/core';
+import { OptionalProps } from '@mikro-orm/core';
+import { Entity, Index, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import { GlobalEntity } from '@endora-commerce/platform/tenancy';
 import type { KnownIconName } from '@endora-commerce/contracts';
 
@@ -23,6 +24,7 @@ import type { KnownIconName } from '@endora-commerce/contracts';
 export class ModuleAction {
   [OptionalProps]?:
     | 'descriptionKey'
+    | 'keywordsKey'
     | 'requiredPermission'
     | 'keywords'
     | 'weight'
@@ -53,6 +55,13 @@ export class ModuleAction {
 
   @Property({ type: 'json', columnType: 'jsonb' })
   keywords: string[] = [];
+
+  /**
+   * Issue #560 — the bundle key whose value lists this action's search words
+   * in the requested language; `null` for an action that declares none.
+   */
+  @Property({ type: 'string', length: 255, nullable: true })
+  keywordsKey: string | null = null;
 
   @Property({ type: 'integer' })
   weight: number = 100;

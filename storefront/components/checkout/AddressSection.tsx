@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { AddressSummary } from '../../lib/api/organization';
 import { tForLocale } from '../../lib/i18n/messages';
+import { PayerBillingSection, useCheckoutPayer } from './CheckoutPayer';
 
 /**
  * Checkout address section (feature 036, US2). Per address kind the buyer can
@@ -36,6 +37,14 @@ export interface AddressSectionProps {
   organizationName?: string | null;
   /** Organization tax-id (NIP) used as the default billing tax-id (overridable). */
   organizationTaxId?: string | null;
+  /**
+   * Issue #759 — the buyer's Organization is a personal (B2C) one. It is not a
+   * company, so its name and its placeholder tax id are never offered as
+   * company data: the buyer opts in with the company-invoice checkbox instead.
+   */
+  personalOrganization?: boolean;
+  /** Whether the company-invoice checkbox starts checked (personal Organization only). */
+  initialCompanyInvoice?: boolean;
 }
 
 function defaultAddressId(
@@ -131,8 +140,14 @@ export function AddressSection({
   preferredBillingAddressId,
   organizationName,
   organizationTaxId,
+  personalOrganization = false,
+  initialCompanyInvoice = false,
 }: AddressSectionProps): React.ReactNode {
   const t = tForLocale(locale);
+  // `specs/182-related-payers/` FR-061 — with a payer chosen at checkout, billing is the
+  // payer's: its company data read-only and one of its allowed billing addresses.
+  const payer = useCheckoutPayer();
+  const [companyInvoice, setCompanyInvoice] = useState(initialCompanyInvoice);
   const [shippingMode, setShippingMode] = useState<'saved' | 'new'>(
     deliveryAddresses.length > 0 ? 'saved' : 'new',
   );
@@ -188,32 +203,80 @@ export function AddressSection({
         )}
       </fieldset>
 
-      {/* Billing company details — defaults to the buyer's organization name +
-          NIP; either may be overridden for this order only. Always visible so
-          the override is reachable even when billing == shipping. */}
-      <fieldset className="b2b-auth__form" style={{ border: 0, padding: 0 }}>
-        <legend style={{ fontWeight: 600 }}>
-          {t('checkout.address.billingCompanyTitle')}
-        </legend>
-        <p className="b2b-auth__hint" style={{ margin: 0 }}>
-          {t('checkout.address.billingCompanyHint')}
-        </p>
-        <input
-          name="billingCompanyName"
-          placeholder={t('checkout.address.companyName')}
-          defaultValue={organizationName ?? ''}
-          maxLength={255}
-          className={FIELD_CLASS}
-        />
-        <input
-          name="billingTaxId"
-          placeholder={t('checkout.address.taxId')}
-          defaultValue={organizationTaxId ?? ''}
-          maxLength={32}
-          className={FIELD_CLASS}
-        />
-      </fieldset>
+      {payer ? (
+        <PayerBillingSection payer={payer} locale={locale} />
+      ) : personalOrganization ? (
+        <>
+          {/* Issue #759 (owner ruling of 2026-11-05) — a personal Organization
+              is billed to the person. Company data is opt-in, starts empty and
+              is validated as at company registration (name + NIP of 8–32). */}
+          <label style={{ display: 'block', margin: 'var(--b2b-spacing, 12px) 0' }}>
+            <input
+              type="checkbox"
+              name="companyInvoice"
+              checked={companyInvoice}
+              onChange={(e) => setCompanyInvoice(e.target.checked)}
+            />{' '}
+            {t('checkout.address.companyInvoice')}
+          </label>
+          {companyInvoice ? (
+            <fieldset className="b2b-auth__form" style={{ border: 0, padding: 0 }}>
+              <legend style={{ fontWeight: 600 }}>
+                {t('checkout.address.billingCompanyTitle')}
+              </legend>
+              <p className="b2b-auth__hint" style={{ margin: 0 }}>
+                {t('checkout.address.companyInvoiceHint')}
+              </p>
+              <input
+                name="billingCompanyName"
+                placeholder={t('checkout.address.companyName')}
+                aria-label={t('checkout.address.companyName')}
+                required
+                maxLength={255}
+                autoComplete="organization"
+                className={FIELD_CLASS}
+              />
+              <input
+                name="billingTaxId"
+                placeholder={t('checkout.address.taxId')}
+                aria-label={t('checkout.address.taxId')}
+                required
+                minLength={8}
+                maxLength={32}
+                className={FIELD_CLASS}
+              />
+            </fieldset>
+          ) : null}
+        </>
+      ) : (
+        /* Billing company details — defaults to the buyer's organization name +
+           NIP; either may be overridden for this order only. Always visible so
+           the override is reachable even when billing == shipping. */
+        <fieldset className="b2b-auth__form" style={{ border: 0, padding: 0 }}>
+          <legend style={{ fontWeight: 600 }}>
+            {t('checkout.address.billingCompanyTitle')}
+          </legend>
+          <p className="b2b-auth__hint" style={{ margin: 0 }}>
+            {t('checkout.address.billingCompanyHint')}
+          </p>
+          <input
+            name="billingCompanyName"
+            placeholder={t('checkout.address.companyName')}
+            defaultValue={organizationName ?? ''}
+            maxLength={255}
+            className={FIELD_CLASS}
+          />
+          <input
+            name="billingTaxId"
+            placeholder={t('checkout.address.taxId')}
+            defaultValue={organizationTaxId ?? ''}
+            maxLength={32}
+            className={FIELD_CLASS}
+          />
+        </fieldset>
+      )}
 
+      {payer ? null : (
       <label style={{ display: 'block', margin: 'var(--b2b-spacing, 12px) 0' }}>
         <input
           type="checkbox"
@@ -223,8 +286,9 @@ export function AddressSection({
         />{' '}
         {t('checkout.address.sameAsShipping')}
       </label>
+      )}
 
-      {!billingSame ? (
+      {!payer && !billingSame ? (
         <fieldset className="b2b-auth__form" style={{ border: 0, padding: 0 }}>
           <legend style={{ fontWeight: 600 }}>{t('checkout.address.billingTitle')}</legend>
           {billingAddresses.length > 0 ? (

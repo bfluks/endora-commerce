@@ -1,28 +1,45 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import {
   ERROR_CODES,
   normalizeEmailAddress,
+  type CustomerAccountCommandPort,
   type CustomerAccountCreateInput,
   type CustomerAccountLookupOptions,
+  type EntityExtensionReadOptions,
+  type WithEntityExtensions,
   type CustomerAccountMemberWritePort,
   type CustomerAccountProfilePatch,
   type CustomerAccountReadPort,
   type CustomerAccountRecord,
-  type CustomerAccountRole,
   type CustomerAuthPort,
   type CustomerPasswordStatePort,
   type CustomerPasswordVerificationPort,
+  type CustomerAccountRoleCommandPort,
+  type CustomerAccountMemberCommandPort,
   type CustomerRolePort,
+  isUuidShape,
 } from '@endora-commerce/contracts';
-import { recordAuditFromContext } from '@endora-commerce/platform/commands';
+import { recordAuditFromContext, type CommandBus } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
-import { hashPassword, verifyPassword } from '@endora-commerce/platform/kernel';
+import type { AuditPort, EntityExtensionReads } from '@endora-commerce/platform/kernel';
+import { lazyEntityExtensionReads, verifyPassword } from '@endora-commerce/platform/kernel';
 import { CustomerAccount } from '../entities/customer-account.entity.js';
 import type { CustomerAuthService } from './customer-auth-service.js';
-import type { RoleService } from './role-service.js';
+import { makeChangeCustomerAccountRoleCommand } from '../commands/customer-account-change-role.command.js';
+import { makeRemoveMemberCommand } from '../commands/customer-account-remove-member.command.js';
+import { prepareCustomerAccountCreate } from '../commands/customer-account-create.command.js';
+import {
+  entityManagerAccountRoleStore,
+  type CustomerAccountRoleCommandDeps,
+  type OrganizationRoleLookup,
+} from '../commands/customer-account-role-rules.js';
 import type { TwoFactorEnrolmentReader } from './two-factor-enrolments.js';
+// A cycle by design: the deprecated member port delegates to the aggregate
+// port, which maps its rows with this file's `toCustomerAccountRecord`. Both
+// are used only inside calls, never while either module is being evaluated.
+import { CustomerAccountCommandService } from './customer-account-command-port.js';
+import { anyRowExists, type WorkRows } from './scheduled-work-probe.js';
+import { organizationMoveAuditState } from './customer-account-audit-state.js';
 
 /**
  * The published face of `customer_accounts` (feature 075, Phase P).
@@ -61,7 +78,7 @@ export function toCustomerAccountRecord(
     email: account.email,
     firstName: account.firstName,
     lastName: account.lastName,
-    role: account.role,
+    organizationRoleId: account.organizationRoleId,
     emailVerifiedAt: account.emailVerifiedAt ?? null,
     twoFactorEnabled,
     lastLoginAt: account.lastLoginAt ?? null,
@@ -78,6 +95,7 @@ export function toCustomerAccountRecord(
     blockedByCustomerAccountId: account.blockedByCustomerAccountId ?? null,
     deletionRequestedByAdminUserId: account.deletionRequestedByAdminUserId ?? null,
     anonymizedAt: account.anonymizedAt ?? null,
+    preferredLanguage: account.preferredLanguage ?? null,
   };
 }
 
@@ -106,37 +124,80 @@ export async function toOneCustomerAccountRecord(
 }
 
 /** `{ deletedAt: null }` when the caller asked for it, nothing otherwise. */
+/** The host name side-table loaders register against (`specs/187-side-table-extensions/`). */
+const CUSTOMER_ACCOUNT_HOST = 'customer_accounts.CustomerAccount';
+
 function activeFilter(options?: CustomerAccountLookupOptions): { deletedAt?: null } {
   return options?.activeOnly ? { deletedAt: null } : {};
+}
+
+/**
+ * The member order both member lists answer in: the Organization's
+ * *Administrator* holders first, each group by creation date — what ordering by
+ * the legacy two-value role gave, before `specs/170-organization-roles/` WP-12
+ * dropped it. A stable sort over rows already in creation order.
+ */
+function administratorsFirst(accounts: CustomerAccount[], administratorRoleId: string): CustomerAccount[] {
+  const rank = (account: CustomerAccount): number => (account.organizationRoleId === administratorRoleId ? 0 : 1);
+  return [...accounts].sort((a, b) => rank(a) - rank(b));
 }
 
 export class CustomerAccountReadService implements CustomerAccountReadPort {
   constructor(
     private readonly emFactory: () => EntityManager,
     private readonly twoFactorEnrolments: TwoFactorEnrolmentReader,
+    /**
+     * `organizations`' role read port, for {@link countAdministrators} and the
+     * administrators-first order of {@link listByOrganization}
+     * (`specs/170-organization-roles/`): which role is the Organization's
+     * *Administrator* is that module's fact. Optional so the hand-built test
+     * services that never ask need not wire it; without it the list is in
+     * creation order.
+     */
+    private readonly roles?: Pick<OrganizationRoleLookup, 'predefinedRoleId'>,
+    /**
+     * The kernel's `entityExtensionReads` (`specs/187-side-table-extensions/`
+     * FR-058), for `include` on {@link findById}, {@link findByIds},
+     * {@link searchByEmail} and {@link listAll}. Absent in a hand-built
+     * service, which has no loader to offer.
+     */
+    private readonly extensionReads: EntityExtensionReads = lazyEntityExtensionReads(() => undefined),
   ) {}
 
   async findById(
     id: string,
-    options?: CustomerAccountLookupOptions,
-  ): Promise<CustomerAccountRecord | null> {
-    const account = await this.emFactory().findOne(CustomerAccount, {
+    options?: CustomerAccountLookupOptions & EntityExtensionReadOptions,
+  ): Promise<WithEntityExtensions<CustomerAccountRecord> | null> {
+    if (!isUuidShape(id)) return null;
+    const em = this.emFactory();
+    const account = await em.findOne(CustomerAccount, {
       id,
       ...activeFilter(options),
     });
-    return account ? toOneCustomerAccountRecord(this.twoFactorEnrolments, account) : null;
+    if (!account) return null;
+    const [record] = await this.#attach([await toOneCustomerAccountRecord(this.twoFactorEnrolments, account)], options, em);
+    return record ?? null;
   }
 
   async findByIds(
     ids: readonly string[],
-    options?: CustomerAccountLookupOptions,
-  ): Promise<CustomerAccountRecord[]> {
+    options?: CustomerAccountLookupOptions & EntityExtensionReadOptions,
+  ): Promise<WithEntityExtensions<CustomerAccountRecord>[]> {
     if (ids.length === 0) return [];
-    const accounts = await this.emFactory().find(CustomerAccount, {
+    const em = this.emFactory();
+    const accounts = await em.find(CustomerAccount, {
       id: { $in: [...ids] },
       ...activeFilter(options),
     });
-    return toCustomerAccountRecords(this.twoFactorEnrolments, accounts);
+    return this.#attach(await toCustomerAccountRecords(this.twoFactorEnrolments, accounts), options, em);
+  }
+
+  async #attach(
+    records: CustomerAccountRecord[],
+    options: EntityExtensionReadOptions | undefined,
+    em: EntityManager,
+  ): Promise<WithEntityExtensions<CustomerAccountRecord>[]> {
+    return [...(await this.extensionReads.attach(CUSTOMER_ACCOUNT_HOST, records, options, em))];
   }
 
   async findByEmail(
@@ -159,6 +220,7 @@ export class CustomerAccountReadService implements CustomerAccountReadPort {
     organizationId: string,
     options?: CustomerAccountLookupOptions,
   ): Promise<CustomerAccountRecord | null> {
+    if (!isUuidShape(id) || !isUuidShape(organizationId)) return null;
     const account = await this.emFactory().findOne(CustomerAccount, {
       id,
       organizationId,
@@ -174,23 +236,31 @@ export class CustomerAccountReadService implements CustomerAccountReadPort {
     const accounts = await this.emFactory().find(
       CustomerAccount,
       { organizationId, ...activeFilter(options) },
-      { orderBy: { role: 'asc', createdAt: 'asc' } },
+      { orderBy: { createdAt: 'asc' } },
     );
-    return toCustomerAccountRecords(this.twoFactorEnrolments, accounts);
+    const ordered = this.roles
+      ? administratorsFirst(accounts, await this.roles.predefinedRoleId(organizationId, 'administrator'))
+      : accounts;
+    return toCustomerAccountRecords(this.twoFactorEnrolments, ordered);
   }
 
-  async countByOrganizationRole(
+  async countAdministrators(
     organizationId: string,
-    role: CustomerAccountRole,
     options?: {
       excludeCustomerAccountId?: string;
       activeOnly?: boolean;
       notBlocked?: boolean;
     },
   ): Promise<number> {
+    if (!this.roles) {
+      throw new Error(
+        'CustomerAccountReadService.countAdministrators needs organizationRoleReadPort; construct the service with it.',
+      );
+    }
+    const administratorRoleId = await this.roles.predefinedRoleId(organizationId, 'administrator');
     return this.emFactory().count(CustomerAccount, {
       organizationId,
-      role,
+      organizationRoleId: administratorRoleId,
       ...(options?.activeOnly ? { deletedAt: null } : {}),
       ...(options?.notBlocked ? { blockedAt: null } : {}),
       ...(options?.excludeCustomerAccountId
@@ -199,14 +269,19 @@ export class CustomerAccountReadService implements CustomerAccountReadPort {
     });
   }
 
-  async searchByEmail(query: string, limit: number): Promise<CustomerAccountRecord[]> {
+  async searchByEmail(
+    query: string,
+    limit: number,
+    options?: EntityExtensionReadOptions,
+  ): Promise<WithEntityExtensions<CustomerAccountRecord>[]> {
     const trimmed = query.trim();
-    const accounts = await this.emFactory().find(
+    const em = this.emFactory();
+    const accounts = await em.find(
       CustomerAccount,
       trimmed ? { email: { $ilike: `%${trimmed}%` } } : {},
       { orderBy: { email: 'asc' }, limit },
     );
-    return toCustomerAccountRecords(this.twoFactorEnrolments, accounts);
+    return this.#attach(await toCustomerAccountRecords(this.twoFactorEnrolments, accounts), options, em);
   }
 
   async searchIdsByName(query: string): Promise<string[]> {
@@ -227,14 +302,62 @@ export class CustomerAccountReadService implements CustomerAccountReadPort {
     return accounts.map((account) => account.id);
   }
 
-  async listAll(): Promise<CustomerAccountRecord[]> {
-    const accounts = await this.emFactory().find(
+  async listAll(options?: EntityExtensionReadOptions): Promise<WithEntityExtensions<CustomerAccountRecord>[]> {
+    const em = this.emFactory();
+    const accounts = await em.find(
       CustomerAccount,
       {},
       { orderBy: { email: 'asc' } },
     );
+    return this.#attach(await toCustomerAccountRecords(this.twoFactorEnrolments, accounts), options, em);
+  }
+
+  /**
+   * The retention sweep's work list (`specs/186-aggregate-ports/` moved it here
+   * from the deprecated lifecycle port): the ids through the shared row source,
+   * then the entities through the ORM, so the tenant filter still applies.
+   */
+  async listDueForAnonymization(cutoff: Date): Promise<CustomerAccountRecord[]> {
+    const em = this.emFactory();
+    const due = dueForAnonymization(cutoff);
+    const rows = await em.execute<Array<{ id: string }>>(`select "id" ${due.from}`, [...due.params]);
+    if (rows.length === 0) return [];
+    const accounts = await em.find(CustomerAccount, { id: { $in: rows.map((row) => row.id) } });
     return toCustomerAccountRecords(this.twoFactorEnrolments, accounts);
   }
+
+  /**
+   * The sweep tick's question, asked outside any tenant scope (issue #857;
+   * `docs/docs/architecture/tenant-scoping.md` § *A scheduled tick with nothing
+   * to do enters no scope*). It learns one bit, through `anyRowExists`, over the
+   * work list's own row source.
+   */
+  async hasDueForAnonymization(cutoff: Date): Promise<boolean> {
+    return anyRowExists(this.emFactory(), [dueForAnonymization(cutoff)]);
+  }
+}
+
+/**
+ * The accounts the retention sweep anonymises at `cutoff`, as a row source —
+ * **the one statement of that rule** (issue #857). Soft-deleted before the
+ * cutoff and not anonymised yet, **or** anonymised by an earlier scrub that left
+ * residue behind (issue #843, `hasScrubResidue` in
+ * `commands/customer-account-anonymize.command.ts`). The residue branch is not
+ * under the cutoff: the window already elapsed once, and an operator raising
+ * `customers.deletion_retention_days` afterwards must not take the account off
+ * the list for good. `listDueForAnonymization` lists through it and
+ * `hasDueForAnonymization` asks through it, so a condition added here is added
+ * to both by the same edit and the sweep's question cannot drift from its work
+ * list.
+ */
+function dueForAnonymization(cutoff: Date): WorkRows {
+  return {
+    from:
+      'from "customer_accounts" where ("deleted_at" is not null and "deleted_at" < ? and "anonymized_at" is null)' +
+      ` or ("anonymized_at" is not null and ("block_reason" is not null or "custom_field_values" <> '{}'::jsonb` +
+      ` or "preferred_language" is not null))`,
+    params: [cutoff],
+  };
 }
 
 /**
@@ -287,206 +410,135 @@ export class CustomerPasswordVerificationService implements CustomerPasswordVeri
 }
 
 /**
- * The member lifecycle `organizations` runs over this module's table
- * (feature 075, Phase C).
+ * `customerAccountMemberWritePort` — the member lifecycle `organizations` runs
+ * over accounts in its Organizations (feature 075, Phase C).
  *
- * It ran it by creating and mutating the `CustomerAccount` entity in its own
- * services and route handlers — seven write sites across five files. They are
- * six methods here, each one unit of work on this table alone, because a write
- * port that took the caller's `EntityManager` would publish the coupling
- * instead of removing it (D-78).
+ * **Deprecated since 0.113.0** (`specs/186-aggregate-ports/` T051, issue
+ * #1822): `create`, `updateProfile`, `setSubtreeRollup`,
+ * `promoteToOrganizationAdmin` and `markEmailVerified` delegate to
+ * `customerAccountCommandPort`, so each runs the Command it ran — or, for
+ * `updateProfile` and `markEmailVerified`, the Command its hand-written entry
+ * became — with the same action, state and refusals.
  *
- * **Each write audits itself**, in the same unit of work, exactly as
- * `RoleService` and `addresses`' `AddressService` — the two write surfaces
- * `organizations` already reaches across this boundary — have always done. The
- * host's own row is a different fact and stays where it is: "an operator edited
- * this member on the organisation panel" is not "this account's e-mail
- * changed", and the role endpoint has recorded both for as long as it has
- * existed.
+ * `attachToOrganization` is a move between Organizations, the Membership
+ * concern `specs/191-membership-join-requests/` owns; it is left as it is and
+ * deprecated there.
  */
 export class CustomerAccountMemberWriteService implements CustomerAccountMemberWritePort {
   constructor(
     private readonly emFactory: () => EntityManager,
     private readonly twoFactorEnrolments: TwoFactorEnrolmentReader,
     private readonly auditLog?: AuditPort,
+    /**
+     * The aggregate port the deprecated methods delegate to. A hand-built test
+     * service may pass only a bus (and the role lookup the promotion needs), and
+     * gets a port over them; without either, each delegated method refuses.
+     */
+    private readonly commands?: {
+      commandBus?: CommandBus;
+      roles?: OrganizationRoleLookup;
+      port?: CustomerAccountCommandPort;
+    },
   ) {}
 
   async create(input: CustomerAccountCreateInput): Promise<CustomerAccountRecord> {
-    const em = this.emFactory();
-    const email = normalizeEmailAddress(input.email);
-    const existing = await em.findOne(CustomerAccount, { email });
-    if (existing) {
-      throw new HttpError(
-        409,
-        ERROR_CODES.EMAIL_ALREADY_REGISTERED,
-        'An account with this email already exists.',
-      );
-    }
-    const account = em.create(CustomerAccount, {
-      organizationId: input.organizationId,
-      email,
-      passwordHash: await hashPassword(input.password),
-      // Issue #222 — a password somebody supplied, so the account has one on
-      // record from its first moment. This is the write both organisation
-      // registration (the holder typed it) and the member admin surface (an
-      // operator set it and hands it over) go through.
-      passwordSetAt: new Date(),
-      firstName: input.firstName,
-      lastName: input.lastName,
-      role: input.role,
-      ...(input.emailVerified ? { emailVerifiedAt: new Date() } : {}),
-    });
-    this.#audit(em, 'customer_account.create', account.id, null, {
-      organizationId: account.organizationId ?? null,
-      email: account.email,
-      role: account.role,
-    });
-    try {
-      await em.persistAndFlush(account);
-    } catch (err) {
-      // The unique index is the real arbiter; the pre-check above only buys a
-      // better message for the common case. Two registrations racing on one
-      // address must both answer 409 rather than one answering 500.
-      if (err instanceof UniqueConstraintViolationException) {
-        throw new HttpError(
-          409,
-          ERROR_CODES.EMAIL_ALREADY_REGISTERED,
-          'An account with this email already exists.',
-        );
-      }
-      throw err;
-    }
-    return toOneCustomerAccountRecord(this.twoFactorEnrolments, account);
+    return this.#port().create(input);
   }
 
-  async updateProfile(
-    customerAccountId: string,
-    patch: CustomerAccountProfilePatch,
-  ): Promise<CustomerAccountRecord> {
-    const em = this.emFactory();
-    const account = await this.#loadLive(em, customerAccountId);
-    const before = {
-      email: account.email,
-      firstName: account.firstName,
-      lastName: account.lastName,
-    };
-    if (patch.email !== undefined) {
-      const nextEmail = normalizeEmailAddress(patch.email);
-      if (nextEmail !== account.email) {
-        const taken = await em.findOne(CustomerAccount, { email: nextEmail, deletedAt: null });
-        if (taken && taken.id !== account.id) {
-          throw new HttpError(
-            409,
-            ERROR_CODES.EMAIL_ALREADY_REGISTERED,
-            'That email is already used by another account.',
-          );
-        }
-        account.email = nextEmail;
-        account.emailVerifiedAt = null;
-      }
-    }
-    if (patch.firstName !== undefined) account.firstName = patch.firstName;
-    if (patch.lastName !== undefined) account.lastName = patch.lastName;
-    this.#audit(em, 'customer_account.update_profile', account.id, before, {
-      email: account.email,
-      firstName: account.firstName,
-      lastName: account.lastName,
-    });
-    await em.flush();
-    return toOneCustomerAccountRecord(this.twoFactorEnrolments, account);
+  async updateProfile(customerAccountId: string, patch: CustomerAccountProfilePatch): Promise<CustomerAccountRecord> {
+    return this.#port().updateProfile(customerAccountId, patch);
   }
 
-  async setSubtreeRollup(
-    customerAccountId: string,
-    enabled: boolean,
-  ): Promise<CustomerAccountRecord> {
-    const em = this.emFactory();
-    const account = await this.#loadLive(em, customerAccountId);
-    const before = { subtreeRollupEnabled: account.subtreeRollupEnabled };
-    account.subtreeRollupEnabled = enabled;
-    this.#audit(em, 'customer_account.set_subtree_rollup', account.id, before, {
-      subtreeRollupEnabled: enabled,
-    });
-    await em.flush();
-    return toOneCustomerAccountRecord(this.twoFactorEnrolments, account);
+  async setSubtreeRollup(customerAccountId: string, enabled: boolean): Promise<CustomerAccountRecord> {
+    return this.#port().setSubtreeRollup(customerAccountId, { enabled });
   }
 
   async promoteToOrganizationAdmin(customerAccountId: string): Promise<CustomerAccountRecord> {
-    const em = this.emFactory();
-    const account = await this.#loadLive(em, customerAccountId);
-    const before = { role: account.role };
-    account.role = 'organization_admin';
-    this.#audit(em, 'customer_account.promote_organization_admin', account.id, before, {
-      role: account.role,
-    });
-    await em.flush();
-    return toOneCustomerAccountRecord(this.twoFactorEnrolments, account);
+    return this.#port().promoteToOrganizationAdmin(customerAccountId);
   }
 
-  async markEmailVerified(
-    customerAccountId: string,
-    verifiedAt: Date,
-  ): Promise<CustomerAccountRecord> {
-    const em = this.emFactory();
-    const account = await em.findOne(CustomerAccount, { id: customerAccountId });
-    if (!account) {
-      throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Customer account not found.');
-    }
-    // Idempotent: a retried verification keeps the first timestamp, and records
-    // nothing the second time — an audit row per retry would say a change
-    // happened that did not.
-    if (!account.emailVerifiedAt) {
-      account.emailVerifiedAt = verifiedAt;
-      this.#audit(em, 'customer_account.email_verified', account.id, { emailVerifiedAt: null }, {
-        emailVerifiedAt: verifiedAt.toISOString(),
-      });
-      await em.flush();
-    }
-    return toOneCustomerAccountRecord(this.twoFactorEnrolments, account);
+  async markEmailVerified(customerAccountId: string, verifiedAt: Date): Promise<CustomerAccountRecord> {
+    return this.#port().markEmailVerified(customerAccountId, { verifiedAt });
   }
 
   async attachToOrganization(
     customerAccountId: string,
     organizationId: string,
+    organizationRoleId: string,
   ): Promise<CustomerAccountRecord> {
     const em = this.emFactory();
+    if (!isUuidShape(customerAccountId)) {
+      throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Customer account not found.');
+    }
     const account = await em.findOne(CustomerAccount, { id: customerAccountId });
     if (!account) {
       throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Customer account not found.');
     }
-    const before = { organizationId: account.organizationId ?? null };
+    const before = {
+      organizationId: account.organizationId ?? null,
+      organizationRoleId: account.organizationRoleId ?? null,
+    };
+    // The role moves with the Organization: the composite foreign key refuses
+    // the previous Organization's role (`specs/170-organization-roles/` R-34).
     account.organizationId = organizationId;
-    this.#audit(em, 'customer_account.attach_organization', account.id, before, {
-      organizationId,
-    });
+    account.organizationRoleId = organizationRoleId;
+    // A tenant move by name: the Organization ids stay out of the audit log (D-288).
+    const move = organizationMoveAuditState(before, { organizationId, organizationRoleId });
+    if (this.auditLog) {
+      recordAuditFromContext(this.auditLog, em, {
+        action: 'customer_account.attach_organization',
+        objectType: 'customer_account',
+        objectId: account.id,
+        stateBefore: move.stateBefore,
+        stateAfter: move.stateAfter,
+      });
+    }
     await em.flush();
     return toOneCustomerAccountRecord(this.twoFactorEnrolments, account);
   }
 
-  #audit(
-    em: EntityManager,
-    action: string,
-    objectId: string,
-    stateBefore: Record<string, unknown> | null,
-    stateAfter: Record<string, unknown> | null,
-  ): void {
-    if (!this.auditLog) return;
-    recordAuditFromContext(this.auditLog, em, {
-      action,
-      objectType: 'customer_account',
-      objectId,
-      stateBefore,
-      stateAfter,
-    });
-  }
+  #delegate: CustomerAccountCommandPort | undefined;
 
-  async #loadLive(em: EntityManager, id: string): Promise<CustomerAccount> {
-    const account = await em.findOne(CustomerAccount, { id, deletedAt: null });
-    if (!account) {
-      throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Customer account not found.');
+  #port(): CustomerAccountCommandPort {
+    if (this.commands?.port) return this.commands.port;
+    const commandBus = this.commands?.commandBus;
+    if (!commandBus) {
+      throw new Error('CustomerAccountMemberWriteService: each write runs a Command; construct the service with its bus.');
     }
-    return account;
+    this.#delegate ??= memberCommandServiceOver({
+      emFactory: this.emFactory,
+      twoFactorEnrolments: this.twoFactorEnrolments,
+      commandBus,
+      ...(this.commands?.roles ? { roles: this.commands.roles } : {}),
+    });
+    return this.#delegate;
   }
+}
+
+/**
+ * The aggregate port over a bus alone, for a hand-built service that delegates
+ * only the member methods: the lifecycle dependencies (sessions, provisioning,
+ * the personal-Organization check) refuse if anything ever reaches for them.
+ */
+function memberCommandServiceOver(deps: {
+  emFactory: () => EntityManager;
+  twoFactorEnrolments: TwoFactorEnrolmentReader;
+  commandBus: CommandBus;
+  roles?: OrganizationRoleLookup;
+}): CustomerAccountCommandPort {
+  const unwired = (what: string) => (): never => {
+    throw new Error(`CustomerAccountMemberWriteService: ${what} is not wired on a member-only service.`);
+  };
+  return new CustomerAccountCommandService({
+    commandBus: deps.commandBus,
+    emFactory: deps.emFactory,
+    twoFactorEnrolments: deps.twoFactorEnrolments,
+    roles: deps.roles ?? { findRole: unwired('the role lookup'), predefinedRoleId: unwired('the role lookup') },
+    isPersonal: unwired('the personal-Organization check'),
+    personalOrganizations: { provisionFor: unwired('the personal-Organization provisioning') },
+    sessions: { destroyAllForCustomer: unwired('the session store') },
+    afterCommit: unwired('the after-commit scope'),
+  });
 }
 
 /**
@@ -524,25 +576,85 @@ export function createCustomerAuthPort(
   };
 }
 
-/** Same substitution for the member-management surface `organizations` calls. */
-export function createCustomerRolePort(
-  getService: () => RoleService,
-  twoFactorEnrolments: TwoFactorEnrolmentReader,
-): CustomerRolePort {
+/**
+ * `specs/176-command-hooks-outbox/` — what {@link prepareCustomerAccountCreate}
+ * maps a just-written account with. A brand-new account holds no second factor,
+ * so the record says so without asking `mfa`: the Command runs inside its
+ * caller's transaction, and a read on another connection there would be a
+ * remote call holding it open for an answer that is known.
+ */
+const NEW_ACCOUNT_RECORD = {
+  toRecord: (account: CustomerAccount): CustomerAccountRecord => toCustomerAccountRecord(account, false),
+};
+
+/**
+ * `customerAccountMemberCommandPort` — the account creation as a Command
+ * factory, for `organizations`' registration to run as a child of
+ * `organization.register` (`specs/176-command-hooks-outbox/` FR-002, FR-005).
+ * The password is hashed by `prepareCreate`, before the caller's transaction.
+ */
+export function createCustomerAccountMemberCommandPort(): CustomerAccountMemberCommandPort {
+  return {
+    prepareCreate: (input) => prepareCustomerAccountCreate(input, NEW_ACCOUNT_RECORD),
+  };
+}
+
+/**
+ * The member-management surface `organizations` calls (`customerRolePort`),
+ * over the member Commands since `specs/170-organization-roles/` WP-02b — it
+ * adapted `RoleService`, which wrote and audited by hand. A role change is the
+ * `customer_account.change_role` Command, through
+ * {@link createCustomerAccountRoleCommandPort}.
+ */
+export function createCustomerRolePort(deps: {
+  emFactory: () => EntityManager;
+  commandBus: CommandBus;
+  roles: OrganizationRoleLookup;
+  twoFactorEnrolments: TwoFactorEnrolmentReader;
+}): CustomerRolePort {
+  const commandDeps: CustomerAccountRoleCommandDeps = { roles: deps.roles, store: entityManagerAccountRoleStore };
   return {
     async listMembers(organizationId) {
+      const members = await deps.emFactory().find(
+        CustomerAccount,
+        { organizationId, deletedAt: null },
+        { orderBy: { createdAt: 'asc' } },
+      );
       return toCustomerAccountRecords(
-        twoFactorEnrolments,
-        await getService().listMembers(organizationId),
+        deps.twoFactorEnrolments,
+        administratorsFirst(members, await deps.roles.predefinedRoleId(organizationId, 'administrator')),
       );
     },
-    async changeRole(organizationId, targetCustomerAccountId, newRole) {
-      return toOneCustomerAccountRecord(
-        twoFactorEnrolments,
-        await getService().changeRole(organizationId, targetCustomerAccountId, newRole),
+    async removeMember(organizationId, targetCustomerAccountId) {
+      await deps.commandBus.run(
+        makeRemoveMemberCommand(commandDeps, { organizationId, customerAccountId: targetCustomerAccountId }),
       );
     },
-    removeMember: (organizationId, targetCustomerAccountId) =>
-      getService().removeMember(organizationId, targetCustomerAccountId),
+  };
+}
+
+/**
+ * `customerAccountRoleCommandPort` — the role assignment as a Command factory,
+ * for `organizations`' role deletion to run as children (research R-22).
+ */
+export function createCustomerAccountRoleCommandPort(deps: {
+  emFactory: () => EntityManager;
+  roles: OrganizationRoleLookup;
+}): CustomerAccountRoleCommandPort {
+  const commandDeps: CustomerAccountRoleCommandDeps = { roles: deps.roles, store: entityManagerAccountRoleStore };
+  return {
+    changeRole: (input) => makeChangeCustomerAccountRoleCommand(commandDeps, input),
+    async holdersOf(organizationId, roleId) {
+      // Every holder — removed and blocked ones included: the foreign key
+      // counts them all. A plain read, so the ids come back without loading
+      // the entities into anybody's unit of work.
+      const rows = (await deps.emFactory().execute(
+        `select "id" from "customer_accounts"
+          where "organization_id" = ? and "organization_role_id" = ?
+          order by "id"`,
+        [organizationId, roleId],
+      )) as Array<{ id: string }>;
+      return rows.map((row) => row.id);
+    },
   };
 }

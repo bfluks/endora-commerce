@@ -52,7 +52,10 @@ An operator switches this module on and off on **/platform/modules**. The choice
 | `new-newsletter-campaign` | `/newsletter/campaigns/new` | `newsletter:write` |
 | `open-newsletter` | `/newsletter/subscribers` | `newsletter:read` |
 | `open-newsletter-automations` | `/newsletter/automations` | `newsletter:read` |
+| `open-newsletter-blocks` | `/newsletter/blocks` | `newsletter:read` |
 | `open-newsletter-campaigns` | `/newsletter/campaigns` | `newsletter:read` |
+| `open-newsletter-provider` | `/newsletter/provider` | `newsletter:write` |
+| `open-newsletter-tags` | `/newsletter/tags` | `newsletter:read` |
 
 ## Settings
 
@@ -65,6 +68,8 @@ An operator switches this module on and off on **/platform/modules**. The choice
 | `newsletter.rate_limit_per_second` | Send rate limit (per second) | `number` |
 | `newsletter.sender.from_email` | Sender email | `string` |
 | `newsletter.sender.from_name` | Sender name | `string` |
+| `newsletter.tracking.clicks_enabled` | Track campaign link clicks | `boolean` |
+| `newsletter.tracking.opens_enabled` | Track campaign opens | `boolean` |
 
 ## Translations
 

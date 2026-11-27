@@ -10,6 +10,11 @@ import { StorefrontApiError } from './client';
 
 export interface CreditLimitReservationView {
   orderId: string;
+  /**
+   * The order's customer-facing number, the one `/orders` lists (issue #661);
+   * `null` or absent when the API could not or did not answer it.
+   */
+  orderBusinessId?: string | null;
   amount: number;
   createdAt: string;
 }
@@ -19,6 +24,15 @@ export interface CreditLimitView {
   grantedAmount: number;
   availableAmount: number;
   currency: string;
+  /**
+   * Every active reservation of the shared limit, whoever placed the order
+   * (issue #748) — the count the widget states.
+   */
+  activeReservationCount: number;
+  /**
+   * The reservations the buyer may read: only their own orders' unless their
+   * organization role holds `orders.view_organization`.
+   */
   activeReservations: CreditLimitReservationView[];
   grantedAt: string;
 }

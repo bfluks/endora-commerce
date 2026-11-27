@@ -1,26 +1,35 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { z } from 'zod';
 import {
   adminAddCommentRequestSchema,
   adminRejectRequestSchema,
   adminTransitionRequestSchema,
   adminReturnsListQuerySchema,
   bulkTransitionRequestSchema,
+  createReturnSavedViewRequestSchema,
   createReturnShipmentRequestSchema,
+  recordAlternativeConsentRequestSchema,
   returnDeliveryMethodCreateSchema,
   returnDeliveryMethodUpdateSchema,
   returnReasonCreateSchema,
   returnReasonUpdateSchema,
-  returnSavedViewCreateSchema,
-  returnSavedViewUpdateSchema,
   returnStatusCreateSchema,
   returnStatusUpdateSchema,
   returnTransitionsSetSchema,
   settlementRequestSchema,
+  updateReturnSavedViewRequestSchema,
+  createReturnCaseClauseRequestSchema,
+  updateReturnCaseClauseRequestSchema,
+  adminEraseGuestDataRequestSchema,
+  type AdminEraseGuestDataResult,
+  type ReturnNotificationHealth,
 } from '@endora-commerce/contracts';
+import { savedViewActor } from './saved-view-actor.js';
 import type { ReturnCaseService } from './services/return-case-service.js';
 import type { ReturnAuthorizationService } from './services/return-authorization-service.js';
 import type { ReturnCommentService } from './services/return-comment-service.js';
 import type { ReturnSettlementService } from './services/return-settlement-service.js';
+import type { ReturnConsentService } from './services/return-consent-service.js';
 import type { ReturnDeliveryMethodService } from './services/return-delivery-method-service.js';
 import type { ReturnShipmentService } from './services/return-shipment-service.js';
 import type { ReturnReasonService } from './services/return-reason-service.js';
@@ -29,6 +38,9 @@ import type { ReturnListViewService } from './services/return-list-view-service.
 import type { ReturnExportService } from './services/return-export-service.js';
 import type { ReturnTransitionService } from './services/return-transition-service.js';
 import type { ReturnStatusGraphService } from './services/return-status-graph-service.js';
+import type { ReturnAttachmentService } from './services/return-attachment-service.js';
+import type { ReturnClauseService } from './services/return-clause-service.js';
+import { sendAttachment } from './attachment-response.js';
 
 type RequireAdmin = (permission?: string) => (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -42,6 +54,7 @@ export interface ReturnsAdminRoutesDeps {
   authorizationService: ReturnAuthorizationService;
   commentService: ReturnCommentService;
   settlementService: ReturnSettlementService;
+  consentService: ReturnConsentService;
   deliveryMethodService: ReturnDeliveryMethodService;
   shipmentService: ReturnShipmentService;
   reasonService: ReturnReasonService;
@@ -50,6 +63,16 @@ export interface ReturnsAdminRoutesDeps {
   exportService: ReturnExportService;
   transitions: ReturnTransitionService;
   graphService: ReturnStatusGraphService;
+  /** `specs/180-off-platform-complaints/` D-7 — where the new-case e-mail goes to nobody. */
+  notificationHealth: () => Promise<ReturnNotificationHealth>;
+  attachmentService: ReturnAttachmentService;
+  clauseService: ReturnClauseService;
+  /** A sentence of this module's bundle in a language — the CSV export's wording. */
+  translate: (key: string, language: string) => Promise<string>;
+  /** `specs/181-guest-complaints/` A3 — Command `return_case.tracking_link.reissue`. */
+  reissueTrackingLink: (caseId: string) => Promise<{ trackingVersion: number }>;
+  /** `specs/181-guest-complaints/` A5 — Command `return_case.guest_data.erase` (trigger `request`). */
+  eraseGuestData: (caseId: string) => Promise<AdminEraseGuestDataResult>;
   requireAdmin: RequireAdmin;
   resolveAdminUserId: (req: FastifyRequest) => string;
 }
@@ -63,6 +86,7 @@ export async function registerReturnsAdminRoutes(
     authorizationService,
     commentService,
     settlementService,
+    consentService,
     deliveryMethodService,
     shipmentService,
     reasonService,
@@ -71,6 +95,10 @@ export async function registerReturnsAdminRoutes(
     exportService,
     transitions,
     graphService,
+    notificationHealth,
+    attachmentService,
+    clauseService,
+    translate,
     requireAdmin,
     resolveAdminUserId,
   } = deps;
@@ -94,7 +122,9 @@ export async function registerReturnsAdminRoutes(
     },
     async (request, reply) => {
       const query = adminReturnsListQuerySchema.parse(request.query);
-      const { csv, rowCount, truncated } = await exportService.exportCsv(query);
+      // The file is worded in the request's language (180 FR-A41).
+      const language = await request.responseLanguage();
+      const { csv, rowCount, truncated } = await exportService.exportCsv(query, (key) => translate(key, language));
       reply.header('content-type', 'text/csv; charset=utf-8');
       reply.header('x-export-row-count', String(rowCount));
       reply.header('x-export-truncated', String(truncated));
@@ -113,43 +143,79 @@ export async function registerReturnsAdminRoutes(
     },
   );
 
-  app.get('/api/v1/admin/returns/list-views', { preHandler: requireAdmin('returns:read') }, async (request) => {
-    const adminUserId = resolveAdminUserId(request);
-    return { data: await listViewService.listFor(adminUserId) };
+  // --- Saved list views (US8; the rules of `specs/147-saved-views/` since #312)
+  // The actor comes from the request's tenant context (`./saved-view-actor.ts`),
+  // derived exactly as the order, product and quote request lists derive
+  // theirs. It is read on every route, the list included, because
+  // `isPlatformAdmin` decides `canModify`.
+  const VIEWS = '/api/v1/admin/returns/list-views';
+
+  app.get(VIEWS, { preHandler: requireAdmin('returns:read') }, async () => {
+    return { data: await listViewService.listFor(savedViewActor()) };
   });
 
   app.post(
-    '/api/v1/admin/returns/list-views',
-    { preHandler: requireAdmin('returns:read'), schema: { body: returnSavedViewCreateSchema } },
+    VIEWS,
+    { preHandler: requireAdmin('returns:read'), schema: { body: createReturnSavedViewRequestSchema } },
     async (request, reply) => {
-      const adminUserId = resolveAdminUserId(request);
-      const body = returnSavedViewCreateSchema.parse(request.body);
-      const data = await listViewService.create(adminUserId, body);
+      const actor = savedViewActor();
+      const body = createReturnSavedViewRequestSchema.parse(request.body);
+      const data = await listViewService.create(actor, body);
       reply.status(201);
       return { data };
     },
   );
 
   app.patch<{ Params: { id: string } }>(
-    '/api/v1/admin/returns/list-views/:id',
-    { preHandler: requireAdmin('returns:read'), schema: { body: returnSavedViewUpdateSchema } },
+    `${VIEWS}/:id`,
+    { preHandler: requireAdmin('returns:read'), schema: { body: updateReturnSavedViewRequestSchema } },
     async (request) => {
-      const adminUserId = resolveAdminUserId(request);
-      const body = returnSavedViewUpdateSchema.parse(request.body);
-      const data = await listViewService.update(request.params.id, adminUserId, body);
-      return { data };
+      const actor = savedViewActor();
+      const body = updateReturnSavedViewRequestSchema.parse(request.body);
+      return { data: await listViewService.update(request.params.id, actor, body) };
     },
   );
 
   app.delete<{ Params: { id: string } }>(
-    '/api/v1/admin/returns/list-views/:id',
+    `${VIEWS}/:id`,
     { preHandler: requireAdmin('returns:read') },
     async (request) => {
-      const adminUserId = resolveAdminUserId(request);
-      await listViewService.remove(request.params.id, adminUserId);
-      return { data: { ok: true } };
+      await listViewService.remove(request.params.id, savedViewActor());
+      return { data: { deleted: request.params.id } };
     },
   );
+
+  // --- Notification health (`specs/180-off-platform-complaints/` D-7) -------
+  // Read by the status configuration screen's "no recipient" alert (research
+  // R-22). A static segment, so the router prefers it to `/:id`.
+  app.get('/api/v1/admin/returns/notification-health', { preHandler: requireAdmin('returns:read') }, async () => {
+    return { data: await notificationHealth() };
+  });
+
+  // --- Clauses (`specs/180-off-platform-complaints/` admin-api.md §B5) --------
+  // Static segments, preferred by the router to `/:id`.
+  const CLAUSES = '/api/v1/admin/returns/clauses';
+  app.get(CLAUSES, { preHandler: requireAdmin('returns:read') }, async () => ({ data: await clauseService.list() }));
+  app.post(
+    CLAUSES,
+    { preHandler: requireAdmin('returns:write'), schema: { body: createReturnCaseClauseRequestSchema } },
+    async (request, reply) => {
+      const data = await clauseService.create(createReturnCaseClauseRequestSchema.parse(request.body));
+      reply.status(201);
+      return { data };
+    },
+  );
+  app.patch<{ Params: { id: string } }>(
+    `${CLAUSES}/:id`,
+    { preHandler: requireAdmin('returns:write'), schema: { body: updateReturnCaseClauseRequestSchema } },
+    async (request) => ({
+      data: await clauseService.update(request.params.id, updateReturnCaseClauseRequestSchema.parse(request.body)),
+    }),
+  );
+  app.delete<{ Params: { id: string } }>(`${CLAUSES}/:id`, { preHandler: requireAdmin('returns:write') }, async (request) => {
+    await clauseService.remove(request.params.id);
+    return { data: { ok: true } };
+  });
 
   // --- Workflow configuration (US3) ---------------------------------------
   // Registered before `/:id` so the static `statuses` segment is unambiguous.
@@ -170,6 +236,7 @@ export async function registerReturnsAdminRoutes(
         isTerminal: body.isTerminal,
         weight: body.weight,
         color: body.color,
+        notifyCustomerOnEntry: body.notifyCustomerOnEntry,
       });
       reply.status(201);
       return { data: await graphService.listGraph() };
@@ -287,6 +354,35 @@ export async function registerReturnsAdminRoutes(
     },
   );
 
+  // --- A guest's case (`specs/181-guest-complaints/` admin-api.md A3) ----------
+  // A case action like any other, so `returns:write` (research R-10). The body is `{}`.
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/admin/returns/:id/guest/tracking-link',
+    { preHandler: requireAdmin('returns:write') },
+    async (request) => ({ data: await deps.reissueTrackingLink(request.params.id) }),
+  );
+
+  // A5 — irreversible and a GDPR action, so its own code rather than `returns:write`
+  // (research R-10). The body is an explicit `{ confirm: true }`; any status; idempotent.
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/admin/returns/:id/guest/erase',
+    { preHandler: requireAdmin('returns:erase_personal_data'), schema: { body: adminEraseGuestDataRequestSchema } },
+    async (request) => {
+      adminEraseGuestDataRequestSchema.parse(request.body);
+      return { data: await deps.eraseGuestData(request.params.id) };
+    },
+  );
+
+  // --- Attachments (`specs/180-off-platform-complaints/` admin-api.md §B3) ----
+  app.get<{ Params: { id: string; attachmentId: string } }>(
+    '/api/v1/admin/returns/:id/attachments/:attachmentId/file',
+    { preHandler: requireAdmin('returns:read') },
+    async (request, reply) => {
+      const served = await attachmentService.openForAdmin(request.params.id, request.params.attachmentId);
+      return sendAttachment(reply, served, { inlineImages: true });
+    },
+  );
+
   // --- Settlement (US5) ----------------------------------------------------
   app.get<{ Params: { id: string } }>(
     '/api/v1/admin/returns/:id/settlement',
@@ -305,6 +401,28 @@ export async function registerReturnsAdminRoutes(
       const body = settlementRequestSchema.parse(request.body);
       const data = await settlementService.settle(request.params.id, adminUserId, body);
       return { data };
+    },
+  );
+
+  // --- The consumer's consent to another resolution (issue #905, design D1)
+  // Both are Commands; the route answers the case detail, as the other case
+  // actions do.
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/admin/returns/:id/alternative-consent',
+    { preHandler: requireAdmin('returns:write'), schema: { body: recordAlternativeConsentRequestSchema } },
+    async (request) => {
+      const body = recordAlternativeConsentRequestSchema.parse(request.body);
+      await consentService.record(request.params.id, body);
+      return { data: await caseService.getByIdForAdmin(request.params.id) };
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>(
+    '/api/v1/admin/returns/:id/alternative-consent',
+    { preHandler: requireAdmin('returns:write') },
+    async (request) => {
+      await consentService.revoke(request.params.id);
+      return { data: await caseService.getByIdForAdmin(request.params.id) };
     },
   );
 
@@ -383,12 +501,17 @@ export async function registerReturnsAdminRoutes(
     },
   );
 
+  // The body is validated for its shape only: the contract's refinement — no
+  // `notifyCustomer` on an internal comment — is the service's 422
+  // `notify_requires_customer_visible` (`specs/180-off-platform-complaints/`
+  // contracts/admin-api.md §A1), which a schema refusal would answer as a 400.
+  const adminAddCommentBodySchema = z.object(adminAddCommentRequestSchema.shape);
   app.post<{ Params: { id: string } }>(
     '/api/v1/admin/returns/:id/comments',
-    { preHandler: requireAdmin('returns:write'), schema: { body: adminAddCommentRequestSchema } },
+    { preHandler: requireAdmin('returns:write'), schema: { body: adminAddCommentBodySchema } },
     async (request, reply) => {
       const adminUserId = resolveAdminUserId(request);
-      const body = adminAddCommentRequestSchema.parse(request.body);
+      const body = adminAddCommentBodySchema.parse(request.body);
       const data = await commentService.addByAdmin(request.params.id, adminUserId, body);
       reply.status(201);
       return { data };

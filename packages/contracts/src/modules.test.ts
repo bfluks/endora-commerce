@@ -1,6 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import { CAPABILITY_KEYS } from './capabilities.js';
-import { defineModuleManifest, type ModuleManifest } from './modules.js';
+import {
+  DeploymentDivergenceDeclarationSchema,
+  EntityExtensionDeclarationSchema,
+  MODULE_ORIGINS,
+  ORGANIZATION_PERMISSION_CODE,
+  defineModuleManifest,
+  moduleOrganizationPermissionDeclarationSchema,
+  type DivergenceDetail,
+  type DivergenceKind,
+  type ModuleManifest,
+  type ModuleOrigin,
+} from './modules.js';
 
 /**
  * `specs/132-connector-family-discovery/contracts/module-capabilities.md` R4 —
@@ -171,5 +182,278 @@ describe('defineModuleManifest — capability declarations (feature 132, contrac
       expect(message).toContain('fixture_self_family');
       expect(message).toContain('pim-connector');
     });
+  });
+});
+
+/**
+ * `specs/170-organization-roles/` WP-01 (T008) — the `organizationPermissions`
+ * manifest field (`contracts/organization-permissions-manifest.md` §1; FR-020,
+ * research R-2). The vocabulary a buyer's role is built from is declared by the
+ * module whose action each code gates, in that module's own namespace.
+ */
+describe('defineModuleManifest — organization permission declarations (feature 170)', () => {
+  const declaration = (code: string) => ({
+    code,
+    label: 'Create and edit carts',
+    description: 'Add products to a cart and change it.',
+    memberDefault: true,
+  });
+
+  it('accepts a declaration in the module\'s own namespace', () => {
+    const parsed = manifest({
+      id: 'fixture_carts',
+      organizationPermissions: [declaration('fixture_carts.create'), { ...declaration('fixture_carts.approve'), memberDefault: false }],
+    });
+    expect(parsed.organizationPermissions?.map((d) => d.code)).toEqual([
+      'fixture_carts.create',
+      'fixture_carts.approve',
+    ]);
+  });
+
+  it('accepts a manifest that declares none — absent is most modules and is not a finding', () => {
+    expect(manifest({ id: 'fixture_silent' }).organizationPermissions).toBeUndefined();
+  });
+
+  it('spells a code `<module>.<action>` in lower snake case, never the operator `area:action` shape', () => {
+    expect(ORGANIZATION_PERMISSION_CODE.test('carts.order_without_approval')).toBe(true);
+    expect(ORGANIZATION_PERMISSION_CODE.test('carts:create')).toBe(false);
+    expect(ORGANIZATION_PERMISSION_CODE.test('Carts.create')).toBe(false);
+    expect(ORGANIZATION_PERMISSION_CODE.test('carts.create.extra')).toBe(false);
+    expect(ORGANIZATION_PERMISSION_CODE.test('carts')).toBe(false);
+  });
+
+  it('refuses a code that does not match ORGANIZATION_PERMISSION_CODE, naming module and code', () => {
+    let message = '';
+    try {
+      manifest({ id: 'fixture_carts', organizationPermissions: [declaration('fixture_carts:create')] });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain('fixture_carts');
+    expect(message).toContain('fixture_carts:create');
+  });
+
+  it('refuses a code whose prefix is not the manifest id (R-2), naming module and code', () => {
+    let message = '';
+    try {
+      manifest({ id: 'fixture_carts', organizationPermissions: [declaration('orders.view_organization')] });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain('fixture_carts');
+    expect(message).toContain('orders.view_organization');
+  });
+
+  it('refuses a prefix that merely starts with the manifest id', () => {
+    expect(() =>
+      manifest({ id: 'fixture_carts', organizationPermissions: [declaration('fixture_carts_extra.create')] }),
+    ).toThrow(/fixture_carts_extra\.create/);
+  });
+
+  it('refuses a duplicate code inside one manifest, naming module and code', () => {
+    let message = '';
+    try {
+      manifest({
+        id: 'fixture_carts',
+        organizationPermissions: [declaration('fixture_carts.create'), declaration('fixture_carts.create')],
+      });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain('fixture_carts');
+    expect(message).toContain('fixture_carts.create');
+  });
+
+  it('refuses an unknown key on a declaration, and an empty label or description', () => {
+    const valid = declaration('carts.create');
+    expect(moduleOrganizationPermissionDeclarationSchema.safeParse(valid).success).toBe(true);
+    expect(moduleOrganizationPermissionDeclarationSchema.safeParse({ ...valid, requires: [] }).success).toBe(false);
+    expect(moduleOrganizationPermissionDeclarationSchema.safeParse({ ...valid, label: '' }).success).toBe(false);
+    expect(moduleOrganizationPermissionDeclarationSchema.safeParse({ ...valid, description: '' }).success).toBe(false);
+    const { memberDefault: _omitted, ...withoutDefault } = valid;
+    expect(moduleOrganizationPermissionDeclarationSchema.safeParse(withoutDefault).success).toBe(false);
+  });
+});
+
+describe('defineModuleManifest — hookable actions (176 T020, FR-010)', () => {
+  const declaration = { action: 'widget.create', objectType: 'widget', phases: ['beforeCommit' as const] };
+
+  it('accepts a list of declarations and keeps it', () => {
+    const m = manifest({ id: 'widgets', hookableActions: [declaration] });
+    expect(m.hookableActions).toEqual([declaration]);
+  });
+
+  it('refuses one action declared twice in one manifest, naming the module and the action', () => {
+    expect(() => manifest({ id: 'widgets', hookableActions: [declaration, declaration] })).toThrow(
+      /widgets.*widget\.create/,
+    );
+  });
+
+  it('refuses a malformed action through the schema', () => {
+    expect(() =>
+      manifest({
+        id: 'widgets',
+        hookableActions: [{ action: 'widget', objectType: 'widget', phases: ['beforeCommit'] }],
+      }),
+    ).toThrow();
+  });
+});
+
+describe('DeploymentDivergenceDeclarationSchema — commandHookOrder (176 T020, FR-014, OD-1)', () => {
+  it('is optional, so an existing declaration still parses and types', () => {
+    expect(DeploymentDivergenceDeclarationSchema.parse({}).commandHookOrder).toBeUndefined();
+  });
+
+  it('accepts an order of two or more modules per action', () => {
+    const parsed = DeploymentDivergenceDeclarationSchema.parse({
+      commandHookOrder: { 'organization.create': ['acme_erp', 'acme_crm'] },
+    });
+    expect(parsed.commandHookOrder).toEqual({ 'organization.create': ['acme_erp', 'acme_crm'] });
+  });
+
+  it('refuses an entry naming one module, which orders nothing', () => {
+    expect(() =>
+      DeploymentDivergenceDeclarationSchema.parse({ commandHookOrder: { 'organization.create': ['acme_erp'] } }),
+    ).toThrow();
+  });
+});
+
+/**
+ * `specs/187-side-table-extensions/contracts/entity-extension-declaration.md`
+ * §1 — the `extends` manifest field (FR-001): E1 is the schema, E5 the
+ * duplicate-table refusal `defineModuleManifest` can decide from one manifest.
+ * E2 – E4 need the whole composition and are the platform's.
+ */
+describe('defineModuleManifest — entity extensions (187 T004, FR-001, E1, E5)', () => {
+  const entry = { entity: 'organizations.Organization', table: 'acme_erp_organization_links' };
+
+  it('accepts a declaration on a host and keeps it', () => {
+    const m = manifest({ id: 'acme_erp', dependencies: ['organizations'], extends: [entry] });
+    expect(m.extends).toEqual([entry]);
+  });
+
+  it('leaves the field absent when nothing is declared — most modules extend nothing', () => {
+    expect(manifest({ id: 'acme_erp' }).extends).toBeUndefined();
+  });
+
+  it('accepts an underscore-prefixed owner module id', () => {
+    expect(EntityExtensionDeclarationSchema.safeParse({ entity: '_lifecycle.Thing', table: 'acme_x' }).success).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    ['no class name', 'organizations'],
+    ['a lower-case class name', 'organizations.organization'],
+    ['an upper-case module id', 'Organizations.Organization'],
+    ['two dots', 'organizations.Organization.Extra'],
+    ['a table name instead of a class', 'organizations.organizations'],
+  ])('refuses an entity reference with %s', (_label, entity) => {
+    expect(EntityExtensionDeclarationSchema.safeParse({ entity, table: 'acme_links' }).success).toBe(false);
+    expect(() => manifest({ id: 'acme_erp', extends: [{ entity, table: 'acme_links' }] })).toThrow();
+  });
+
+  it('refuses an upper-case table, a leading digit and a 64-byte table', () => {
+    for (const table of ['Acme_links', '1acme', `a${'b'.repeat(63)}`]) {
+      expect(EntityExtensionDeclarationSchema.safeParse({ entity: entry.entity, table }).success, table).toBe(false);
+    }
+    expect(EntityExtensionDeclarationSchema.safeParse({ entity: entry.entity, table: `a${'b'.repeat(62)}` }).success).toBe(
+      true,
+    );
+  });
+
+  it('refuses an extra key on an entry', () => {
+    expect(EntityExtensionDeclarationSchema.safeParse({ ...entry, columns: [] }).success).toBe(false);
+    expect(() => manifest({ id: 'acme_erp', extends: [{ ...entry, columns: [] } as never] })).toThrow();
+  });
+
+  it('accepts 16 entries and refuses a 17th', () => {
+    const entries = (n: number) => Array.from({ length: n }, (_, i) => ({ entity: entry.entity, table: `acme_t${i}` }));
+    expect(manifest({ id: 'acme_erp', extends: entries(16) }).extends).toHaveLength(16);
+    expect(() => manifest({ id: 'acme_erp', extends: entries(17) })).toThrow();
+  });
+
+  it('refuses one table declared twice in one manifest, naming the module, the table and the rule (E5)', () => {
+    expect(() =>
+      manifest({
+        id: 'acme_erp',
+        extends: [entry, { entity: 'orders.Order', table: entry.table }],
+      }),
+    ).toThrow(/acme_erp.*duplicate-table.*acme_erp_organization_links|acme_erp.*acme_erp_organization_links.*duplicate-table/);
+  });
+});
+
+describe('ModuleOrigin (189 T001, contracts/module-origin.md §1)', () => {
+  it('is exactly core, deployment and package', () => {
+    expect(MODULE_ORIGINS).toEqual(['core', 'deployment', 'package']);
+    expectTypeOf<ModuleOrigin>().toEqualTypeOf<'core' | 'deployment' | 'package'>();
+  });
+});
+
+describe('defineModuleManifest — command middleware (189 T004, FR-001, FR-003, FR-004)', () => {
+  it('accepts a list of declarations and keeps it', () => {
+    const declarations = [
+      { id: 'legal-hold', phase: 'admit' as const, actions: ['organization.'] },
+      { id: 'timing', phase: 'observe' as const, actions: '*' as const },
+    ];
+    expect(manifest({ id: 'acme_hold', commandMiddleware: declarations }).commandMiddleware).toEqual(declarations);
+  });
+
+  it('applies assertCommandMiddlewareRules, naming the module', () => {
+    expect(() =>
+      manifest({
+        id: 'acme_hold',
+        commandMiddleware: [
+          { id: 'hold', phase: 'admit', actions: '*' },
+          { id: 'hold', phase: 'admit', actions: '*' },
+        ],
+      }),
+    ).toThrow(/acme_hold/);
+    expect(() =>
+      manifest({ id: 'acme_hold', commandMiddleware: [{ id: 'hold', phase: 'admit', actions: '*', timeoutMs: 501 }] }),
+    ).toThrow(/acme_hold/);
+  });
+
+  it('refuses a malformed declaration through the schema', () => {
+    expect(() =>
+      manifest({
+        id: 'acme_hold',
+        commandMiddleware: [{ id: 'hold', phase: 'transform', actions: '*' } as never],
+      }),
+    ).toThrow();
+  });
+
+  it('refuses an authored `origin` key, pointing to the module-origin contract', () => {
+    expect(() => manifest({ id: 'acme_hold', origin: 'core' } as never)).toThrow(
+      /acme_hold.*origin.*module-origin\.md/,
+    );
+  });
+});
+
+describe('DeploymentDivergenceDeclarationSchema — commandMiddlewareOrder (189 T005, FR-031)', () => {
+  it('is optional, so an existing declaration still parses and types', () => {
+    expect(DeploymentDivergenceDeclarationSchema.parse({}).commandMiddlewareOrder).toBeUndefined();
+  });
+
+  it('accepts two or more module ids, first runs first', () => {
+    expect(
+      DeploymentDivergenceDeclarationSchema.parse({ commandMiddlewareOrder: ['acme_hold', 'acme_rate'] })
+        .commandMiddlewareOrder,
+    ).toEqual(['acme_hold', 'acme_rate']);
+  });
+
+  it('refuses a list of one module and a malformed id', () => {
+    expect(() => DeploymentDivergenceDeclarationSchema.parse({ commandMiddlewareOrder: ['acme_hold'] })).toThrow();
+    expect(() =>
+      DeploymentDivergenceDeclarationSchema.parse({ commandMiddlewareOrder: ['acme_hold', 'Acme-Rate'] }),
+    ).toThrow();
+  });
+});
+
+describe('DivergenceDetail — command-middleware (189 T005, FR-034)', () => {
+  it('carries the phase, id and filter', () => {
+    const detail: DivergenceDetail = { kind: 'command-middleware', phase: 'observe', id: 'timing', actions: '*' };
+    const kind: DivergenceKind = detail.kind;
+    expect(kind).toBe('command-middleware');
   });
 });

@@ -42,6 +42,9 @@ describe('ShopInfoResolver', () => {
       contactEmail: 'hello@acme.test',
       supportEmail: 'support@acme.test',
       phone: '+48 111 222 333',
+      // Feature 163 (T088): the two new fields, unset here.
+      logoUrl: null,
+      socialProfiles: [],
     });
   });
 
@@ -70,6 +73,34 @@ describe('ShopInfoResolver', () => {
       contactEmail: '',
       supportEmail: '',
       phone: '',
+      logoUrl: null,
+      socialProfiles: [],
     });
+  });
+
+  // Feature 163 (T088; FR-035): the logo and social profiles.
+  it('resolves shop.logo_asset_id through the logo resolver', async () => {
+    const values = new Map<string, SettingsReadResult<unknown>>([
+      ['shop.logo_asset_id', { ok: true, value: 'asset-1' }],
+    ]);
+    const asked: string[] = [];
+    const resolver = new ShopInfoResolver(fakeSettings(values), async (assetId) => {
+      asked.push(assetId);
+      return 'https://cdn.example.com/logo.png';
+    });
+    const info = await resolver.resolve(CHANNEL_ID);
+    expect(asked).toEqual(['asset-1']);
+    expect(info.logoUrl).toBe('https://cdn.example.com/logo.png');
+  });
+
+  it('keeps only https entries of shop.social_profiles, whatever was stored', async () => {
+    const values = new Map<string, SettingsReadResult<unknown>>([
+      [
+        'shop.social_profiles',
+        { ok: true, value: ['https://social.example.com/acme', 'http://old.example.com', 42, 'nope'] },
+      ],
+    ]);
+    const info = await new ShopInfoResolver(fakeSettings(values)).resolve(CHANNEL_ID);
+    expect(info.socialProfiles).toEqual(['https://social.example.com/acme']);
   });
 });

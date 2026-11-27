@@ -2,34 +2,53 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import type { FastifyRequest } from 'fastify';
 import type { Redis } from 'ioredis';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import {
+  CUSTOMER_ACCOUNT_ORGANIZATION_ROLE_CHANGED_EVENT,
+  ERROR_CODES,
+  createProductTaxRateResolver,
+  type CustomerAccountOrganizationRoleChangedEventV1,
+  type OrganizationPermissionPort,
+} from '@endora-commerce/contracts';
 import type {
+  CartAnonymizationPort,
   CartQueryPort,
   CartReadPort,
   CartWritePort,
+  CatalogProductAvailabilityPort,
+  CatalogProductUrlKeyReadPort,
   CatalogProductReadPort,
   CustomerAccountReadPort,
-  LinePricePort,
+  EmailDefaultsRegistryPort,
+  LinePricesPort,
+  OrderQuoteSourcePort,
   ProductDisplayModePort,
-  OrganizationCartApprovalWritePort,
   OrganizationDetailsPort,
+  RelatedPayerPolicyPort,
+  OrganizationTaxProfilePort,
   PromotionApplyPort,
   PromotionCodePort,
   QuoteRequestReadPort,
   RfqCustomerPort,
+  TaxServicePort,
+  TransactionalEmailSender,
 } from '@endora-commerce/contracts';
 import type { CartPlacementApplyPort } from '../ports/index.js';
 import { HttpError } from '@endora-commerce/platform/http';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
-import { lazyPort } from '@endora-commerce/platform/kernel';
+import { currentSalesChannel, effectiveState, lazyPort } from '@endora-commerce/platform/kernel';
+import { providePricingSubjectResolver } from '@endora-commerce/platform/http';
 import type { OrganizationReadPort } from '@endora-commerce/platform/kernel';
 import type { RequireAdminFactory, RequireCustomerGuard } from '@endora-commerce/platform/kernel';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
+import type { SalesChannelResolutionPort } from '@endora-commerce/platform/kernel';
 import type { SettingsReadPort } from '@endora-commerce/platform/kernel';
 import { abandonmentSettingsReaders } from './services/cart-abandonment-settings.js';
 import { CartQueryService } from './services/cart-query-service.js';
+import { CartAnonymizationService } from './services/cart-anonymization-service.js';
 import { CartPlacementApplyService } from './services/cart-placement-apply-port.js';
 import { CartLinePricing } from './services/cart-line-pricing.js';
+import { CartBuyingForService } from './services/cart-buying-for.js';
+import { Cart as CartEntity } from './entities/cart.entity.js';
 import { CartReadService, createCartWritePort } from './services/cart-read-port.js';
 import { CartService } from './services/cart-service.js';
 import { CartUpsellService } from './services/cart-upsell-service.js';
@@ -38,10 +57,20 @@ import { CartConversionService } from './services/cart-conversion-service.js';
 import { CartAdminService } from './services/cart-admin-service.js';
 import { CartAuditService } from './services/cart-audit-service.js';
 import { CartApprovalService } from './services/cart-approval-service.js';
+import { createCartApprovalEmailDispatch } from './services/cart-approval-emails.js';
+import {
+  CART_APPROVAL_REQUESTED_DEFAULT,
+  CART_APPROVAL_REQUESTED_EMAIL_CODE,
+  CART_APPROVED_DEFAULT,
+  CART_APPROVED_EMAIL_CODE,
+  CART_REJECTED_DEFAULT,
+  CART_REJECTED_EMAIL_CODE,
+} from './email-templates/cart-approval-defaults.js';
 import { CartOrganizationVisibilityService } from './services/cart-organization-visibility-service.js';
 import { CartRecomputeCache } from './services/cart-recompute-cache.js';
 import { CartPricingRecompute } from './services/cart-pricing-recompute.js';
 import { CartAbandonmentWorker } from './services/cart-abandonment-worker.js';
+import { startCartAbandonmentSweep } from './workers/cart-abandonment-sweep-worker.js';
 import { registerCartRoutes, type CartsDeps } from './routes.js';
 import { registerCartsAdminRoutes } from './routes.admin.js';
 import { registerCartsOrganizationRoutes } from './routes.organization.js';
@@ -116,7 +145,7 @@ export interface CartsCradle {
    * `@endora-commerce/contracts`, never the provider's class, and each is resolved lazily
    * by a string literal so a switched-off owner answers at the call.
    */
-  readonly pricingService: LinePricePort;
+  readonly pricingService: LinePricesPort;
   readonly promotionService: PromotionApplyPort;
   readonly promotionCodePort: PromotionCodePort;
   readonly rfqService: RfqCustomerPort;
@@ -140,11 +169,39 @@ export interface CartsCradle {
   readonly cartAbandonmentNotifier:
     | ConstructorParameters<typeof CartAbandonmentWorker>[0]['dispatchNotification']
     | undefined;
+  /**
+   * `transactional_emails`' late-bound sender, read per send (issue #651). It
+   * answers `undefined` until that module has announced it.
+   */
+  readonly transactionalEmailSenderAccessor: () => TransactionalEmailSender | undefined;
   readonly cartService: CartService;
   readonly cartAuditService: CartAuditService;
   readonly cartApprovalService: CartApprovalService;
   readonly cartRecomputeCache: CartRecomputeCache;
   readonly cartAbandonmentWorker: CartAbandonmentWorker;
+  /**
+   * Whether this process runs queue consumers (Principle X) — the platform's
+   * one module-agnostic answer, `false` in the test kit.
+   */
+  readonly processRunsWorkers: boolean;
+  /**
+   * The connection a module may build a BullMQ queue on. `undefined` is a
+   * composition saying it wants no queues, and the abandonment sweep's
+   * consumer is then not built.
+   */
+  readonly moduleQueueRedis: Redis | undefined;
+}
+
+/**
+ * `organization_role.permissions_changed.v1`, as `organizations`'
+ * `organization_role.update` Command announces it. The fields this module
+ * reads, stated here because the event has no published type.
+ */
+interface OrganizationRolePermissionsChangedPayload {
+  readonly organizationId: string;
+  readonly roleId: string;
+  readonly added?: readonly string[];
+  readonly removed?: readonly string[];
 }
 
 /** Refuses in the shape Constitution XVII item 3 requires: an explicit 503. */
@@ -161,6 +218,14 @@ function refuseShoppingList(): CartShoppingListBridge {
 }
 
 export function registerModule(ctx: ModuleContext): void {
+  // `specs/182-related-payers/` research R-4 — the one pricing-subject contributor: a signed-in
+  // buyer whose active basket is on a payer's commercial terms sees the payer's prices on every
+  // catalogue read of that channel (FR-115). Filtered by this module's presence at call time.
+  providePricingSubjectResolver(
+    'carts',
+    (request, audience) => pricingSubjectOf(ctx, request, audience.organizationId),
+    () => effectiveState.isPresent('carts'),
+  );
   ctx.di.register({
     // Contribution point, defaulted to a refusal that names the absent module
     // rather than a 404 that does not.
@@ -191,12 +256,30 @@ export function registerModule(ctx: ModuleContext): void {
           new CartApprovalService(
             emFactory,
             cartAuditService,
-            lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
-            lazyPort<OrganizationCartApprovalWritePort>(
-              ctx,
-              'organizationCartApprovalWritePort',
-            ),
+            // `specs/170-organization-roles/` — approval is the buyer's
+            // `carts.order_without_approval`; the cascade asks who holds it.
+            lazyPort<OrganizationPermissionPort>(ctx, 'organizationPermissionPort'),
             lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
+            lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
+            lazyPort<OrderQuoteSourcePort>(ctx, 'orderQuoteSourcePort'),
+            lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
+            // Issue #651 — the submit / approve / reject e-mails. The service
+            // calls them after its flush and absorbs what they raise, so a
+            // message that does not go out never fails the transition.
+            createCartApprovalEmailDispatch({
+              sender: () => ctx.cradle<CartsCradle>().transactionalEmailSenderAccessor(),
+              customerAccounts: lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
+              organizations: lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
+              // FR-033 — the "submitted" e-mail goes to the holders of `carts.approve`.
+              permissions: lazyPort<OrganizationPermissionPort>(ctx, 'organizationPermissionPort'),
+              channelLanguage: async (salesChannelId) =>
+                (
+                  await lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort').getById(
+                    salesChannelId,
+                  )
+                )?.defaultLanguage ?? null,
+              log: (message, context) => ctx.log.warn(context, message),
+            }),
           ),
       )
       .singleton(),
@@ -236,14 +319,19 @@ export function registerModule(ctx: ModuleContext): void {
         ({ emFactory, cartApprovalService, cartAuditService, cartRecomputeCache }: CartsCradle) =>
           new CartService(
             emFactory,
-            lazyPort<LinePricePort>(ctx, 'pricingService'),
+            lazyPort<LinePricesPort>(ctx, 'pricingService'),
             lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
             lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
-            lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
             lazyPort<ProductDisplayModePort>(ctx, 'productDisplayModePort'),
+            lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
             cartApprovalService,
             cartAuditService,
             cartRecomputeCache,
+            // Feature 163 (N2) — a named channel's default language, for the unit name.
+            lazyPort<SalesChannelResolutionPort>(ctx, 'salesChannelResolutionPort'),
+            // `specs/170-organization-roles/` PR-12 — the sign-in merge is
+            // judged against the member's `carts.create`.
+            lazyPort<OrganizationPermissionPort>(ctx, 'organizationPermissionPort'),
           ),
       )
       .singleton(),
@@ -302,11 +390,14 @@ export function registerModule(ctx: ModuleContext): void {
           new CartPlacementApplyService(
             emFactory,
             new CartLinePricing(
-              lazyPort<LinePricePort>(ctx, 'pricingService'),
+              lazyPort<LinePricesPort>(ctx, 'pricingService'),
               lazyPort<ProductDisplayModePort>(ctx, 'productDisplayModePort'),
               lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
             ),
             lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
+            // Issue #648 — placement refuses a basket that awaits approval,
+            // judged by the owner's `carts.order_without_approval` (R-25).
+            { permissions: lazyPort<OrganizationPermissionPort>(ctx, 'organizationPermissionPort') },
           ),
       )
       .singleton(),
@@ -315,6 +406,18 @@ export function registerModule(ctx: ModuleContext): void {
   ctx.di.providePort<CartQueryPort>(
     'cartQueryPort',
     ctx.asFunction(({ emFactory }: CartsCradle) => new CartQueryService(emFactory)).singleton(),
+  );
+
+  // Issue #920 — this module's step in `customers`' anonymisation sweep: the
+  // reasons operators and approvers wrote about the account's carts.
+  ctx.di.providePort<CartAnonymizationPort>(
+    'cartAnonymizationPort',
+    ctx
+      .asFunction(
+        ({ emFactory, auditLogService }: CartsCradle) =>
+          new CartAnonymizationService(emFactory, auditLogService),
+      )
+      .singleton(),
   );
 
   ctx.routes(async (app) => {
@@ -332,24 +435,36 @@ export function registerModule(ctx: ModuleContext): void {
     const requireCustomer: RequireCustomerGuard = (req) =>
       ctx.cradle<CartsCradle>().requireCustomer(req);
 
+    // `specs/170-organization-roles/` — the route guards' port, read per
+    // request through this thunk and never captured (contracts §5 item 1).
+    const organizationPermissions = (): OrganizationPermissionPort =>
+      lazyPort<OrganizationPermissionPort>(ctx, 'organizationPermissionPort');
+
+    const cartCouponService = new CartCouponService(
+      emFactory,
+      lazyPort<PromotionApplyPort>(ctx, 'promotionService'),
+      lazyPort<PromotionCodePort>(ctx, 'promotionCodePort'),
+      lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
+      lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
+      cradle.cartApprovalService,
+    );
     await registerCartRoutes(app, {
       emFactory,
       resolveCartActor,
       requireCustomer,
+      organizationPermissions,
       cartService,
       catalogProducts: lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
+      catalogAvailability: lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
+      // Feature 163 (T113a, R28) — basket and up-sell links use the effective key.
+      catalogUrlKeys: lazyPort<CatalogProductUrlKeyReadPort>(ctx, 'catalogProductUrlKeyReadPort'),
       cartUpsellService: new CartUpsellService(
         emFactory,
         lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
+        lazyPort<CatalogProductAvailabilityPort>(ctx, 'catalogProductAvailabilityPort'),
+        lazyPort<CatalogProductUrlKeyReadPort>(ctx, 'catalogProductUrlKeyReadPort'),
       ),
-      cartCouponService: new CartCouponService(
-        emFactory,
-        lazyPort<PromotionApplyPort>(ctx, 'promotionService'),
-        lazyPort<PromotionCodePort>(ctx, 'promotionCodePort'),
-        lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
-        lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
-        cradle.cartApprovalService,
-      ),
+      cartCouponService,
       cartConversionService: new CartConversionService(
         emFactory,
         cartService,
@@ -358,16 +473,31 @@ export function registerModule(ctx: ModuleContext): void {
         lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
         lazyPort<SalesChannelMembershipPort>(ctx, 'salesChannelMembershipPort'),
       ),
+      // Issue #168 — the read prices through the chain placement charges by.
       cartPricingRecompute: new CartPricingRecompute(
         emFactory,
-        lazyPort<LinePricePort>(ctx, 'pricingService'),
+        new CartLinePricing(
+          lazyPort<LinePricesPort>(ctx, 'pricingService'),
+          lazyPort<ProductDisplayModePort>(ctx, 'productDisplayModePort'),
+          lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
+        ),
         cradle.cartRecomputeCache,
         lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
-        lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
       ),
+      // Issue #436 — the read answers the cart's VAT per rate, from the rates
+      // placement resolves: `organizations`' tax profile and `taxes`' rules.
+      // `specs/182-related-payers/` FR-110 — *Buying for*, through `related_payers`' policy
+      // (`degrades-without`): absent, no payer can be named and a payer's-terms cart returns to
+      // the buyer's own prices on its next read (FR-116).
+      cartBuyingFor: buyingForRoutes(ctx, emFactory, cradle.cartRecomputeCache),
+      cartTaxRates: createProductTaxRateResolver({
+        taxProfiles: lazyPort<OrganizationTaxProfilePort>(ctx, 'organizationTaxProfilePort'),
+        taxes: lazyPort<TaxServicePort>(ctx, 'taxService'),
+      }),
       assertOrganizationCanTransact: async (organizationId) => {
         await ctx.cradle<CartsCradle>().organizationReadPort.assertCanTransact(organizationId);
       },
+      cartApprovalPolicy: (buyer) => cradle.cartApprovalService.submissionRequired(buyer),
       pushLineToShoppingList: (input) =>
         ctx.cradle<CartsCradle>().cartShoppingListBridge.pushLineToShoppingList(input),
       appendShoppingListToCart: (input) =>
@@ -382,9 +512,11 @@ export function registerModule(ctx: ModuleContext): void {
       emFactory,
       resolveCartActor,
       requireCustomer,
+      organizationPermissions,
       cartService,
       cartApprovalService: cradle.cartApprovalService,
       customerAccounts: lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
+      catalogProducts: lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
       visibilityService: new CartOrganizationVisibilityService(
         emFactory,
         lazyPort<CustomerAccountReadPort>(ctx, 'customerAccountReadPort'),
@@ -400,8 +532,12 @@ export function registerModule(ctx: ModuleContext): void {
         lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
         lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
         lazyPort<PromotionApplyPort>(ctx, 'promotionService'),
+        // Issue #1350 — the rates the buyer's cart read resolves, for the gross discount.
+        createProductTaxRateResolver({
+          taxProfiles: lazyPort<OrganizationTaxProfilePort>(ctx, 'organizationTaxProfilePort'),
+          taxes: lazyPort<TaxServicePort>(ctx, 'taxService'),
+        }),
       ),
-      cartApprovalService: cradle.cartApprovalService,
       resolveAdminUserId: (req: FastifyRequest): string | null => {
         const prodActor = (req as { actor?: { kind?: string; adminUserId?: string } }).actor;
         if (prodActor?.kind === 'admin' && prodActor.adminUserId) return prodActor.adminUserId;
@@ -411,6 +547,68 @@ export function registerModule(ctx: ModuleContext): void {
         return null;
       },
     });
+  });
+
+  // The clock of the abandonment sweep (issue #1119): a Job Scheduler and its
+  // consumer — see `workers/cart-abandonment-sweep-worker.ts`. `ctx.worker`
+  // applies `defineModuleWorker('carts', …)`, which is what stops the consumer
+  // with the module: while `carts` is off, no tick runs.
+  //
+  // Attached in a routes body rather than at registration for the reason every
+  // worker in the tree is: this is where `app.log` exists, and a
+  // `BACKEND_ROLE=worker` process reaches it. Built only where the host says
+  // this process consumes queues and offers a connection to build one on; the
+  // shared test server says neither, and drives `sweep()` directly.
+  ctx.routes(async (app) => {
+    const cradle = ctx.cradle<CartsCradle>();
+    await startCartAbandonmentSweep({
+      processRunsWorkers: cradle.processRunsWorkers,
+      moduleQueueRedis: cradle.moduleQueueRedis,
+      sweep: cradle.cartAbandonmentWorker,
+      log: ctx.log,
+      attach: (worker) => ctx.worker(worker, { logger: app.log }),
+      onClose: (close) => {
+        app.addHook('onClose', close);
+      },
+    });
+  });
+
+  /**
+   * FR-034 — the approval cascade (`specs/170-organization-roles/`,
+   * `contracts/commands-audit-events.md` §4; research R-25). `organizations`
+   * and `customer_accounts` announce a role's grants changing and a member's
+   * role changing on commit; a role or a member gaining
+   * `carts.order_without_approval` returns the affected `pending` carts to
+   * `not_required` through this module's own audited transition. A lost event
+   * costs presentation only: placement judges the permission itself.
+   */
+  ctx.subscribe('organization_role.permissions_changed.v1', async (payload) => {
+    const event = payload as unknown as OrganizationRolePermissionsChangedPayload;
+    if (!event.added?.includes('carts.order_without_approval')) return;
+    await ctx
+      .cradle<CartsCradle>()
+      .cartApprovalService.onRoleGainedOrderWithoutApproval(event.organizationId, event.roleId);
+  });
+
+  ctx.subscribe(CUSTOMER_ACCOUNT_ORGANIZATION_ROLE_CHANGED_EVENT, async (payload) => {
+    const event = payload as unknown as CustomerAccountOrganizationRoleChangedEventV1;
+    await ctx.cradle<CartsCradle>().cartApprovalService.onMemberRoleChanged(event);
+  });
+
+  /**
+   * The default subject and body of the three cart-approval e-mails this
+   * module declares in its manifest (issue #651) — a **contribution** hook,
+   * as every module that owns a transactional e-mail registers its own.
+   *
+   * `ctx.onBoot` rather than a registration: the registry is read once, by
+   * `transactional_emails`' boot reconciler inside its plugin body, which runs
+   * after every boot hook.
+   */
+  ctx.onBoot(() => {
+    const defaults = lazyPort<EmailDefaultsRegistryPort>(ctx, 'emailDefaultsPort');
+    defaults.register(CART_APPROVAL_REQUESTED_EMAIL_CODE, CART_APPROVAL_REQUESTED_DEFAULT, 'carts');
+    defaults.register(CART_APPROVED_EMAIL_CODE, CART_APPROVED_DEFAULT, 'carts');
+    defaults.register(CART_REJECTED_EMAIL_CODE, CART_REJECTED_DEFAULT, 'carts');
   });
 }
 
@@ -430,3 +628,70 @@ export const entities = [
   CartItem,
   Cart,
 ];
+
+/** The policy port while `related_payers` is present, else `null` (`degrades-without`). */
+function relatedPayerPolicy(ctx: ModuleContext): RelatedPayerPolicyPort | null {
+  return effectiveState.isPresent('related_payers')
+    ? lazyPort<RelatedPayerPolicyPort>(ctx, 'relatedPayerPolicyPort')
+    : null;
+}
+
+function buyingForRoutes(
+  ctx: ModuleContext,
+  emFactory: () => EntityManager,
+  cache: { invalidate(cartId: string): Promise<void> },
+) {
+  const service = new CartBuyingForService({
+    emFactory,
+    policy: () => relatedPayerPolicy(ctx),
+    linePricing: new CartLinePricing(
+      lazyPort<LinePricesPort>(ctx, 'pricingService'),
+      lazyPort<ProductDisplayModePort>(ctx, 'productDisplayModePort'),
+      lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort'),
+    ),
+    catalogProducts: lazyPort<CatalogProductReadPort>(ctx, 'catalogProductReadPort'),
+    invalidate: (cartId) => cache.invalidate(cartId),
+  });
+  return {
+    set: service.set.bind(service),
+    resetIfUnusable: service.resetIfUnusable.bind(service),
+    available: () => effectiveState.isPresent('related_payers'),
+    payerName: async (organizationId: string) =>
+      (await lazyPort<OrganizationDetailsPort>(ctx, 'organizationDetailsPort').findById(organizationId))?.name ?? '',
+  };
+}
+
+/**
+ * Research R-4 decision 4 — free for an Organization with no payer's-terms link: the policy
+ * answers that from its per-process cache, before any read of the basket. With one, the active
+ * basket's *Buying for* is read and re-vouched by the policy; anything unusable prices as the
+ * buyer (the next cart read resets it, FR-116).
+ */
+async function pricingSubjectOf(
+  ctx: ModuleContext,
+  request: FastifyRequest,
+  buyerOrganizationId: string | null,
+): Promise<string | null> {
+  const actor = request.actor as { kind?: string; customerAccountId?: string } | undefined;
+  const salesChannelId = currentSalesChannel()?.id;
+  if (!buyerOrganizationId || actor?.kind !== 'customer' || !actor.customerAccountId || !salesChannelId) return null;
+  const policy = relatedPayerPolicy(ctx);
+  if (!policy || !(await policy.hasPayerTermsLinks(buyerOrganizationId, salesChannelId))) return null;
+  const em = ctx.cradle<{ emFactory: () => EntityManager }>().emFactory();
+  const cart = await em.findOne(
+    CartEntity,
+    { customerAccountId: actor.customerAccountId, salesChannelId, status: 'active', buyingForTerms: 'payer' },
+    { fields: ['id', 'buyingForOrganizationId'] },
+  );
+  const payer = cart?.buyingForOrganizationId ?? null;
+  if (!payer) return null;
+  try {
+    const priced = await policy.pricingContext(
+      { buyerOrganizationId, customerAccountId: actor.customerAccountId, salesChannelId },
+      payer,
+    );
+    return priced?.organizationId ?? null;
+  } catch {
+    return null;
+  }
+}

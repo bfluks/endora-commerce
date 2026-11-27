@@ -4,6 +4,20 @@ import { PluralizingNamingStrategy } from './pluralizing-naming-strategy.js';
 import { OrgWriteGuardSubscriber } from '../tenancy/org-write-guard.js';
 import type { ConfiguredEntity } from './configured-entities.js';
 import type { ConfiguredMigrations } from './configured-migrations.js';
+import { schemaExtensionProjections } from './schema-extension-projection.js';
+import { schemaExtensionDiscovery } from './table-mapping-rule.js';
+import {
+  rolledOutExtensibleHosts,
+  type ExtensibleHostSet,
+} from '../kernel/schema-extensions/extensible-hosts.js';
+import { SchemaExtensionInvalidError } from '../kernel/schema-extensions/errors.js';
+import { recordActiveSchemaExtensions } from '../kernel/schema-extensions/registry.js';
+import type { ColumnExtension } from '../kernel/schema-extensions/types.js';
+import type { ResolvedEntityExtension } from '../kernel/entity-extensions/declarations.js';
+import type { EntityExtensionOrigin } from '../kernel/entity-extensions/errors.js';
+import { recordActiveEntityExtensions } from '../kernel/entity-extensions/context.js';
+import { assertEntityExtensionMetadata } from './entity-extension-metadata.js';
+import { CORE_MODULE_ID, PLATFORM_ENTITIES } from './platform-schema.js';
 
 /**
  * MikroORM configuration for an Endora platform.
@@ -51,6 +65,82 @@ export interface OrmConfigurationInputs {
   readonly entities: readonly ConfiguredEntity[];
   /** The merged execution order — `configuredMigrations`' answer. */
   readonly migrations: ConfiguredMigrations;
+  /**
+   * The declared extension columns to project (`specs/178-extensible-columns/`
+   * FR-030). Defaults to every declaration the installed packages and overlay
+   * modules the order was merged from contribute — the same producers, so the ORM
+   * and the migration order can never disagree about which declarations exist.
+   */
+  readonly schemaExtensions?: readonly ColumnExtension[];
+  /**
+   * The extensible hosts in force. Defaults to the rolled-out list (FR-011);
+   * the platform's own tests pass a throwaway host table here.
+   */
+  readonly extensibleHosts?: ExtensibleHostSet;
+  /**
+   * The side tables to verify (`specs/187-side-table-extensions/`
+   * `contracts/verification-rules.md` §1). Defaults to what the migration merge
+   * resolved over every composed module — core, packages and overlays — so the
+   * ORM and the order agree on which declarations exist.
+   */
+  readonly entityExtensions?: readonly ResolvedEntityExtension[];
+  /**
+   * Which committed module contributes which entity classes — the owner of
+   * the tables they map (`ENTITY_OWNERS` in this repository's generated entity
+   * registry). An instance has no committed half and passes none: its modules
+   * are packages and overlays, whose entities the merge already attributes.
+   */
+  readonly coreEntityOwners?: ReadonlyArray<readonly [moduleId: string, entities: readonly unknown[]]>;
+}
+
+/**
+ * Module id → its entity classes and origin, over every producer: the
+ * platform's own, the committed modules' and each package's and overlay's.
+ */
+function entityOwnersOf(inputs: OrmConfigurationInputs): {
+  readonly entitiesByModule: Map<string, readonly unknown[]>;
+  readonly moduleOrigins: Map<string, EntityExtensionOrigin>;
+} {
+  const entitiesByModule = new Map<string, readonly unknown[]>([[CORE_MODULE_ID, PLATFORM_ENTITIES]]);
+  const moduleOrigins = new Map<string, EntityExtensionOrigin>([[CORE_MODULE_ID, 'core']]);
+  const add = (moduleId: string, entities: readonly unknown[], origin: EntityExtensionOrigin): void => {
+    entitiesByModule.set(moduleId, [...(entitiesByModule.get(moduleId) ?? []), ...entities]);
+    if (!moduleOrigins.has(moduleId)) moduleOrigins.set(moduleId, origin);
+  };
+  for (const [moduleId, entities] of inputs.coreEntityOwners ?? []) add(moduleId, entities, 'core');
+  for (const contribution of inputs.migrations.packages) add(contribution.id, contribution.entities, 'package');
+  for (const contribution of inputs.migrations.overlays) add(contribution.id, contribution.entities, 'overlay');
+  return { entitiesByModule, moduleOrigins };
+}
+
+/**
+ * The declarations to project, held to V2 against the hosts in force.
+ *
+ * V9 – V11 were asked when the package was read; V2 is asked here as well as
+ * in the migration merge because both are the platform's statement of which
+ * hosts are rolled out, and either one alone could be bypassed by a caller that
+ * built the other's input by hand.
+ */
+function projectedDeclarations(inputs: OrmConfigurationInputs): readonly ColumnExtension[] {
+  const declarations =
+    inputs.schemaExtensions ??
+    [
+      ...inputs.migrations.packages.flatMap((contribution) => contribution.schemaExtensions ?? []),
+      ...inputs.migrations.overlays.flatMap((contribution) => contribution.schemaExtensions),
+    ];
+  const hosts = inputs.extensibleHosts ?? rolledOutExtensibleHosts();
+  for (const declaration of declarations) {
+    if (!hosts.has(declaration.host)) {
+      throw new SchemaExtensionInvalidError(
+        'host-not-extensible',
+        declaration.module,
+        null,
+        `"${declaration.host}" is not extensible on this platform; extensible hosts: ` +
+          `${[...hosts.keys()].sort().join(', ') || '(none)'}`,
+      );
+    }
+  }
+  return declarations;
 }
 
 /**
@@ -84,6 +174,29 @@ export function mikroOrmConfigFrom(inputs: OrmConfigurationInputs): Options {
     console.warn(diagnostic.message);
   }
 
+  // `specs/178-extensible-columns/` FR-030, FR-031. One projection per declared
+  // extension, on its host's own table, and the duplicate-table rule that lets
+  // exactly those through. The pair is set with no declaration too: MikroORM's
+  // own check is never off without the rule, and a configuration that set it
+  // only sometimes would be two configurations to reason about.
+  const declarations = projectedDeclarations(inputs);
+  const projections = schemaExtensionProjections(declarations, inputs.entities);
+  recordActiveSchemaExtensions({
+    declarations,
+    hosts: inputs.extensibleHosts ?? rolledOutExtensibleHosts(),
+    ownership: inputs.migrations.ownership,
+  });
+
+  // `specs/187-side-table-extensions/` FR-010 – FR-013 — the side tables'
+  // metadata rules run right after D2's table-mapping rule, in the same
+  // `afterDiscovered`, so every ORM initialisation refuses before a query. The
+  // context is recorded here without table facts and again by discovery with
+  // them; with nothing declared the rules still hold the bindings (M0).
+  const entityExtensions = inputs.entityExtensions ?? inputs.migrations.entityExtensions ?? [];
+  const owners = entityOwnersOf(inputs);
+  recordActiveEntityExtensions({ extensions: entityExtensions, tables: null });
+  const d2Discovery = schemaExtensionDiscovery(projections.allowed);
+
   return defineConfig({
     clientUrl: databaseUrl(),
     namingStrategy: PluralizingNamingStrategy,
@@ -92,7 +205,20 @@ export function mikroOrmConfigFrom(inputs: OrmConfigurationInputs): Options {
     // transform and which breaks under Vitest. See
     // backend/src/db/entities-registry.generated.ts for the rationale and for
     // what emits it, and ./configured-entities.ts for the package half.
-    entities: [...inputs.entities],
+    entities: [...inputs.entities, ...projections.schemas],
+    discovery: {
+      checkDuplicateTableNames: d2Discovery.checkDuplicateTableNames,
+      afterDiscovered: (storage) => {
+        d2Discovery.afterDiscovered(storage);
+        const tables = assertEntityExtensionMetadata(storage, {
+          extensions: entityExtensions,
+          entitiesByModule: owners.entitiesByModule,
+          moduleOrigins: owners.moduleOrigins,
+          projections: projections.allowed,
+        });
+        recordActiveEntityExtensions({ extensions: entityExtensions, tables });
+      },
+    },
     // The tenant guard on the write side (D-260/A). One subscriber, over the
     // classification registry the `@OrgScoped()` decorators already write, so
     // there is nothing per entity and nothing per module to declare here as
@@ -104,6 +230,17 @@ export function mikroOrmConfigFrom(inputs: OrmConfigurationInputs): Options {
     debug: process.env['NODE_ENV'] === 'development' && process.env['DB_DEBUG'] === 'true',
     allowGlobalContext: false,
     forceUndefined: true,
+    // MikroORM 7 (#1866) changed three runtime defaults the estate was built and
+    // characterised on (#1860), and each is pinned to 6's value here rather than
+    // taken silently with the major: `balanced` loading turns a joined to-many
+    // populate into a second statement — what the bounded-statement-count tests
+    // and the tenant filters' join conditions were measured against —
+    // `forceUtcTimezone` changes how a `timestamp` without a zone is read, and
+    // early `onCreate` hooks change when a default is computed. Moving any of
+    // them is a change of its own, with its own measurement.
+    loadStrategy: 'joined',
+    forceUtcTimezone: false,
+    processOnCreateHooksEarly: false,
     extensions: [Migrator],
     migrations: {
       migrationsList: inputs.migrations.migrations,

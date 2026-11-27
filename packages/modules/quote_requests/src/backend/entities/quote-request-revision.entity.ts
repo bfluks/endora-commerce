@@ -1,4 +1,5 @@
-import { Entity, Index, OptionalProps, PrimaryKey, Property } from '@mikro-orm/core';
+import { OptionalProps } from '@mikro-orm/core';
+import { Entity, Index, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
 import { GlobalEntity } from '@endora-commerce/platform/tenancy';
 import { randomUUID } from 'crypto';
 
@@ -29,6 +30,19 @@ export interface QuoteRequestRevisionLine {
    */
   packagingUnitName?: string | null;
   packagingUnitBaseQuantity?: number | null;
+  /**
+   * Feature 159 (research R-10) — the line's place in the arrangement the
+   * customer was shown. Snapshots are written in display order; only groups
+   * holding a line can appear. Absent on snapshots written before the
+   * feature, read as "ungrouped, legacy order".
+   */
+  /** Order within the line's section. */
+  position?: number;
+  /** `null` = ungrouped. */
+  groupId?: string | null;
+  groupName?: string | null;
+  /** The group's order among the quote's groups; `null` when ungrouped. */
+  groupPosition?: number | null;
 }
 
 @GlobalEntity()

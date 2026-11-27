@@ -5,9 +5,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type {
   DisplayMode,
   ListingPrice,
+  ListingPriceDetail,
   ListingPriceOrderChunk,
   ListingPriceOrderQuery,
   ListingPriceViewerContext,
+  PinnedPriceBookPublishability,
 } from '@endora-commerce/contracts';
 import { EventBus } from '@endora-commerce/platform/events';
 import {
@@ -19,6 +21,7 @@ import {
 import { createRootContainer, type KernelContainer } from '@endora-commerce/platform/composition';
 import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import type {
+  LinePricesInput,
   ListingPricesInput,
   PricingEngineResult,
   PricingLineResult,
@@ -74,7 +77,7 @@ class CorePricingService implements PricingServiceContract {
     } as PricingLineResult;
   }
 
-  async listBracketMinQuantities(_productId: string, _currencyCode: string): Promise<number[]> {
+  async listTierStarts(_productId: string, _currencyCode: string): Promise<number[]> {
     return [1, 10];
   }
 
@@ -82,8 +85,27 @@ class CorePricingService implements PricingServiceContract {
     return new Map();
   }
 
+  async resolveListingPriceDetails(): Promise<Map<string, ListingPriceDetail>> {
+    return new Map();
+  }
+
+  async resolveLinePrices(input: LinePricesInput): Promise<Map<string, PricingLineResult | null>> {
+    const out = new Map<string, PricingLineResult | null>();
+    for (const line of input.lines) {
+      out.set(
+        line.key,
+        await this.resolveLinePrice({ product: line.product, context: { ...input.context, quantity: line.quantity } }),
+      );
+    }
+    return out;
+  }
+
   async namedListPrices(): Promise<Map<string, string>> {
     return new Map();
+  }
+
+  async namedListPublishability(): Promise<PinnedPriceBookPublishability> {
+    return { publishable: true };
   }
 
   async orderByUnitPrice(): Promise<ListingPriceOrderChunk> {
@@ -120,8 +142,8 @@ class TaggingPricingService implements PricingServiceContract {
     return base === null ? null : { ...base, priceListId: `${this.tag}:${base.priceListId}` };
   }
 
-  async listBracketMinQuantities(productId: string, currencyCode: string): Promise<number[]> {
-    return this.inner.listBracketMinQuantities(productId, currencyCode);
+  async listTierStarts(productId: string, currencyCode: string): Promise<number[]> {
+    return this.inner.listTierStarts(productId, currencyCode);
   }
 
   async resolveListingPrices(
@@ -130,12 +152,37 @@ class TaggingPricingService implements PricingServiceContract {
     return this.inner.resolveListingPrices(input);
   }
 
+  async resolveListingPriceDetails(
+    input: ListingPricesInput,
+  ): Promise<Map<string, ListingPriceDetail>> {
+    return this.inner.resolveListingPriceDetails(input);
+  }
+
+  /** The batched line path carries the same adjustment as the single one. */
+  async resolveLinePrices(input: LinePricesInput): Promise<Map<string, PricingLineResult | null>> {
+    const lines = await this.inner.resolveLinePrices(input);
+    return new Map(
+      [...lines].map(([key, line]) => [
+        key,
+        line === null ? null : { ...line, priceListId: `${this.tag}:${line.priceListId}` },
+      ]),
+    );
+  }
+
   async namedListPrices(input: {
     priceListId: string;
     currencyCode: string;
     productIds: readonly string[];
   }): Promise<Map<string, string>> {
     return this.inner.namedListPrices(input);
+  }
+
+  async namedListPublishability(input: {
+    priceListId: string;
+    currencyCode: string;
+    salesChannelId: string;
+  }): Promise<PinnedPriceBookPublishability> {
+    return this.inner.namedListPublishability(input);
   }
 
   async orderByUnitPrice(input: ListingPriceOrderQuery): Promise<ListingPriceOrderChunk> {
@@ -213,6 +260,19 @@ describe('T062 — a client wraps core instead of replacing it', () => {
     expect(line?.priceListId).toBe('acme:core');
   });
 
+  it('the batched line path carries the same decoration (D-287 P0)', async () => {
+    // The cart, the placement drift check and a quote's reference prices price
+    // through `resolveLinePrices`; a decoration of the single call alone would
+    // leave the basket priced by core.
+    const { container } = compose([coreModule(), decoratingModule('acme_pricing', 'acme')]);
+    const pricing = container.cradle['pricingService'] as PricingServiceContract;
+    const lines = await pricing.resolveLinePrices({
+      lines: [{ key: 'a', product: { id: 'p1', attributeValues: {} }, quantity: 1 }],
+      context: { salesChannel: { id: 'ch', defaultCurrency: 'PLN' } },
+    });
+    expect(lines.get('a')?.priceListId).toBe('acme:core');
+  });
+
   it('core still runs — the override delegates rather than reimplementing', async () => {
     const { container } = compose([coreModule(), decoratingModule('acme_pricing', 'acme')]);
 
@@ -231,7 +291,7 @@ describe('T062 — a client wraps core instead of replacing it', () => {
     const { container } = compose([coreModule(), decoratingModule('acme_pricing', 'acme')]);
 
     const pricing = container.cradle['pricingService'] as PricingServiceContract;
-    expect(await pricing.listBracketMinQuantities('p1', 'PLN')).toEqual([1, 10]);
+    expect(await pricing.listTierStarts('p1', 'PLN')).toEqual([1, 10]);
   });
 
   it('preserves the inner registration lifetime, so a singleton stays one instance', async () => {

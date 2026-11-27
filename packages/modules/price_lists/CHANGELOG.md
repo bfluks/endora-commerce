@@ -1,5 +1,1312 @@
 # @endora-commerce/mod-price-lists
 
+## 0.112.0
+
+### Minor Changes
+
+- 8b29aae: Pricing can name an Organization other than the viewer's. `@endora-commerce/platform/http` exports `pricedAudienceOf(request)` and `providePricingSubjectResolver(resolver)` (type `PricingSubjectResolver`): without a contributed resolver `pricedAudienceOf` equals `productAudienceOf`; with one it adds `ProductAudience.pricingOrganizationId`, which visibility never reads. `ListingPriceViewerContext` gains an optional `displayModeOrganization`, so the price display mode can be resolved for the viewer while the price is resolved for another Organization. The catalogue listing and product page, cross-sell tiles, search hits and type-ahead, comparisons and the storefront resolved-price and display-mode endpoints now price for `pricingOrganizationId ?? organizationId` and resolve the display mode for the viewer. Nothing changes for a request no resolver names a pricing subject for; no new cache key is introduced.
+- cd9a755: Issue #470 (D-288; owner ruling O-3, 2026-11-10), second stage: every price-book Command that changes a value now writes the book's own price-change history in the same transaction. Each book it changed gets one `price_list_value_changes` row, with one `price_list_row_value_changes` line per price row it added, changed or removed. A rolled-back Command leaves neither the history row nor its audit entry.
+
+  - The Commands that write it: `price_list.create`, `price_list.update` (only when the name, the priority, the audience kind or the audience members change), `price_list.rows_replace` (the admin row batch, which also carries the bulk change and the CSV import), `price_list.duplicate`, `price_list.base_prices_set` (the base-price editor and `priceBookWritePort`), and `price_list.book_rows_set` / `price_list.book_rows_remove` (`priceBookRowWritePort`, which already wrote it).
+  - `header_before` / `header_after` hold only the changed header values: `name`, `priority`, `audience` as `{ kind, memberIds }` (members sorted), and on a duplicate `amountMultiplier`. A change of the audience kind alone is recorded too. A created book records its whole header in `header_after`.
+  - A line records the row's selection, its quantity window, and both sides of its price in the row's own types, unrounded. A row that keeps its selection and window and changes its price is one `changed` line. A row whose window moves, including one moved by its id in the admin batch, is one `removed` line and one `added` line.
+  - The actor is the Command's. `actor_admin_user_id` is set only for an administrator, and stays `null` for a system, PIM or API-key caller.
+  - Each audit entry points at its row with `valueChangeId`. A base-price write points at one row per currency with `valueChangeIds`. The entries keep their current values for now (`rows`, `byCurrency`, `amountMultiplier`). Removing them is a later stage of #470.
+  - A Command that changes no value writes no history row, and its audit entry has no `valueChangeId`. Status, dates, channels and deletion write none. A deleted book takes its history with it, and the delete's audit entry still records how many rows the book had.
+
+  Nothing reads the history yet, and no route, screen or price changes.
+
+- 2e287a5: Issue #470, third stage: the admin API reads a price book's price-change history. Three new reads, behind `price_lists:read`:
+
+  - `GET /api/v1/admin/price-books/:id/price-history`: the book's value changes, newest first, each with its action, actor, time, changed header values and line count.
+  - `GET /api/v1/admin/price-books/:id/price-history/:changeId/lines`: one change's lines in order, with the row's selection, quantity window and both sides of its price.
+  - `GET /api/v1/admin/price-books/:id/price-history/products/:productId`: one product's lines, its variants' included, newest first.
+
+  The reads are keyset-paged, `{ data, pagination: { cursor, hasMore, limit } }` (50 by default, at most 200), unlike the other price-book lists. Amounts are the stored decimal strings, never rounded. A book the caller cannot see answers `404` like an unknown one. For a caller limited to some organizations, organization ids outside their reach are left out of a recorded audience and counted in `withheldMemberCount`. The actor's id and name are served for an administrator only. Answers carry ids, not labels. The history starts with the release that first wrote it.
+
+  The schemas are in `@endora-commerce/contracts` (`priceBookHistory*`). `price_lists` now declares `admin_users` as a dependency, for the actor names.
+
+### Patch Changes
+
+- b2b41eb: Page headers are shorter and every page has a heading (issue #1436). Home, Profile, the products list, product create and edit, the inventory and warehouse screens and Pricing settings now draw their title as a real page heading. Page descriptions that repeated the title or described the implementation are removed (categories, bulk operations, new price book, SEO, assets library, dictionary, products list, inventory, warehouses, home, profile); the rest are one short line, in English and Polish. Longer explanations — warehouses, Pricing settings, import/export and category taxonomy revisions — moved behind an ⓘ beside the title.
+- 4fdc335: More admin screens follow the DS-03 rule that a frame inside a card is a defect unless it is a field (issue #1437, UX audit 2026-11-17).
+
+  - **My profile** is one form card with three sections (identity, author profile, password) under the one Save, and the language preference, which is saved on its own, is the one card beside it. The language Save's result is a status line beside its button, with an icon, in place of a red or green box inside the card. The language select is named by its heading. The screen is on the kit's primitives.
+  - **Organization detail, price display mode** (`price_lists`, `organization.detail.after`): the panel has a heading (_Pricing_) and renders as an `EditorSection`, so it follows the mount — one titled card at page level, a section inside a host card. It was a card without a heading.
+  - **Return detail** (`returns`): comments and the accepted clauses are rows divided by a rule, not a bordered box each.
+  - **Settings** (`settings`): a group's settings are rows divided by a rule inside the group card, not a bordered box each; a changed row keeps its tint and its _Unsaved_ badge.
+  - **Form entry notes** (`forms`): notes are rows divided by a rule, not a bordered box each.
+
+- 1306e55: The price-book list's filters use the kit's list toolbar (issue #1440). Search, type, status and currency stay in view; sales channel, audience and member are folded behind _More filters_, which counts the folded filters in use and opens by itself when the address carries one. _Clear all filters_ ends the filter row and returns focus to the search box.
+- 84ed7b6: Empty lists now tell "nothing here yet" apart from "your filters match nothing" (issue #1448). The products, inventory, warehouses, back-in-stock and pricing-override lists used to show one sentence for both. Now a list that its filters emptied offers _Clear filters_, and a list with no records offers its create action, if the operator may use it. The sales channels, credentials, online customers, invoice ledger deliveries, dictionary audit and command hooks screens show the kit's empty state instead of a plain grey sentence.
+
+  - **`EmptyState`'s documentation** says where the block belongs. Use it for the page's or the tab's primary region. Keep a one-line sentence for pickers, inline sub-lists and side widgets.
+  - **Header create buttons.** While a list is empty, its header no longer repeats the create button that the empty state carries: products, warehouses, inventory import, sales channels and credentials.
+  - **Removed keys.** `catalog` drops `productsList.empty.prefix`, `.button`, `.suffix` and `.readOnly`. The empty catalog now uses `productsList.empty.noData.*`.
+  - **Peer dependencies.** `mod-sales-channels`, `mod-credentials` and `mod-invoice-ledger` gain an optional peer dependency on `lucide-react` `^1`, which their admin screens now import.
+
+- 1064839: `@endora-commerce/admin-kit/ui` publishes `EmptyState` (issue #1448): the block a list, a tab or a panel shows when it has nothing to show — a decorative icon, a title, at most one line and at most one action, drawn with the design system's `.b2b-empty` classes.
+
+  It has two variants. `no-data` (the default) takes `icon`, `title`, an optional `description` and an optional `action`. `no-results` takes `onClearFilters` and renders the kit's own title, line and _Clear filters_ button (new `core` keys `common.emptyState.clearFilters`, `common.emptyState.noResults.title` and `common.emptyState.noResults.body`, in English and Polish); `icon`, `title` and `description` override them.
+
+  After _Clear filters_ the kit moves focus to `focusAfterClear` (a ref, normally the list's search box) on the next frame, so focus never drops to `<body>` when the button unmounts (WCAG 2.2 SC 2.4.3). Without one, and only if focus was lost, it focuses the page's `<h1>`, else the closest container of the block still in the document. Every list that uses the `no-results` variant here passes its search box; `EntryFilters`, `OpportunityFilterFields` and `TaskFilters` gain an optional `searchRef` for that.
+
+  ```tsx
+  <EmptyState variant="no-results" title={t('list.emptyFiltered')} onClearFilters={clearFilters} />
+  <EmptyState icon={<ClipboardList size={20} />} title={t('list.empty.title')} action={createButton} />
+  ```
+
+  The forms and form-entries lists, the CRM opportunities list, the task and _My tasks_ lists, the task settings lists, the project and project-template lists, the custom-fields table, the price-book list, and the product-feed list, runs, delivery and templates screens now use it. The forms list now says "No forms yet" with a line of its own (a reader is told who can create one), and it hides the header's _New form_ while the empty state carries it. The form-entries list's empty state gains a title.
+
+- 7be07f6: Shorter copy on the catalog screens (issues #1458 and #1459, UX audit CAT-13 and CAT-14), in English and Polish.
+
+  - **Product editor:** the sentences under Gallery, Attachments, Attributes, Categories and SEO that repeated the _Applies immediately_, _Unsaved_ and _Global only_ badges are gone, and so are the notes under _Minimum order quantity_ and the packaging units' minimum. Field notes are one clause; the longer explanation of _Status_, _Publication window_ and _Returnable_ moved behind an ⓘ beside the label. The confirmations for duplicate, archive and restore, the unsaved-changes question and the inventory and order-rules notes are shorter. The SKU field is labelled _SKU_; the create form says once, under it, that it cannot be changed later. The base-price panel explains what a base price is only while the product has none.
+  - **Products list:** shorter bulk-edit hints and archive / restore confirmations.
+  - **Attributes, price lists, warehouses, custom fields, product feeds, import/export, assets:** shorter help texts and notices; the product feed FTP passive mode, the only supported one, is shown as text instead of a disabled one-option select.
+  - **Settings and SEO:** the descriptions of _Completeness check when switching a product on_ and of the LLM search toggle are one or two short sentences, the same English text in the manifest (what the API serves) and in the admin bundle, and so are the two notices above the robots.txt preview.
+
+- 87fb9c3: On the Settings screen a boolean setting is a switch instead of a `true` / `false` list, and an enum setting's options read as labels in English and Polish instead of machine codes (issue #1479). The switch changes the draft like every other field; the page's one Save still writes it. The default and global values under a field read as "On" / "Off" and as option labels too.
+
+  A module labels its enum setting's options in its own bundle, under `settingLabels.<setting code>.options.<option value>`; an option without a label is shown as its value. Every enum setting shipped in the platform now has those labels, except `seo.default_robots`, whose directive pairs are the vocabulary.
+
+- 998ac87: Banners that appear as the result of an action keep being announced now that the kit's `Alert` no longer interrupts for every variant (issue #1484). A refused or partly rejected action (activating a price book, a stale price-book save, a taxonomy revision, quick-order lines, quote-request lines unavailable on the channel) is announced at once, and so is the shell's notice to an administrator without a role. An import, undo, PDF or save result, a template-preview verdict, a brand contrast warning, a changed refund method, the organization-attribution scope notice and the information notices after an action are announced politely. Static banners present when a page loads, such as the modules screen's degraded-mode warning or a quote request's lapsed validity, are shown but no longer announced as an interruption.
+- 31b5403: The product editor has one heading outline: the page `h1`, each tab's sections as `h2`, their sub-sections as `h3`, with no level skipped (issue #1490, UX audit CAT-11).
+
+  `@endora-commerce/mod-catalog`: the Scope map tab no longer opens with a "Scope map" `h3` that repeated the tab's name. The map is an `h2` section, _Values by channel and language_, with the help line as its description, and _No longer applies_ (an `h4` before) is the `h2` section after it. A reset still returns focus to the map's heading. A content attribute's card on the Attributes tab captions its label like the fields beside it instead of using an `h3` with no `h2` above it. A bundle slot's heading is an `EditorSection` at `h3`, styled like every other sub-section.
+
+  `@endora-commerce/mod-seo`: the SEO tab no longer opens with an "SEO meta tags" heading. Its fields are two `h2` sections, _Search results_ (title, meta description) and _Social sharing_ (the Open Graph fields). The `productSeo.title` message is removed.
+
+  `@endora-commerce/mod-price-lists`: the Pricing tab's _Base prices_ and _Price books pricing this product_ are `EditorSection`s divided by a rule, like the other tabs' sections, instead of headings with extra space above the second one.
+
+- 44c09b1: Four more tab strips are the admin kit's `Tabs` (issue #1491): the products list's status tabs (All / Active / Inactive / Archived), the price book's Settings / Prices, the product feed's Overview / Runs / Delivery / Settings and the taxonomy-updates screen's provider tabs. Each is a named tab list with one tab stop, ←/→ and Home/End, and the content below it in the one panel the selected tab labels; they all look like the design system's strip. The products list's status still opens from `?status=`, the price book's tab still lives in `?tab=`, and both price-book sections stay mounted, so unsaved prices survive a look at the settings. A count of zero on a products-list tab is no longer drawn, and a count is read out with what it counts ("Active, items: 12").
+
+  On a feed's schedule, _Custom…_'s two input methods (choose a schedule / write a cron expression) are a radio group rather than a second tab strip inside the Settings tab.
+
+- e685326: The product feeds, price lists, SEO and import/export screens now use one visual system: the admin kit's `ui/*` primitives and Tailwind utilities instead of the legacy `b2b-*` classes and inline styles (issue #1492, UX audit CAT-17). Side drawers keep their frame until the kit has a drawer.
+
+  - Product feeds: when the operator may not download a feed or run file, _Download_ is a disabled button. Before, it was a link with clicks turned off, and the keyboard could still follow it. The sample-product picker's search box now has a name, its loading line is announced, and a failed load shows as an alert. _Export_ is a kit button. The template-editor search and the loading lines use the kit's look.
+  - Price lists: the display-mode override row uses the kit `Label` and `Select`. Its help line is linked to the select, so a screen reader reads it with the select. The _show the list price_ switch is the kit `Checkbox`.
+  - SEO and import/export: _Edit in the product editor_ and _Import / export_ are kit outline buttons.
+
+- f3b2ec8: The products list, the product editor's Inventory tab and packaging units, the inventory list, the sales-channel warehouses panel and the pricing settings page draw one visual system: the admin kit's `ui/*` primitives and Tailwind utilities, instead of kit components next to the legacy `b2b-*` classes and inline styles (issue #1492, UX audit CAT-17).
+
+  `@endora-commerce/admin-kit` theme. **Breaking for a module that renders these classes (0.x, so released as a minor).** Nothing in the platform renders them any more, so they are removed from `theme.css`:
+
+  - `.b2b-bulkbar` (and its `.count`, `.actions` and button rules): the products list's bulk-action bar was its only renderer. Draw the bar with `Button` from `./ui` inside a Tailwind row, for example `<div className="flex items-center gap-3 rounded-md border bg-muted px-3 py-2"><Button size="sm">…</Button></div>`.
+  - `.b2b-table`: a table class one screen used. Use `Table`, `TableHeader`, `TableBody`, `TableRow`, `TableHead` and `TableCell` from `./ui`.
+  - The `.b2b-tbl` row and cell modifiers `tr.is-selected`, `tr.is-clickable` and `.col-cb`. `.b2b-tbl` itself stays. With the kit `Table`, mark a selected row with `<TableRow data-state="selected">`, make a clickable row `className="cursor-pointer"`, and size a checkbox column with `className="w-8"`.
+
+  `@endora-commerce/mod-catalog`: the products list is a kit `Card` with kit buttons, checkboxes and table. The page and row checkboxes now have accessible names, and the bulk-action bar is a light row with one filled primary, where it used to be a dark inverted bar. The row thumbnail placeholder is one neutral tile instead of a colour derived from the product id. On the Inventory tab, the two low-stock threshold modes form one radio group named after their section, and the inputs and the per-warehouse table come from the kit. Packaging units use kit inputs, which were unstyled before because the class they used was never defined, and icon buttons to reorder.
+
+  `@endora-commerce/mod-inventory`: the inventory list's KPI tiles and per-warehouse totals are kit cards, each KPI marked up as a term and its value. The sales-channel warehouses panel uses the kit table, select and buttons. Its _Add_ is an outline button now, because it applies at once and the channel editor's Save is the page's one primary.
+
+  `@endora-commerce/mod-price-lists`: the pricing settings page switches scope through kit tabs instead of three hand-coloured buttons. Its saved and failed results are kit `Alert`s: a saved change is announced politely, a failure as an alert. The override search has an accessible name, and in the _Add override_ drawer each candidate is a keyboard-reachable button.
+
+- 50d451b: The product editor has fewer tabs (issue #1510, UX audit CAT-10). Media and Attachments are one **Media & files** tab with the gallery and the attachments as its two sections, and the Scope map is no longer a tab: it opens as a side drawer from the Scope map link in the scope bar and from the completeness line, and its address is `?scopeMap=1`. Old addresses keep working — `?tab=scopes` opens the drawer and `?tab=attachments` the Media & files tab, each rewritten to the current address; the bulk-edit result links to `?scopeMap=1`. A simple product now has eight tabs at most. `ModalDialog` gains `placement="end"` (exported type `ModalDialogPlacement`), a full-height panel docked to the inline end of the viewport, with the same modal behaviour.
+
+  The Pricing tab's base-price panel (issue #1529, CAT-19) says "No base price in …" and "Not orderable below …" in the warning token with an icon instead of a hard-coded amber, so it reads in every theme, and it drops its own **Discard changes** button: the editor's one Save and its Save / Discard / Stay question are the one way to keep or drop the changes. The `basePrices.discard` string is removed.
+
+- df16345: The Settings screen shows less on every row (UX audit SHELL-09, SHELL-23). A row no longer carries a value-type badge, a source badge or a "Default … · 0 per-channel overrides" footer: one muted line appears only when the value in force differs from the default or channels override it. A changed row is marked by a bar at its edge, a switched-off module's group states its read-only reason once, the "Editing for" channel picker sits in the toolbar beside the search, and the hard-coded "system" group badge is gone. Single-line controls sit to the right of the setting's name.
+
+  A setting's description is now at most 120 characters (`check:text-budget`), with the long explanations left to each module's documentation page, and it never falls back to another language: in Polish the screen shows the Polish description or none. Every module that declares settings now ships `settingLabels.<code>.name` and `.description` in English and Polish, so the screen no longer shows English names in Polish. Where a manifest declared one of the shortened descriptions, its `description` is the same shorter sentence.
+
+- 306a659: The back link above an admin page title now names the screen it leads to, in the words that screen uses for its own title — _Organizations_, _Price books_, _CMS pages_ — instead of _Back to organizations_, _All warehouses_, _Back to list_ or a bare _Back_ (follow-up of issue #1549). A generic _Back_ remains only where a screen was opened from somewhere else and leads back there. The rule is described under `PageHeader` in the admin-kit README.
+
+  The back-only translation keys these screens no longer read are removed: `categoryEditor.backToTree` and `postEditor.backToList` (blog), `bulkOperations.detail.back` and `categoryContent.action.back` (catalog), `common.back` (cms, megamenu), `detail.backToList` (comparisons), `entry.back` (forms), `priceBooks.common.backToList` (price lists), `detail.back` (returns), and `inventory.import.back`, `warehouses.editor.backToList`, `organizations.detail.back` and `rfqCreate.back` (core bundle). A deployment that overrides one of them overrides the destination screen's title key instead. `taxIdScope.back` (organizations) and `productContent.action.back` (catalog, now the fallback while the product name loads) keep their keys with new text; `runs.detail.feedFallback` (product feeds) is new.
+
+- 0d4c134: Accessibility follow-ups from the UX audit (issues #1599, #1600, #1607).
+
+  - **Scope picker** (CMS pages, blocks and templates; blog posts and categories): the _Languages_ heading now names the group of language checkboxes, so a screen reader announces "Languages, group" when focus enters it. It used to be a label attached to nothing.
+  - **New order — delivery and billing address**: the _Pick existing_ / _Enter new_ buttons are a group named _Address source_, and pressing the option already chosen no longer clears a typed address or a picked one.
+  - **Pricing settings — Show the list price beside the buyer's price**, and the **Private** setting on a new task and on a task's page, are now the standard on/off switch rather than a checkbox announced as a switch. A task's _Private_ switch that cannot be turned on (other people are assigned) stays focusable and says why.
+  - The unused, never-displayed _Quote requests_ settings tab component in the Settings module, and its strings, are removed. The quote-request settings are unchanged.
+
+- 8688a1f: Nine more admin list screens now use the kit `ListPage` (issue #1749): Inventory, Low stock, Warehouses, Availability notifications, Product feeds, Price books, Return reasons, Return delivery methods and Return clauses. Each one has the kit's loading skeleton, a load error with **Retry**, and the result count at the end of the toolbar row. The inventory lists' toolbar is a row above the results, not a strip inside their card. A filter or page change on Inventory, Warehouses, Availability notifications and Price books keeps the rows on screen while it reloads. Return clauses show the kit empty state instead of a bare sentence. Product feeds no longer show _New feed_ twice while there is no feed.
+
+  - `@endora-commerce/admin-kit`: the `ListPage` `tabs` slot is documented as the band between the header and the toolbar, which can also hold a KPI strip.
+  - New `en` / `pl` keys: core `warehouses.count`, `inventory.count`, `inventory.lowStock.count`, `inventory.availability.count`; `product_feeds` `feeds.count`; `returns` `reasons.count`, `methods.count`, `clauses.count`.
+
+- 0686447: Always pass the admin UI language to `formatDate(value, language)` and `formatDateTime(iso, language)` (`@endora-commerce/admin-kit/lib`), taking it from `useTranslationContext()` or `useAppLanguage()` (`@endora-commerce/admin-kit/i18n`). **Upgrade note:** calling either without a language is now `@deprecated`. It still falls back to the browser's locale, but that fallback will be removed in a later release, so `formatDateTime(order.placedAt)` should become `formatDateTime(order.placedAt, language)` now. The kit's field-protection summary reads the language without requiring `AppLanguageContext`, so an integration zone rendered without it keeps working.
+
+  Every admin date now goes through them, so a screen no longer mixes `17.11.2026`, `11/25/2026` and `Nov 22, 2026`: the lists, detail pages and panels of every module that called `formatDateTime` without a language, and the screens that called `toLocaleDateString` / `toLocaleString` directly (the CRM board card, the Projects stage bar and templates list, the Organization sales reps tab — which wrote every date in Polish — the blog post editor, comparisons, the dictionaries audit, display-mode overrides, the feed schedule's next run, the online-customers refresh time, the product list's update date, and the kit's comment thread, record history, field-protection summary and order reference). `endora new module` scaffolds its list's date the same way.
+
+- 9eee781: The Admin UI in Polish no longer shows four kinds of text in English (issue #1809).
+
+  - **Order statuses** are named in the admin's language on the Orders list, the order detail, the bulk status dialog and the Order statuses screen. The names were always stored per language; the screens read the English one.
+  - **CMS hooks**: the 23 seeded hooks, such as "Search Page Bottom", are named and described in the admin's language until an operator renames them. A renamed or custom hook keeps the operator's text.
+  - **Transactional e-mails**: each e-mail's name, description and the reason it cannot be switched off come from the sending module's bundle (`transactionalEmails.<code>.name`, `.description`, `.reason`), in the language the response is read in.
+  - **Platform → Modules**: each module's name, description and the reason it cannot be switched off come from the module's own bundle (`module.name`, `module.description`, `module.nonDeactivatableReason`). `GET /api/v1/admin/modules` gains an optional `nonDeactivatableReason` field on each row. `auth`, `currencies`, `email` and `languages` now ship translation bundles.
+
+  Each of these falls back to the English declared in code when a bundle has no entry. `endora new module` now writes `module.description` into the scaffolded bundles.
+
+- 0fbf186: `organizations` now creates `organizations.customer_group_id` and
+  `organizations_customer_group_id_index` itself, in the new
+  `Migration20261117T033143OrganizationsCustomerGroupColumn` (issue #611). Until now only
+  `price_lists`' `Migration20260426T075235PriceListsPricingInit` created them, although the column
+  belongs to `organizations`' `Organization` entity. That migration keeps its class name and no
+  longer names `organizations` in `up()` or `down()`. The new migration uses `if not exists` with the
+  same type and index name, so a database that has already applied the old migration does not change.
+  `FIRST_PARTY_FOREIGN_WRITE_EXEMPTIONS` no longer lists `price_lists` writing `organizations`.
+- Updated dependencies [c878440]
+- Updated dependencies [65f9a7b]
+- Updated dependencies [3fdbe86]
+- Updated dependencies [bfc68c7]
+- Updated dependencies [9eaa409]
+- Updated dependencies [d908737]
+- Updated dependencies [1042e2a]
+- Updated dependencies [3872f3d]
+- Updated dependencies [bbfcd80]
+- Updated dependencies [41b598c]
+- Updated dependencies [f5b8275]
+- Updated dependencies [467b075]
+- Updated dependencies [a56109e]
+- Updated dependencies [84b89ed]
+- Updated dependencies [b2cd2d3]
+- Updated dependencies [e5b17ae]
+- Updated dependencies [e78d27d]
+- Updated dependencies [596ce81]
+- Updated dependencies [b2b41eb]
+- Updated dependencies [932821f]
+- Updated dependencies [28181ed]
+- Updated dependencies [c15eb60]
+- Updated dependencies [33db45a]
+- Updated dependencies [cec9beb]
+- Updated dependencies [d4bda8d]
+- Updated dependencies [8e7684c]
+- Updated dependencies [87fb9c3]
+- Updated dependencies [998ac87]
+- Updated dependencies [d0a6c2c]
+- Updated dependencies [35e0829]
+- Updated dependencies [3f66b6f]
+- Updated dependencies [61bdc2a]
+- Updated dependencies [649d662]
+- Updated dependencies [38adf84]
+- Updated dependencies [7329865]
+- Updated dependencies [84ed7b6]
+- Updated dependencies [1064839]
+- Updated dependencies [d2d9d79]
+- Updated dependencies [f687479]
+- Updated dependencies [074f500]
+- Updated dependencies [7624db6]
+- Updated dependencies [cec9beb]
+- Updated dependencies [7be07f6]
+- Updated dependencies [2614e4f]
+- Updated dependencies [90320fd]
+- Updated dependencies [bb21b86]
+- Updated dependencies [79a17a3]
+- Updated dependencies [3dab0be]
+- Updated dependencies [e22b612]
+- Updated dependencies [cb75825]
+- Updated dependencies [a4455db]
+- Updated dependencies [f3b2ec8]
+- Updated dependencies [f093a02]
+- Updated dependencies [d5a077f]
+- Updated dependencies [86b9b39]
+- Updated dependencies [42febee]
+- Updated dependencies [447e829]
+- Updated dependencies [2040ae9]
+- Updated dependencies [fc7f669]
+- Updated dependencies [40b76aa]
+- Updated dependencies [eeed5c8]
+- Updated dependencies [63a657b]
+- Updated dependencies [0ecb287]
+- Updated dependencies [9a27b93]
+- Updated dependencies [2f0b69f]
+- Updated dependencies [87b9b60]
+- Updated dependencies [50d451b]
+- Updated dependencies [98c0411]
+- Updated dependencies [9f4eae3]
+- Updated dependencies [a8261aa]
+- Updated dependencies [f64646d]
+- Updated dependencies [306a659]
+- Updated dependencies [7ea72af]
+- Updated dependencies [f6dda10]
+- Updated dependencies [f6dda10]
+- Updated dependencies [f6dda10]
+- Updated dependencies [bfbcac2]
+- Updated dependencies [ee6062c]
+- Updated dependencies [820f089]
+- Updated dependencies [f33ffed]
+- Updated dependencies [4e668b5]
+- Updated dependencies [843ed42]
+- Updated dependencies [0d4c134]
+- Updated dependencies [3f7b5ae]
+- Updated dependencies [b98739c]
+- Updated dependencies [6155f4b]
+- Updated dependencies [bdcc9a4]
+- Updated dependencies [5850aac]
+- Updated dependencies [c042024]
+- Updated dependencies [8a5725e]
+- Updated dependencies [f915a24]
+- Updated dependencies [8688a1f]
+- Updated dependencies [95e5082]
+- Updated dependencies [31c0430]
+- Updated dependencies [0686447]
+- Updated dependencies [691414b]
+- Updated dependencies [8a06dc5]
+- Updated dependencies [e118ee4]
+- Updated dependencies [5fb3cd3]
+- Updated dependencies [9eee781]
+- Updated dependencies [bd47236]
+- Updated dependencies [bd47236]
+- Updated dependencies [79d15cf]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [398e6d2]
+- Updated dependencies [51c5072]
+- Updated dependencies [0e81803]
+- Updated dependencies [2e287a5]
+- Updated dependencies [fbc6c7c]
+- Updated dependencies [9d6f006]
+- Updated dependencies [49328cf]
+- Updated dependencies [b3d4843]
+- Updated dependencies [f74fe34]
+- Updated dependencies [19eb7c0]
+- Updated dependencies [0fbf186]
+- Updated dependencies [27b977d]
+- Updated dependencies [5e2a12a]
+- Updated dependencies [5518a09]
+- Updated dependencies [5e380e3]
+- Updated dependencies [bfab5bd]
+- Updated dependencies [8a0ec92]
+- Updated dependencies [81fcc3f]
+- Updated dependencies [12c63fa]
+- Updated dependencies [72637e0]
+  - @endora-commerce/platform@0.112.0
+  - @endora-commerce/contracts@0.112.0
+  - @endora-commerce/admin-kit@0.112.0
+
+## 0.111.0
+
+### Minor Changes
+
+- 3de70b4: New port `PriceBookRowWritePort` (container name `priceBookRowWritePort`, exported as `PRICE_BOOK_ROW_WRITE_PORT`, owner `price_lists`): a module — an ERP or PIM connector — can now write the rows of one product in one non-base price book (a customer-group, organization, catalogue or sale book) without an admin HTTP call. `replaceBookRows(bookId, productId, { product: BasePriceTier[], variants?: Record<variantId, VariantRowWrite | null> })` replaces the product's fixed tiers and the rows of the named variants and answers `BookProductRows`; `removeBookRows(bookId, productId)` removes them (a no-op when there are none); `bookRows(bookId, productId)` reads them, or `null`. Only rows the write shape can say are the port's: a row an administrator entered that it cannot say — a product-level percentage or amount, an adjustment limited to a quantity range — is neither replaced nor removed and keeps pricing; `bookRows` reports it with `complete: false`, and a tier that would overlap it, even one starting at the same quantity, is refused with `409 PRICE_BOOK_ROW_OVERLAP` naming it, never written over it. Each write goes through the admin row batch's rules and command, audited as `price_list.book_rows_set` or `price_list.book_rows_remove` with the caller's actor — the entry holds names, counts and a `valueChangeId`, never a price or a quantity; the prices go to the book's own price-change history (`price_list_value_changes`), written in the same Command — and bumps the pricing generation once, naming the book and the product; a write that changes nothing writes nothing. The port creates no book and changes no header. Base books are refused with the new error code `409 PRICE_BOOK_BASE_BOOK` (write base prices through `priceBookWritePort`, which is unchanged) and expired books with `409 PRICE_BOOK_EXPIRED`; both codes are added to `ERROR_CODES`, with the new schemas `bookProductRowsWriteSchema` and `bookProductRowsSchema` and the type `VariantRowWrite`. Additive (issue #1028).
+- e435bad: The product editor's one Save now covers the panels contributed to its zones (issue #407, `specs/180-one-save-zone-editors/`).
+
+  **mod-catalog:**
+  - The editor runs a save session keyed on the scope it opened, and passes the session to every product-editor zone except SEO.
+  - Save counts the product's staged changes plus every panel's.
+  - Save writes the product's own changes first and the panels after, each through its own module.
+  - If a panel's write fails after the product saved, the editor reports what was saved and what was not, and the next Save writes only what is left.
+  - One guard covers every unsaved change on the page, including a scope switch. The browser's leave prompt covers panel changes too.
+  - Save is shown to an operator who may write the product or any panel.
+  - The Pricing tab heading no longer says "Applies immediately".
+  - The editor context carries `saveSession`.
+
+  **mod-price-lists:**
+  - The product's base-price panel saves with the product editor's Save. It no longer has a _Save prices_ button or a leave prompt of its own.
+  - `PUT /api/v1/admin/price-books/base-prices/:productId?dryRun=true` runs every rule of the write and writes nothing (no Command, no audit entry). The editor's Save calls it before anything is written.
+  - The admin client gains `checkBasePrices(productId, body)`.
+  - The `basePrices.save`, `basePrices.saving` and `basePrices.status.*` strings are removed; `basePrices.partLabel` is added.
+
+- 036865c: The category editor's Save now covers the panels contributed to `category.editor.after` (issue #407, `specs/180-one-save-zone-editors/` WP-6).
+
+  **mod-catalog:**
+  - The category editor runs a save session, one per open category, and passes it to `category.editor.after`.
+  - The zone is mounted above the Save / Cancel row instead of below it.
+  - Save reads "Save" or "Save n changes", counting the category's own field changes plus every panel's. It does nothing while there is nothing to save.
+  - Save writes the category first, then the panels. If the category write is refused (a slug that is taken, an invalid custom field), no panel is written. If a panel fails after the category saved, the editor stays open and reports what was saved and what was not; the next Save writes only what is left.
+  - Opening another category with unsaved changes asks _Save and continue / Discard changes / Stay here_. Cancel discards every change without asking, as before. Leaving the page or closing the browser tab with unsaved changes asks too.
+  - A refresh of the tree after a write no longer unmounts the open editor.
+  - New strings in English and Polish: `categories.save.hostPartLabel` and `categories.guard.*`.
+
+  **mod-price-lists:**
+  - `DisplayModeOverrideRow` takes an optional `saveSession`. With one, changing the select stages the mode as the part "Price display mode" (`displayModeRow.partLabel`, English and Polish) and the host's Save writes it through the same `PUT /api/v1/admin/pricing/display-mode-overrides/:scope/:targetId`. There is no write on change and no "saved" suffix. Without `saveSession` the row saves on change as before.
+  - The category editor contribution passes the editor's session, so the category's display mode saves with the category. The organization detail is unchanged for now.
+
+- 75027ef: The organization detail screen now has one Save for the whole page (issue #407, `specs/180-one-save-zone-editors/` WP-7).
+
+  **mod-organizations:**
+  - The screen runs a save session, one per organization, and passes it to `organization.detail.after`. The Save button sits in the page header (a sticky bar at the bottom on narrow screens). It reads "Save" or "Save n changes" and does nothing while there is nothing to save.
+  - Status, VAT status, order-confirmation e-mails, fulfilment strategy, restrictions and custom fields no longer save on change, on blur or through their own Save buttons. They are staged and written by the page's Save: first one `PATCH /api/v1/admin/organizations/:id` with `expectedUpdatedAt`, carrying only the fields that changed, then, if the allow-lists changed, the `PUT …/restrictions` with the version the `PATCH` returned. After that come the panels, in zone order.
+  - If either write answers `VERSION_CONFLICT`, no panel is written. The organization is reloaded, every unsaved change on the page (the screen's and every panel's) is discarded, and the screen says so. If a panel fails after the organization saved, a summary reports what was saved and what was not, and the next Save writes only what is left.
+  - Members (invite, direct add, role, edit, remove), hierarchy, moderation, VAT validation, sales channels, roles and sales representatives still apply immediately. Each of these sections now carries an "Applies immediately" badge.
+  - Leaving the page with unsaved changes asks first.
+  - An operator without `customers:manage` sees status, VAT status, e-mails, fulfilment strategy, restrictions and custom fields read-only. The page's Save would never write them for that operator.
+  - New strings in English and Polish: `detail.save.hostPartLabel` and `detail.save.conflict`. The badge is `@endora-commerce/admin-kit`'s `ImmediateBadge`.
+
+  **mod-price-lists:**
+  - The organization detail's display-mode panel passes that screen's session, so the display mode is saved by the page's Save instead of on change. No host is left without a session, so `DisplayModeOverrideRow` now requires `saveSession`, and its save-on-change branch and its "saved" suffix are gone.
+
+- e30c1cb: Issue #409 — after a bulk write, the owning module now runs `VACUUM (ANALYZE)` of the tables it wrote in the background, so the admin's index-only reads (the product list's ordered walk and search count, a price book's lines and searches) have fresh statistics and a visibility map before autovacuum's first pass, which for a write below autovacuum's scale factor may never come.
+
+  - **`@endora-commerce/mod-catalog`** adds the BullMQ queue `catalog.table-maintenance` and its consumer: a products import that wrote (`catalogBulkImportPort.importProducts`, not a dry run) asks for `products` and `product_variants`. `import_export` reaches it through that port and names no table.
+  - **`@endora-commerce/mod-price-lists`** adds `price_lists.table-maintenance`: a price-book row batch (the editor's save and its CSV import), a base-price write (`priceBookWritePort`, the PIM price import) and a book duplicate ask for `price_list_matrix_entries` and `price_list_product_lines`.
+
+  Each request is a job delayed by one minute and deduplicated by its table (BullMQ `deduplication` with `keepLastIfActive`), so a burst of writes costs one vacuum per table, and a write while one runs keeps exactly one follow-up. The consumers run one job at a time where the host consumes queues, stop with their module, and log a failure; the write itself never waits for or fails on the request. Without a worker nothing changes — autovacuum remains the fallback. No migration, no new dependency.
+
+- 44ad9cd: Issue #470 (D-288; owner ruling O-3, 2026-11-10), first stage: the schema of a price book's own price-change history. The migration `Migration20261110T073922PriceListsValueChanges` creates two tables owned by the module, and the package's `entities` array registers their entities. Both are `@RuleScoped` like the book.
+
+  - `price_list_value_changes` (`PriceListValueChange`) holds one row per Command that changed a value: the action, the actor, the time, the changed header values and the line count. It is indexed on `(price_list_id, at desc, id desc)`.
+  - `price_list_row_value_changes` (`PriceListRowValueChange`) holds one line per price row the Command added, changed or removed. Each line has the row's selection and quantity window, and both sides of its price in the row's own types, `numeric(14,4)` and `numeric(7,2)`. It is keyed by `(change_id, seq)` and indexed on `(price_list_id, product_id, at desc)`.
+
+  Both tables cascade from their price book. Deleting a book deletes its price history (owner ruling, 2026-11-10). Lines also cascade from their change.
+
+  Nothing writes or reads the tables yet, and no behaviour changes. Price-book audit entries keep their current contents until a later stage of #470.
+
+- ecbebe2: Two `price_lists` refusals have error codes of their own instead of `VALIDATION_FAILED`, and a
+  sentence in English and Polish (issue #636, part of #86). **A caller that matches on
+  `VALIDATION_FAILED` for either of them now sees the specific code.** The HTTP status is unchanged.
+  Both were refused by the book's stored state, not by the request, and until now the reader got the
+  English literal, because the error envelope never replaces the message of `VALIDATION_FAILED`.
+
+  | Where                                                                                                      | Was                                                                                                                                                                                                | Is                                    | `details`                                               |
+  | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------- |
+  | `priceBookWritePort.replaceProductBaseTiers` (`PriceBookService.setBasePrices` keeping the variants' rows) | `400 VALIDATION_FAILED`, "The base prices were refused. A variant's percentage or amount adjustment needs the product's own base price in this currency.", `details` the `[{ path, issue }]` array | `400 PRICE_BOOK_BASE_PRICE_REQUIRED`  | `productId`, `currency`, and the same array as `issues` |
+  | `PriceBookService.replaceChannels` on a base book                                                          | `400 VALIDATION_FAILED`, "The channel set was refused. A base book is channel-independent and has no channel set."                                                                                 | `400 PRICE_BOOK_BASE_HAS_NO_CHANNELS` | `priceBookId`, `currency`                               |
+
+  `details` of `PRICE_BOOK_BASE_PRICE_REQUIRED` is now an object: a caller that read the issue array
+  directly finds it under `details.issues`.
+
+  `buyerLinePricePort.resolveForBuyer` with a `null` channel on an installation with no
+  system-default sales channel threw `400 VALIDATION_FAILED` "No default sales channel."; it now throws
+  the platform's `NoSystemDefaultChannel` (`500 INTERNAL`). No request causes that state and no buyer
+  can fix it: the boot reconciler guarantees a default channel, so a booted deployment never reaches
+  it.
+
+  The other refusals of the price-book service (a missing version, an empty channel set, an unknown
+  channel, `endsAt` not after `startsAt`, a malformed row plan) stay `VALIDATION_FAILED`. The two codes
+  are members of `ERROR_CODES` in `@endora-commerce/contracts`, declared by the `price_lists`
+  manifest, and the module's developer guide lists them. No setting, permission or migration changes.
+
+- 42a9a4b: One sales-representative reach rule on every admin surface (issue #305, owner ruling 2026-11-07). A sales representative reaches every Organization not governed by another representative — the ones assigned to them (with `organizations:rollup`, their subtrees, the nearest assignment winning) and every Organization nobody is assigned to. `adminTenantScopePort` answers that reach as its complement, computed in one statement per request (`SalesRepAssignmentService.reachOf`), so the tenant-scoped reads and writes of every module, the Organizations list and its pickers, admin search and the Organization screens answer by the same rule. Every module that read the reach as a list of assigned ids now reads it through the platform's helpers.
+
+  `mod-orders`: `resolveAdminOrdersScope` answers `{ allowAll: boolean }` (was `{ allowAll: false, allowedOrganizationIds }`); the list's reach is the ambient tenant context's. `mod-customers`: `ResolveModerationActor` answers `{ adminUserId, isPlatformAdmin }` (was with `allowedOrganizationIds`).
+
+  **Behaviour change on upgrade.** Every sales representative gains the tenant data of every unassigned Organization — members, customers, orders, invoices, carts, returns, quote requests and customer-level settings — and, since no representative can be assigned to a personal Organization, of every B2C customer (confirmed by the owner on 2026-11-08). The Organizations list, its pickers and admin search stop showing Organizations assigned to other representatives. A sales representative with no assignment used to be treated as a platform administrator by the quick-order default-preference routes; they now manage only the Organizations they reach, and a write naming an Organization that does not exist answers `404 NOT_FOUND`. The read-only query in _Upgrading an instance_ ("One sales-representative reach rule on every surface") counts, per representative, what they gain and what leaves their lists.
+
+### Patch Changes
+
+- 0e14e9b: **The storefront pricing routes read `Accept-Language` as a q-weighted list matched against the sales channel's languages, and the admin price-book labels follow the operator's language** (issue #1011).
+
+  - `GET /api/v1/storefront/pricing/display-mode/:productId` and `GET /api/v1/storefront/products/:id/resolved-price` ask whether the product is available at the request's (channel, language). That language used to be the header's first tag alone, so `Accept-Language: en;q=0.2, pl-PL;q=0.9` asked about English and `de-DE, pl;q=0.5` about the channel default, and a product available only in Polish answered `404`. It is now resolved through `requestScopeLanguage` from `@endora-commerce/contracts`, as the catalogue does since #397: the tags in descending `q`, each matched against the channel's languages (exactly, then by base language), the first one the channel offers winning, else the channel's default. A request without the header behaves as before.
+  - The admin price-book routes (`/api/v1/admin/price-books/...`: the attribute targets, rows, lines, resolution explanations and row writes) pick product, category and attribute labels in `?lang=` when it is given, as before, and otherwise in `request.responseLanguage()` — the admin's stored preferred language, the one the admin panel renders in and error messages are translated into. They used to take the first tag of the browser's `Accept-Language`, which the admin panel does not set, so an operator whose panel is in English could read Polish labels, and the reverse. An admin with no stored preference now gets English labels, where an exact English label exists.
+
+- ed57923: Published tarballs no longer carry source maps (issue #107). Every package publishes `dist` and
+  not `src`, so each `.js.map` and `.d.ts.map` pointed at source files no consumer had; they were
+  about a third of a tarball's unpacked size. Each package's `files` list now ends with
+  `"!dist/**/*.map"`: `@endora-commerce/mod-quick-order` packs 69 files instead of 131 (243.6 kB
+  unpacked instead of 359.9 kB), and `@endora-commerce/test-kit` packs 25 instead of 47. The
+  compiled JavaScript, the type declarations and every other shipped file are unchanged, and so is
+  every export. A stack trace from an installed package now names the compiled `dist` file rather
+  than a source path that does not exist in the install.
+- 644739b: Cross-process cache subscribers no longer send `SUBSCRIBE` while their ioredis client is still in its handshake (issue #1096). In the `connect` state ioredis wrote the command straight to the socket; when its reply arrived before the ready check's `INFO`, ioredis refused that `INFO`, re-opened the connection, and a message published during the reconnect was lost. The new `subscribeWhenReady(client, ...channels)` in `@endora-commerce/platform/kernel` (with its structural type `HandshakeAwareSubscriber`) waits out the handshake and then subscribes. It rejects as `subscribe` does, including when the connection ends mid-handshake. The module-registry cache, the sales-channel access cache, the `custom_fields` definition cache and the `price_lists` pricing generation now subscribe through it. The cradle type `PricingGenerationSubscriber` in `price_lists` now extends `HandshakeAwareSubscriber`, so it also requires `status`, `once` and `removeListener`. The composition's ioredis subscriber already has them. Nothing else changes for a caller.
+- 4d0a26d: Documentation only (issue #407). The shipped `docs/` pages, in English and Polish, now describe the one Save on every editor with zone panels. Each page says what Save covers, what is checked before anything is written, the order the parts are written in, what a partial save reports and that the next Save writes only the part that failed. It also says how the leave guard works and which sections carry the "Applies immediately" badge.
+
+  - catalog: "Editing a product at a scope" covers the base prices and the Inventory tab's product settings under Save, plus the actions that apply immediately. A new "Editing a category" section on the module page covers the category editor's Save.
+  - price_lists: the display-mode override saves with the organization and category editors. The base-price panel's **Discard changes** is described.
+  - organizations, customers: a section on each screen's one Save and its immediate actions.
+  - quick_order, quote_requests: their panels save with the host screen's Save.
+  - sales_channels: the edit page's Save and its count. Deactivate and Re-activate keep unsaved edits, and warehouse routing applies immediately.
+
+  No code, API or string changes.
+
+- 37532da: Issue #414 — a product feed can now be pinned to a price book in the Admin UI. The _Prices_ section of a feed's _Settings_ tab carries a _Price book_ picker: _No price book_ (catalogue prices), then the price books in the feed's currency that would publish for the feed now, then — disabled, with the reason beside the name — the ones that would not (not active, outside its dates, not on the feed's sales channel, not for everyone). The book the feed is already pinned to stays selectable whatever its state, its reason is stated under the field, and saving the other settings no longer resends an unchanged pin, so a pin to a deleted book does not block them.
+
+  - **`@endora-commerce/contracts`** adds `productFeedPriceBookOptionSchema` (`id`, `name`, `isBase`, `unpublishableReason` — a `pinnedPriceBookUnpublishableReasonSchema` value or `null`), its type `ProductFeedPriceBookOption`, and `productFeedPriceBookOptionsResponseSchema`.
+  - **`@endora-commerce/mod-product-feeds`** adds `GET /api/v1/admin/product-feeds/:id/price-book-options`, gated on `product_feeds:read` and `price_lists:read`: every book in the feed's currency plus the pinned one whatever its currency, each with the answer `namedListPublishability` gives for the feed's channel and currency. Without `price_lists:read` the picker is shown disabled and says which permission it needs. The _pinned book no longer exists_ warning now points at the Settings tab instead of the API.
+  - **`@endora-commerce/mod-price-lists`** — its documentation no longer says a feed can be pinned only through the API.
+
+  Additive; no migration.
+
+- 49b43de: **Breaking (0.x, so `minor`):** a sales representative's reach is no longer computed on every admin request (issue #955, owner ruling of 2026-11-10). `@endora-commerce/platform/tenancy` removes `isOrgInScope(id, ctx?)` and `ruleVisibleForScope(ids, ctx?)` — use `await orgInScope(id, ctx?)` and `await ruleInScope(ids, ctx?)`, or `const inScope = await orgScopeTest(ctx?)` for a synchronous predicate over rows you already hold — and `assignedOrganizationIdsForRanking(ctx?)` now returns a promise. They were removed rather than retyped because `if (!isOrgInScope(x))` over a promise is always false.
+
+  `AdminTenantScope`'s `excluding` member (`@endora-commerce/contracts`) replaces `excludedOrganizationIds` / `assignedOrganizationIds` with `loadReach(): Promise<{ excludedOrganizationIds, assignedOrganizationIds }>`, beside `excludedOrganizationsQuery`; the platform memoises it once per tenant context, and a failure rejects every helper that awaits it. `OrgConstraint`'s `excluded` arm and `AdminScopeInput` follow. `PreferenceActor`'s `salesperson.reaches(id)` returns `Promise<boolean>`, and `canManagePreference` (`quick_order`) is async. `adminTenantScopePort` (`organizations`) answers without calling `reachOf`. The listed modules move their call sites to the async helpers.
+
+- 51b4e5c: Documentation only: the pages describe a sales representative's reach, the base-price dry run, the price-change history tables, the table maintenance after bulk writes and the label and storefront language rules, and drop three known limitations that are fixed, in English and Polish.
+- Updated dependencies [baa0dae]
+- Updated dependencies [ee0698d]
+- Updated dependencies [9c8efbe]
+- Updated dependencies [3de70b4]
+- Updated dependencies [2ee4923]
+- Updated dependencies [e9df6b5]
+- Updated dependencies [1937bed]
+- Updated dependencies [3254098]
+- Updated dependencies [7616ef1]
+- Updated dependencies [ed57923]
+- Updated dependencies [cffa0bf]
+- Updated dependencies [644739b]
+- Updated dependencies [c58acd1]
+- Updated dependencies [fc91398]
+- Updated dependencies [feaa40b]
+- Updated dependencies [d2f179f]
+- Updated dependencies [d16b343]
+- Updated dependencies [34b3387]
+- Updated dependencies [e283396]
+- Updated dependencies [4ecb155]
+- Updated dependencies [ff7bd10]
+- Updated dependencies [097b599]
+- Updated dependencies [761d9c4]
+- Updated dependencies [8e7f794]
+- Updated dependencies [8e7f794]
+- Updated dependencies [f39d37f]
+- Updated dependencies [f39d37f]
+- Updated dependencies [3f95d1c]
+- Updated dependencies [695636f]
+- Updated dependencies [27834f3]
+- Updated dependencies [190986e]
+- Updated dependencies [3f95d1c]
+- Updated dependencies [27834f3]
+- Updated dependencies [190986e]
+- Updated dependencies [f5caa4e]
+- Updated dependencies [d14a4fd]
+- Updated dependencies [86a92af]
+- Updated dependencies [ee2a111]
+- Updated dependencies [c7ec2fa]
+- Updated dependencies [bfa1ac4]
+- Updated dependencies [8a4ca9c]
+- Updated dependencies [c7ec2fa]
+- Updated dependencies [a2d306f]
+- Updated dependencies [aaa50ff]
+- Updated dependencies [6e528ad]
+- Updated dependencies [eedda68]
+- Updated dependencies [2e603f7]
+- Updated dependencies [73e8e8c]
+- Updated dependencies [bf257b8]
+- Updated dependencies [d591709]
+- Updated dependencies [577e94c]
+- Updated dependencies [e435bad]
+- Updated dependencies [7bdf512]
+- Updated dependencies [5c148de]
+- Updated dependencies [e435bad]
+- Updated dependencies [5c148de]
+- Updated dependencies [036865c]
+- Updated dependencies [0beb869]
+- Updated dependencies [37532da]
+- Updated dependencies [bfdbeaf]
+- Updated dependencies [65f7abc]
+- Updated dependencies [a998fee]
+- Updated dependencies [54ae028]
+- Updated dependencies [20cda0c]
+- Updated dependencies [48b2505]
+- Updated dependencies [c24bd3c]
+- Updated dependencies [6b664cd]
+- Updated dependencies [cd05402]
+- Updated dependencies [91272e6]
+- Updated dependencies [eb4dbc6]
+- Updated dependencies [e2669cd]
+- Updated dependencies [aec841a]
+- Updated dependencies [da2b459]
+- Updated dependencies [77904b3]
+- Updated dependencies [4ab926c]
+- Updated dependencies [a3b1da5]
+- Updated dependencies [28fc1c7]
+- Updated dependencies [2b12d58]
+- Updated dependencies [9110863]
+- Updated dependencies [2905024]
+- Updated dependencies [ae1cedf]
+- Updated dependencies [6f0debc]
+- Updated dependencies [d6e7a55]
+- Updated dependencies [62d3e2d]
+- Updated dependencies [0b2f558]
+- Updated dependencies [dc9bbea]
+- Updated dependencies [1acf873]
+- Updated dependencies [edf46c9]
+- Updated dependencies [ef656f9]
+- Updated dependencies [71ec1f8]
+- Updated dependencies [7a3673f]
+- Updated dependencies [1c3366d]
+- Updated dependencies [ea965bb]
+- Updated dependencies [fc08f90]
+- Updated dependencies [d34fe02]
+- Updated dependencies [59b5246]
+- Updated dependencies [c55dcf5]
+- Updated dependencies [3e7b0b6]
+- Updated dependencies [d68aa70]
+- Updated dependencies [0b991d6]
+- Updated dependencies [9af7a64]
+- Updated dependencies [ecbebe2]
+- Updated dependencies [e61a12b]
+- Updated dependencies [d362c3c]
+- Updated dependencies [ef9630f]
+- Updated dependencies [b7a9c8e]
+- Updated dependencies [75f89d2]
+- Updated dependencies [ca66684]
+- Updated dependencies [b6fd6df]
+- Updated dependencies [6658f0f]
+- Updated dependencies [877477b]
+- Updated dependencies [767d5de]
+- Updated dependencies [d0c5dc8]
+- Updated dependencies [ac094f5]
+- Updated dependencies [61a6edf]
+- Updated dependencies [dd869ee]
+- Updated dependencies [ff6b599]
+- Updated dependencies [ac65359]
+- Updated dependencies [49b43de]
+- Updated dependencies [5f8eede]
+- Updated dependencies [de28088]
+- Updated dependencies [44529a4]
+- Updated dependencies [af88938]
+- Updated dependencies [9aff446]
+- Updated dependencies [42a9a4b]
+- Updated dependencies [8ae3f58]
+- Updated dependencies [65cdd0e]
+  - @endora-commerce/admin-kit@0.111.0
+  - @endora-commerce/contracts@0.111.0
+  - @endora-commerce/platform@0.111.0
+
+## 0.110.0
+
+### Patch Changes
+
+- 3f020ba: Product names, descriptions, alt texts, attachment and packaging-unit names are read at the document's sales channel and language — Channel × language → Channel → Global — through `catalogProductAvailabilityPort.effectiveTexts`, or as the Global string where there is no channel (feature 174). Basket, quote and order snapshots take the effective name when the line is created; a deliberately empty packaging-unit name at the scope keeps the Global name. The back-in-stock e-mail shows the Global name.
+- 1c0068f: The price-surface worker checks for pending work once each job completes and, when a mark is pending, enqueues a follow-up job (issue #427). A mark committed after a pass's final empty read used to have its enqueue deduplicated against the still-active job under the fixed id, leaving its profile stale until an unrelated write. `startPriceSurfaceWorker` takes two new inputs, `hasPendingWork` and `enqueue`; `PriceSurface` gains `hasPendingWork()`.
+- b2db8c3: English module names and admin sidebar labels are now sentence case, like the rest of the UI. The manifest `name` changes for 22 modules and for the platform's `_lifecycle` module ("Quote Requests" becomes "Quote requests", "API Keys" becomes "API keys", "Module Lifecycle" becomes "Module lifecycle"). The English `module.name` for Quick order, Quote requests and Shopping lists changes the same way. That string heads their permission groups on the organization role form and appears on the modules screen. The admin sidebar labels in blog ("Blog posts", "Blog categories", "Blog tags"), cms ("CMS pages", "CMS blocks", "CMS templates", "CMS hooks"), custom_fields ("Custom fields"), import_export ("Import / export"), newsletter ("Tags & fields") and transactional_emails ("Transactional emails", "Email blocks", "Email templates") change the same way. Product names (Google Analytics, Google Tag Manager, LinkedIn Ads, Meta Ads) keep their capitals. Polish strings do not change. If your code compares a manifest `name` against the old title-case string, update the comparison. Better, compare the module `id`.
+- 5bbb389: A personal (B2C) Organization's placeholder tax id is no longer shown anywhere outside `organizations` (issue #767). The quote request PDF prints the person as the buyer, with no tax-id line and no placeholder head office. `GET /api/v1/admin/orders/:id` and `GET /api/v1/admin/quote-requests/:id` answer `organization.taxId: null` for it, and the admin order and quote request screens' _Organization_ panel then print no tax-id line. The price-book (`…/price-books/targets/organizations`) and push audience (`…/pwa/rule-targets/organizations`) organization pickers answer `taxId: null` for it, so the picker shows no hint. A company Organization's tax id is shown as before.
+- d69e765: A path parameter that is not a UUID is answered exactly as a well-formed id that names nothing, on every customer- and admin-facing id route, mutations included, instead of `500` (issue #781). The shape is checked with `isUuidShape` from `@endora-commerce/contracts` before the database is asked, so a malformed id gets the route's own answer for an unknown record: its own not-found code (`404`), or the empty list or `204` the route gives an unknown id. Examples: `POST /api/v1/orders/:id/cancel` answers `404 ORDER_NOT_FOUND`; the returns comment, delivery-method and cancel routes and `POST /api/v1/organization/carts/:id/approve` and `/reject` answer `404 NOT_FOUND`.
+
+  Routes whose params schema demanded a UUID answered a malformed id `400 VALIDATION_FAILED`; they now answer `404` like an unknown id (owner ruling of 2026-11-05): `/api/v1/organizations/mine/roles/:id`, `/api/v1/admin/organizations/:id/roles[/:roleId]` and `…/permission-catalogue`, `/api/v1/organizations/mine/members/:id[/role]`, every `/api/v1/admin/product-feeds/:id…`, `/api/v1/admin/feed-templates/:id` and `/api/v1/admin/feed-taxonomies/revisions/:taxonomyId…` route, `/api/v1/admin/document-templates/:id…`, `/api/v1/admin/quote-requests/:id/document-templates`, `…/document-template` and `…/pdf`, the blog `url-redirects/:redirectId` and `addresses/:id` deletes, `PATCH /api/v1/admin/cms/hooks/:id/attachments/:blockId`, and `GET`, `PATCH` and `DELETE /api/v1/admin/import-export/profiles/:id` (`404 IMPORT_PROFILE_NOT_FOUND`). A client that told a malformed id from an unknown one by the `400` can no longer do so.
+
+  Every private copy of the UUID pattern is replaced by `isUuidShape`, `UUID_SHAPE_PATTERN` or, where a filter has always asked for RFC 9562 version and variant bits (the CRM board filters), `uuidSchema`; what each check accepts is unchanged, except that the invoice-ledger delivery retry now accepts any uuid-shaped id and answers an unknown one `404` from the lookup.
+
+- d24be0e: The module documentation pages have readable titles instead of the module id (for example _Carts_ instead of `carts`), in the docs sidebar, the module map and the browser tab, in English and Polish. Page headings and screen names in the page text are sentence case, as in the Admin UI (#795). File names and URLs are unchanged.
+- 14fe4fb: A product's gross price uses that product's own VAT rate for the buyer, not a flat 23 % (issue #852).
+
+  - `@endora-commerce/contracts`: `productSummarySchema` (and so `productDetailSchema`) gains the optional `vatRate` — the buyer's VAT rate for the product as a fraction, `null` where it could not be resolved. Additive: a reply without it parses as before. New `createProductTaxRateResolver` / `ProductTaxRateResolver`: the rate rule the cart applied since issue #436 — the product's tax class against the Organization's VAT status and registered country through `OrganizationTaxProfilePort` and `TaxServicePort`, `0` for a VAT-exempt or reverse-charge Organization, a buyer with no Organization a VAT payer in PL — moved here so the cart and the catalogue resolve one rule.
+  - `@endora-commerce/mod-catalog`: `GET /api/v1/catalog/products` and `GET /api/v1/catalog/products/:idOrSlug` answer `vatRate` on every product. It depends only on the viewer's Organization, so it follows the price's cache rule: a reply for a caller naming an Organization is `private, no-store`, and the shareable anonymous reply carries the guest's rate. A failed resolution answers `vatRate: null` rather than refusing the listing. The module now declares `taxes` as a dependency (it resolves `taxService`) and acknowledges `organizations`' `organizationTaxProfilePort`.
+  - `@endora-commerce/mod-carts`: the cart's rates come from the contracts' `createProductTaxRateResolver`; the module's own `cart-tax-rates.ts` is gone. No change to what the cart answers.
+  - `@endora-commerce/mod-price-lists`: the display-mode documentation says how a gross price is derived.
+
+- ca120cc: Every settings group a module declares now has a translated heading on the Settings screen (#884). Each module's bundle gains `settingGroups.<group code>.name` in English and Polish, so a Polish operator no longer reads group headings such as _Orders_, _Carts_ or _Security / MFA_ in English. `@endora-commerce/mod-admin-notifications` and `@endora-commerce/mod-shipments` ship translation bundles for the first time: their manifests declare `i18n: { bundlesDir: 'i18n' }` and their tarballs carry `i18n/`.
+- Updated dependencies [18cce2e]
+- Updated dependencies [18cce2e]
+- Updated dependencies [9cfb28b]
+- Updated dependencies [a206da9]
+- Updated dependencies [34485ae]
+- Updated dependencies [34485ae]
+- Updated dependencies [0f1717c]
+- Updated dependencies [86e8761]
+- Updated dependencies [9bfb0b8]
+- Updated dependencies [ed5cf6a]
+- Updated dependencies [2da23d2]
+- Updated dependencies [2da23d2]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [5303aab]
+- Updated dependencies [16f85f4]
+- Updated dependencies [270aa2b]
+- Updated dependencies [3f020ba]
+- Updated dependencies [3f020ba]
+- Updated dependencies [b59e5d5]
+- Updated dependencies [b59e5d5]
+- Updated dependencies [bf1cc2d]
+- Updated dependencies [ff60e93]
+- Updated dependencies [6f19230]
+- Updated dependencies [77b8c37]
+- Updated dependencies [65104b8]
+- Updated dependencies [7acaa33]
+- Updated dependencies [7019c71]
+- Updated dependencies [4eee98b]
+- Updated dependencies [14ac256]
+- Updated dependencies [248bf1b]
+- Updated dependencies [b2db8c3]
+- Updated dependencies [4cf529d]
+- Updated dependencies [5e4dd48]
+- Updated dependencies [75b053f]
+- Updated dependencies [54fc8f1]
+- Updated dependencies [dac5795]
+- Updated dependencies [5bbb389]
+- Updated dependencies [d69e765]
+- Updated dependencies [dbc1cef]
+- Updated dependencies [d69e765]
+- Updated dependencies [a6bc891]
+- Updated dependencies [8ad737c]
+- Updated dependencies [a9398c8]
+- Updated dependencies [0b56038]
+- Updated dependencies [717e4c6]
+- Updated dependencies [cea1470]
+- Updated dependencies [cea1470]
+- Updated dependencies [d46d414]
+- Updated dependencies [73e2eec]
+- Updated dependencies [29d7e90]
+- Updated dependencies [7f2fa6e]
+- Updated dependencies [57145f7]
+- Updated dependencies [58a1632]
+- Updated dependencies [e46d233]
+- Updated dependencies [e46d233]
+- Updated dependencies [58a1632]
+- Updated dependencies [b476f44]
+- Updated dependencies [14fe4fb]
+- Updated dependencies [76d89ab]
+- Updated dependencies [5cbffb9]
+- Updated dependencies [6bd2ab7]
+- Updated dependencies [a3502c0]
+- Updated dependencies [7a73cc8]
+- Updated dependencies [5ff8302]
+- Updated dependencies [fc7db4c]
+- Updated dependencies [c34b405]
+- Updated dependencies [5af8c25]
+- Updated dependencies [48f055e]
+- Updated dependencies [bf50b85]
+- Updated dependencies [2c6fba0]
+- Updated dependencies [0801f69]
+- Updated dependencies [d1c0d13]
+- Updated dependencies [6d1d284]
+- Updated dependencies [974be57]
+- Updated dependencies [99c075e]
+- Updated dependencies [32b4d0c]
+- Updated dependencies [3355e60]
+- Updated dependencies [7ce9b8a]
+  - @endora-commerce/contracts@0.110.0
+  - @endora-commerce/platform@0.110.0
+  - @endora-commerce/admin-kit@0.110.0
+
+## 0.109.0
+
+### Minor Changes
+
+- f148418: The storefront probes that take a bare product id follow product data scopes per sales channel and language.
+
+  - **Behaviour change for API clients — price and stock probes:** `GET /api/v1/storefront/products/:id/resolved-price`, `GET /api/v1/storefront/pricing/display-mode/:productId`, `GET /api/v1/storefront/inventory/stock/:id` and both notify-when-available routes (`POST /api/v1/storefront/inventory/notify-when-available`, `POST /api/v1/catalog/products/:id/notify-when-available`) answer only about a product available at the request's channel and language to the caller now. A product that is switched off there, outside its publication window, sold on another channel or outside the channel's audience rule gets each route's existing `404`, the same body an id nobody sells gets; a notify-when-available request for such a product can no longer reach `409 PRODUCT_UNMANAGED_STOCK` or `422 PRODUCT_IN_STOCK`.
+  - **Composition:** `price_lists`' plugin options and `inventory`'s plugin options take `catalogAvailability` (`catalogProductAvailabilityPort`), required; `AvailabilityNotificationService` takes it in place of the sales-channel membership port, and `SubscribeInput` gains `languageTag`.
+  - **Caching:** `markPersonalisedPricing` now marks every response for an authenticated caller `private, no-store`, not only one naming an organisation; `GET /api/v1/catalog/filters` and `GET /api/v1/catalog/categories` call it, since their counts and tree follow the caller's audience. Anonymous responses stay unstamped.
+  - **Product page:** an archived product answers `410` only where it would be available with the archive taken away; otherwise (switched off in that channel or language, outside its window) it answers the absent product's `404`.
+  - **Buyer seams name their channel:** `CreateForCustomerOptions.salesChannelId` (and the draft-edit and resubmit options) carry the channel the buyer's route resolved; quick order's pasted-SKU lookup takes it too; the basket asks availability at its own channel. The audience-only answer remains only for callers outside a request.
+  - **Helpers:** `@endora-commerce/contracts` exports `toScopeChannel`, `scopeLanguageOf` and `firstLanguageTag`. `BundleService.validateConfiguration` requires its availability filter.
+
+- 0a816a0: Display mode `none` now withholds every amount on the server (issue #491). Until now it hid prices
+  in the storefront only: the API still sent the price, the base, the sale, the list price and every
+  tier — a buyer's own included — so a shop configured to show prices only after sign-in
+  (`pricing.unauthenticated_display_mode = none`) disclosed them to anyone reading the network tab.
+
+  - **`@endora-commerce/mod-price-lists`.** Where the viewer's display mode resolves to `none`,
+    `resolveListingPriceDetails` answers `price: { source: 'none' }`, `basePrice` and `salePrice`
+    `null`, no `listPrice` and every `tiers` entry `null`; `resolveListingPrices` answers the `none`
+    arm; `resolveEngine` names no book, bracket, sale, source or compare-at. `displayMode: 'none'`
+    stays, so the storefront still renders "price on request". The catalogue listing, product page,
+    home cards, search hits and suggestions, comparisons, product links and
+    `GET /api/v1/storefront/products/:id/resolved-price` therefore send no amount. A line
+    (`resolveLinePrices`) keeps its amount beside the mode — it is the charging path, which the cart,
+    the admin order preview and order intake refuse as quote-only.
+  - **Price sort and range.** A product whose own display-mode step (its override, else its
+    category's) is `none` is left out of the price surface: a price-sorted listing shows it after the
+    priced products, in both directions, and a price range leaves it out. This replaces spec 086's
+    clarification 2, under which such a product kept its position in the order. A product or
+    category display-mode override now marks the products it concerns for the surface worker, so the
+    order follows it at the worker's turnaround, like a price change. `PriceListService` gains
+    `anyProductStepWithholds()`; `BookPricingDeps` gains the optional `anyProductStepWithholds`.
+  - **`@endora-commerce/contracts`.** New `displayModeWithholdsAmounts(mode)`, the one statement of
+    the rule for a consumer that publishes a line amount. The documentation of
+    `productResolvedPriceSchema`, `resolvedPriceEngineSchema`, `ListingPrice`, `ListingPriceDetail`
+    and `LinePriceResult` says what each carries under `none`; no shape changes.
+  - **`@endora-commerce/mod-catalog`.** The external catalogue API (`/api/v1/external/catalog/*`)
+    withholds a bound key's price, tier ladder and bulk price for a product whose display mode is
+    `none` for the bound Organization: `price: null` with `priceUnavailable: true`, no `priceTiers`
+    rung, and `reason: 'price_unavailable'` in a bulk answer.
+
+  **Behaviour change for API consumers.** A client that read amounts under `displayMode: 'none'` —
+  none should have — now reads `null`. Product feeds are unchanged: a feed publishes deliberately.
+
+### Patch Changes
+
+- 9b3e7f0: The megamenu becomes the storefront's navigation bar (`specs/168-megamenu-navigation-bar/`, issue #522).
+
+  **Breaking** (owner ruling: no backward compatibility for stored menus or the megamenu wire contract):
+
+  - A top-level item is a **tab** and must carry a `presentation` — `link`, `dropdown`, `mega` or `catalog` — and may carry an `alignment` (`start`, `end`); no other item may carry either. `PUT /api/v1/admin/megamenu/menus/:id/items` refuses a tab without one, a tab of kind `asset`, `cms-block-embed` or `category-tree` (`400 MEGAMENU_KIND_NOT_ALLOWED_AS_TAB`), a `link` tab with children or of kind `group` (`400 MEGAMENU_LINK_TAB_INVALID`), and an `external-link`, `button` or `group` with no label (`400 MEGAMENU_LABEL_REQUIRED`).
+  - `ResolvedMenuItem.id` and `parentId` are strings, not uuids: a category a `category-tree` expands to has the id `<tree item id>:<category id>`. Tabs carry `presentation` and `alignment`. A `category-tree` never appears in a resolved tree.
+  - The migration `20261029T162855_megamenu_navigation_bar` adds `presentation`, `alignment` and `audience` to `megamenu_items` and makes every stored top-level item a start-aligned `mega` tab; nothing else is converted. The Redis prefix moves to `megamenu:v2:`.
+  - The storefront header renders the menu's tabs and nothing else: the hard-coded _Wszystkie kategorie_ trigger and Quick Order button are gone, and so is the mobile drawer's Quick Order promo. A deployment that wants them configures them as tabs; the demo menu does.
+
+  Added:
+
+  - `@endora-commerce/contracts`: item kinds `group` (a heading; a column of a `mega` panel) and `category-tree` (`{ rootCategoryId, depth: 1–3 }`); `megamenuPresentationSchema`, `megamenuAlignmentSchema`, `megamenuAudienceSchema`, `MEGAMENU_TAB_KINDS`, `MEGAMENU_LABEL_INHERITING_KINDS`; `CmsPageReadPort.findStorefrontLinks`; `effectiveCustomerGroupId`, moved from `@endora-commerce/mod-price-lists`, which re-exports it.
+  - `@endora-commerce/mod-megamenu`: a `category-tree` expands to the catalogue's live categories on every resolution, from one catalogue read; an empty label on a category link, page link or tree inherits the target's name; a page link follows the page's name, slug and parent path per language. Every item has an audience — everyone, guests, signed-in customers, or customers whose effective customer group is one of the chosen ones — and the storefront API answers each visitor only their items, with `Cache-Control: private, no-store` for an identified caller. Every write runs as a Command with one audit entry (`megamenu.*`), and the module joins the Command Bus coverage check. New dependencies on `customer_accounts` and `organizations`, both non-deactivatable. The editor shows a tab's presentation and alignment, offers the kinds a level allows, sets audiences with customer groups, configures category trees, and marks hidden items in the tree.
+  - `@endora-commerce/mod-megamenu`: a tab with a link of its own and a panel can follow its link on click (`clickNavigates`, migration `20261029T190956_megamenu_tab_click_navigates`); the storefront renders it as its link plus a separate toggle for the panel. The `catalog` presentation is named _Panel with side list_ in the editor, and its _All in …_ link appears only for a category.
+  - `@endora-commerce/mod-cms`: `findStorefrontLinks(ids, { salesChannelId, language, channelDefaultLanguage })` on the page read port — a page's localised name and its URL in the channel's tree for that language.
+  - `@endora-commerce/mod-settings`: the cache flush names `megamenu:v2:*`.
+  - `@endora-commerce/mod-catalog`: the demo categories carry Polish names.
+  - `@endora-commerce/demo-composition`: the demo menu is a _Wszystkie kategorie_ catalogue tab over the demo category tree, and a Quick Order button at the end of the bar.
+
+- f261ed3: The sales channel's `isPublic` flag is retired in favour of the pricing display-mode chain
+  (issue #492; closes #467). The flag was documented as anonymous-price visibility, but every read of
+  it withheld prices from **everyone** on the channel, signed-in buyers included, beside a chain that
+  already says "prices after sign-in" per channel: `pricing.unauthenticated_display_mode = none`.
+
+  **Behaviour change.** Signed-in buyers on a channel that had `isPublic = false` now see prices
+  according to the display-mode chain (their organization's override, else the channel's
+  `pricing.default_display_mode`), where they used to see none — on the catalogue listing, the product
+  page, product links, search, comparisons, and the price sort and range, which are no longer refused
+  to them. Anonymous visitors on such a channel still see no prices: the migration below carries that
+  half of the flag over. A channel that had `isPublic = false` **and** its own value for
+  `pricing.unauthenticated_display_mode` keeps that value, so its anonymous visitors now see prices if
+  that value is a priced mode. A new channel, the boot-time default channel included, no longer starts
+  with prices hidden from everyone; it follows the chain like any other.
+
+  The display-mode chain itself is unchanged (owner ruling of 2026-10-28): a product or category
+  override takes precedence over the channel's `pricing.unauthenticated_display_mode`, also for
+  anonymous visitors, so a product overridden to `gross_only` shows its price to guests on a channel
+  whose guest mode is `none`. An organization override still applies to signed-in buyers only.
+
+  - **`@endora-commerce/platform`.** New migration `Migration20261028T173317CoreSalesChannelsRetireIsPublic`
+    (core): every channel with `is_public = false` and no value of its own for
+    `pricing.unauthenticated_display_mode` gets `"none"` as its per-channel value, then
+    `sales_channels.is_public` is dropped. It refuses — rather than migrating into showing prices — a
+    database that has a non-public channel but no registered `pricing.unauthenticated_display_mode`
+    setting; start the platform once on the previous release, so the settings reconciler registers
+    it, and migrate again. Because the column is dropped, stop processes running the previous release
+    before migrating. `SalesChannel.isPublic` and `CachedChannel.isPublic` are removed;
+    `SALES_CHANNELS_CACHE_KEY_PREFIX` moves from `sales-channels:v3:` to `sales-channels:v4:`, so no
+    process reads an entry cached in the other shape. The default-channel reconciler no longer sets
+    the flag.
+  - **`@endora-commerce/contracts`.** `ResolvedSearchChannel.isPublic` is removed — drop it from the
+    context you hand `SearchQueryPort`. No public HTTP shape carried the flag, so no response changes
+    shape. The `SALES_CHANNEL_AUDIT_ACTIONS` documentation now says who writes each row: the identity
+    Commands (with `stateBefore` / `stateAfter` snapshots) since #484.
+  - **`@endora-commerce/mod-catalog`.** `CatalogResolvedChannel.isPublic` and the `isPublic` field of
+    `ProductLinkService`'s storefront context are removed. The catalogue no longer skips pricing on
+    a channel: prices follow the viewer's display mode (a viewer whose mode is `none` gets the
+    withheld answer, `resolvedPrice.displayMode: 'none'`, where the channel used to answer
+    `resolvedPrice: null`). The price controls are refused only where the page's display mode is
+    `none`; the reason "This sales channel does not publish prices…" is gone.
+  - **`@endora-commerce/mod-search`.** The service's `ResolvedSearchChannel.isPublic` is removed, and
+    hits are always resolved for the viewer.
+  - **`@endora-commerce/mod-comparisons`.** A comparison is priced for the viewer on every channel.
+  - **`@endora-commerce/mod-sales-channels`.** The channel form's _Open to anonymous visitors_ hint
+    gains a second line pointing to the guest display mode, with a link to _Pricing settings_
+    (`identity.anonymousAccess.pricesHint`, `identity.anonymousAccess.pricesLink`, English and
+    Polish). New channels are no longer written with the flag.
+  - **`@endora-commerce/mod-price-lists`, `@endora-commerce/mod-i18n`.** _Pricing settings_ states,
+    under the two default modes, that a channel's own value wins over them and that a product or
+    category override takes precedence over both, for anonymous visitors too
+    (`priceLists.displayModes.settings.precedenceHint`).
+  - **`@endora-commerce/demo-composition`.** The `pl_b2b_vip` channel is created without the flag and
+    a new step, _the VIP channel hides prices until sign-in_, sets its
+    `pricing.unauthenticated_display_mode` to `none`; its signed-in buyers see prices. `pl_retail`
+    publishes prices to everyone, as before.
+  - **`@endora-commerce/mod-settings`, `@endora-commerce/cli`.** Comments only: the cache-clear
+    namespace names the new key prefix, and the channel-resolution rule no longer cites the flag.
+
+- c99b4cd: The command-palette actions of the commerce modules (`carts`, `catalog`, `comparisons`, `credit_limits`, `customer_accounts`, `customers`, `custom_fields`, `delivery_methods`, `dictionaries`, `document_templates`, `import_export`, `inventory`, `invoice_ledger`, `invoices`, `payment_methods`, `price_lists`, `product_feeds`, `promotions`, `quote_requests`, `sales_channels`, `taxes`) keep only English `keywords` in their manifests. Their Polish search words moved to each module's `i18n/pl.json` under the action's new `keywordsKey`, with an English entry in `i18n/en.json` (issue #573, following #560), and the ones that had been written without diacritics now carry them (`utwórz cennik`, `wyjaśnienie ceny`, `kolejność cen`). A Polish operator finds the same screens by the same words; an English-language admin is no longer offered the Polish ones.
+- 70092cf: The price book grid's per-rule cell reasons moved from the `errors.reason.*` bundle keys to `grid.reason.*`, because `errors.*` is reserved for the error envelope's sentences. A deployment that overrides those strings in its own bundle renames the keys.
+- Updated dependencies [42b1038]
+- Updated dependencies [5d192d3]
+- Updated dependencies [9b45768]
+- Updated dependencies [d2acc82]
+- Updated dependencies [22604fa]
+- Updated dependencies [c3165da]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [e64ed74]
+- Updated dependencies [e03e6a9]
+- Updated dependencies [50338a6]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [22604fa]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [9ff8307]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [07f3764]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [ea892d5]
+- Updated dependencies [678fed1]
+- Updated dependencies [dcbd154]
+- Updated dependencies [a76d6ee]
+- Updated dependencies [22604fa]
+- Updated dependencies [9a38360]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [bdef54c]
+- Updated dependencies [1b4f2b7]
+- Updated dependencies [d560d58]
+- Updated dependencies [dd6deb2]
+- Updated dependencies [3f697a3]
+- Updated dependencies [df0a90e]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [774d23e]
+- Updated dependencies [4cb0a7d]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [f148418]
+- Updated dependencies [3ea1249]
+- Updated dependencies [476c5aa]
+- Updated dependencies [8ef189b]
+- Updated dependencies [4bc5c7f]
+- Updated dependencies [eba4fd8]
+- Updated dependencies [61fc321]
+- Updated dependencies [9b3e7f0]
+- Updated dependencies [ecdd2f7]
+- Updated dependencies [ecdd2f7]
+- Updated dependencies [b7baf8a]
+- Updated dependencies [1b1c43e]
+- Updated dependencies [56e237d]
+- Updated dependencies [d50b874]
+- Updated dependencies [a166cfd]
+- Updated dependencies [0a816a0]
+- Updated dependencies [f261ed3]
+- Updated dependencies [302e5ce]
+- Updated dependencies [d68fb89]
+- Updated dependencies [c73366c]
+- Updated dependencies [b0a1e48]
+- Updated dependencies [b25d8be]
+- Updated dependencies [5038a3a]
+- Updated dependencies [df95f59]
+- Updated dependencies [1fd4822]
+- Updated dependencies [9cb3c8d]
+- Updated dependencies [0f5bcde]
+- Updated dependencies [c72a83e]
+- Updated dependencies [42189ce]
+- Updated dependencies [d9053a7]
+- Updated dependencies [23489bf]
+- Updated dependencies [f40ce92]
+- Updated dependencies [55864a1]
+- Updated dependencies [ed85493]
+- Updated dependencies [3174251]
+- Updated dependencies [55864a1]
+- Updated dependencies [11b0eb8]
+- Updated dependencies [b8b6eed]
+- Updated dependencies [2aa2c9b]
+- Updated dependencies [883d192]
+- Updated dependencies [5114576]
+- Updated dependencies [8f7c38e]
+- Updated dependencies [1846755]
+  - @endora-commerce/admin-kit@0.109.0
+  - @endora-commerce/platform@0.109.0
+  - @endora-commerce/contracts@0.109.0
+
+## 0.108.0
+
+### Minor Changes
+
+- 789f917: A product feed pinned to a price book publishes the book's prices only while the book applies to an anonymous buyer on the feed's channel (feature 160, FR-029, owner ruling 2026-10-23).
+
+  - **`@endora-commerce/contracts`.** New `pinnedPriceBookUnpublishableReasonSchema` (`not_found`, `currency_mismatch`, `not_active`, `outside_schedule`, `not_on_channel`, `audience_restricted`) and the `PinnedPriceBookPublishability` type. `productFeedSchema` gains `pinnedPriceBookWarning` (the reason, or `null`).
+  - **`@endora-commerce/mod-price-lists`.** `pricingService.namedListPrices` answers nothing unless the book is `active` or `scheduled` inside its schedule window, bound to the feed's channel with the channel offering its currency (a base book is channel-independent) and for everyone; before, it ignored status, dates, channel and audience. New `pricingService.namedListPublishability({ priceListId, currencyCode, salesChannelId })` says whether, and why not. The catalogue price a pinned book's percentage and amount rows are taken off is now the channel's catalogue price **without** that book (an everyone book was taken off its own result).
+  - **`@endora-commerce/mod-product-feeds`.** `FeedPricingPort` requires `namedListPublishability`; the admin feed list and detail rows carry `pinnedPriceBookWarning`, and the feed page shows it as a warning (English and Polish). What a run of such a feed does is `160-pinned-feed-withdrawal.md`'s.
+
+- 14bcf1d: Pricing model v2 (feature 160, D-287 P1): price books replace the Application-rule price lists, in one release with no compatibility phase.
+
+  - **Model.** A price book fixes one currency, a set of sales channels (each offering it), an audience set of one kind (everyone, customer groups or organizations), a type (regular or sale), a schedule read at resolution time and a priority. Its rows select a variant, a product, a category ∩ attribute, a category, an attribute or everything, in quantity tiers, at a fixed price, a signed percentage or an amount adjustment. Base prices — product and variant rows — live in one system base book per currency.
+  - **Resolution.** Three tiers: the catalogue price (base, overridden by the channel's everyone books), the buyer price (organization and customer-group rows ranked by the versioned precedence, HY by default; percentages off the catalogue price), and a sale charged only when lower, the buyer price shown as compare-at. Every consumer reads it through the batched entry points; price sort and range read a materialised price surface rebuilt by the `price_lists.surface` worker (a request never builds; the order may lag a change by the worker's turnaround, a price never).
+  - **Removed routes and their replacements.** `/api/v1/admin/price-lists-engine/…` (lists, brackets, rosters, matrix entries, activation, sweep) → `/api/v1/admin/price-books/…` (`GET`/`POST /price-books`, `GET`/`PATCH`/`DELETE /price-books/:id`, `POST /price-books/:id/activate|draftify|duplicate`, `GET`/`PUT /price-books/:id/rows`, `PUT /price-books/base-prices/:productId`). `/api/v1/admin/pricing/rule-targets/…` → `/api/v1/admin/price-books/targets/…`. `GET /api/v1/admin/products/:id/resolved-price` → `POST /api/v1/admin/price-books/resolve` (with the explanation). `GET /api/v1/admin/products/:id/price-lists` → `GET /api/v1/admin/price-books?productId=`. The display-mode routes are unchanged.
+  - **Removed in-process surface.** `priceListAdminPort` — replaced by `priceBookWritePort` (`basePrices`, `replaceProductBaseTiers`, `replaceBasePrices`, `booksPricingProduct`; the method mapping is in the `@endora-commerce/contracts` note), whose writes are the admin base-price command (`PUT /price-books/base-prices/:productId`): one audited command, the base books' version moved, the caches told after the commit, a missing currency's base book created as the admin write does; `DefaultPriceListMigrator` and `DEFAULT_PRICE_LIST_ID` on `./backend` (the demo's prices are `seedDemoPriceBooks` / `withdrawDemoPriceBooks`; base books are created by the migrations). The `PriceListProduct` and `PriceListPriceBracket` entities are gone.
+  - **Changed constructors.** `PricingService(emFactory, resolveOrgChain?, targetReads?, customerAccountRead?, { channelBridge, bookCache?, profileMemo?, requestSurfaceRebuild?, showListPrice? })` — the legacy `cache` parameter and the `model: 'legacy' | 'books'` option are removed, and a composition must pass the `price-list` channel bridge. `PriceListService(emFactory, pricingCache?, targetReads?)` holds the display-mode chain only — `create`, `patch`, `activate`, brackets, rosters and matrix entries are gone.
+  - **Migrations.** `20261021T165239_price_lists_price_books_expand` (books, audience and channel sets, evolved rows, precedence v1 = HY, the price surface), `…_price_books_version`, `…_price_surface_generations`, and `20261022T111815_price_lists_price_books_conversion`: every Default-list bracket becomes a row of its currency's base book (a base row already written wins); every non-system list of the old model is deleted with its roster, brackets, rule and matrix entries (one a product feed is pinned to is retired instead: an empty, expired, channel-less book for everyone, renamed "… (removed by the 0.108.0 upgrade)"); `price_list_products`, `price_list_price_brackets`, `price_list_items`, `price_list_assignments`, `price_lists.application_rule|code|is_default|modified_at` and the matrix entries' `organization_id|currency_code|discount_percent` are dropped; type `base` becomes `regular`. Its `down` gives the old storage back empty.
+  - **Admin.** The price-list roster, the list detail with its rule builder, bracket grid and matrix, and the product editor's _Linked price lists_ zone are deleted with the API they edited; the price-book editor ships in the same release (P2). The sidebar entry _Price books_ and the palette action open the book list (`/price-lists`).
+  - **Demo.** The demo seeds base prices for every demo product and the books of the owner's scenarios E1–E3 (E3's active, E1's and E2's drafts); `demo reset` withdraws them and `demo seed` brings them back.
+
+- 715ddcf: The price surface is refreshed per trigger instead of rebuilt whole (feature 160, `contracts/price-surface.md` §4, owner ruling 2026-10-23).
+
+  - **Marks.** A pricing write marks, after its commit, only what it moved: a (profile, product) mark in the new table `price_profile_stale_products` (migration `20261023T152351_price_lists_price_surface_targeted_marks`, which also adds `price_profiles.revision`), or the whole profile `stale` when every product of it is concerned. A book change marks the products its rows select in the profiles containing the book; a row batch the products of its rows; a base price the product in every profile of its currency; a `product.*` event the product, a `category.updated.v1` the products of the subtree and an `attribute.updated.v1` the products its rows select; a sales-channel event every profile of the channel. A buyer profile is marked for a product only when one of its books can select it or its surface holds a row for it. Display-mode writes and a name-only book patch mark nothing; a deleted book's buyer profiles are dropped.
+  - **Worker.** A pass reads its work in one statement, builds never-built and stale profiles whole and re-resolves only the marked products of the others, replacing their rows of the served generation in one transaction; everyone profiles go before buyer profiles, and a pass clears only the marks it read. A buyer profile's whole build resolves only the products its own books can select.
+  - **API.** `PricingGeneration.bump(change?)` and `invalidateAll(change?)` take a `SurfaceChange` (`services/surface-change.ts`); without one every profile is marked stale, as before. `PriceSurface.markChanged(change)` is new; `markStale()` keeps marking every profile. The pricing cache is still cleared whole on every bump.
+
+- 20d563e: `PriceListService.resolveDisplayModes` is removed: nothing called it since the price-book engine split the display-mode chain. Call `resolveProductDisplayModes({ productIds })` for the product and category steps, and `resolvePageDisplayMode({ organizationId, salesChannelId, customerKind })` once for every product the first left undecided — the two halves the engine composes.
+- c781cd6: The product editor's base-price panel (feature 161, US3; FR-019–FR-021) in `product.editor.pricing.after`, replacing the Phase 3 shell.
+
+  - One line per currency a sales channel offers: the price from 1 and further tiers (each starting above the one before; windows chained on save), and per variant _inherits_ / own price / signed percentage / signed amount, with a labelled preview rounded by the contracts' decimal helpers; a notice when the product has no base price and cannot be ordered, and per currency without one.
+  - Its own _Save prices_: one `PUT /api/v1/admin/price-books/base-prices/:productId` of the changed currencies, with progress, no double submit and a live announcement; refused values marked on their fields; the unsaved-changes prompt on leaving the page and the product editor's other tabs. Read-only when `writable` is false.
+  - Below it, read-only, the books that price the product directly (`GET …/price-books?productId=`), with audience and price, linked to the book and to _Why this price?_.
+
+- a9c72e8: CSV export and import of a price book (feature 161, US9; FR-018, FR-038–FR-042), under _CSV file_ in the book's price grid.
+
+  - **Export to CSV** (every reader): the book's rows for the grid's current filter, read 1 000 at a time, in the fixed price-book format — UTF-8 with a BOM, `;`, the header and kinds in the admin language, a decimal comma for a Polish administrator. The file is named `<book>-<date>-<en|pl>.csv`; more than 5 000 rows become numbered files of at most 5 000 rows each.
+  - **Import from CSV…** (only on a book the caller may change, and only while the grid holds no unsaved edits): a file of at most 5 MB and 5 000 rows. Either `;` or `,` works, as do a decimal comma or point, UTF-8 with or without a BOM, and Windows-1250, chosen by the administrator when the bytes are not UTF-8. Headers and kinds are read in English or Polish. Merge or replace. Local refusals and the server's `dryRun` refusals are listed with file line, column and reason, and the refused rows can be downloaded with a `reason` column. The preview lists changed (old → new), added and, in replace mode, removed rows. Nothing is written until _Import_, which is offered only for a preview with changes and no refused row; it sends the same batch once against the preview's version, and a book saved since is refused with a new preview offered.
+  - New pure codec `src/admin/lib/price-book-csv.ts`; `readDecimalText` exported from `src/admin/lib/price-cell.ts`. Strings under `grid.csv.*` and `import.*`, English and Polish.
+
+- fdd86e3: Duplicating a price book and explaining a price (feature 161, US4 and US5; FR-022–FR-024).
+
+  - **Duplicate** on a book's header (`price_lists:write`, not on a base book): a dialog pre-filled with "… (copy)", the source's channels, currency and audience and a multiplier of 1; a chosen channel that does not sell in a changed currency is flagged before anything is sent; percentages are copied unchanged; `POST …/:id/duplicate`, then the draft copy opens. The source is never written.
+  - **`/price-lists/explain`** — the price explainer: sales channel, currency, buyer (guest, organization from the scope-filtered targets, or customer with `customers:read`) and lines (product, variant, quantity); per line the price, its source, the cell in words, the book and the row (linked into the grid), the reference price, the precedence version and the runner-ups by name; a sale with the regular price it beat; an unpriced line with a link to set a base price. Pre-filled from `productId`, `variantId`, `organizationId` and `bookId` (the book's channel, currency and only organization).
+  - **Entry points:** _Explain a price_ on a book's header, _Why this price?_ in a grid cell's detail and the product's base-price panel, and _Explain a price for this organization_ in the organization detail's zone.
+  - The book's price grid opens on `?tab=prices&search=…`, so a link can land on a row's line.
+
+- af57b55: The admin price-book API gains what the editor needs (feature 161, G11, G12, G15, G16, G18).
+
+  - **`writable` (G11)** on `GET /api/v1/admin/price-books/:id`, on every line of `GET /api/v1/admin/price-books` and on `GET …/base-prices?productId=`, and `meta.creatableAudienceKinds` on the list — the server's scope rule, so the browser never re-derives it. `PriceBookService.basePrices(productId, scope?)` takes the caller's scope (default: every book).
+  - **`GET …/targets/organizations?ids=a,b` (G12)** labels stored organization members (≤ 1 000 ids), scope-filtered like the search: an out-of-scope or unknown id is absent, never an error. `ids` with `search` is `400`.
+  - **`GET /api/v1/admin/price-books/:id/lines` (G15)** — the book paged by whole line (a selection with every row, a product with its variant lines), general to specific and by label; `kind` and `search` filters; `meta.totalLines`. Product lines are ordered and searched by `catalogProductReadPort.pageProductsByAdminName` (see the product-lines note).
+  - **Named runner-ups (G16)** — `POST …/resolve` candidates carry `bookName` and `labels`; `BookExplanation.candidates[]` carries `bookName`.
+  - **Batch validation scoped to the batch (G18)** — `PUT …/:id/rows` (and its dry run) reads the stored rows of the selections and ids the batch names and the book's row count, not the whole book; replace mode still reads every row. The 5 000-row cap (`PRICE_BOOK_MAX_ROWS`) applies to non-base books only: a base book accepts batches past 5 000 rows (owner ruling, 2026-10-22). The per-batch cap is unchanged. `planBatch` takes `storedRowCount`; `touchedSelections` is new.
+  - **Decimal helpers (G17)** — `matrix-decimal.ts` re-exports the eight price-book helpers from `@endora-commerce/contracts` instead of defining them.
+
+- 615a5c9: The price-book editor's admin surfaces (feature 161, Phase 3; FR-029, `specs/161-price-book-editor/research.md` R3).
+
+  - **Routes.** `/price-lists` (the book list, `price_lists:read`, the module's landing again), `/price-lists/new` (`price_lists:write`), `/price-lists/explain` (`price_lists:read`) and `/price-lists/:id` (`price_lists:read`) join `/price-lists/display-modes`, which is no longer the index route. The four new screens are shells with their titles; the next phases fill them.
+  - **Navigation.** The _Pricing_ sidebar entry opens `/price-lists` (was `/price-lists/display-modes`) and reads _Price books_ in English (was _Price lists_); Polish is unchanged (_Cenniki_).
+  - **Palette.** `open-price-lists` targets `/price-lists` (was `/price-lists/display-modes`), described _Find, create and edit price books_; new `new-price-book` → `/price-lists/new` (`price_lists:write`) and `open-price-explainer` → `/price-lists/explain` (`price_lists:read`).
+  - **Zone.** The product editor's `product.editor.pricing.after` gets this module's base-price panel (`price_lists:read`), a shell for now.
+  - **Admin library** (`src/admin/lib/`, not exported): the API client over every editor endpoint, parsing each answer with the contracts' schemas; the price-cell parser and formatter (fixed, signed percentage, signed amount, liberal input); the cell and source labels, with `cells.*` and `sources.*` keys in both bundles.
+
+- ef1318e: The price-book grid (feature 161, US2; FR-006–FR-017, FR-036, FR-037) on `/price-lists/:id?tab=prices`; the book page now has _Settings_ and _Prices_ tabs (`?tab=prices` opens the prices).
+
+  - One line per selection, general to specific, one column per quantity tier; each price's kind in words and an icon, a percentage with its reference (_of base_ on a catalogue book, _of catalogue price_ otherwise); an empty cell says what it inherits from the line's lower tier, a variant cell what its product line gives, or that the line does not price the quantity.
+  - Pages of 50, 100 or 200 **lines** from `GET …/lines`, with the total and page numbers; search and line kind sent to the server; edits kept across pages.
+  - Lines added through the product browser (many at once, none twice among the loaded lines) and through category, attribute-value and category ∩ attribute-value pickers (eligible attributes only); a product line expands to its catalogue variants.
+  - Typing and pasting read prices liberally (decimal comma, spaces, currency, Unicode minus); refused text stays in its cell with the reason; bulk changes (set percentage, set adjustment, multiply fixed prices, clear) are one undo step; a cell detail sets a quantity window outside the columns or clears the cell.
+  - One batch per save against the opened version, with progress and a live announcement; tier windows are re-chained so a new tier ends the one below; every refused cell is marked; a stale book is reloaded with the edits kept to re-apply or discard; a save past 5 000 rows on a non-base book is refused before it is sent; leaving with unsaved prices asks first.
+  - Admin library: `book-edit-state.ts` (cells, windows, the batch, error mapping, rebase), `bulk.ts`, `grid-labels.ts`; the API client gains `productVariants(productId)`.
+
+- 004c513: The price-book editor's first screens (feature 161, US1; FR-001–FR-005).
+
+  - **`/price-lists` — the book list.** Filters by name, type, status, currency, sales channel, audience kind and member, all kept in the URL; columns for type, status, currency, channels, audience, priority and price rows; _applies to no one_ and _applies nowhere_ flags; base books marked _Base prices — PLN_; a delete (confirmed, naming the book and its row count) only on books the caller may change and never on a base book; loading, empty, filtered-empty and error states.
+  - **`/price-lists/new` — the create flow.** Five steps (name and type, currency, sales channels, audience, schedule and priority); only channels selling in the currency are offered and the others are named with the reason; only the audience kinds the caller may create; members picked through the scope-filtered targets; the book is created as a draft and opened. A refusal returns to the step that owns the field.
+  - **`/price-lists/:id` — the header.** Name, channels (dormant bindings explained), members, schedule and priority edited and saved against the book's version (`409 PRICE_BOOK_STALE` keeps the edits and offers a reload); currency and, once active, audience kind read-only; activate and move to draft, a refused activation naming what is missing with a way to the field; delete; history link to the audit log; read-only for a caller who may not change the book; the not-found page for an unknown or hidden book.
+  - The package now declares `react-router-dom` (`^7`, optional peer) for its admin layer.
+
+- c9b9d27: _Pricing settings_ is reachable, and read-only for a reader (feature 161, Checkpoint 10 rulings; Principle XVI, FR-028).
+
+  - New palette action `open-pricing-settings` → `/price-lists/display-modes` (`price_lists:read`), labelled "Pricing settings" / "Ustawienia cenowe". The price-book list's header links the page too.
+  - Old: every display-mode control showed for an operator holding only `price_lists:read`, and the server refused the write. This covered the page's default-mode selects, each override's mode select, _Remove_ and _Add override_, and the override row in the organization and category zones. New: these controls render only with `price_lists:write`; a reader sees each value as text. An override's mode select is now labelled "Mode for {name}".
+
+- 4d07648: _Pricing settings_ (feature 161, US6 and US7; FR-025, FR-026). `/price-lists/display-modes` keeps its address and its display-mode sections and gains two:
+
+  - **Storefront prices** — _Show list price beside the buyer's price_ reads and writes `GET`/`PUT /api/v1/admin/price-books/settings/show-list-price` (`{ value }`, audited), off by default. The switch is offered only with `price_lists:write`; a reader sees _On_ or _Off_ with no control. The save is announced in a live region and cannot be sent twice; a refused save keeps the stored value.
+  - **Price precedence** (`#precedence`), read-only from `GET …/precedence`: the active preset by name (or _Custom order_), the version, the twelve buyer cells in the order in force with an example each, which of a category line and an attribute value line wins, the nearest-organization-first depth when it is in force, and that changing it arrives later. The grid's _See the price precedence_ link lands on this section, scrolled to and focused.
+
+  New strings under `settings.*` in the module's bundle, English and Polish.
+
+- 74faecb: The price-book lines read meets 150 ms p95 at 50 000 lines (feature 161, G15 redesign, `specs/161-price-book-editor/research.md` R14).
+
+  - **`price_list_product_lines`** (migration `20261022T182527_price_lists_product_lines`, entity `PriceListProductLine`): one row per product line of a book, backfilled from `price_list_matrix_entries` and kept equal to its `distinct price_list_id, product_id` by every write of this module in the same transaction (batch, base prices, duplicate, demo); both foreign keys cascade; a catalogue variant delete that leaves a line without rows is reconciled on `product.updated.v1`. `PriceBookService.reconcileProductLines(productId)` is new. Code that writes `price_list_matrix_entries` past the service must keep the table in step.
+  - **`GET /api/v1/admin/price-books/:id/lines`** — same shape; it now reads a visibility-only header, counts product lines from the new table, and pages and searches product lines through `catalogProductReadPort.pageProductsByAdminName` with the book's membership subquery (`priceBookMembership`), in the admin language (`en`, `pl`; others `en`). Attribute and category lines order by `foldAdminName` bytewise rather than `localeCompare`, so accented names sort with their base letter. `PriceBookReads` needs `pageProductsByAdminName` (was `pageProductIdsByName`) on its catalogue port.
+
+- 49d82dd: Which picked products already have a line in a price book, in one request (feature 161, Checkpoint 5 review).
+
+  - **`GET /api/v1/admin/price-books/:id/product-lines?productIds=a,b`** (`price_lists:read`, the book's visibility): answers `{ data: { productIds } }`, the named products with a line in the book (a row of the product or of one of its variants), read from `price_list_product_lines`. At most 200 ids (`PRICE_BOOK_PRODUCT_LINES_MAX_IDS`); none, a non-uuid or more is `400`; an out-of-scope book `404`. `PriceBookReads.productLines(bookId, productIds, scope)` is new.
+  - **Contracts:** `priceBookProductLinesQuerySchema`, `priceBookProductLinesResponseSchema` and their types.
+  - **The grid** asks it before adding products from the browser: a product already in the book is not added again (its stored price is never overwritten) and is offered to be opened where it is.
+
+- 72f9cec: A refused price-book row names the rule it broke (feature 161, Checkpoint 11 ruling 2; `specs/conventions/module-i18n.md`: the backend returns codes, the consumer translates them).
+
+  - **Contracts:** `priceBookRowErrorSchema` gains an optional `reason`, one of the new `PRICE_BOOK_ROW_ERROR_REASONS` (`priceBookRowErrorReasonSchema`, `PriceBookRowErrorReason`). The values are:
+    - `row_invalid`, `selection_combined`, `max_below_min`, `fixed_on_all`, `variant_needs_product`, `base_book_kind`, `base_product_fixed`;
+    - `product_unknown`, `variant_unknown`, `variant_other_product`, `category_unknown`;
+    - `attribute_not_selectable`, `attribute_value_unknown`, `attribute_value_boolean`;
+    - `row_not_in_book`, `rows_overlap`, `book_row_limit`.
+
+    `priceBookRowShapeIssues` returns each issue's `reason`. The change is additive: `code`, `field` and `message` are unchanged.
+
+  - **`PUT /api/v1/admin/price-books/:id/rows`** (and its `?dryRun=true` preview) sets `reason` on every row error. Old: the attribute refusal was one `PRICE_BOOK_ROW_TARGET` whose English message told the cases apart. New: three reasons. An unknown variant id is now `variant_unknown`; a variant of another product is `variant_other_product`.
+  - **Admin:** the grid's cell reasons (`errors.reason.*`) and the CSV preview's refusals (`import.reason.*`) translate the rule in English and Polish; the preview no longer quotes the server's English. The display-mode override row's help line and its two errors are in the module's bundle (Checkpoint 11 ruling 3). The import preview notes when refused lines were not compared.
+
+- 4d49029: The pricing cache is invalidated after commit and across processes (D-287 P0).
+
+  - **Invalidate after commit.** Every audited `PriceListService` write (and `patch`) now clears the pricing cache once `CommandBus.run` has returned, i.e. after the transaction committed — it used to clear it inside the command's `run` callback, so a read racing the write could re-cache the pre-write price for the whole 60 s TTL. A write that changed nothing clears nothing. `PricingCache` gains a `generation` counter and `set(key, value, generation?)`: an answer whose resolution began before an invalidation is returned to its caller but not stored.
+  - **Cross-replica invalidation.** New `PricingGeneration` (`services/pricing-generation.ts`): a bump clears this process's LRU and publishes on the Redis channel `b2b:price_lists:pricing-generation`; every process subscribes on boot (through the composition's shared `redisSubscriber`) and clears its own LRU. Publishing is best-effort; a lost message degrades to the 60 s TTL, the previous behaviour. The module now resolves `redis` and `redisSubscriber` from the container; `priceListsModule` takes an optional `pricingGenerationPublisher`, and its handle exposes `pricingGeneration`.
+  - **The status sweeper invalidates.** `PriceListStatusWorker` takes the cache as a second constructor argument and clears it after a sweep that activated or expired at least one list (an idle tick clears nothing). The test-only `POST /api/v1/admin/price-lists-engine/internal/sweep` route now runs the module's own worker instance; `PricingRoutesDeps` gains `statusWorker`.
+
+- 5bddd11: Batched resolution entry points and one customer-group rule (D-287 P0).
+
+  - **`PricingServiceContract` gains `resolveLinePrices(input: LinePricesInput)`** — many lines, each at its own quantity, in a number of statements that does not grow with the lines (9 lines: 12 statements against 112 for the per-line loop; 45 lines: still 12). It answers exactly what one `resolveLinePrice` per line answers. **An overlay that decorates `resolveLinePrice` must decorate `resolveLinePrices` too** — the cart, the placement price check, quote reference prices and the external catalogue API now price through it.
+  - **`PricingServiceContract` gains `resolveListingPriceDetails(input)`** — `resolveListingPrices` plus `basePrice` / `salePrice` / `displayMode` from the same resolution.
+  - **The customer's own group on every path.** Every entry point accepts `customerAccountId`; the engine reads the account (once per call) and prices on `customerGroupId ?? account's group ?? organization's group` (`effectiveCustomerGroupId`, `services/customer-group-rule.ts`). An account that does not belong to the named organization is ignored. `PricingService` takes `customer_accounts`' read port as a fifth constructor argument; a resolution that names an account without it refuses. `GET /api/v1/storefront/products/:id/resolved-price` now prices a signed-in customer on their own group — a behaviour change for a customer whose group differs from their organization's.
+  - **`BuyerLinePriceService`** prices each chunk of lines with one `resolveLinePrices` call (it was one sequential `resolveLinePrice` per line); its `pricingService` dependency is now `Pick<PricingServiceContract, 'resolveLinePrices'>`.
+
+### Patch Changes
+
+- 337fb65: The upgrade to price books no longer stops on a product feed pinned to an old-model price list.
+
+  - **`@endora-commerce/mod-price-lists`.** The conversion migration deletes the old-model lists one at a time. A list another table still refers to (on 0.107.0, a product feed pinned to it) is **retired** instead of deleted: it keeps its id, loses its rows, audience, channel bindings and dates, becomes `expired` and for everyone, and is renamed "… (removed by the 0.108.0 upgrade)". Before, the conversion failed on the feed's foreign key and the whole upgrade rolled back.
+  - **`@endora-commerce/mod-product-feeds`.** New migration `20261023T234605_product_feeds_price_list_fk_dropped` drops `product_feeds_price_list_fk`: a price book a feed is pinned to can now be deleted. The feed then warns `not_found` and its next run withdraws its published file; a new pin is still checked against the price books when it is written. After the upgrade a feed pinned to a retired list warns `not_active`, and its next run withdraws its file until it is pinned to a price book that applies, or unpinned, through the product feeds API (`PATCH …/product-feeds/:id`, `priceListId`).
+
+- 256e488: The `price_lists` manifest describes price books (feature 160): the module description reads _Price books — base, catalogue, buyer and sale prices per currency, sales channel and audience — and price display modes._, and the permissions _View price books and display modes_ (`price_lists:read`) and _Edit price books, base prices and display modes_ (`price_lists:write`), in English and Polish. They named brackets, pricing rules and a rule-based engine the module no longer has.
+- e47b84b: The four price-matrix error codes are gone (feature 160): `ERROR_CODES.PRICE_MATRIX_ENTRY_NOT_FOUND`, `PRICE_MATRIX_ENTRY_OVERLAP`, `PRICE_MATRIX_ATTRIBUTE_NOT_ELIGIBLE` and `PRICE_MATRIX_ENTRY_LIMIT` are no longer exported or declared by `price_lists`, and their sentences and the unused `priceMatrix.*` admin strings are removed from both bundles. Nothing has raised them since the matrix entries became price-book rows: a row is refused with `PRICE_BOOK_ROW_SHAPE`, `PRICE_BOOK_ROW_OVERLAP`, `PRICE_BOOK_ROW_TARGET` or `PRICE_BOOK_ROW_LIMIT`.
+- b583f89: The price surface's coverage check (whether a buyer surface holds every product of the everyone surface, which lets an all-products buyer's sorted page skip the everyone stream) probes each everyone row by primary key with a scalar `limit 1` sub-select instead of a `not exists`. On a `price_profile_prices` analysed while empty — a fresh install's, before autovacuum catches up — the `not exists` was planned as a nested-loop anti join filtering every buyer row per everyone row, and the first price-sorted page of an all-products buyer took 428 s on a 50 000-product catalogue; the probe takes about 0.2 s whatever the statistics.
+
+  Follow-up in the same release: the probe still took 47 s there, because with no statistics the planner served it from the ordering index (a range scan of the buyer surface per probe). The coverage check now reads each surface's product ids by itself and compares them in memory, and a whole build that writes a large share of `price_profile_prices`, or the first rows of a table with no statistics, analyses the table inside its own transaction, so the statistics are visible together with the rows.
+
+- 8d62ff8: Documentation only (feature 160, FR-048): the module pages describe how prices are determined with price books.
+
+  - `price_lists` ships three pages instead of one: _Price books_ (what a book is, base prices, the four resolution steps, the default precedence, variants, where prices appear, the demo's worked examples, permissions, known limitations and a migration note), _The price-book editor_ (every admin screen) and _Pricing for developers_ (data model, resolver, the batched read path, caching, the price surface, the admin and storefront API, the ports and the conversion from the old model).
+  - The pages of `catalog`, `carts`, `orders`, `organizations`, `product_feeds`, `quick_order`, `quote_requests` and `search` describe their prices as resolved from price books, with no product-owned price and no fallback. No code changes.
+
+- e358ccb: Documentation only (feature 160): the module pages follow the targeted refresh of the price surface and the pinned-feed rules of 2026-10-23.
+
+  - `price_lists` — _Pricing for developers_ describes the two kinds of mark (a (profile, product) mark in `price_profile_stale_products`, a whole-profile mark), what each write marks, the worker's pass, `namedListPublishability` and the reference a pinned book's percentages are taken off, and the unpriced shape of `resolved-price`; _Price books_ says how soon a price change shows in a price-sorted listing — within a minute for a targeted change, within five minutes at about 200 profiles for a catalogue-wide one (SC-005, owner ruling 2026-10-24) — and that a list a feed was pinned to is retired, not deleted, by the upgrade. The demo is loaded with `demo seed`, not `demo reset`.
+  - `product_feeds` — a pinned price book publishes only while it is active or scheduled within its dates, on the feed's channel and for everyone; the feed page warns otherwise, and a run ends `withdrawn` and withdraws the published file (not a failure: no notification, no delivery; the old file stays downloadable from its run). A feed is pinned through the admin API (issue #414).
+  - `catalog` — product, category and attribute events mark on the price surface the products they concern. No code changes.
+
+- 6865b14: Pricing strings (feature 160): the product editor's _Pricing_ tab label is translated (`productEditor.tab.pricing`, _Ceny_ in Polish); `price_lists`' Polish hint names the attribute flag _Reguły cennika_, as the catalogue's attribute screen does; a comment on the cart read's pricing chain no longer describes a product price of its own.
+- 9434cbc: `resolvedPriceEngineSchema` describes what `GET /api/v1/storefront/products/:id/resolved-price` answers (feature 160, FR-018).
+
+  - **`@endora-commerce/contracts`.** Amounts are decimal strings (`{ amount: '199.0000', currency: 'PLN' }`), as the route has always sent them — the schema declared numbers. An unpriced product has `baseListId`, `basePrice` and `quantityBracket` all `null` (they were declared non-null); the three are `null` together or set together.
+  - **`@endora-commerce/mod-price-lists`.** The route answers `baseListId: null` for an unpriced product instead of an empty string.
+
+- df3b5c2: Every array `price_lists` binds to a statement now goes through one helper that quotes and escapes each element.
+
+  The price surface built the text array of an attribute change by hand and escaped `"` but not `\`, so an attribute key holding a backslash was read as another key (its rows marked nothing), and one ending in a backslash made the literal malformed, so the marking failed and fell back to marking every profile stale — a full rebuild. The uuid, numeric and text arrays of the module (the engine, the surface, its marking, the book reads and writes, the representative scope and the list-read port) are now built by `pgArray`, which double-quotes every element, escapes `\` and `"`, and writes `null` as `NULL`; the three private copies of `uuidArray` and two of the text-array helper are gone.
+
+- f3bab60: The upgrade to price books no longer stops on an old price list coded like a base book.
+
+  The conversion migration `20261022T111815_price_lists_price_books_conversion` inserted each new currency's base book with the code `base-<currency>` before it removed the old lists, so an existing list coded `base-eur` (for example) failed the whole upgrade on `price_lists_code_unique`. The base book's code is now derived from its own new id; the column is dropped later in the same migration, so nothing reads it.
+
+- badca15: A cached price no longer carries another viewer's display mode.
+
+  The price-book engine's cache is keyed by the pricing profile, which a guest and an organization with no buyer book share, while the display mode's organization and settings steps differ between them: whichever asked first decided the net/gross mode the other was shown for up to 60 seconds. The cache now holds only what the profile decides — the price, and the product and category steps of the display-mode chain — and the organization → settings tail is applied per request. The price surface's worker, which resolves a buyer profile with a guest viewer, no longer reads or writes the cache at all.
+
+  `BookPricingDeps.displayModes` is replaced by `productDisplayModes` (the product and category steps) and `viewerDisplayMode` (the tail); the cache's value type is the new `CachedBookLine`. `PriceListService.resolveProductDisplayModes` is new; `resolveDisplayModes` answers as before.
+
+- 7f33967: The price explainer no longer identifies a price book outside a sales representative's scope.
+
+  `POST /api/v1/admin/price-books/resolve` named every candidate book — id, name, row and its labels — including books a representative may not see, such as a parent organization's book met through the organization chain or a book shared with an organization outside their scope (FR-034 requires those to answer as missing books). For such a caller, a winning book outside their scope now answers `bookId`, `bookName` and `rowId` as `null` while the price, `tier`, `cell` and `reference` stay what the buyer is charged, and runner-ups from such books are left out of `candidates`. The explainer screen shows _A price book outside your scope_ in place of the book. A platform administrator sees every book as before. New `PriceBookReads.visibleBookIds(ids, scope)`.
+
+- 2974ffa: A price-book write that commits while a price is being resolved no longer leaves the pre-write price cached for a minute.
+
+  `BookPricing.resolve` read the pricing cache's generation after the channel, the precedence and the pricing profile, so a write that committed and invalidated in between (a book moved to draft, say) was stored under the new generation with the profile read before it, and served until the 60-second TTL ran out. The generation is now read before the first statement, as `PricingCache` requires.
+
+- e3aef9b: Marking the price surface after a write that touches several price books reads the price profiles and each book's channel set once, rather than once per book (and the channel set once per before/after state). The profiles are read again only after a deleted book's profiles have been dropped.
+- a71bc5a: Changing a price book's dates now re-decides its status.
+
+  `PATCH /api/v1/admin/price-books/:id` with `startsAt` or `endsAt` on an `active` or `scheduled` book sets its status as activation does: `expired` once its end has passed, `scheduled` before its start, `active` otherwise. An active book moved to a future start used to stay `active`; the status sweep only starts `scheduled` books, so when the book began to price nothing marked the price surface and price sorting never took it in. A draft and an expired book keep their status.
+
+- 86050a0: A sales representative can no longer widen a price book's audience beyond their own organizations.
+
+  - `PATCH /api/v1/admin/price-books/:id` now asks what create and duplicate ask: a representative may give a book only an organization audience, so patching their own draft to everyone or to customer groups answers `403`.
+  - An organization book naming no organization named none outside a representative's scope, so it was visible and writable to every representative. It now answers to a representative exactly as a missing book (`404`, absent from lists and counts), and a representative cannot create, duplicate or patch a book to an organization audience naming no one (`400 PRICE_BOOK_AUDIENCE_KIND`). A platform administrator is unaffected.
+
+- c092719: The price-book engine's cached line (`CachedBookLine`, internal to the package) no longer stores the currency: the pricing profile it is keyed by carries the currency, so an answer reads the request's own. No answer changes.
+- 26ad8db: The price explanation (`POST /api/v1/admin/price-books/resolve`) cuts the runner-ups to ten **after** leaving out the books outside the caller's scope. The cut used to happen first, in the resolver, so a sales representative lost one visible runner-up for every hidden book ranked above it; the answer is now exactly what it would be had the hidden books not existed. `BookExplanation.candidates` (internal to the package) carries every ranked candidate when the resolver is asked to explain, which only that route does.
+- bf6e980: The price-book engine reads the viewer's tail of the display-mode chain (the organization override, then the `pricing.*` display-mode settings) once per pricing generation and viewer rather than on every resolve, so a warm resolve whose lines are all cached issues no display-mode statements. Every write the tail reads now bumps the pricing generation: an organization override (as before), `PriceListService.setSettingsDisplayMode` (it did not), and a settings write of `pricing.default_display_mode` or `pricing.unauthenticated_display_mode` through the settings module, which `price_lists` now hears as `settings.value_changed`. `ViewerModeKey` and the engine option `viewerModeMemo` are new.
+- d99d6c1: Only the admin price explainer (`POST /api/v1/admin/price-books/resolve`) lists every ranked runner-up of a line, and it resolves past the answer cache to do so; every other resolution — listings, carts, the price-surface build — keeps at most ten runner-ups, as before review 2, so the shared answer cache no longer holds an unbounded runner-up list per line. The explainer still cuts its list to ten after leaving out the books outside the caller's scope.
+- 0ef7316: The catalogue and pricing documentation now state what a price-sorted walk guarantees: every product whose price does not change during the walk is met exactly once, including when the price order goes missing midway; a product repriced meanwhile may be met twice or not at all, as with any cursor over a live price. They no longer claim that nothing is ever repeated or lost, and they say that a page may be short or empty and still have more after it.
+- 5f7cbdf: The viewer display-mode memo is cleared once per pricing-generation bump, by the module that owns it; `BookPricing.invalidateAll()` no longer clears it a second time and now drops only the engine's own precedence memo. The generation in `ViewerModeKey` still keeps a tail read during a write from being served after it.
+- 8026d81: Base-price writes keep the rows they do not change (feature 161, Checkpoint 6 review). `PUT /api/v1/admin/price-books/base-prices/:productId` (and `PriceBookWritePort.replaceBasePrices` / `replaceProductBaseTiers`) used to delete every row of the currency and insert the new set, so a tier nobody edited was rewritten with a new id; now a row whose variant, window, kind and value are unchanged keeps its id and values, only differing rows are deleted or inserted, and the base book's version moves only when something changed. The admin panel shows a lowest tier above 1 as stored (with a "not orderable below" notice) and a variant's own quantity tiers read-only, sending both back exactly. `price_lists:write` now advises `catalog:read` (`requires`, D-175): the product browser and the variant read need it.
+- 301a69f: An admin read of a product's variants (feature 161, Checkpoint 5 review).
+
+  - **`GET /api/v1/admin/catalog/products/:productId/variants`** (`catalog:read`): every variant of the product by SKU, serialized as the variant writes answer them (`id`, `parentProductId`, `sku`, `variantAttributeValues`, `stockLevel`, `createdAt`, `updatedAt`), whatever the product's status, sales channels or audience; an unknown or deleted product is `404`. `CatalogAdminService.listVariants(productId)` is new. The storefront's `GET /api/v1/catalog/products/:id`, which answers an inactive product `410` and an out-of-channel one `404`, is unchanged.
+  - **Contracts:** `adminProductVariantSchema`, `adminProductVariantsResponseSchema` and their types.
+  - **The price-book grid** expands a product line through this read (the action is absent without `catalog:read`).
+
+- ae25fed: The display-mode page names category and product overrides in the admin language. `GET /api/v1/admin/price-books/targets/categories` and `GET /api/v1/admin/catalog/products` answer `name` as a map keyed by language tag; the page rendered the map itself, which failed for either scope. It now picks the name as the other admin surfaces do (the admin language's tag, then `en-US`, then any, then the slug or SKU), in the table and in the _Add override_ dialog.
+- 29626f4: A large paste in the price grid, and a save of many lines, stay fast (feature 161, T099; FR-036).
+
+  - Old: each cell of a pasted or filled group copied every pending edit, and the save read every edit once per line. Both were quadratic: 5 000 cells took about 4 s.
+  - New: the grid applies a group in one pass (`editCells` in `src/admin/lib/book-edit-state.ts`), and the save and the cell views group the edits by line once per change. Measured on the development machine, 5 000 cells take about 90 ms.
+
+- ce572ca: A price book's _Duplicate_ is offered only on a book the caller may change (feature 161, US8; FR-027, A3.3). Old: any operator holding `price_lists:write` saw _Duplicate_ on every non-base book, including an everyone or customer-group book a sales representative may only read. New: it needs the book's `writable` as well, like every other edit control on the page.
+- 4d919e6: Every editor screen states its loading and its failures (feature 161, T096; FR-032).
+
+  - The create flow's currency step shows a loading state and, when the currencies cannot be loaded, says so with _Try again_. Old: the step was empty, without saying why.
+  - On _Pricing settings_, the list-price setting's load failure offers _Try again_ instead of asking for a page reload.
+
+- 8e4f87a: A whole rebuild of the price surface is about three times faster (issue #416), so a catalogue-wide change shows in the price-sorted order sooner.
+
+  - **What is faster.** A catalogue-wide change used to take about 4.5 minutes to show in the price sort. It now takes under 1.5 minutes, measured on 202 built profiles of the 50 000-product SC-005 fixture: 275.64 s → 84.84 s for an all-products row, and 273.47 s → 83.23 s for a sales-channel identity event. A catalogue-wide change is an all-products or attribute-only row on an everyone or base book, a sales-channel identity or lifecycle event, or a change to more than 10 000 products. Targeted changes and the prices on cards are unchanged.
+  - **How.** A build reads the catalogue through `catalogProductReadPort.listPricingRefs()`, one statement with no entity hydration, at its own start, so it always prices the catalogue as it is. It resolves the next batch of products while it writes the previous one, and reads a buyer's comparison rows beside the resolution. The surface's resolution skips the display-mode chain, which the surface does not store.
+  - **A product deleted during a rebuild costs a retry, not the job.** A build that meets a product deleted after it read the catalogue rolls back and runs again on a fresh read. Only if its products vanish under three attempts in a row does the pass fail, swapping nothing and keeping every mark; no later profile of that pass is built, so no buyer is ever compared with an everyone surface that failed. The queue's own retry then runs the job again. Before this, the first such error failed the pass.
+  - **A failed `price_lists.surface` job no longer blocks the queue.** Every request uses one fixed job id, and BullMQ refuses an id it still holds. Failed jobs used to be kept, so a job that failed for good silently swallowed every later request until it was evicted. A failed job is now removed, and the worker logs each failure at `error`.
+  - **Unchanged.** Every surface row is still computed by the resolver the cards use. A build still writes the next generation beside the served one and swaps it in in one transaction. A failed build swaps nothing, and a failed write fails it at once. A whole-profile mark that lands while a build no pass asked for is reading the catalogue is no longer cleared by that build.
+  - `BookPricing.resolveProfileListing` is new. It is the listing resolution of a fixed profile without the display mode, and `resolveListing` answers as before.
+
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [4da88fd]
+- Updated dependencies [291ec86]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [e1b173f]
+- Updated dependencies [ef1318e]
+- Updated dependencies [f42bbaf]
+- Updated dependencies [c781cd6]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [172597c]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [53e88c7]
+- Updated dependencies [8e10ba1]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [3a9dc6e]
+- Updated dependencies [5bddd11]
+- Updated dependencies [5bddd11]
+- Updated dependencies [4a05f32]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+  - @endora-commerce/platform@0.108.0
+  - @endora-commerce/admin-kit@0.108.0
+
+## 0.107.0
+
+### Minor Changes
+
+- cad6a6e: Add many products to a price list in one request.
+
+  **New route: `POST /api/v1/admin/price-lists-engine/:id/products/bulk-add`**, gated by
+  `price_lists:write`.
+
+  - Body: `{ productIds: uuid[] }` with 1 to 200 ids (`bulkAddPriceListProductsRequestSchema` from
+    `@endora-commerce/contracts`). Duplicates are collapsed, the first occurrence kept.
+  - Answer `200 { data: { added, unchanged, failed } }` (`bulkAddPriceListProductsResponseSchema`).
+    An id already on the list is `unchanged` and its brackets are left exactly as they were; an id
+    the catalogue does not hold as a live product (unknown or soft-deleted) is
+    `failed: [{ productId, reason: 'product_not_found' }]`; every other product is `added`, in
+    request order, whatever its status or type. Nothing is ever removed.
+  - Refusals write nothing: `403 FORBIDDEN` for the system Default price list (its roster is seeded
+    from each product's default price) and for a caller without `price_lists:write`,
+    `404 NOT_FOUND` for an unknown or deleted price list, `400 VALIDATION_FAILED` for an invalid
+    body (not an object, no ids, more than 200, a non-uuid id). Two requests racing to add the same
+    new product: one adds it; the other may answer `409 VERSION_CONFLICT` (or report it
+    `unchanged`), and retrying reports the product `unchanged`.
+  - One request is one Command, `price_list.products_add`, and writes **one** audit entry whose
+    after-state holds counts only — `{ name, added, unchanged, failed }`, never the id list — and
+    **no** entry when nothing was added, so a retry of an accepted request is silent.
+  - The manifest's `recentActivity` declares `price_list.products_add`, so the dashboard's recent
+    activity shows a bulk add as "added products to price list" / "dodał(a) produkty do cennika";
+    the module's own bundle gains `activity.verb.price_list.products_add` in English and Polish.
+
+  `PriceListService.addProducts(priceListId, productIds, auditCtx?)` is the service method behind
+  it. The single-product `POST …/products` and the replacing `PUT …/products` are unchanged.
+
+  **Admin screen.** On a price list's _Products & brackets_ tab, **Add** now opens the shared product
+  browser over the whole catalogue: it opens on _All_, every status and type can be ticked, products
+  already on the list are shown as _Already on this price list_ and cannot be ticked, and one confirm
+  sends one bulk-add request. A refused or lost request keeps the browser open with the selection, a
+  message naming the cause where the answer gives one (the Default list or a missing permission, a
+  price list deleted meanwhile, an invalid request, a concurrent change) and a **Retry** that
+  re-sends the same products; an accepted one closes it, reloads the roster, opens the first added
+  product's bracket editor and names any product that could not be added with the reason. The
+  roster now resolves product names for a list of any size (`batch-by-id`, 500 ids per request, at
+  most two in flight, shared by every roster change while names are still loading) instead of
+  reading the catalogue's newest 20, and the bracket editor opens for every roster product — one
+  whose name is unknown shows its id prefix rather than staying on _Loading product…_. **Add** is
+  disabled, with a hint, for an operator without `price_lists:write`, and stays disabled on the
+  system Default list. The single-product picker drawer is removed.
+
+- 70bb5e5: New `buyerLinePricePort` (container name; type `BuyerLinePricePort` in `@endora-commerce/contracts`): `resolveForBuyer({ buyer, salesChannelId, currencyCode?, lines })` answers, per line, the net unit price a buyer would pay on a normal order on that sales channel now — the account's customer group before the organization's, quantity brackets and active sale prices included. `salesChannelId: null` is the system default channel; a product that does not exist answers `price: null`; an unknown channel throws `400 VALIDATION_FAILED`. Lines are resolved in bounded chunks. The port carries no authority check — the caller passes a buyer it has already authorised — but a `customerAccountId` named together with an `organizationId` it does not belong to throws `400 VALIDATION_FAILED`.
+
+  The admin probe `GET /api/v1/admin/products/:id/resolved-price` is served by the same implementation and accepts a new `salesChannelId` query parameter (absent = system default channel; an unknown or malformed id is `400 VALIDATION_FAILED`, without echoing the id).
+
+- 70bb5e5: **The admin probe `GET /api/v1/admin/products/:id/resolved-price` now checks the buyer before pricing.** An `organizationId` or `customerAccountId` that does not exist — and, for a sales representative, one outside the organizations they may see — answers `404` with one shared body. It used to be answered with the anonymous price. A customer account that is not a member of the named `organizationId` is `400 VALIDATION_FAILED`. A request naming neither is still the anonymous price, and a platform administrator still reaches every organization.
+- 76f9757: Price lists gain a **price matrix**: one entry prices a selection of products for an optional organization and a quantity window, at a fixed unit price or a percentage discount.
+
+  - **Selections**: one product (with an organization), a category, an attribute value, a category
+    and an attribute value, or every product. Attribute selections accept only attributes flagged
+    _Price list rules_ (`isPriceRule`) whose values are a single choice, multiple choices or yes/no
+    and that are neither per-language nor per-channel; clearing the flag deactivates the entries
+    without a pricing error.
+  - **Resolution**: list selection, the Base/Sale partitions and fall-through are unchanged. Inside
+    the picked list, the list's own bracket and its entries compete — organization-specific first
+    (nearest organization in the inheritance chain first), then product > category ∩ attribute >
+    attribute > category > all products, then the higher starting quantity, the lower price and the
+    entry id. A percentage is taken off the list's own bracket, else the system Default list's,
+    rounded half-up to four decimals; without a reference it is skipped.
+  - **Every surface agrees**: `resolveLinePrice`, `resolveListingPrices`, the storefront price sort
+    and filter (`orderByUnitPrice`, `pricedProductIds`), the quantity-tier ladder
+    (`listBracketMinQuantities`) and the admin resolved-price probe, which now answers
+    `resolvedPrice.matrixEntryId`. `namedListPrices` (pinned feeds) still reads brackets only.
+    `PricingLineResult` gains an optional `matrixEntryId`; the published `LinePricePort`,
+    `LinePriceResult` and `BuyerLinePriceAnswer` are unchanged.
+  - **Admin API** behind the existing `price_lists:read` / `price_lists:write`:
+    `GET|POST /api/v1/admin/price-lists-engine/:id/matrix`,
+    `GET|PATCH|DELETE /api/v1/admin/price-lists-engine/:id/matrix/:entryId` and
+    `GET /api/v1/admin/pricing/rule-targets/attributes`. Writes are audited as
+    `price_list.matrix_entry_create|update|delete` (declared for Recent activity), tenant-scoped,
+    limited to 5 000 entries per list, and refuse overlaps. Duplicating a list copies its matrix.
+  - **Admin UI**: a _Price matrix_ tab on the price-list editor (`?tab=matrix`), English and Polish.
+  - **Schema**: one migration creates `price_list_matrix_entries`.
+  - **Composition**: `PriceListTargetReads` gains a required `catalogAttributeRead`
+    (`CatalogAttributeReadPort`); the module resolves it as `catalogAttributeReadPort`. A deployment
+    constructing `PriceListService` or `PricingService` by hand must pass it.
+
+- 3d5a203: A product sold on request only is refused by the cart whether or not a price list holds it. `CartService.addItem` read the display mode off the resolved list price, so a product no price list prices — priced from the catalogue attribute — resolved nothing, the `CART_PRODUCT_QUOTE_ONLY` guard was skipped, and `POST /api/v1/cart/items` added the line with `200`. It now answers `400 CART_PRODUCT_QUOTE_ONLY` for it too.
+
+  `@endora-commerce/contracts` publishes `ProductDisplayModePort` — `resolveDisplayMode({ productId, organizationId, salesChannelId, customerKind })` — and `@endora-commerce/mod-price-lists` provides it as `productDisplayModePort`, over the same Product → Category → Organization → Settings chain its storefront display-mode route answers with. `CartService` takes it as a new required constructor argument, after `channelMembership`; the module's own composition wires it.
+
+### Patch Changes
+
+- d76291d: Storefront catalogue reads can be priced in the currency the shopper selected. `GET /api/v1/catalog/products`, `GET /api/v1/catalog/products/:idOrSlug` and `GET /api/v1/catalog/products/:idOrSlug/links` accept `?currency=` (an ISO 4217 code, any case). The listing price, the price ordering, the price-range filter, the link tiles and the Meilisearch-served listing are all resolved in that currency when the request's sales channel lists it in its `currencies`, and in the channel's `defaultCurrency` otherwise. A malformed code answers `400 VALIDATION_FAILED`. Without the parameter, every read asks the pricing engine exactly what it asked before.
+
+  `@endora-commerce/contracts` exports the pieces both modules use: `listingCurrencyQuerySchema` (the parameter), `resolveListingCurrency(requested, channel)` (requested if the channel offers it, else its default) and `listingPriceChannelContext(channel, currency)` (the `salesChannel` and `currencyCode` half of a `ListingPriceViewerContext`, with the default currency left implicit). `SearchQueryContext` gains an optional `currency`.
+
+  `@endora-commerce/mod-price-lists`: a listing priced in a currency other than the channel's default no longer falls back to the Product's own `defaultPrice` / `price` attribute. That attribute has no currency of its own and was entered in the default one, so the fallback would have quoted, for example, 100 PLN as 100 EUR; such a product now has no listing price in that currency (`source: 'none'`). In the default currency nothing changes.
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

@@ -16,7 +16,7 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 | | |
 | --- | --- |
 | Identyfikator modułu | `quote_requests` |
-| Nazwa | Quote Requests |
+| Nazwa | Quote requests |
 | Wersja | `1.0.0` |
 | Pakiet | `@endora-commerce/mod-quote-requests` |
 | Licencja | `MIT` |
@@ -44,9 +44,12 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 | `transactional_emails` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `carts` | tylko bramkowanie | rozwiązuje `cartWritePort`; pominięty w `dependencies`, bo kolejność instalacji nie może nieść tej krawędzi |
 | `orders` | tylko bramkowanie | rozwiązuje `orderReadPort`; pominięty w `dependencies`, bo kolejność instalacji nie może nieść tej krawędzi |
+| `admin_notifications` | nie | degrades-without `adminNotificationRecordPort` — operatorzy nie dostają wpisów w dzwonku o zapytaniach ofertowych; każdy rekord dostarczenia zamyka się jako pominięty (moduł wyłączony). |
 | `admin_search` | nie | contributes-to `adminSearchProviderRegistry` |
+| `customer_notifications` | nie | degrades-without `customerNotificationRecordPort` — kupujący nie dostają wpisów o swoich zapytaniach ofertowych w centrum powiadomień sklepu; każdy rekord dostarczenia zamyka się jako pominięty (moduł wyłączony). |
 | `document_templates` | nie | refuses-without `documentRenderPort` — zapytań ofertowych nie można eksportować do PDF ani wybrać dla nich szablonu PDF |
 | `document_templates` | nie | contributes-to `documentTypeRegistry` |
+| `pwa` | nie | degrades-without `customerPushPort` — kupujący nie dostają powiadomień push o swoich zapytaniach ofertowych na swoje urządzenia; każdy rekord dostarczenia zamyka się jako pominięty (moduł wyłączony). |
 | `webhooks` | nie | contributes-to `webhookEventRegistry` |
 
 ## Uprawnienia

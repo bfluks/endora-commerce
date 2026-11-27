@@ -9,9 +9,17 @@ import {
 import { OrderListViewService } from '../../../../packages/modules/orders/src/backend/services/order-list-view-service.js';
 import { ProductListViewService } from '../../../../packages/modules/catalog/src/backend/services/product-list-view-service.js';
 import { QuoteRequestListViewService } from '../../../../packages/modules/quote_requests/src/backend/services/quote-request-list-view-service.js';
+import { ReturnListViewService } from '../../../../packages/modules/returns/src/backend/services/return-list-view-service.js';
+import { TaskListViewService } from '../../../../packages/modules/tasks/src/backend/services/saved-view-service.js';
+import { OpportunityListViewService } from '../../../../packages/modules/crm/src/backend/services/opportunity-list-view-service.js';
+import { ProjectListViewService } from '../../../../packages/modules/projects/src/backend/services/project-list-view-service.js';
 import { savedViewActor as orderSavedViewActor } from '../../../../packages/modules/orders/src/backend/saved-view-actor.js';
 import { savedViewActor as productSavedViewActor } from '../../../../packages/modules/catalog/src/backend/saved-view-actor.js';
 import { savedViewActor as quoteRequestSavedViewActor } from '../../../../packages/modules/quote_requests/src/backend/saved-view-actor.js';
+import { savedViewActor as returnSavedViewActor } from '../../../../packages/modules/returns/src/backend/saved-view-actor.js';
+import { savedViewActor as taskSavedViewActor } from '../../../../packages/modules/tasks/src/backend/saved-view-actor.js';
+import { savedViewActor as opportunitySavedViewActor } from '../../../../packages/modules/crm/src/backend/saved-view-actor.js';
+import { savedViewActor as projectSavedViewActor } from '../../../../packages/modules/projects/src/backend/saved-view-actor.js';
 import { resolveTenantContext } from '@endora-commerce/platform/composition';
 import { runWithTenantContext, type TenantContext } from '../../../src/tenancy/tenant-context.js';
 
@@ -83,6 +91,12 @@ interface ListAdapter {
    * itself refuses the duplicate instead.
    */
   holdsLegacyDuplicates: boolean;
+  /**
+   * The unique index S8 expects the schema to answer with; `<table>_owner_name_key_uq`
+   * unless named. Tasks' migration (`specs/165-task-management/`) named it
+   * `task_list_saved_views_owner_name_unique` before it joined this table.
+   */
+  uniqueIndex?: string;
   make(emFactory: () => EntityManager, log: SpyLogger): SavedViewServiceUnderTest;
   /**
    * The list's route-side actor derivation: who is asking, read from the
@@ -155,6 +169,91 @@ const ADAPTERS: ListAdapter[] = [
         `insert into quote_request_list_saved_views
            (id, owner_admin_user_id, name, shared, filters, sort, visible_columns, created_at, updated_at)
          values (?, ?, ?, ?, '{}'::jsonb, null, null, now(), now())`,
+        [id, row.ownerAdminUserId, row.name, row.shared],
+      );
+      return id;
+    },
+  },
+  {
+    // Issue #312: the Returns list. Its table predates the rules, as the order
+    // list's does, so it carries no unique index and keeps rows saved before
+    // them — names, duplicates and all.
+    label: 'returns',
+    table: 'return_list_saved_views',
+    conflictCode: 'RETURN_SAVED_VIEW_NAME_TAKEN',
+    holdsLegacyDuplicates: true,
+    // Same narrow cast as orders': the return list requires `sort`.
+    make: (emFactory, log) =>
+      new ReturnListViewService(emFactory, log) as unknown as SavedViewServiceUnderTest,
+    actor: returnSavedViewActor,
+    async seedRaw(em, row) {
+      const id = randomUUID();
+      await em.execute(
+        `insert into return_list_saved_views
+           (id, owner_admin_user_id, name, shared, filters, sort, visible_columns, created_at, updated_at)
+         values (?, ?, ?, ?, '{}'::jsonb, '{"field":"submittedAt","dir":"desc"}'::jsonb, null, now(), now())`,
+        [id, row.ownerAdminUserId, row.name, row.shared],
+      );
+      return id;
+    },
+  },
+  {
+    // `specs/165-task-management/` R-13: the Tasks list and board, on the same rules.
+    label: 'tasks',
+    table: 'task_list_saved_views',
+    conflictCode: 'TASK_VIEW_NAME_TAKEN',
+    holdsLegacyDuplicates: false,
+    uniqueIndex: 'task_list_saved_views_owner_name_unique',
+    // Same narrow cast as the others': the Tasks list's `sort` and
+    // `visibleColumns` are optional, which no one input type shares exactly.
+    make: (emFactory, log) => new TaskListViewService(emFactory, log) as unknown as SavedViewServiceUnderTest,
+    actor: taskSavedViewActor,
+    async seedRaw(em, row) {
+      const id = randomUUID();
+      await em.execute(
+        `insert into task_list_saved_views
+           (id, owner_admin_user_id, name, shared, filters, sort, visible_columns, created_at, updated_at)
+         values (?, ?, ?, ?, '{}'::jsonb, null, null, now(), now())`,
+        [id, row.ownerAdminUserId, row.name, row.shared],
+      );
+      return id;
+    },
+  },
+  {
+    // Issue #1734: the CRM Opportunities page, its list and board, on the same rules.
+    label: 'crm',
+    table: 'crm_opportunity_list_saved_views',
+    conflictCode: 'CRM_SAVED_VIEW_NAME_TAKEN',
+    holdsLegacyDuplicates: false,
+    // Same narrow cast as the others': `sort` is optional and there is no `visibleColumns`.
+    make: (emFactory, log) => new OpportunityListViewService(emFactory, log) as unknown as SavedViewServiceUnderTest,
+    actor: opportunitySavedViewActor,
+    async seedRaw(em, row) {
+      const id = randomUUID();
+      await em.execute(
+        `insert into crm_opportunity_list_saved_views
+           (id, owner_admin_user_id, name, shared, filters, sort, created_at, updated_at)
+         values (?, ?, ?, ?, '{}'::jsonb, null, now(), now())`,
+        [id, row.ownerAdminUserId, row.name, row.shared],
+      );
+      return id;
+    },
+  },
+  {
+    // Issue #1734: the Projects list, on the same rules.
+    label: 'projects',
+    table: 'project_list_saved_views',
+    conflictCode: 'PROJECT_SAVED_VIEW_NAME_TAKEN',
+    holdsLegacyDuplicates: false,
+    // Same narrow cast as the others': `sort` is optional and there is no `visibleColumns`.
+    make: (emFactory, log) => new ProjectListViewService(emFactory, log) as unknown as SavedViewServiceUnderTest,
+    actor: projectSavedViewActor,
+    async seedRaw(em, row) {
+      const id = randomUUID();
+      await em.execute(
+        `insert into project_list_saved_views
+           (id, owner_admin_user_id, name, shared, filters, sort, created_at, updated_at)
+         values (?, ?, ?, ?, '{}'::jsonb, null, now(), now())`,
         [id, row.ownerAdminUserId, row.name, row.shared],
       );
       return id;
@@ -309,7 +408,7 @@ describe('saved list views — one rule set for every list (spec 147)', () => {
       await adapter.seedRaw(em, { ownerAdminUserId: owner.adminUserId, name: `S8 unique ${run}`, shared: false });
       await expect(
         adapter.seedRaw(em, { ownerAdminUserId: owner.adminUserId, name: `s8 UNIQUE ${run}`, shared: false }),
-      ).rejects.toThrow(`${adapter.table}_owner_name_key_uq`);
+      ).rejects.toThrow(adapter.uniqueIndex ?? `${adapter.table}_owner_name_key_uq`);
     });
 
     it.runIf(adapter.holdsLegacyDuplicates)('S8 leaves a pre-existing duplicate alone when only `shared` changes', async () => {

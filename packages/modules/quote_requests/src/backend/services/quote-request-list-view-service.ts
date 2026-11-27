@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { ERROR_CODES, savedListViewNameKey, type SavedListView } from '@endora-commerce/contracts';
+import { ERROR_CODES, savedListViewNameKey, type SavedListView, isUuidShape } from '@endora-commerce/contracts';
 import type { PlatformLogger } from '@endora-commerce/platform/kernel';
 import { HttpError } from '@endora-commerce/platform/http';
 import { QuoteRequestListSavedView } from '../entities/quote-request-list-saved-view.entity.js';
@@ -92,7 +92,7 @@ export class QuoteRequestListViewService {
         });
         // command-coverage-ignore: per-admin saved list preset — personal UI
         // configuration, not a domain mutation.
-        await tx.persistAndFlush(created);
+        await tx.persist(created).flush();
         return created;
       }),
     );
@@ -149,7 +149,7 @@ export class QuoteRequestListViewService {
       const found = await loadModifiable(tx, id, actor);
       // command-coverage-ignore: per-admin saved list preset — personal UI
       // configuration, not a domain mutation.
-      await tx.removeAndFlush(found);
+      await tx.remove(found).flush();
       return found;
     });
     this.logForeignWrite('saved_view.deleted', view, actor);
@@ -219,20 +219,16 @@ async function assertNameAvailable(
 }
 
 /**
- * The shape of a `uuid` column value. A view id that does not have it names no
- * view, so it answers the same 404 as an absent one instead of reaching
- * PostgreSQL, whose `invalid input syntax for type uuid` would surface as a
- * 500. Shape only — deliberately looser than RFC 9562's version and variant
- * bits, which PostgreSQL does not check either.
+ * A view id without the shape of a `uuid` column value names no view, so it
+ * answers the same 404 as an absent one instead of reaching PostgreSQL, whose
+ * `invalid input syntax for type uuid` would surface as a 500 (`isUuidShape`).
  */
-const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 async function loadModifiable(
   tx: EntityManager,
   id: string,
   actor: QuoteRequestSavedViewActor,
 ): Promise<QuoteRequestListSavedView> {
-  if (!UUID_SHAPE.test(id)) {
+  if (!isUuidShape(id)) {
     throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Saved view not found.');
   }
   const view = await tx.findOne(QuoteRequestListSavedView, { id });

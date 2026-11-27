@@ -6,5 +6,18 @@
   "errors.ADMIN_AUTHENTICATION_UNAVAILABLE": "Logowanie jest chwilowo niedostępne, ponieważ usługa, od której zależy, nie odpowiada. Spróbuj ponownie za chwilę; jeśli problem się powtarza, skontaktuj się z osobą, która utrzymuje tę platformę.",
   "errors.ADMIN_USER_ROLE_REQUIRED": "Konto administratora musi mieć przypisaną rolę. Wybierz rolę dla tego konta.",
   "errors.NEW_PASSWORD_UNCHANGED": "Nowe hasło jest takie samo jak obecne. Wybierz inne hasło.",
-  "errors.ADMIN_USER_OUTRANKS_ACTOR": "Rola tego konta ma uprawnienia, których nie ma Twoja rola ({permissions}), więc nie możesz go zmienić, ustawić mu hasła, dezaktywować ani usunąć."
+  "errors.ADMIN_USER_OUTRANKS_ACTOR": "Rola tego konta ma uprawnienia, których nie ma Twoja rola ({permissions}), więc nie możesz go zmienić, ustawić mu hasła, dezaktywować ani usunąć.",
+  "errors.ADMIN_USER_AVATAR_NOT_FOUND": "Avatar musi być obrazem z biblioteki. Wybierz go ponownie.",
+  "actions.openAdminUsers.keywords": "użytkownicy, operatorzy, konta",
+  "errors.MFA_REQUIRED_FOR_ROLE_TWO_FACTOR": "Ta rola nie może wymagać weryfikacji dwuetapowej na tej instancji.",
+  "errors.MFA_REQUIRED_FOR_ROLE_TWO_FACTOR.mfa_off": "Ta rola nie może wymagać weryfikacji dwuetapowej, dopóki weryfikacja dwuetapowa (moduł MFA) jest wyłączona. Najpierw ją włącz, a potem zapisz rolę ponownie.",
+  "errors.MFA_REQUIRED_FOR_ROLE_TWO_FACTOR.encryption_key_missing": "Ta rola nie może wymagać weryfikacji dwuetapowej, bo na tej instancji nie da się skonfigurować drugiego składnika: nie ustawiono klucza szyfrowania MFA_SECRET_ENCRYPTION_KEY. Poproś osobę, która utrzymuje platformę, o jego ustawienie.",
+  "roles.twoFactor.help": "Członkowie muszą mieć drugi składnik; kto go nie ma, ustawi go przy logowaniu.",
+  "roles.twoFactor.mfaOff": "Nie obowiązuje, dopóki weryfikacja dwuetapowa jest wyłączona.",
+  "roles.twoFactor.confirmSignOut": "Administratorzy z tą rolą bez skonfigurowanej weryfikacji dwuetapowej: {count}. Zostaną teraz wylogowani i przy następnym logowaniu poproszeni o jej skonfigurowanie. Kontynuować?",
+  "roles.twoFactor.signedOut": "Zapisano rolę {code}. Wylogowani administratorzy bez skonfigurowanej weryfikacji dwuetapowej: {count}.",
+  "roles.twoFactor.notice.encryption_key_missing": "Nie obowiązuje: brak klucza szyfrowania (MFA_SECRET_ENCRYPTION_KEY).",
+  "module.name": "Administratorzy",
+  "module.description": "Konta administratorów, sesje i logowanie jako klient.",
+  "module.nonDeactivatableReason": "Obsługuje logowanie administratorów, sesje i logowanie jako klient; po wyłączeniu żaden operator nie mógłby zalogować się do panelu — także po to, by moduł z powrotem włączyć."
 }

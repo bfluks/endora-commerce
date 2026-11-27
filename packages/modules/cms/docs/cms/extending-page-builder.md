@@ -1,6 +1,6 @@
 ---
 title: Extending the Page Builder
-sidebar_position: 2
+sidebar_position: 3
 ---
 
 # Extending the Page Builder
@@ -9,8 +9,8 @@ The CMS module ships built-in components — `Row`, `Columns`, `Text`,
 `Heading`, `Button`, `InsertBlock`, and others — but every other
 backend module can contribute its own components. (`InsertTemplate` remains
 registered for legacy content trees but is no longer listed in the drawer
-palette.) The `cms`, `catalog`, `orders`, `invoices` and `transactional_emails`
-modules already declare their blocks this way. Their renderers are still the
+palette.) The `cms`, `catalog`, `blog`, `newsletter`, `orders`, `invoices` and
+`transactional_emails` modules already declare their blocks this way. Their renderers are still the
 built-in ones in `@endora-commerce/cms-components` and
 `@endora-commerce/email-components`; a module package outside the platform
 ships its own, as section 2 describes. A contributing module participates in
@@ -604,6 +604,11 @@ nothing is written to the stored content:
 | E-mail | the block contributes nothing to the HTML or the text; the message is still sent, and content holding the block can still be saved |
 | Admin editors | a stored block is a visible placeholder that keeps its props; the block is not offered in the palette |
 
+The editors find a stored block by its place in the document — an object with
+a `type` beside its `props` — so the nodes inside a rich-text value (a
+paragraph, an image, a mark) are never taken for blocks and never become
+placeholders.
+
 Switching the module back on restores all three, with no document changed in
 between. The storefront decides from the modules the backend **reports** as not
 present, so a block whose owner the backend does not know — an overlay
@@ -692,6 +697,17 @@ Default breakpoints (configurable via Settings
 - Tablet: 768–1023px
 - Desktop: ≥ 1024px
 
+A responsive value is stored either plain (one value for every breakpoint) or
+as `{ base, tablet?, desktop? }`, where `base` is the mobile value. The editor
+always writes `base`. A value written without it — through the API or an
+import, for example `{ "desktop": 2 }` — means **no value below the first
+breakpoint that has one**: the breakpoints below render as if the option were
+unset, and that breakpoint and the ones above it take the value.
+`normalizeResponsive` and `resolveResponsive` from
+`@endora-commerce/page-builder-core` read it that way, so a renderer that goes
+through them needs nothing more; an object whose keys are not only `base`,
+`tablet` and `desktop` is a plain value, never a responsive one.
+
 Email and invoice builders use a single layout width and do not expose
 responsive fields.
 
@@ -703,7 +719,11 @@ fields reuse the CMS color palette.
 ## Nesting (slots)
 
 Layout components (`Row`, `Columns`) use Puck **slot** fields — nested
-content is stored in `props`, not the legacy `zones` map.
+content is stored in `props`, not the legacy `zones` map. Since feature 163 the
+panels of `cms.Tabs` and `cms.Accordion` are slots too (`items[].panel`, which
+refuses `cms.Column`, `cms.Tabs` and `cms.Accordion`), and the Carousel's
+`slides` slot takes the four carousel item blocks besides `cms.Slide`. Do not
+declare a slot prop as `translatable`: the blocks inside it declare their own.
 
 ## Box model (CMS layout + content)
 
@@ -714,6 +734,183 @@ count (1–12 per breakpoint) with equal-width tracks.
 
 Use `createSpacingField`, `createBorderField`, and `createColorField` from
 `@endora-commerce/page-builder-core` when adding new CMS components.
+
+## Sections
+
+Section settings — anchor, colour scheme, background, spacing, width, content
+position and entrance reveal — live on one block, **`cms.Section`**, as its own
+top-level props beside a slot that holds any other blocks (the CMS module page
+describes what an editor sees): `anchor`, `scheme`, `background`, `width`,
+`customMaxWidthPx`, `reveal`, and per breakpoint `spaceTop`, `spaceBottom` and
+`contentPosition`. The three per-breakpoint props are the block's
+`responsiveFields`; their fields carry `PB_RESPONSIVE_METADATA`, so the editor
+shows them on its Responsive tab and they edit the breakpoint its scope
+switcher selects. `@endora-commerce/page-builder-core` exports the custom
+fields the plain Puck ones cannot express — `createSectionBackgroundField`,
+`createSectionSpaceField` (responsive), `createSectionAnchorField`,
+`createSectionRevealField` — and `isSectionBackgroundField`, by which the
+admin gives the background its asset picker. No other block carries section
+settings: a block outside a Section renders exactly as it does on its own, and
+a full-bleed look is a Section with the **Bleed** or **Full** width around the
+block.
+
+An aspect ratio per breakpoint as a block's own prop (`cms.Video.aspectRatio`,
+`cms.Image.ratio`) is `createAspectRatioField({ label, defaultRatio, allowAuto })`
+from the same package: a responsive field on the Responsive tab, offering every
+aspect token and a custom `w:h`. A ratio nested in a composite value (the
+hero's or the media-and-text video) uses `ResponsiveRatioControl` from
+`@endora-commerce/page-builder-admin`, the image field's in-field switch.
+
+A Section stands only at the top level of a page:
+
+- every slot of every block refuses it — list `cms.Section` in a new slot's
+  `disallow` (or leave it out of its `allow`), as the built-in slots do;
+- the editor guard `shouldRevertPuckAction` from
+  `@endora-commerce/page-builder-core/editor/puck-guards` reverts an insert or
+  a move of a root-only block (`ROOT_ONLY_TYPES`) into any zone but the page's
+  own list;
+- a Section stored nested anyway renders its children with no section wrapper.
+
+The one exception is **`cms.SectionGroup`**, a top-level container whose slot
+`allow`s `cms.Section` only. It is root-only too (in `ROOT_ONLY_TYPES`, so list
+it beside `cms.Section` in a new slot's `disallow`); the guard lets a Section
+into a group's `content` zone and nothing else
+(`isSectionGroupContentZone`, `SECTION_GROUP_CHILD_TYPES`). It renders through
+`SectionGroupFrame`: a `<div class="cmsc-section-group">` with the group's
+anchor, scheme and spacing (`--cmsc-group-p(t|b)(-md|-lg)`) and one
+`.cmsc-section-group__paint` layer — scheme background, paint, media and the
+decorative layer, spanning the window — behind all its Sections. A Section in
+it renders as a top-level Section (`data-in-group`), transparent
+(`data-transparent`) when the group paints and the Section has no background
+of its own and no other scheme.
+
+The block renders through `SectionFrame` from `@endora-commerce/cms-components`,
+which at the top level (or directly in a top-level group) draws
+`<section class="cmsc-section" id=… data-cmsb-scheme=… data-width=…>` with the
+background layer, the padding and the content frame, and nested elsewhere
+renders the children only. An image background is a `<picture>` (`object-fit`
+`cover`, or `contain`) unless its `size` is `auto`, px or % or it has a
+`repeat`: then it is one `.cmsc-section__tile` in the media layer, painted as a
+CSS background from `--cmsc-tile-image` (`--cmsc-tile-image-mobile` below
+768 px). The decorative layer's `decorativeSize`, `decorativeRepeat` and
+`decorativePosition` are written inline on the section or the group's paint.
+
+A renderer that needs to know where it stands reads `useSectionContext()` from
+`@endora-commerce/page-builder-core`: `{depth, topLevel}`. The hero uses it to
+load its media eagerly only as the page's lead block — the first top-level
+block, the first block of a first top-level Section, or the first block of the
+first Section of a first top-level Section group. The depth comes from
+`withHideOn`, which every block carries; `EmbeddedBlockDepth` lets
+`cms.InsertBlock` render an embedded tree at its own depth, so a Section in an
+embed at the top level is a section and the same embed inside a column is not.
+A block that sends the visitor back to the page reads `useSectionAnchor()` for
+the anchor of the Section it stands in; `newsletter.Signup` does.
+
+## Brand variables (`--cmsb-*`)
+
+The brand settings reach the page as CSS custom properties prefixed
+`--cmsb-` — colours, the scheme colours, fonts, the type scale, button shape,
+spacing and widths. The full list is on the CMS module's Brand settings page.
+A block stylesheet that should follow the brand reads them, **always with a
+literal fallback**:
+
+```css
+.acme_promotions-banner {
+  color: var(--cmsb-fg, #15202b);
+  background: var(--cmsb-bg, #ffffff);
+  border: 1px solid var(--cmsb-border, #d9e0e7);
+  font-family: var(--cmsb-font-body, Inter, system-ui, sans-serif);
+  padding-block: var(--cmsb-space-m, 24px);
+}
+.acme_promotions-banner__cta {
+  background: var(--cmsb-color-primary, #1261a6);
+  color: var(--cmsb-color-on-primary, #ffffff);
+  border-radius: var(--cmsb-btn-radius, 8px);
+}
+```
+
+- The fallback is what the block looks like with no brand settings — the
+  `cms` module switched off, a failed read, or a surface that does not inject
+  them, such as the e-mail editor. Use the value the block had before it read
+  the variable, so introducing the variable changes nothing on an instance
+  that never opens the Brand screen.
+- Read the scheme variables (`--cmsb-fg`, `--cmsb-bg`, `--cmsb-fg-muted`,
+  `--cmsb-border`, `--cmsb-link`) rather than fixed colours for text and
+  borders. A Section with a colour scheme rebinds them, so the block follows a
+  dark Section with no code of its own.
+- A colour prop may hold a brand colour reference, `token:<role>`.
+  `resolveColorValue(value)` from `@endora-commerce/page-builder-core` turns it
+  into `var(--cmsb-color-<role>, <built-in>)` and leaves a hex value as it is.
+- The built-in blocks follow the same rule:
+  `packages/cms-components/src/brand/fallback-parity.test.tsx` renders them with
+  no brand settings and compares the result with the values they had before.
+
+## Server-read data: the block-data seam
+
+A block that shows data from another module — products, categories, blog posts
+— must have that data in the server-rendered HTML (Principle VII), so the read
+is lifted out of the block:
+
+1. The block **declares** its request as data. The kinds are a closed union in
+   `@endora-commerce/cms-components/utils/block-data`
+   (`packages/cms-components/src/utils/block-data.ts`):
+   `products-by-slugs`, `products-list` and `categories` (owner `catalog`) and
+   `blog-posts` (owner `blog`).
+2. The storefront **resolves** every request on the page before rendering —
+   `resolveBlockDataFor(documents, ctx, modules)` in
+   `storefront/lib/page-builder/block-data.ts`, mounted through
+   `storefront/components/BlockData.tsx` — and skips a request whose owner
+   module is absent (`blockDataOwnerOf`), so a module that is switched off costs
+   the page nothing. A failed read is left out; the block renders its empty
+   state and the rest of the page is unaffected.
+3. The block **reads** its answer with `useBlockData(request)` from
+   `@endora-commerce/cms-components/hooks/use-block-data` (the key is
+   `blockDataKey(request)`). In the admin editor, which has no server render,
+   the same hook fetches through the preview readers that
+   `AdminCatalogPreviewProvider` registers.
+
+The seam was catalog-only before feature 163 and was generalised for
+`blog.LatestPosts`. Its old subpath,
+`@endora-commerce/cms-components/utils/catalog-block-data`, is kept as a
+**deprecated** re-export under the old names (`collectCatalogBlockDataRequests`,
+`resolveCatalogBlockData`, `CatalogBlockDataSource` and the rest), because a
+storefront created by an earlier release imports it. New code imports
+`utils/block-data`.
+
+The union is closed: a module package cannot add a request kind of its own
+today. A module-owned server-data hook is on the follow-up list below.
+
+## Changing a block that is already in use: extend, don't narrow
+
+A built-in block may be reshaped, but an editor must never lose an option they
+had. Feature 163 reshaped the hero, heading, button, feature list, stats,
+testimonial, tabs, accordion, carousel and product listings under these
+rules, and a block author changing any block should apply them too:
+
+1. **Keep a superset of the options.** Every field the block had keeps the same
+   or an equivalent control. Ask of every change: "what can an editor do
+   before this change that they cannot do after it?" — the answer must be
+   "nothing".
+2. **Tokens are defaults, not a cage.** Where a block starts reading a brand
+   token (size, font, colour, spacing), keep a **Custom** literal override (px,
+   hex, font family) in an "Advanced" group.
+3. **Neutral defaults.** New props default to today's look: no overlay
+   without media, start alignment unless the block was centred, section
+   headings at `h2`/`h3` sizes, one primary button.
+4. **Old content keeps rendering.** Map the earlier props to the new shape in
+   a pure function (the built-in blocks call it `<block>FromLegacy`), apply it
+   when rendering and in the block's `resolveData`, and make it idempotent. A
+   stored page then renders as before, and the editor converts it the next
+   time it is opened (see *Keep old content rendering* above).
+5. **Prove it.** Add the block's case to the option-parity test,
+   `packages/cms-components/src/components/option-parity.test.ts`, before the
+   reshape: it records the fields the block had as literals and fails while
+   any of them has no counterpart. Add the block's default render to the
+   fallback-parity test.
+6. **Remove a block only with a full equivalent.** `cms.ImageSlider` was
+   removed only once its parity case showed that **Carousel image** items carry
+   every option it had. Stored content of a removed block degrades to the
+   missing-block placeholder; the name is never reused.
 
 ## Built-in Icons / Social
 
@@ -727,24 +924,22 @@ Use `createSpacingField`, `createBorderField`, and `createColorField` from
 
 ## Additional landing components
 
+The full block list, with what each block offers, is on the CMS module page.
+Two of them are often confused:
+
 | Component | Purpose |
 | --------- | ------- |
-| `Spacer` | Vertical space + optional divider |
-| `FeatureList` | Icon + title + description columns |
-| `Hero` | Background + heading + CTA first-fold |
-| `LogoStrip` | Partner / trust logos |
-| `Testimonial` | Quote + author |
-| `Stats` | KPI strip |
-| `AnnouncementBar` | Thin promo strip |
-| `SimpleTable` | Pipe-separated headers/rows |
-| `NewsletterSignup` | Email form (wire `actionUrl` to newsletter) |
-| `ContactFormEmbed` | Iframe embed or mailto fallback |
+| `newsletter.Signup` | Subscribes through the `newsletter` module: topics as tags, a required consent, works without JavaScript. Present only while `newsletter` is. |
+| `cms.NewsletterSignup` | Posts to any external form endpoint (`actionUrl`), for a newsletter service outside the platform. |
 
 ## Suggested follow-up (deeper integrations)
 
 | Priority | Idea | Why |
 | -------- | ---- | --- |
-| Medium | Newsletter signup ↔ the `newsletter` module | Auto-wire channel subscribe endpoint |
+| Done (feature 163) | Newsletter signup ↔ the `newsletter` module | `newsletter.Signup` posts to the storefront's `/newsletter/subscribe`, which subscribes in the request's sales channel with source `cms-block`. |
+| Medium | A module-owned server-data hook | Let a module's `./storefront` layer declare an async resolver for its own blocks, instead of adding a kind to the closed block-data union in `cms-components`. It changes the server-rendering boundary of the Page Builder renderer, so it needs its own specification. |
+| Medium | Islands for static blocks | The whole Page Builder tree hydrates today. Rendering static blocks as server-only islands would cut the JavaScript a page sends and the work done on hydration. |
+| Medium | `hreflang` with per-language URLs | One storefront URL serves every language, so pages announce their other languages as `og:locale:alternate` only. `hreflang` alternates need language-specific URLs first. |
 | Low | Contact ↔ forms module | Pick an existing form instead of iframe URL |
 
 `Accordion` / `Tabs` already cover FAQ-style sections; prefer those before a

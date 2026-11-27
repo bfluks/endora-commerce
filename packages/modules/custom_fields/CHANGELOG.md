@@ -1,5 +1,889 @@
 # @endora-commerce/mod-custom-fields
 
+## 0.112.0
+
+### Minor Changes
+
+- fa6959b: The custom-field definition editor has its own page instead of a dialog over the list (issue #1804): `/custom-fields/new` creates a field and `/custom-fields/<id>` edits one. Both addresses can be bookmarked or shared, and the command palette has a new **New custom field** action. The page has a link back to the list, keeps Save in the sticky bar at the bottom, and asks before you leave with unsaved changes, including with the browser's Back button. After a save you are back on the list of the field's record type, with the field selected and a confirmation shown. The list keeps the selected record type in its address (`?entityType=`), and each field's label links to its page. On an existing field, option changes are still saved as soon as you make them, and the Options section is now marked **Applies immediately**. An administrator without `custom_fields:write`, or a field whose record type another module manages, sees the field read-only. Removed bundle key: `customFields.editor.optionsNote`.
+
+### Patch Changes
+
+- b2b41eb: Page headers are shorter and every page has a heading (issue #1436). Home, Profile, the products list, product create and edit, the inventory and warehouse screens and Pricing settings now draw their title as a real page heading. Page descriptions that repeated the title or described the implementation are removed (categories, bulk operations, new price book, SEO, assets library, dictionary, products list, inventory, warehouses, home, profile); the rest are one short line, in English and Polish. Longer explanations — warehouses, Pricing settings, import/export and category taxonomy revisions — moved behind an ⓘ beside the title.
+- 1064839: `@endora-commerce/admin-kit/ui` publishes `EmptyState` (issue #1448): the block a list, a tab or a panel shows when it has nothing to show — a decorative icon, a title, at most one line and at most one action, drawn with the design system's `.b2b-empty` classes.
+
+  It has two variants. `no-data` (the default) takes `icon`, `title`, an optional `description` and an optional `action`. `no-results` takes `onClearFilters` and renders the kit's own title, line and _Clear filters_ button (new `core` keys `common.emptyState.clearFilters`, `common.emptyState.noResults.title` and `common.emptyState.noResults.body`, in English and Polish); `icon`, `title` and `description` override them.
+
+  After _Clear filters_ the kit moves focus to `focusAfterClear` (a ref, normally the list's search box) on the next frame, so focus never drops to `<body>` when the button unmounts (WCAG 2.2 SC 2.4.3). Without one, and only if focus was lost, it focuses the page's `<h1>`, else the closest container of the block still in the document. Every list that uses the `no-results` variant here passes its search box; `EntryFilters`, `OpportunityFilterFields` and `TaskFilters` gain an optional `searchRef` for that.
+
+  ```tsx
+  <EmptyState variant="no-results" title={t('list.emptyFiltered')} onClearFilters={clearFilters} />
+  <EmptyState icon={<ClipboardList size={20} />} title={t('list.empty.title')} action={createButton} />
+  ```
+
+  The forms and form-entries lists, the CRM opportunities list, the task and _My tasks_ lists, the task settings lists, the project and project-template lists, the custom-fields table, the price-book list, and the product-feed list, runs, delivery and templates screens now use it. The forms list now says "No forms yet" with a line of its own (a reader is told who can create one), and it hides the header's _New form_ while the empty state carries it. The form-entries list's empty state gains a title.
+
+- f687479: Keys and codes are proposed from the name instead of typed by hand (issue #1450). The admin kit's
+  `./lib` exports `deriveKey(name, { separator, maxLength })`, built on the contracts' `slugify` with
+  its diacritic fold, and `useDerivedKey`, the field behaviour that goes with it: the key follows the
+  name until the operator edits it, is normalised on blur, and a cleared key follows the name again.
+
+  - The Tasks status and priority dialogs take the new code from the English name, and the CRM status
+    dialog from the default name (issue #1560). A code already in the list is refused at the code, and
+    so is the server's own collision, never with a suffix added. The code hint now says where the code
+    comes from and that it cannot be changed later.
+  - The custom-field definition form takes the new key from the default label, which now has the focus
+    when the form opens, and refuses a key the record type already has before sending it (issue #1531).
+    The key help is shortened to the same sentence.
+
+  The API is unchanged: the server still refuses a malformed or taken code, and existing codes and keys
+  are not changed.
+
+- 7be07f6: Shorter copy on the catalog screens (issues #1458 and #1459, UX audit CAT-13 and CAT-14), in English and Polish.
+
+  - **Product editor:** the sentences under Gallery, Attachments, Attributes, Categories and SEO that repeated the _Applies immediately_, _Unsaved_ and _Global only_ badges are gone, and so are the notes under _Minimum order quantity_ and the packaging units' minimum. Field notes are one clause; the longer explanation of _Status_, _Publication window_ and _Returnable_ moved behind an ⓘ beside the label. The confirmations for duplicate, archive and restore, the unsaved-changes question and the inventory and order-rules notes are shorter. The SKU field is labelled _SKU_; the create form says once, under it, that it cannot be changed later. The base-price panel explains what a base price is only while the product has none.
+  - **Products list:** shorter bulk-edit hints and archive / restore confirmations.
+  - **Attributes, price lists, warehouses, custom fields, product feeds, import/export, assets:** shorter help texts and notices; the product feed FTP passive mode, the only supported one, is shown as text instead of a disabled one-option select.
+  - **Settings and SEO:** the descriptions of _Completeness check when switching a product on_ and of the LLM search toggle are one or two short sentences, the same English text in the manifest (what the API serves) and in the admin bundle, and so are the two notices above the robots.txt preview.
+
+- 998ac87: Banners that appear as the result of an action keep being announced now that the kit's `Alert` no longer interrupts for every variant (issue #1484). A refused or partly rejected action (activating a price book, a stale price-book save, a taxonomy revision, quick-order lines, quote-request lines unavailable on the channel) is announced at once, and so is the shell's notice to an administrator without a role. An import, undo, PDF or save result, a template-preview verdict, a brand contrast warning, a changed refund method, the organization-attribution scope notice and the information notices after an action are announced politely. Static banners present when a page loads, such as the modules screen's degraded-mode warning or a quote request's lapsed validity, are shown but no longer announced as an interruption.
+- 98c0411: The Admin UI sidebar's _System_ section, which had 18 entries, is now two sections (issue #1519, UX audit SHELL-11, owner decision DEC-02):
+
+  - **Access**: Users, Roles, API keys, Credentials, Audit log.
+  - **Platform**: Modules, Settings, Custom fields, Import/export, Bulk operations, Webhooks, Global search, PWA, Command hooks, API description.
+
+  Host rows are now sorted by weight together with the contributed rows. Before, they always came first, so the API description sat above Settings.
+
+  An administrator's own two-step verification is no longer in the sidebar. It is the **Security** tab of **My profile** (`/profile/security`), opened from the avatar or from the palette's _Account security_ action, which now targets that tab. `/security` redirects there, so old bookmarks still work. With `mfa` off, the profile has no tab strip and `/profile/security` opens the profile.
+
+  **For module authors.** `AdminNavSectionNameSchema` gains `'access'` and `'platform'`, and `AdminZoneNameSchema` gains `'profile.security'`, the body of the Profile's Security tab, with empty props. `'system'` is deprecated but still accepted: the shell puts such an entry under _Platform_, so a module that ships separately keeps its row. It will be removed in a major release.
+
+  **Upgrade notes.**
+
+  - An administrator who had collapsed _System_ sees both _Access_ and _Platform_ collapsed. The preference is rewritten the next time they toggle a group.
+  - A pin of `/security` in the sidebar's Pinned section no longer shows, because that destination is no longer a sidebar entry. The stored pin is kept but not displayed.
+
+- c56895b: The _Custom fields_ screen is now the admin's standard list page (issue #1749). _New field_ sits in the header once, the record-type select is the toolbar, and the field count is announced beside it. Loading shows the list skeleton, and a failed read says why and offers _Retry_. A row's _Edit_ and _Delete_ moved into its actions menu. A deletion is confirmed in a dialog, or in the carry warning when the field is part of a carry. The _Visible to_ value changes through a confirm dialog instead of a select that saved on change, and that dialog shows the carry warning when the change stops a value from carrying. Removed bundle keys: `customFields.table.keep`, `customFields.table.loading`, `customFields.table.delete`.
+- 9eee781: The Admin UI in Polish no longer shows four kinds of text in English (issue #1809).
+
+  - **Order statuses** are named in the admin's language on the Orders list, the order detail, the bulk status dialog and the Order statuses screen. The names were always stored per language; the screens read the English one.
+  - **CMS hooks**: the 23 seeded hooks, such as "Search Page Bottom", are named and described in the admin's language until an operator renames them. A renamed or custom hook keeps the operator's text.
+  - **Transactional e-mails**: each e-mail's name, description and the reason it cannot be switched off come from the sending module's bundle (`transactionalEmails.<code>.name`, `.description`, `.reason`), in the language the response is read in.
+  - **Platform → Modules**: each module's name, description and the reason it cannot be switched off come from the module's own bundle (`module.name`, `module.description`, `module.nonDeactivatableReason`). `GET /api/v1/admin/modules` gains an optional `nonDeactivatableReason` field on each row. `auth`, `currencies`, `email` and `languages` now ship translation bundles.
+
+  Each of these falls back to the English declared in code when a bundle has no entry. `endora new module` now writes `module.description` into the scaffolded bundles.
+
+- 79d15cf: The Admin UI has one, light theme (issue #1810). `@endora-commerce/admin-kit/theme.css` no longer declares the `.dark { --background: … }` token block: nothing applied it, and applied by hand it was incomplete, with a light page under dark cards and unreadable outline buttons. An instance that set `.dark` on an element by itself now gets the light tokens; to restyle the admin, redeclare the `:root` tokens instead.
+
+  The `dark:` utilities are gone too: `Badge`'s `success` and `warning` variants, the `ScopedField` "unsaved" badge, the shell's not-found notice, and the amber and emerald notices and icons in the admin screens of admin users, catalog bulk operations, the page-builder translate action and header actions, CRM propagation outcomes, custom-field carry drift, document-template item tables, tax-ID scope, product feeds and settings. Without a `dark` variant definition, Tailwind 4 compiles `dark:` to `@media (prefers-color-scheme: dark)`, so on an operating system set to dark these elements turned dark on a light page. They now render the same on every system.
+
+- Updated dependencies [c878440]
+- Updated dependencies [65f9a7b]
+- Updated dependencies [3fdbe86]
+- Updated dependencies [bfc68c7]
+- Updated dependencies [9eaa409]
+- Updated dependencies [d908737]
+- Updated dependencies [1042e2a]
+- Updated dependencies [3872f3d]
+- Updated dependencies [bbfcd80]
+- Updated dependencies [41b598c]
+- Updated dependencies [f5b8275]
+- Updated dependencies [467b075]
+- Updated dependencies [a56109e]
+- Updated dependencies [84b89ed]
+- Updated dependencies [b2cd2d3]
+- Updated dependencies [e5b17ae]
+- Updated dependencies [e78d27d]
+- Updated dependencies [596ce81]
+- Updated dependencies [b2b41eb]
+- Updated dependencies [932821f]
+- Updated dependencies [28181ed]
+- Updated dependencies [c15eb60]
+- Updated dependencies [33db45a]
+- Updated dependencies [cec9beb]
+- Updated dependencies [d4bda8d]
+- Updated dependencies [8e7684c]
+- Updated dependencies [87fb9c3]
+- Updated dependencies [998ac87]
+- Updated dependencies [d0a6c2c]
+- Updated dependencies [35e0829]
+- Updated dependencies [3f66b6f]
+- Updated dependencies [61bdc2a]
+- Updated dependencies [649d662]
+- Updated dependencies [38adf84]
+- Updated dependencies [7329865]
+- Updated dependencies [84ed7b6]
+- Updated dependencies [1064839]
+- Updated dependencies [d2d9d79]
+- Updated dependencies [f687479]
+- Updated dependencies [074f500]
+- Updated dependencies [7624db6]
+- Updated dependencies [cec9beb]
+- Updated dependencies [7be07f6]
+- Updated dependencies [2614e4f]
+- Updated dependencies [90320fd]
+- Updated dependencies [bb21b86]
+- Updated dependencies [79a17a3]
+- Updated dependencies [3dab0be]
+- Updated dependencies [e22b612]
+- Updated dependencies [cb75825]
+- Updated dependencies [a4455db]
+- Updated dependencies [f3b2ec8]
+- Updated dependencies [f093a02]
+- Updated dependencies [d5a077f]
+- Updated dependencies [86b9b39]
+- Updated dependencies [42febee]
+- Updated dependencies [447e829]
+- Updated dependencies [2040ae9]
+- Updated dependencies [fc7f669]
+- Updated dependencies [40b76aa]
+- Updated dependencies [eeed5c8]
+- Updated dependencies [63a657b]
+- Updated dependencies [0ecb287]
+- Updated dependencies [9a27b93]
+- Updated dependencies [2f0b69f]
+- Updated dependencies [87b9b60]
+- Updated dependencies [50d451b]
+- Updated dependencies [98c0411]
+- Updated dependencies [9f4eae3]
+- Updated dependencies [a8261aa]
+- Updated dependencies [f64646d]
+- Updated dependencies [306a659]
+- Updated dependencies [7ea72af]
+- Updated dependencies [f6dda10]
+- Updated dependencies [f6dda10]
+- Updated dependencies [f6dda10]
+- Updated dependencies [bfbcac2]
+- Updated dependencies [ee6062c]
+- Updated dependencies [820f089]
+- Updated dependencies [f33ffed]
+- Updated dependencies [4e668b5]
+- Updated dependencies [843ed42]
+- Updated dependencies [0d4c134]
+- Updated dependencies [3f7b5ae]
+- Updated dependencies [b98739c]
+- Updated dependencies [6155f4b]
+- Updated dependencies [bdcc9a4]
+- Updated dependencies [5850aac]
+- Updated dependencies [c042024]
+- Updated dependencies [8a5725e]
+- Updated dependencies [f915a24]
+- Updated dependencies [8688a1f]
+- Updated dependencies [95e5082]
+- Updated dependencies [31c0430]
+- Updated dependencies [0686447]
+- Updated dependencies [691414b]
+- Updated dependencies [8a06dc5]
+- Updated dependencies [e118ee4]
+- Updated dependencies [5fb3cd3]
+- Updated dependencies [9eee781]
+- Updated dependencies [bd47236]
+- Updated dependencies [bd47236]
+- Updated dependencies [79d15cf]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [8b29aae]
+- Updated dependencies [398e6d2]
+- Updated dependencies [51c5072]
+- Updated dependencies [0e81803]
+- Updated dependencies [2e287a5]
+- Updated dependencies [fbc6c7c]
+- Updated dependencies [9d6f006]
+- Updated dependencies [49328cf]
+- Updated dependencies [b3d4843]
+- Updated dependencies [f74fe34]
+- Updated dependencies [19eb7c0]
+- Updated dependencies [0fbf186]
+- Updated dependencies [27b977d]
+- Updated dependencies [5e2a12a]
+- Updated dependencies [5518a09]
+- Updated dependencies [5e380e3]
+- Updated dependencies [bfab5bd]
+- Updated dependencies [8a0ec92]
+- Updated dependencies [81fcc3f]
+- Updated dependencies [12c63fa]
+- Updated dependencies [72637e0]
+  - @endora-commerce/platform@0.112.0
+  - @endora-commerce/contracts@0.112.0
+  - @endora-commerce/admin-kit@0.112.0
+
+## 0.111.0
+
+### Minor Changes
+
+- f39d37f: Buyer input, admin access and the public read of input surfaces (`specs/175-buyer-input-custom-fields/`).
+
+  - A definition carries `customerInput` (the buyer input surfaces its value may be supplied on — `organization.register` is the one surface, offered by the `organization` and `customer` entity types) and `adminAccess` (`edit`, `read` or `hidden` in the admin panel — a convenience, not access control: no API endpoint reads it). Both are audited with the definition, answered by the admin definitions read, and published on `CustomFieldDefinitionRecord`. The entity-types listing answers `customerInputSurfaces`.
+  - Four refusals, judged on the resulting definition at create, update and through the `apply*` seam, answer `422 CUSTOM_FIELD_DEFINITION_INVALID` with `details.code` / `details.reason` and `details.key`: `customer_input_unsupported`, `customer_input_audience`, `customer_input_value_type` and `admin_access_required`, each with an English and Polish sentence. `CustomFieldDefinitionApplyCreateInput` takes both attributes as optional.
+  - `customFieldValueService` gains `validateForCustomerInput(entityType, values, surface, language?)`: refuses (never drops) a key not open on the surface with `not_open_for_input`, more than 50 keys with `too_many_keys` before any definition is read, enforces `required` only among open fields, trims text and caps it at 1 000 characters, and otherwise applies the administrator's type rules. Each refusal's `message` names neither the key nor the typed value and, given the request's language, is this module's sentence for the code (`customFields.valueError.<code>`, English and Polish), resolved through `_i18n`'s `adminI18nService` — so the manifest now declares `_i18n` in `dependencies`.
+  - `CUSTOM_FIELD_VALUE_INVALID` has a sentence in both languages (`errors.CUSTOM_FIELD_VALUE_INVALID`), so the envelope's `message` of every host's custom-field refusal is translated in the request's language; the per-field `details` are unchanged on the admin paths.
+  - New anonymous route `GET /api/v1/custom-fields/input-surfaces/:surface` (`salesChannelAccess: 'open'`): the fields open on a surface per entity type, labels in the request language. A committed definition or option change of a type that offers a surface revalidates the storefront tag `custom-fields:input-surface:<surface>` when `STOREFRONT_BASE_URL` and `REVALIDATE_SECRET` are set.
+  - Migration `Migration20261106T094044CustomFieldsDefinitionCustomerInputAdminAccess` adds `customer_input` (jsonb, default `[]`) and `admin_access` (varchar, default `edit`) to `custom_field_definitions`; existing definitions read as open on no surface and editable.
+  - The definition editor offers both options: _Collect from the buyer at registration_ (one checkbox per surface the record type declares, disabled with its reason while the field is internal or holds Page Builder content) and _Admin access_ on every definition, with the sentence that it only changes the admin panel; read-only and hidden are unavailable while the field is required, and required while it is not editable. The definitions list marks the fields collected at registration and the read-only and hidden ones with a badge.
+
+### Patch Changes
+
+- ed57923: Published tarballs no longer carry source maps (issue #107). Every package publishes `dist` and
+  not `src`, so each `.js.map` and `.d.ts.map` pointed at source files no consumer had; they were
+  about a third of a tarball's unpacked size. Each package's `files` list now ends with
+  `"!dist/**/*.map"`: `@endora-commerce/mod-quick-order` packs 69 files instead of 131 (243.6 kB
+  unpacked instead of 359.9 kB), and `@endora-commerce/test-kit` packs 25 instead of 47. The
+  compiled JavaScript, the type declarations and every other shipped file are unchanged, and so is
+  every export. A stack trace from an installed package now names the compiled `dist` file rather
+  than a source path that does not exist in the install.
+- 644739b: Cross-process cache subscribers no longer send `SUBSCRIBE` while their ioredis client is still in its handshake (issue #1096). In the `connect` state ioredis wrote the command straight to the socket; when its reply arrived before the ready check's `INFO`, ioredis refused that `INFO`, re-opened the connection, and a message published during the reconnect was lost. The new `subscribeWhenReady(client, ...channels)` in `@endora-commerce/platform/kernel` (with its structural type `HandshakeAwareSubscriber`) waits out the handshake and then subscribes. It rejects as `subscribe` does, including when the connection ends mid-handshake. The module-registry cache, the sales-channel access cache, the `custom_fields` definition cache and the `price_lists` pricing generation now subscribe through it. The cradle type `PricingGenerationSubscriber` in `price_lists` now extends `HandshakeAwareSubscriber`, so it also requires `status`, `once` and `removeListener`. The composition's ioredis subscriber already has them. Nothing else changes for a caller.
+- c7ec2fa: The host storage binding reads `CUSTOM_FIELD_HOST_BINDINGS` from `@endora-commerce/contracts` instead of a module-internal copy (`specs/178-extensible-columns/` FR-010). Same tables, same columns; no behaviour change.
+- 4ab926c: Custom-field definition replies are described by their contract (issue #599, section 6):
+
+  - `@endora-commerce/contracts` publishes `customFieldDefinitionListResponseSchema` / `CustomFieldDefinitionListResponse` for `GET /api/v1/admin/custom-fields/definitions` and `customFieldEntityTypeListResponseSchema` / `CustomFieldEntityTypeListResponse` for `GET /api/v1/admin/custom-fields/entity-types`, each a `data` array of the rows that were already described. The list envelopes were not.
+  - `mod-custom-fields` builds every definition reply as the contract's `CustomFieldDefinitionDto` instead of `Record<string, unknown>`, and the list, detail, create, update and entity-types handlers declare their reply types. Nothing on the wire changes.
+
+- 51b4e5c: Documentation only: the page lists `CUSTOM_FIELD_NOT_FOUND`, `CUSTOM_FIELD_KEY_CONFLICT` and `CUSTOM_FIELD_HOST_MANAGED`, in English and Polish.
+- Updated dependencies [baa0dae]
+- Updated dependencies [ee0698d]
+- Updated dependencies [9c8efbe]
+- Updated dependencies [3de70b4]
+- Updated dependencies [2ee4923]
+- Updated dependencies [e9df6b5]
+- Updated dependencies [1937bed]
+- Updated dependencies [3254098]
+- Updated dependencies [7616ef1]
+- Updated dependencies [ed57923]
+- Updated dependencies [cffa0bf]
+- Updated dependencies [644739b]
+- Updated dependencies [c58acd1]
+- Updated dependencies [fc91398]
+- Updated dependencies [feaa40b]
+- Updated dependencies [d2f179f]
+- Updated dependencies [d16b343]
+- Updated dependencies [34b3387]
+- Updated dependencies [e283396]
+- Updated dependencies [4ecb155]
+- Updated dependencies [ff7bd10]
+- Updated dependencies [097b599]
+- Updated dependencies [761d9c4]
+- Updated dependencies [8e7f794]
+- Updated dependencies [8e7f794]
+- Updated dependencies [f39d37f]
+- Updated dependencies [f39d37f]
+- Updated dependencies [3f95d1c]
+- Updated dependencies [695636f]
+- Updated dependencies [27834f3]
+- Updated dependencies [190986e]
+- Updated dependencies [3f95d1c]
+- Updated dependencies [27834f3]
+- Updated dependencies [190986e]
+- Updated dependencies [f5caa4e]
+- Updated dependencies [d14a4fd]
+- Updated dependencies [86a92af]
+- Updated dependencies [ee2a111]
+- Updated dependencies [c7ec2fa]
+- Updated dependencies [bfa1ac4]
+- Updated dependencies [8a4ca9c]
+- Updated dependencies [c7ec2fa]
+- Updated dependencies [a2d306f]
+- Updated dependencies [aaa50ff]
+- Updated dependencies [6e528ad]
+- Updated dependencies [eedda68]
+- Updated dependencies [2e603f7]
+- Updated dependencies [73e8e8c]
+- Updated dependencies [bf257b8]
+- Updated dependencies [d591709]
+- Updated dependencies [577e94c]
+- Updated dependencies [e435bad]
+- Updated dependencies [7bdf512]
+- Updated dependencies [5c148de]
+- Updated dependencies [e435bad]
+- Updated dependencies [5c148de]
+- Updated dependencies [036865c]
+- Updated dependencies [0beb869]
+- Updated dependencies [37532da]
+- Updated dependencies [bfdbeaf]
+- Updated dependencies [65f7abc]
+- Updated dependencies [a998fee]
+- Updated dependencies [54ae028]
+- Updated dependencies [20cda0c]
+- Updated dependencies [48b2505]
+- Updated dependencies [c24bd3c]
+- Updated dependencies [6b664cd]
+- Updated dependencies [cd05402]
+- Updated dependencies [91272e6]
+- Updated dependencies [eb4dbc6]
+- Updated dependencies [e2669cd]
+- Updated dependencies [aec841a]
+- Updated dependencies [da2b459]
+- Updated dependencies [77904b3]
+- Updated dependencies [4ab926c]
+- Updated dependencies [a3b1da5]
+- Updated dependencies [28fc1c7]
+- Updated dependencies [2b12d58]
+- Updated dependencies [9110863]
+- Updated dependencies [2905024]
+- Updated dependencies [ae1cedf]
+- Updated dependencies [6f0debc]
+- Updated dependencies [d6e7a55]
+- Updated dependencies [62d3e2d]
+- Updated dependencies [0b2f558]
+- Updated dependencies [dc9bbea]
+- Updated dependencies [1acf873]
+- Updated dependencies [edf46c9]
+- Updated dependencies [ef656f9]
+- Updated dependencies [71ec1f8]
+- Updated dependencies [7a3673f]
+- Updated dependencies [1c3366d]
+- Updated dependencies [ea965bb]
+- Updated dependencies [fc08f90]
+- Updated dependencies [d34fe02]
+- Updated dependencies [59b5246]
+- Updated dependencies [c55dcf5]
+- Updated dependencies [3e7b0b6]
+- Updated dependencies [d68aa70]
+- Updated dependencies [0b991d6]
+- Updated dependencies [9af7a64]
+- Updated dependencies [ecbebe2]
+- Updated dependencies [e61a12b]
+- Updated dependencies [d362c3c]
+- Updated dependencies [ef9630f]
+- Updated dependencies [b7a9c8e]
+- Updated dependencies [75f89d2]
+- Updated dependencies [ca66684]
+- Updated dependencies [b6fd6df]
+- Updated dependencies [6658f0f]
+- Updated dependencies [877477b]
+- Updated dependencies [767d5de]
+- Updated dependencies [d0c5dc8]
+- Updated dependencies [ac094f5]
+- Updated dependencies [61a6edf]
+- Updated dependencies [dd869ee]
+- Updated dependencies [ff6b599]
+- Updated dependencies [ac65359]
+- Updated dependencies [49b43de]
+- Updated dependencies [5f8eede]
+- Updated dependencies [de28088]
+- Updated dependencies [44529a4]
+- Updated dependencies [af88938]
+- Updated dependencies [9aff446]
+- Updated dependencies [42a9a4b]
+- Updated dependencies [8ae3f58]
+- Updated dependencies [65cdd0e]
+  - @endora-commerce/admin-kit@0.111.0
+  - @endora-commerce/contracts@0.111.0
+  - @endora-commerce/platform@0.111.0
+
+## 0.110.0
+
+### Minor Changes
+
+- 5303aab: The `page_builder` value type (`specs/172-product-content-attributes/`) is admissible only on entity types whose registry entry carries the new `pageBuilderValues` marker, which only `product` does. Creating such a definition on any other entity type is refused with `value_type_unsupported`, and changing a definition's value type to or from `page_builder` with `value_type_locked`. A `page_builder` value never coerces (`wrong_type`) and offers no list-filter operator. The generic definition form does not offer the type.
+
+### Patch Changes
+
+- b2db8c3: English module names and admin sidebar labels are now sentence case, like the rest of the UI. The manifest `name` changes for 22 modules and for the platform's `_lifecycle` module ("Quote Requests" becomes "Quote requests", "API Keys" becomes "API keys", "Module Lifecycle" becomes "Module lifecycle"). The English `module.name` for Quick order, Quote requests and Shopping lists changes the same way. That string heads their permission groups on the organization role form and appears on the modules screen. The admin sidebar labels in blog ("Blog posts", "Blog categories", "Blog tags"), cms ("CMS pages", "CMS blocks", "CMS templates", "CMS hooks"), custom_fields ("Custom fields"), import_export ("Import / export"), newsletter ("Tags & fields") and transactional_emails ("Transactional emails", "Email blocks", "Email templates") change the same way. Product names (Google Analytics, Google Tag Manager, LinkedIn Ads, Meta Ads) keep their capitals. Polish strings do not change. If your code compares a manifest `name` against the old title-case string, update the comparison. Better, compare the module `id`.
+- 0b64c13: English page titles, dialog titles, command-palette action labels, settings group names and
+  documentation page titles now use sentence case, like the module names and sidebar labels
+  before them. For example, "Quote Requests" becomes "Quote requests", "CMS Pages" becomes
+  "CMS pages" and the "Quick Order" settings group becomes "Quick order". Polish strings are
+  unchanged. Product names keep their capitals: Page Builder, Google Analytics, LinkedIn and
+  Meta among them.
+
+  The admin search group labels change the same way: "Quote Requests" becomes "Quote requests"
+  and "Sales Opportunities" becomes "Sales opportunities". The demo megamenu's English button
+  label becomes "Quick order". The demo seed does not rewrite a menu it has already created, so an
+  existing demo database keeps "Quick Order" until it is seeded afresh or the label is edited on
+  the megamenu screen.
+
+  The settings group names are updated in the database the next time the settings manifest
+  reconciler runs at boot. Nothing has to be migrated.
+
+- d69e765: A path parameter that is not a UUID is answered exactly as a well-formed id that names nothing, on every customer- and admin-facing id route, mutations included, instead of `500` (issue #781). The shape is checked with `isUuidShape` from `@endora-commerce/contracts` before the database is asked, so a malformed id gets the route's own answer for an unknown record: its own not-found code (`404`), or the empty list or `204` the route gives an unknown id. Examples: `POST /api/v1/orders/:id/cancel` answers `404 ORDER_NOT_FOUND`; the returns comment, delivery-method and cancel routes and `POST /api/v1/organization/carts/:id/approve` and `/reject` answer `404 NOT_FOUND`.
+
+  Routes whose params schema demanded a UUID answered a malformed id `400 VALIDATION_FAILED`; they now answer `404` like an unknown id (owner ruling of 2026-11-05): `/api/v1/organizations/mine/roles/:id`, `/api/v1/admin/organizations/:id/roles[/:roleId]` and `…/permission-catalogue`, `/api/v1/organizations/mine/members/:id[/role]`, every `/api/v1/admin/product-feeds/:id…`, `/api/v1/admin/feed-templates/:id` and `/api/v1/admin/feed-taxonomies/revisions/:taxonomyId…` route, `/api/v1/admin/document-templates/:id…`, `/api/v1/admin/quote-requests/:id/document-templates`, `…/document-template` and `…/pdf`, the blog `url-redirects/:redirectId` and `addresses/:id` deletes, `PATCH /api/v1/admin/cms/hooks/:id/attachments/:blockId`, and `GET`, `PATCH` and `DELETE /api/v1/admin/import-export/profiles/:id` (`404 IMPORT_PROFILE_NOT_FOUND`). A client that told a malformed id from an unknown one by the `400` can no longer do so.
+
+  Every private copy of the UUID pattern is replaced by `isUuidShape`, `UUID_SHAPE_PATTERN` or, where a filter has always asked for RFC 9562 version and variant bits (the CRM board filters), `uuidSchema`; what each check accepts is unchanged, except that the invoice-ledger delivery retry now accepts any uuid-shaped id and answers an unknown one `404` from the lookup.
+
+- d24be0e: The module documentation pages have readable titles instead of the module id (for example _Carts_ instead of `carts`), in the docs sidebar, the module map and the browser tab, in English and Polish. Page headings and screen names in the page text are sentence case, as in the Admin UI (#795). File names and URLs are unchanged.
+- Updated dependencies [18cce2e]
+- Updated dependencies [18cce2e]
+- Updated dependencies [9cfb28b]
+- Updated dependencies [a206da9]
+- Updated dependencies [34485ae]
+- Updated dependencies [34485ae]
+- Updated dependencies [0f1717c]
+- Updated dependencies [86e8761]
+- Updated dependencies [9bfb0b8]
+- Updated dependencies [ed5cf6a]
+- Updated dependencies [2da23d2]
+- Updated dependencies [2da23d2]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [9d9c8df]
+- Updated dependencies [5303aab]
+- Updated dependencies [16f85f4]
+- Updated dependencies [270aa2b]
+- Updated dependencies [3f020ba]
+- Updated dependencies [3f020ba]
+- Updated dependencies [b59e5d5]
+- Updated dependencies [b59e5d5]
+- Updated dependencies [bf1cc2d]
+- Updated dependencies [ff60e93]
+- Updated dependencies [6f19230]
+- Updated dependencies [77b8c37]
+- Updated dependencies [65104b8]
+- Updated dependencies [7acaa33]
+- Updated dependencies [7019c71]
+- Updated dependencies [4eee98b]
+- Updated dependencies [14ac256]
+- Updated dependencies [248bf1b]
+- Updated dependencies [b2db8c3]
+- Updated dependencies [4cf529d]
+- Updated dependencies [5e4dd48]
+- Updated dependencies [75b053f]
+- Updated dependencies [54fc8f1]
+- Updated dependencies [dac5795]
+- Updated dependencies [5bbb389]
+- Updated dependencies [d69e765]
+- Updated dependencies [dbc1cef]
+- Updated dependencies [d69e765]
+- Updated dependencies [a6bc891]
+- Updated dependencies [8ad737c]
+- Updated dependencies [a9398c8]
+- Updated dependencies [0b56038]
+- Updated dependencies [717e4c6]
+- Updated dependencies [cea1470]
+- Updated dependencies [cea1470]
+- Updated dependencies [d46d414]
+- Updated dependencies [73e2eec]
+- Updated dependencies [29d7e90]
+- Updated dependencies [7f2fa6e]
+- Updated dependencies [57145f7]
+- Updated dependencies [58a1632]
+- Updated dependencies [e46d233]
+- Updated dependencies [e46d233]
+- Updated dependencies [58a1632]
+- Updated dependencies [b476f44]
+- Updated dependencies [14fe4fb]
+- Updated dependencies [76d89ab]
+- Updated dependencies [5cbffb9]
+- Updated dependencies [6bd2ab7]
+- Updated dependencies [a3502c0]
+- Updated dependencies [7a73cc8]
+- Updated dependencies [5ff8302]
+- Updated dependencies [fc7db4c]
+- Updated dependencies [c34b405]
+- Updated dependencies [5af8c25]
+- Updated dependencies [48f055e]
+- Updated dependencies [bf50b85]
+- Updated dependencies [2c6fba0]
+- Updated dependencies [0801f69]
+- Updated dependencies [d1c0d13]
+- Updated dependencies [6d1d284]
+- Updated dependencies [974be57]
+- Updated dependencies [99c075e]
+- Updated dependencies [32b4d0c]
+- Updated dependencies [3355e60]
+- Updated dependencies [7ce9b8a]
+  - @endora-commerce/contracts@0.110.0
+  - @endora-commerce/platform@0.110.0
+  - @endora-commerce/admin-kit@0.110.0
+
+## 0.109.0
+
+### Minor Changes
+
+- 2aa2c9b: _Project_ is a record type of Custom Fields: an operator defines fields on Projects on
+  `/custom-fields` as on Opportunities, and the Projects module validates, stores and shows them.
+
+  **`@endora-commerce/mod-custom-fields`**:
+
+  - New entity type `project` (_Project_ / _Projekt_), owned by the `projects` module: offered on
+    the entity-types listing, and its definitions created, changed or deleted, only while Projects
+    is on — while it is off the type is absent and a definition write answers 409
+    `CUSTOM_FIELD_HOST_MANAGED`, as for the other owned types. Definitions and stored values are
+    kept and served again when Projects is back.
+  - A Project definition may be marked as a list filter; no carry targets.
+  - The values live in `projects.custom_field_values`; the definition-change guards and the
+    list-filter condition read that column.
+
+  **`@endora-commerce/contracts`**:
+
+  - `supportedEntityTypeSchema` gains `'project'`. A consumer that switches exhaustively over
+    `SupportedEntityType`, or holds a `Record<SupportedEntityType, …>`, gets a compile error until
+    it handles the new member.
+
+- 55864a1: Tasks can carry custom fields (`specs/165-task-management/` R-8): `task` is a host entity type owned by the `tasks` module, stored in `tasks.custom_field_values`, offered only while Tasks is on, and usable as a list filter.
+
+### Patch Changes
+
+- 24ef6aa: `/custom-fields`: a field is created in the same definition form that edits it, so it can be fully
+  defined when it is created (#447).
+
+  - **New field** opens the form in a dialog with the edit dialog's sections in the same order:
+    definition (record type, type, key), labels, options, rules, behaviour. Create still sends one
+    `POST` — now with a label per admin language and options carrying their own labels per language,
+    the default flag and their order. The comma-separated options box is gone.
+  - The label languages are the platform's supported languages, not a list written in the module.
+  - **Who can see the value** is offered in the edit dialog as well; a change that breaks a carry asks
+    first, as it does from the table.
+  - Both views check before sending: the key's format, a default label, unique non-empty option values,
+    a default label per option, and at most one default option on a _Single choice_ field (several are
+    allowed on _Multiple choice_). A server refusal is said next to the field it concerns — a taken key
+    at the key — never as a code.
+  - The behaviour block's `row` layout and the `customFields.carry.helpGroup` key went with the inline
+    create form; the create form's carry checkboxes now carry their own help lines, as the editor's do.
+
+- c99b4cd: The command-palette actions of the commerce modules (`carts`, `catalog`, `comparisons`, `credit_limits`, `customer_accounts`, `customers`, `custom_fields`, `delivery_methods`, `dictionaries`, `document_templates`, `import_export`, `inventory`, `invoice_ledger`, `invoices`, `payment_methods`, `price_lists`, `product_feeds`, `promotions`, `quote_requests`, `sales_channels`, `taxes`) keep only English `keywords` in their manifests. Their Polish search words moved to each module's `i18n/pl.json` under the action's new `keywordsKey`, with an English entry in `i18n/en.json` (issue #573, following #560), and the ones that had been written without diacritics now carry them (`utwórz cennik`, `wyjaśnienie ceny`, `kolejność cen`). A Polish operator finds the same screens by the same words; an English-language admin is no longer offered the Polish ones.
+- df95f59: The manifests now declare the refusal tokens of every error code they raise with a computed `details.code`. `mod-tasks` declares `TASK_WORKFLOW_INVALID`'s ten rule tokens and `TASK_STATUS_IN_USE_TOO_MANY`'s `priority`; `mod-custom-fields` (`CUSTOM_FIELD_OPTION_IN_USE`, `CUSTOM_FIELD_STORED_VALUES_EXIST`, `CUSTOM_FIELD_VALUE_TYPE_LOCKED`), `mod-document-templates` (`DOCUMENT_TEMPLATE_INVALID`) and `mod-projects` (`PROJECT_MOVE_NOT_PERMITTED`) declare `tokens: []`, stating that those raises never carry a token. Every token already had its sentence in English and Polish, so no rendered message changes.
+- Updated dependencies [42b1038]
+- Updated dependencies [5d192d3]
+- Updated dependencies [9b45768]
+- Updated dependencies [d2acc82]
+- Updated dependencies [22604fa]
+- Updated dependencies [c3165da]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [e64ed74]
+- Updated dependencies [e03e6a9]
+- Updated dependencies [50338a6]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [22604fa]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [9ff8307]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [07f3764]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [ea892d5]
+- Updated dependencies [678fed1]
+- Updated dependencies [dcbd154]
+- Updated dependencies [a76d6ee]
+- Updated dependencies [22604fa]
+- Updated dependencies [9a38360]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [bdef54c]
+- Updated dependencies [1b4f2b7]
+- Updated dependencies [d560d58]
+- Updated dependencies [dd6deb2]
+- Updated dependencies [3f697a3]
+- Updated dependencies [df0a90e]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [3ccf23b]
+- Updated dependencies [774d23e]
+- Updated dependencies [4cb0a7d]
+- Updated dependencies [0e33ca9]
+- Updated dependencies [f148418]
+- Updated dependencies [3ea1249]
+- Updated dependencies [476c5aa]
+- Updated dependencies [8ef189b]
+- Updated dependencies [4bc5c7f]
+- Updated dependencies [eba4fd8]
+- Updated dependencies [61fc321]
+- Updated dependencies [9b3e7f0]
+- Updated dependencies [ecdd2f7]
+- Updated dependencies [ecdd2f7]
+- Updated dependencies [b7baf8a]
+- Updated dependencies [1b1c43e]
+- Updated dependencies [56e237d]
+- Updated dependencies [d50b874]
+- Updated dependencies [a166cfd]
+- Updated dependencies [0a816a0]
+- Updated dependencies [f261ed3]
+- Updated dependencies [302e5ce]
+- Updated dependencies [d68fb89]
+- Updated dependencies [c73366c]
+- Updated dependencies [b0a1e48]
+- Updated dependencies [b25d8be]
+- Updated dependencies [5038a3a]
+- Updated dependencies [df95f59]
+- Updated dependencies [1fd4822]
+- Updated dependencies [9cb3c8d]
+- Updated dependencies [0f5bcde]
+- Updated dependencies [c72a83e]
+- Updated dependencies [42189ce]
+- Updated dependencies [d9053a7]
+- Updated dependencies [23489bf]
+- Updated dependencies [f40ce92]
+- Updated dependencies [55864a1]
+- Updated dependencies [ed85493]
+- Updated dependencies [3174251]
+- Updated dependencies [55864a1]
+- Updated dependencies [11b0eb8]
+- Updated dependencies [b8b6eed]
+- Updated dependencies [2aa2c9b]
+- Updated dependencies [883d192]
+- Updated dependencies [5114576]
+- Updated dependencies [8f7c38e]
+- Updated dependencies [1846755]
+  - @endora-commerce/admin-kit@0.109.0
+  - @endora-commerce/platform@0.109.0
+  - @endora-commerce/contracts@0.109.0
+
+## 0.108.0
+
+### Minor Changes
+
+- 1846a38: An existing custom-field definition is editable on `/custom-fields`.
+
+  - **Edit dialog.** Each row has an _Edit_ action that opens a dialog showing the key, the entity
+    type and the value type as fixed text. The dialog edits the default, English and Polish
+    labels, _Required_ (switching it on explains that existing records keep their values and are
+    asked for one at their next custom-field edit) and _Use as list filter_ where the entity type
+    offers it. _Save_ sends only the members that changed and nothing when nothing did; a refusal
+    keeps the dialog open with the server's sentence.
+  - **Options** of a select or multiselect field are edited in the same dialog, one action at a
+    time: relabel, mark as default, move up or down (announced to assistive technology), remove
+    after an in-dialog confirmation (an option still in use is refused at its row), and add. An
+    option's stored value never changes.
+  - **The table** shows a _List filter_ column, and the create form offers _Use as list filter_
+    for the entity types that have the option.
+  - **Translated.** Every label, header, value-type name and placeholder on the page is read from
+    the module's bundle, in English and Polish.
+  - **Write controls follow `custom_fields:write`.** Create, edit, delete and the audience select
+    are offered only to an operator holding it; a reader sees the table.
+  - **Edits keep your place.** An option's labels save when you leave the field or press Enter, with a
+    _Saved_ confirmation at the row. Its inputs stay usable while a save is on its way, a save that
+    lands does not overwrite what you are still typing, and a reorder returns focus to the moved
+    option. Option changes apply at once, and the dialog says so: after one, _Cancel_ reads _Close_.
+  - **An option in use** is named by its label in a sentence of the editor's own, never by the
+    server's message or code.
+  - **Deleting a field** asks in place first. The table shows a loading line, an empty state with
+    one action, and cards on a narrow screen. Its _List filter_ column says _Yes_ or _No_.
+
+- b124db8: **Behaviour change for API clients.** Three 409 refusals on the custom-field definition routes no longer share `CUSTOM_FIELD_DEFINITION_INVALID` and an English message:
+
+  - removing an option records still hold answers `CUSTOM_FIELD_OPTION_IN_USE`, with `details.value` and `details.label`;
+  - changing a definition's value type while records hold values answers `CUSTOM_FIELD_VALUE_TYPE_LOCKED`, with `details.key`;
+  - creating a customer-visible definition over values a deleted field left answers `CUSTOM_FIELD_STORED_VALUES_EXIST`, with `details.key`.
+
+  Each has a sentence in English and Polish naming what it refuses.
+
+  **An option patch changes only what it names.** `PATCH /api/v1/admin/custom-fields/definitions/:id/options/:optionId` used to fill every member the request left out with its create default, so relabelling an option also cleared its translations, its default flag and its position; it now leaves them as they are, and still never changes the stored `value`. Its audit entry records the option's `label`, `labelDefault`, `isDefault` and `sortOrder` before and after, so a translation, a new default or a move is visible in the audit log rather than looking unchanged.
+
+- 44c1615: **Behaviour change for API clients.** Quote Request custom-field definitions now follow the `quote_requests` module, as Opportunity definitions follow `crm`: while `quote_requests` is switched off, `quote_request` is left out of `GET /api/v1/admin/custom-fields/entity-types`, its definitions are not listed or served by id (404), and every definition and option write answers 409 `CUSTOM_FIELD_HOST_MANAGED`. Nothing is deleted; the definitions and the stored values return unchanged with the module.
+
+  Definitions carry `listFilter`, saying whether the admin list of their entity type offers the field as a filter. It is settable on Order, Quote Request and Opportunity definitions; `listFilter: true` on any other entity type is refused with 422 `CUSTOM_FIELD_DEFINITION_INVALID`. Absent on create it is `false`, absent on update it is unchanged, and changing it is one audited write that never touches a record's stored values. Each `entity-types` item carries `listFilter`, saying whether its definitions may be list filters.
+
+  The admin custom-fields page no longer offers the Quote request type before the server has said it is offered.
+
+- 3d1e47c: Publishes `customFieldListFilterPort`, the seam the admin lists of other modules use to filter on custom fields.
+
+  - `listFilterable(entityType)` answers the fields a list offers: the served definitions of the type whose list-filter option is on, ordered, with their labels and options and nothing else.
+  - `condition(entityType, filters)` turns a request's custom-field filters into one server-side condition over the entity's own table, every key and value bound. A filter on a field the list does not offer is refused with a failure naming every such key, which the hosts answer as 400 `CUSTOM_FIELD_FILTER_UNAVAILABLE`; more than 10 keys or 100 chosen values in total is refused before anything is read.
+  - An operator that does not apply to the field's type (`contains` on a Yes/No field, a range on an options field) is refused as a validation failure rather than ignored, and so is an inverted range (a minimum above its maximum, a start date after its end) rather than answered with an empty list.
+  - A Yes/No filter matches a stored _yes_ or _no_ only; a record without a value matches neither. A date range compares only a stored `YYYY-MM-DD` date and a number range only a stored number, so a value stored under an earlier type neither matches nor fails the list.
+
+- b0e1abd: A custom-field value that was not carried is recorded with the field's label, so its history line can name the field.
+
+  - **`customFieldCarryPort`** names every skipped key with the **source** definition's label as
+    it reads at that moment — `label: { labelDefault, labels }` — a `target_missing` skip
+    included.
+  - **Records keep the label.** The Order system note (`systemNote.skipped`), the Quote Request
+    `custom-field-carry-skipped` event and its `custom_field_carry_skipped` history entry, and the
+    Sales Opportunity audit member `customFieldCarry.skipped` store each skip's label next to its
+    key and reason. It is a snapshot: renaming the field later does not change history. Skips
+    recorded earlier have no label and read as before.
+  - An administrator who cannot read custom-field definitions can now be shown which field was
+    not carried and why. The values themselves stay visible only to readers with
+    `custom_fields:read`.
+
+- 55d957b: Custom-field definitions can carry their values to Quote Requests, Orders and Sales Opportunities.
+
+  - **Carry options on definitions.** A definition's `carryTo` names the entity types its values
+    carry to when a record of such a type is created from, or joins, a record of the definition's
+    own type. `GET /api/v1/admin/custom-fields/entity-types` serves `carryTargets` per type — the
+    pairs the registry offers (Quote Request → Order and Opportunity, Order → Opportunity,
+    Opportunity → Quote Request and Order), filtered to targets whose owner module is present.
+    New column `custom_field_definitions.carry_to` (migration
+    `Migration20261020T110920CustomFieldsDefinitionCarryTo`); every existing definition carries
+    nothing, and turning an option on or off changes no stored value.
+  - **Configuration refusal.** Turning a target on is judged once, in the definition Command:
+    `422 CUSTOM_FIELD_CARRY_INCOMPATIBLE` with `details.code` `target_missing`,
+    `value_type_mismatch`, `options_missing` (`details.missingOptionValues` as text,
+    `details.missingOptionValueList` as a list), `audience_mismatch`, `pair_unsupported` or
+    `target_unavailable`, and a sentence in the request's language. A target already on is never
+    judged again, so later changes to either field are allowed. The audit entries of
+    `custom_fields.definition.*` carry `carryTo`.
+  - **Retention while an owner is off.** A carry to a type whose module is switched off is not
+    served and not offered, a save made meanwhile keeps it, and it is served again when the module
+    returns.
+  - **`customFieldCarryPort`** (`CustomFieldCarryPort` from `@endora-commerce/contracts`) computes
+    which values carry into a target record's bag — empty target fields only, the value judged by
+    the target definition — and writes nothing; the module owning the target persists the answer.
+  - **`./ports`:** `CustomFieldDefinitionApplyApi.applyCreate` takes the new
+    `CustomFieldDefinitionApplyCreateInput` (the create request with `carryTo` optional). A host
+    names no carry target; one it named outside the registry's pairs is refused
+    (`carry_incompatible`).
+
+- 9a2d1f8: The `/custom-fields` screen turns value carry-over on and off, shows where values carry, and warns before a change that would stop a carry from working.
+
+  **For an administrator.**
+
+  - The create form and the definition editor offer one _Carry value to …_ checkbox per entity type
+    the definition's type can carry to — none for a type that carries nowhere (Category, Product,
+    Customer, Organization), and never _Quote request_ for an Order field. The editor's _Save_ sends
+    the carry list only when it changed.
+  - A refused carry option keeps the form or the editor open with a sentence that names what is
+    wrong — the missing field and its type, the two value types, the missing option values, or the
+    audience rule — in the operator's language. The sentence stands under the carry options it is
+    about and takes the focus; the editor also says beside _Save_ that nothing was saved.
+  - A new _Carries to_ column lists each target as a chip. A chip whose same-key target no longer
+    fits is marked _Incompatible_, with its reason as text; the mark goes as soon as the definitions
+    are re-read compatible.
+  - When the definitions of every type cannot be read, the table says _Carry checks are
+    unavailable_ with a _Retry_ button instead of showing no mark and asking nothing in silence.
+  - Removing or adding an option, changing a field's audience in the table and deleting a field ask
+    first when the change would break an enabled carry, naming every field on the other side.
+    _Cancel_ sends nothing; the proceed button, named after the action — _Remove option anyway_,
+    _Add option anyway_, _Change audience anyway_, _Delete field anyway_ — makes the change exactly
+    as before. A change that breaks nothing asks nothing.
+
+  **For a module author.** `DefinitionBehaviourFields` takes an optional `value.carryTo` (answered
+  back by `onChange`), an optional `entityTypes`, and an optional `carryError` with its `carryErrorRef`; `DefinitionEditorDialog` takes optional
+  `entityTypes` and `definitions`; `DefinitionOptionsEditor` takes an optional `carryGuard`. All
+  additive.
+
+### Patch Changes
+
+- ee26beb: Documentation for custom-field list filters, in English and Polish.
+
+  - `@endora-commerce/mod-custom-fields` ships its first documentation page: the records that take
+    custom fields, creating and editing a field and the limits of editing, the _Use as list
+    filter_ option, how each type filters, and the list APIs.
+  - The `orders`, `quote_requests` and `crm` pages describe the custom-field filters on their admin
+    lists. The `quote_requests` page also says that its fields follow the module's activation. The
+    `crm` page explains how the Opportunities list's filters differ from the board's card-field
+    filters.
+
+- 6f1e0ec: Custom-field carry review fixes.
+
+  - **`@endora-commerce/contracts`** — every string of `customFieldCarrySkipLabelSchema` is at most 200 characters (`CUSTOM_FIELD_CARRY_SKIP_LABEL_MAX`, new export); a longer `labelDefault` or per-locale label is refused.
+  - **`@endora-commerce/mod-custom-fields`** — the carry port cuts a skip's label snapshot to that limit, since a definition's per-locale labels are not capped, so every skip it plans parses.
+  - **`@endora-commerce/mod-quote-requests`** — the Opportunity → Quote Request carry takes the request's row `for update` and plans over the bag it re-reads under the lock, so an administrator's concurrent edit is never overwritten. A carry that fills a field still raises the request's `version`.
+
+- Updated dependencies [0bd5a2b]
+- Updated dependencies [4da88fd]
+- Updated dependencies [291ec86]
+- Updated dependencies [20af5d5]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [cf7a9c0]
+- Updated dependencies [c8aa175]
+- Updated dependencies [c8aa175]
+- Updated dependencies [1284428]
+- Updated dependencies [1df7a5e]
+- Updated dependencies [14bcf1d]
+- Updated dependencies [789f917]
+- Updated dependencies [d231c48]
+- Updated dependencies [e47b84b]
+- Updated dependencies [9434cbc]
+- Updated dependencies [87ac085]
+- Updated dependencies [87f673d]
+- Updated dependencies [ad341ed]
+- Updated dependencies [e1b173f]
+- Updated dependencies [ef1318e]
+- Updated dependencies [f42bbaf]
+- Updated dependencies [c781cd6]
+- Updated dependencies [301a69f]
+- Updated dependencies [1377dc8]
+- Updated dependencies [af57b55]
+- Updated dependencies [49d82dd]
+- Updated dependencies [72f9cec]
+- Updated dependencies [172597c]
+- Updated dependencies [6f1e0ec]
+- Updated dependencies [0d0a1c6]
+- Updated dependencies [61a1188]
+- Updated dependencies [56b075d]
+- Updated dependencies [53e88c7]
+- Updated dependencies [53e88c7]
+- Updated dependencies [8e10ba1]
+- Updated dependencies [eda7da8]
+- Updated dependencies [359ee2b]
+- Updated dependencies [8f0fd0e]
+- Updated dependencies [cc98507]
+- Updated dependencies [ced7b20]
+- Updated dependencies [f3598cd]
+- Updated dependencies [6177c81]
+- Updated dependencies [2effab9]
+- Updated dependencies [c8b20f6]
+- Updated dependencies [29180cd]
+- Updated dependencies [0f09369]
+- Updated dependencies [52884d6]
+- Updated dependencies [0071cd7]
+- Updated dependencies [3e949eb]
+- Updated dependencies [403ccc1]
+- Updated dependencies [2b8bd26]
+- Updated dependencies [8a2fc1b]
+- Updated dependencies [ec14b96]
+- Updated dependencies [a4cd906]
+- Updated dependencies [3a9dc6e]
+- Updated dependencies [5bddd11]
+- Updated dependencies [5bddd11]
+- Updated dependencies [4a05f32]
+- Updated dependencies [a8919dc]
+  - @endora-commerce/contracts@0.108.0
+  - @endora-commerce/platform@0.108.0
+  - @endora-commerce/admin-kit@0.108.0
+
+## 0.107.0
+
+### Patch Changes
+
+- Updated dependencies [97d24cf]
+- Updated dependencies [fcf4d09]
+- Updated dependencies [09e72a3]
+- Updated dependencies [70bb5e5]
+- Updated dependencies [cd272e5]
+- Updated dependencies [76f9757]
+- Updated dependencies [05d0650]
+- Updated dependencies [bf9881f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [8397b0f]
+- Updated dependencies [dd939be]
+- Updated dependencies [d571d8c]
+- Updated dependencies [34f97ae]
+- Updated dependencies [f61fea3]
+- Updated dependencies [afaa86a]
+- Updated dependencies [248a9df]
+- Updated dependencies [248a9df]
+- Updated dependencies [b8adc7f]
+- Updated dependencies [86a88fd]
+- Updated dependencies [cb098b7]
+- Updated dependencies [3d5a203]
+- Updated dependencies [2933bf0]
+- Updated dependencies [edac0be]
+- Updated dependencies [fe48d6d]
+- Updated dependencies [a57515b]
+- Updated dependencies [4f9daef]
+- Updated dependencies [5865c59]
+- Updated dependencies [7d2d00f]
+- Updated dependencies [e9a92b9]
+- Updated dependencies [d76291d]
+- Updated dependencies [1525d86]
+- Updated dependencies [4e82450]
+- Updated dependencies [ecd23de]
+- Updated dependencies [0472475]
+- Updated dependencies [dd9ab59]
+- Updated dependencies [30c61d9]
+- Updated dependencies [30c61d9]
+- Updated dependencies [3acae57]
+- Updated dependencies [b96321c]
+- Updated dependencies [9d8f8c5]
+  - @endora-commerce/admin-kit@0.107.0
+  - @endora-commerce/contracts@0.107.0
+  - @endora-commerce/platform@0.107.0
+
 ## 0.106.0
 
 ### Patch Changes

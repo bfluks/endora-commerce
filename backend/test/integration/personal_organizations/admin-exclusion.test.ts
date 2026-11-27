@@ -25,10 +25,11 @@ describe('Personal orgs excluded from B2B admin surfaces (feature 051 US3)', () 
       isPersonal: false, registeredAddress: { street: '-', city: '-', postalCode: '-', country: 'PL' },
     });
     const personal = em.create(Organization, {
-      name: '051 Individual', taxId: randomUUID().replace(/-/g, ''), status: 'active', vatStatus: 'vat_exempt',
+      // A personal organization has no tax ID (specs/177-tax-id-scope/).
+      name: '051 Individual', taxId: null, personalAccountId: randomUUID(), status: 'active', vatStatus: 'vat_exempt',
       isPersonal: true, registeredAddress: { street: '-', city: '-', postalCode: '-', country: 'PL' },
     });
-    await em.persistAndFlush([company, personal]);
+    await em.persist([company, personal]).flush();
     companyId = company.id;
     personalId = personal.id;
   });
@@ -61,17 +62,19 @@ describe('Personal orgs excluded from B2B admin surfaces (feature 051 US3)', () 
   it('a sales rep cannot be assigned to a personal org', async () => {
     const em = h.em();
     const role = em.create(AdminRole, { code: `r${Date.now()}`, name: 'R', permissions: [] });
-    await em.persistAndFlush(role);
+    await em.persist(role).flush();
     const rep = em.create(AdminUser, {
       email: `rep-${Date.now()}@x.test`, passwordHash: 'x'.repeat(60), adminRoleId: role.id,
       firstName: 'R', lastName: 'R',
     });
-    await em.persistAndFlush(rep);
+    await em.persist(rep).flush();
 
     const svc = new SalesRepAssignmentService(h.em);
-    await expect(svc.assign({ organizationId: personalId, adminUserId: rep.id })).rejects.toThrow(
-      /personal/i,
-    );
+    await expect(svc.assign({ organizationId: personalId, adminUserId: rep.id })).rejects.toMatchObject({
+      statusCode: 422,
+      code: 'ORGANIZATION_PERSONAL',
+      details: { code: 'sales_rep', organizationId: personalId },
+    });
     // company org is fine
     await expect(svc.assign({ organizationId: companyId, adminUserId: rep.id })).resolves.toBeTruthy();
     void OrganizationSalesRepAssignment;
@@ -90,6 +93,11 @@ describe('Personal orgs excluded from B2B admin surfaces (feature 051 US3)', () 
       },
     });
     expect(res.statusCode).toBe(422);
+    // Issue #629 (#86) — the organization's own refusal, the token naming the action.
+    expect((res.json() as { error: { code: string; details?: { code?: string } } }).error).toMatchObject({
+      code: 'ORGANIZATION_PERSONAL',
+      details: { code: 'add_member', organizationId: personalId },
+    });
     // company org accepts a direct member
     const ok = await h.app.inject({
       method: 'POST',

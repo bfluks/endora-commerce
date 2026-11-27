@@ -16,6 +16,7 @@ describe('MobileSearchOverlay', () => {
       <MobileSearchOverlay
         apiBaseUrl="http://api"
         locale="pl-PL"
+        salesChannelCode="retail"
         placeholder="Szukaj SKU, kodu, nazwy…"
         seeAllResultsLabel="Pokaż wszystkie wyniki"
         quickLinks={[{ label: 'Łożyska', href: '/c/lozyska' }]}
@@ -30,6 +31,7 @@ describe('MobileSearchOverlay', () => {
       <MobileSearchOverlay
         apiBaseUrl="http://api"
         locale="pl-PL"
+        salesChannelCode="retail"
         placeholder="Szukaj"
         seeAllResultsLabel="Pokaż"
       />,

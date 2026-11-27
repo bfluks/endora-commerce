@@ -1,0 +1,382 @@
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { describe, expect, it } from 'vitest';
+import { MODULE_ADMIN_CONTRIBUTIONS, type AdminRegistryEntry } from '../../src/modules.generated.js';
+import {
+  describeFinding,
+  paletteCoverageFindings,
+  type CoverageAction,
+  type CoverageSurface,
+  type PaletteCoverageFinding,
+  type PaletteLedger,
+} from '@endora-commerce/cli/lib/palette-coverage.js';
+
+/**
+ * Every admin destination a module contributes is reachable from ⌘K / CTRL+K,
+ * or is recorded here as deliberately not a palette target (Principle XVI;
+ * issue #510), and every module with an admin page declares at least one
+ * palette action of its own (issue #82). The rules are stated in
+ * `specs/conventions/module-admin-surfaces.md` § *Command palette*, item 7;
+ * the derivation is `@endora-commerce/cli/lib/palette-coverage.js`, which
+ * `endora generate` runs in an instance (`specs/190-overlay-full-modules/`
+ * FR-085).
+ *
+ * The population is per deployment: bare core, and then every deployment on
+ * disk with its own admin registry and its own overlay manifests beside core's.
+ */
+
+/**
+ * **The escape hatch.** A static route that is not a top-level screen of its
+ * own — a create form its list already opens, a tab of another screen, a
+ * legacy address kept for bookmarks — keyed by the module that contributes it,
+ * with the reason. Neither a landing route nor a sidebar destination can be
+ * exempted. Two-way: an entry whose route gained an action, or stopped being
+ * contributed, fails as stale.
+ */
+const PALETTE_EXEMPTIONS: PaletteLedger = {
+  api_keys: {
+    '/api-keys/new': 'Create form opened from the API-key list header (issue #1501); the palette carries the list.',
+  },
+  blog: {
+    '/blog/categories/new':
+      'Create form opened from the category tree (*New category*, *Add subcategory* with a parent id); the palette carries the tree.',
+  },
+  cms: {
+    '/cms': 'Legacy alias rendering the same page list as /cms/pages, which open-pages advertises.',
+    '/cms/blocks/new': 'Create form opened from the block list header; the palette carries the list.',
+    '/cms/templates/new': 'Create form opened from the template list header; the palette carries the list.',
+  },
+  crm: {
+    '/crm/workflow/order-sync': 'A tab of the workflow configuration (RouteTabs, issue #1559); open-crm-workflow carries the screen.',
+    '/crm/workflow/value': 'A tab of the workflow configuration (RouteTabs, issue #1559); open-crm-workflow carries the screen.',
+    '/crm/workflow/board-card': 'A tab of the workflow configuration (RouteTabs, issue #1559); open-crm-workflow carries the screen.',
+    '/crm/tags':
+      'Redirect to the Tags tab at /crm/workflow/tags (issue #1557), kept so old bookmarks resolve; open-crm-tags advertises the destination.',
+  },
+  dictionaries: {
+    '/dictionaries/audit':
+      'Unadvertised legacy spelling of /admin/dictionaries/audit, kept so old bookmarks resolve.',
+  },
+  inventory: {
+    '/warehouses/new': 'Create form opened from the warehouse list header.',
+  },
+  invoice_ledger: {
+    '/invoice-ledger/routing': 'A tab of the ledger screen (RouteTabLink), not a screen of its own.',
+  },
+  invoices: {
+    '/invoices/templates':
+      'Redirect to Document templates (spec 152 FR-088), kept so old bookmarks resolve; document_templates advertises the destination.',
+  },
+  mfa: {
+    '/security':
+      'Redirect to the Profile Security tab (issue #1519), kept so old bookmarks resolve; open-security advertises /profile/security.',
+  },
+  newsletter: {
+    '/newsletter/automations/new': 'Create form opened from the automation list header.',
+  },
+  product_feeds: {
+    '/product-feeds/templates/new': 'Create form opened from the feed-template list header.',
+  },
+  projects: {
+    '/projects/settings/templates/new': 'Create form opened from the project-template list header.',
+    // Issue #1557: the configuration's addresses before it became one row with tabs.
+    '/projects/templates':
+      'Redirect to the Templates tab at /projects/settings (issue #1557), kept so old bookmarks resolve; open-project-templates advertises the destination.',
+    '/projects/templates/new':
+      'Redirect to /projects/settings/templates/new (issue #1557), kept so old bookmarks resolve.',
+    '/projects/roles':
+      'Redirect to the Roles tab (issue #1557), kept so old bookmarks resolve; open-project-roles advertises the destination.',
+    '/projects/loss-reasons':
+      'Redirect to the Loss reasons tab (issue #1557), kept so old bookmarks resolve; open-project-loss-reasons advertises the destination.',
+  },
+  quote_requests: {
+    '/quote-requests/new':
+      'Create form opened from the RFQ inbox header and from a CRM opportunity; the palette carries the inbox.',
+  },
+  returns: {
+    '/returns/reasons': 'Configuration sub-screen reached from the returns list, by the module’s own design.',
+    '/returns/delivery-methods':
+      'Configuration sub-screen reached from the returns list, by the module’s own design.',
+  },
+  tasks: {
+    '/tasks/settings/workflow':
+      'Redirect to the Workflow tab at /tasks/settings (issue #1557), kept so old bookmarks resolve; open-task-workflow advertises the destination.',
+  },
+  webhooks: {
+    '/webhooks/new': 'Create form opened from the webhook list header (issue #1501); the palette carries the list.',
+  },
+};
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+interface ManifestShape {
+  readonly id: string;
+  readonly actions?: ReadonlyArray<{ readonly id: string; readonly targetRoute: string }>;
+}
+
+/**
+ * The manifests of every module package the admin depends on, read through
+ * each package's own root export rather than through the generated registry,
+ * so the registry is reconciled against a second author instead of being
+ * reported as itself.
+ */
+async function loadManifests(): Promise<Map<string, ManifestShape>> {
+  const pkg = JSON.parse(readFileSync(resolve(__dirname, '../../package.json'), 'utf8')) as {
+    dependencies?: Record<string, string>;
+  };
+  const names = Object.keys(pkg.dependencies ?? {}).filter((name) =>
+    name.startsWith('@endora-commerce/mod-'),
+  );
+  const manifests = new Map<string, ManifestShape>();
+  for (const name of names) {
+    const loaded = (await import(/* @vite-ignore */ name)) as { manifest?: ManifestShape };
+    if (loaded.manifest === undefined) throw new Error(`${name} exports no \`manifest\``);
+    manifests.set(loaded.manifest.id, loaded.manifest);
+  }
+  return manifests;
+}
+
+describe('palette coverage rule (red proofs)', () => {
+  const surface = (over: Partial<CoverageSurface> = {}): CoverageSurface => ({
+    moduleId: 'widgets',
+    routes: [
+      { path: '/widgets', index: true },
+      { path: '/widgets/:id' },
+      { path: '/widgets/new' },
+      { path: '/widget-groups' },
+    ],
+    nav: [{ to: '/widgets' }, { to: '/widget-groups' }],
+    ...over,
+  });
+  const action = (targetRoute: string): CoverageAction => ({
+    moduleId: 'widgets',
+    id: `go${targetRoute.replaceAll('/', '-')}`,
+    targetRoute,
+  });
+  const all = [action('/widgets'), action('/widgets/new'), action('/widget-groups')];
+  const run = (over: {
+    surfaces?: CoverageSurface[];
+    actions?: CoverageAction[];
+    exemptions?: PaletteLedger;
+  }): string[] =>
+    paletteCoverageFindings({
+      surfaces: over.surfaces ?? [surface()],
+      actions: over.actions ?? all,
+      exemptions: over.exemptions ?? {},
+    }).map((f: PaletteCoverageFinding) => `${f.kind} ${f.path}`);
+  const reason = 'created from the list header, never on its own';
+
+  it('is clean when every static destination has an action', () => {
+    expect(run({})).toEqual([]);
+  });
+
+  it('counts an action declared by another module as coverage', () => {
+    expect(run({ actions: [action('/widgets'), action('/widgets/new'), { ...action('/widget-groups'), moduleId: 'gadgets' }] })).toEqual([]);
+  });
+
+  it('refuses a landing route with no action, and refuses to exempt it', () => {
+    expect(
+      run({
+        actions: [action('/widgets/new'), action('/widget-groups')],
+        exemptions: { widgets: { '/widgets': reason } },
+      }),
+    ).toEqual(['uncovered-landing /widgets', 'stale-exemption /widgets']);
+  });
+
+  it('refuses a sidebar entry with no action, and refuses to exempt it', () => {
+    expect(
+      run({
+        actions: [action('/widgets'), action('/widgets/new')],
+        exemptions: { widgets: { '/widget-groups': reason } },
+      }),
+    ).toEqual(['uncovered-sidebar-entry /widget-groups', 'stale-exemption /widget-groups']);
+  });
+
+  it('refuses a sidebar entry pointing outside its own routes', () => {
+    expect(run({ surfaces: [surface({ nav: [{ to: '/widget-roles' }] })] })).toEqual([
+      'uncovered-sidebar-entry /widget-roles',
+    ]);
+  });
+
+  it('refuses a non-sidebar static route with no action and no exemption', () => {
+    expect(run({ actions: [action('/widgets'), action('/widget-groups')] })).toEqual([
+      'uncovered-destination /widgets/new',
+    ]);
+  });
+
+  it('accepts an exemption with a reason for a non-sidebar static route', () => {
+    expect(
+      run({
+        actions: [action('/widgets'), action('/widget-groups')],
+        exemptions: { widgets: { '/widgets/new': reason } },
+      }),
+    ).toEqual([]);
+  });
+
+  it('never asks for an action on a parameterised or wildcard route', () => {
+    expect(
+      run({
+        surfaces: [surface({ routes: [{ path: '/widgets/:id/history' }, { path: '/widgets/*' }], nav: [] })],
+        // The module's own action, so the per-module rule is met and only
+        // the per-destination question is asked of these two routes.
+        actions: [action('/widget-search')],
+      }),
+    ).toEqual([]);
+  });
+
+  it('refuses a ledger entry that states no reason', () => {
+    expect(
+      run({
+        actions: [action('/widgets'), action('/widget-groups')],
+        exemptions: { widgets: { '/widgets/new': ' ' } },
+      }),
+    ).toEqual(['entry-without-reason /widgets/new']);
+  });
+
+  it('refuses an exemption whose route gained an action', () => {
+    expect(run({ exemptions: { widgets: { '/widgets/new': reason } } })).toEqual([
+      'stale-exemption /widgets/new',
+    ]);
+  });
+
+  it('refuses a module with admin pages that declares no action of its own, even when another module covers them', () => {
+    const gadgets = (targetRoute: string): CoverageAction => ({ ...action(targetRoute), moduleId: 'gadgets' });
+    expect(
+      run({ actions: [gadgets('/widgets'), gadgets('/widgets/new'), gadgets('/widget-groups')] }),
+    ).toEqual(['module-without-action /widgets']);
+  });
+
+  it('refuses a module whose only pages are parameterised and which declares no action', () => {
+    expect(
+      run({
+        surfaces: [surface({ routes: [{ path: '/widgets/:id' }], nav: [] })],
+        actions: [],
+      }),
+    ).toEqual(['module-without-action /widgets/:id']);
+  });
+
+  it('asks no action of a module contributing no admin page (zones only)', () => {
+    expect(run({ surfaces: [surface({ routes: [], nav: [] })], actions: [] })).toEqual([]);
+  });
+
+  it('refuses an exemption for a route no module contributes', () => {
+    expect(run({ exemptions: { gadgets: { '/gadgets/new': reason } } })).toEqual([
+      'stale-exemption /gadgets/new',
+    ]);
+  });
+});
+
+/** `backend/src/apps` — every deployment this checkout ships. */
+const APPS_ROOT = resolve(__dirname, '../../../backend/src/apps');
+
+/** Every deployment on disk, sorted: one directory under {@link APPS_ROOT}. */
+function deploymentsOnDisk(): readonly string[] {
+  return readdirSync(APPS_ROOT, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+    .map((entry) => entry.name)
+    .sort();
+}
+
+/**
+ * One deployment's half of the population: its admin registry, read through the
+ * committed artefact the admin build selects, and the manifest of every overlay
+ * module it ships — with or without an admin layer, since any module's action
+ * covers a route.
+ */
+async function deploymentPopulation(deployment: string): Promise<{
+  registry: readonly AdminRegistryEntry[];
+  manifests: Map<string, ManifestShape>;
+}> {
+  const registryPath = resolve(__dirname, `../../src/deployments/${deployment}.generated.ts`);
+  // A deployment with no registry is one this test would otherwise not judge.
+  expect(existsSync(registryPath), `${deployment} has no admin registry`).toBe(true);
+  const { DEPLOYMENT_ADMIN_CONTRIBUTIONS } = (await import(/* @vite-ignore */ pathToFileURL(registryPath).href)) as {
+    DEPLOYMENT_ADMIN_CONTRIBUTIONS: readonly AdminRegistryEntry[];
+  };
+  const manifests = new Map<string, ManifestShape>();
+  const modulesRoot = join(APPS_ROOT, deployment, 'modules');
+  for (const entry of existsSync(modulesRoot) ? readdirSync(modulesRoot, { withFileTypes: true }) : []) {
+    const manifestPath = join(modulesRoot, entry.name, 'manifest.ts');
+    if (!entry.isDirectory() || !existsSync(manifestPath)) continue;
+    const loaded = (await import(/* @vite-ignore */ pathToFileURL(manifestPath).href)) as { manifest?: ManifestShape };
+    if (loaded.manifest === undefined) throw new Error(`${manifestPath} exports no \`manifest\``);
+    manifests.set(loaded.manifest.id, loaded.manifest);
+  }
+  return { registry: DEPLOYMENT_ADMIN_CONTRIBUTIONS, manifests };
+}
+
+function judge(
+  label: string,
+  registry: readonly AdminRegistryEntry[],
+  manifests: ReadonlyMap<string, ManifestShape>,
+): { findings: readonly string[]; modules: number; routes: number } {
+  // The registry and the manifests are two authors of one population; a
+  // registry entry with no manifest behind it would be a module judged against
+  // no actions at all.
+  const unmatched = registry.map((e) => e.moduleId).filter((id) => !manifests.has(id));
+  expect(unmatched, `${label}: registry modules with no manifest`).toEqual([]);
+
+  const surfaces: CoverageSurface[] = registry.map((entry) => ({
+    moduleId: entry.moduleId,
+    routes: entry.contributions.routes ?? [],
+    nav: entry.contributions.nav ?? [],
+  }));
+  const actions: CoverageAction[] = [...manifests.values()].flatMap((manifest) =>
+    (manifest.actions ?? []).map((a) => ({ moduleId: manifest.id, id: a.id, targetRoute: a.targetRoute })),
+  );
+
+  // What it read, so a green run cannot mean "read nothing" (issue #113).
+  const routeCount = surfaces.reduce((n, s) => n + s.routes.length, 0);
+  console.info(
+    `[palette-coverage] ${label} read: modules=${surfaces.length} routes=${routeCount} ` +
+      `actions=${actions.length} sources=manifests:${manifests.size}`,
+  );
+  expect(surfaces.length).toBeGreaterThan(0);
+  expect(routeCount).toBeGreaterThan(0);
+  expect(actions.length).toBeGreaterThan(0);
+
+  const findings = paletteCoverageFindings({ surfaces, actions, exemptions: PALETTE_EXEMPTIONS });
+  return { findings: findings.map(describeFinding), modules: surfaces.length, routes: routeCount };
+}
+
+describe('palette coverage of the real admin registry (Principle XVI)', () => {
+  it('reaches every contributed destination from the palette, or records why not', async () => {
+    const manifests = await loadManifests();
+    expect(judge('core', MODULE_ADMIN_CONTRIBUTIONS, manifests).findings).toEqual([]);
+  });
+
+  it('holds per deployment, over core plus each deployment on disk (FR-085)', async () => {
+    const core = await loadManifests();
+    const deployments = deploymentsOnDisk();
+    expect(deployments.length).toBeGreaterThan(0);
+
+    let overlaySurfaces = 0;
+    for (const deployment of deployments) {
+      const { registry, manifests } = await deploymentPopulation(deployment);
+      overlaySurfaces += registry.length;
+      const result = judge(deployment, [...MODULE_ADMIN_CONTRIBUTIONS, ...registry], new Map([...core, ...manifests]));
+      expect(result.findings, deployment).toEqual([]);
+    }
+    // At least one deployment ships an overlay admin layer, or this case
+    // judged core again under another name.
+    expect(overlaySurfaces).toBeGreaterThan(0);
+  });
+
+  it('is red on an overlay landing route with no action — the population a deployment adds', async () => {
+    const core = await loadManifests();
+    const overlay: AdminRegistryEntry = {
+      moduleId: 'acme_board',
+      contributions: { routes: [{ path: '/acme-board', index: true, component: () => import('react') }] },
+    };
+    const result = judge(
+      'fixture',
+      [...MODULE_ADMIN_CONTRIBUTIONS, overlay],
+      new Map([...core, ['acme_board', { id: 'acme_board' }]]),
+    );
+    expect(result.findings).toEqual([
+      'acme_board: landing route /acme-board has no palette action (no exemption possible)',
+      'acme_board: contributes admin pages (/acme-board first) but declares no palette action of its own (no exemption possible)',
+    ]);
+  });
+});

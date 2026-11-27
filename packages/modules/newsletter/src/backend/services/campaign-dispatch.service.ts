@@ -13,6 +13,20 @@ import type {
 import { withEmailBranding } from './content.service.js';
 import type { NewsletterOptInService } from './opt-in.service.js';
 import type { NewsletterLinkBuilder } from './subscriber.service.js';
+import type { NewsletterTokenHelper } from './token.helper.js';
+import {
+  applyEngagementTracking,
+  type EngagementTrackingSwitches,
+  type NewsletterTrackingLinks,
+} from './engagement-tracking.js';
+
+/** What a campaign send needs to add the open pixel and the click redirects. */
+export interface CampaignEngagementTracking {
+  tokens: NewsletterTokenHelper;
+  links: NewsletterTrackingLinks;
+  /** The operator's switches for a sales channel (`null` = platform-wide). */
+  resolveSwitches: (salesChannelId: string | null) => Promise<EngagementTrackingSwitches>;
+}
 
 export interface CampaignDispatchDeps {
   emFactory: () => EntityManager;
@@ -26,6 +40,8 @@ export interface CampaignDispatchDeps {
   resolveEmailBranding?: EmailBrandingResolver;
   /** Whose branding a campaign or automation with no Sales Channel carries (issue #121). */
   resolveDefaultChannelId?: DefaultChannelIdResolver;
+  /** Open and click tracking; absent = campaign e-mails go out untracked. */
+  tracking?: CampaignEngagementTracking;
 }
 
 export interface DispatchResult {
@@ -84,7 +100,7 @@ export class NewsletterCampaignDispatchService {
     }
     if (campaign.status !== 'sent') {
       campaign.status = 'sending';
-      await em.persistAndFlush(campaign);
+      await em.persist(campaign).flush();
     }
     return claimed;
   }
@@ -126,13 +142,15 @@ export class NewsletterCampaignDispatchService {
       },
     });
 
+    const html = await this.withTracking(rendered.html, record.id, campaign);
+
     try {
       const res = await provider.send({
         to: subscriber.email,
         fromEmail: sender.fromEmail || 'noreply@localhost',
         ...(sender.fromName ? { fromName: sender.fromName } : {}),
         subject: rendered.subject,
-        html: rendered.html,
+        html,
         text: rendered.text,
         messageId: record.id,
         headers: { 'List-Unsubscribe': `<${unsubscribeUrl}>` },
@@ -140,14 +158,33 @@ export class NewsletterCampaignDispatchService {
       record.status = 'sent';
       record.sentAt = new Date();
       record.providerMessageId = res.providerMessageId ?? null;
-      await em.persistAndFlush(record);
+      await em.persist(record).flush();
       return 'sent';
     } catch (err) {
       record.status = 'failed';
       record.error = err instanceof Error ? err.message : String(err);
-      await em.persistAndFlush(record);
+      await em.persist(record).flush();
       return 'failed';
     }
+  }
+
+  /**
+   * The open pixel and the click redirects, bound to this send record. Applied
+   * only when the campaign keeps tracking on and the operator's switches for
+   * its sales channel allow it; the plain-text part is never rewritten.
+   */
+  private async withTracking(html: string, sendRecordId: string, campaign: NewsletterCampaign): Promise<string> {
+    const tracking = this.deps.tracking;
+    if (!tracking || !campaign.trackingEnabled) return html;
+    const channelId = campaign.salesChannelId ?? (await this.deps.resolveDefaultChannelId?.()) ?? null;
+    const switches = await tracking.resolveSwitches(channelId);
+    if (!switches.opens && !switches.clicks) return html;
+    return applyEngagementTracking(html, {
+      sendRecordId,
+      ...switches,
+      tokens: tracking.tokens,
+      links: tracking.links,
+    });
   }
 
   /** Inline both phases (tests + console fallback). Safe to re-run. */
@@ -164,7 +201,7 @@ export class NewsletterCampaignDispatchService {
     const em = this.deps.emFactory();
     const campaign = await em.findOneOrFail(NewsletterCampaign, { id: campaignId });
     campaign.status = 'sent';
-    await em.persistAndFlush(campaign);
+    await em.persist(campaign).flush();
     return result;
   }
 }

@@ -116,6 +116,23 @@ export async function withModuleOff<T>(
   }
 }
 
+/**
+ * What a probed route answers with while its module is on (issue #102).
+ *
+ *  - `'json'` (the default) — the route speaks JSON, so whatever it answers can
+ *    be read for an error envelope, and the on-phases assert only that the
+ *    envelope is not `MODULE_DISABLED`.
+ *  - `'non-json'` — the route's own answer is XML, CSV, plain text or similar,
+ *    as `seo`'s storefront sitemap is. Its body is never parsed while the
+ *    module is on; the on-phases instead hold it to answering a body that does
+ *    not declare itself JSON, which is the positive control: the refusal is a
+ *    JSON envelope, so a route that answers JSON while on is not answering in
+ *    its own voice. Off, it is held to the `MODULE_DISABLED` envelope exactly
+ *    like every other probe — the platform's refusal is the same whatever the
+ *    route would have said.
+ */
+export type OffStateSuccessBody = 'json' | 'non-json';
+
 /** A request to make while the module is off. A bare string means `GET`. */
 export interface OffStateProbe {
   method?: InjectOptions['method'];
@@ -123,6 +140,8 @@ export interface OffStateProbe {
   headers?: Record<string, string>;
   cookies?: Record<string, string>;
   payload?: unknown;
+  /** Defaults to `'json'`. See {@link OffStateSuccessBody}. */
+  successBody?: OffStateSuccessBody;
 }
 
 export interface OffStateSurfaces {
@@ -140,8 +159,11 @@ export interface OffStateSurfaces {
   readonly adminPresence?: { readonly cookies: Record<string, string> };
   /**
    * One ordinary (non-activation) setting the module owns. Writing it while
-   * the module is off must be refused — Constitution XVII counts an editable
-   * configuration surface as the module still being observable. The module's
+   * the module is off must be refused with `400 MODULE_SETTING_READ_ONLY` —
+   * Constitution XVII counts an editable configuration surface as the module
+   * still being observable — and the same write must succeed once it is back
+   * (the positive control, issue #174), after which the stored value is put
+   * back. `value` must therefore be one the setting accepts. The module's
    * own activation control is the single exception and is covered by the
    * activation endpoint's own contract test, not here.
    */
@@ -164,6 +186,7 @@ interface ServerLike {
     inject(opts: InjectOptions): Promise<{
       statusCode: number;
       headers: Record<string, unknown>;
+      body: string;
       json(): { error?: { code?: string } };
     }>;
   };
@@ -196,6 +219,10 @@ function toInject(probe: string | OffStateProbe): InjectOptions {
   } as InjectOptions;
 }
 
+function successBodyOf(probe: string | OffStateProbe): OffStateSuccessBody {
+  return typeof probe === 'string' ? 'json' : (probe.successBody ?? 'json');
+}
+
 function label(probe: string | OffStateProbe): string {
   const p: OffStateProbe = typeof probe === 'string' ? { url: probe } : probe;
   return `${p.method ?? 'GET'} ${p.url}`;
@@ -213,8 +240,12 @@ async function expectRoutesRefused(
       res.statusCode,
       `[off-state:${phase}] ${label(probe)} should refuse while "${moduleId}" is off`,
     ).toBe(503);
+    // Parsed from the raw body rather than through `res.json()`, so a route
+    // whose own answer is not JSON (issue #102) fails here on the assertion —
+    // "no MODULE_DISABLED envelope" — and not on a parse error that names
+    // nothing.
     expect(
-      res.json().error?.code,
+      envelopeCodeOf(res.body),
       `[off-state:${phase}] ${label(probe)} should carry the MODULE_DISABLED envelope`,
     ).toBe('MODULE_DISABLED');
     expect(
@@ -232,12 +263,34 @@ async function expectRoutesAnswering(
 ): Promise<void> {
   for (const probe of surfaces.routes) {
     const res = await server.app.inject(toInject(probe));
+    if (successBodyOf(probe) === 'non-json') {
+      // Its body is not parsed: an XML or plain-text answer is the route
+      // speaking for itself, and a JSON one is not — whatever envelope it
+      // carries, it is not the answer this probe declared.
+      expect(
+        String(res.headers['content-type'] ?? ''),
+        `[off-state:${phase}] ${label(probe)} was declared to answer a non-JSON body ` +
+          `while "${moduleId}" is on, and answered JSON (${res.statusCode}): ${res.body.slice(0, 200)}`,
+      ).not.toMatch(/json/i);
+      continue;
+    }
     // The route may legitimately answer 401/404/422 for the probe's payload —
     // what it must not do is claim the module is absent.
     expect(
       res.json().error?.code,
       `[off-state:${phase}] ${label(probe)} should not report "${moduleId}" as disabled`,
     ).not.toBe('MODULE_DISABLED');
+  }
+}
+
+/** The error envelope's code, or `undefined` for a body that is not a JSON envelope. */
+function envelopeCodeOf(body: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body) as { error?: { code?: unknown } } | null;
+    const code = parsed?.error?.code;
+    return typeof code === 'string' ? code : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -323,6 +376,66 @@ function expectPermissionCatalogueReflects(
   }
 }
 
+/**
+ * What the probe setting held before the harness touched it, so the positive
+ * control can put it back. `null` when the module has no `settingWrite`.
+ */
+interface SettingSnapshot {
+  readonly globalValue: unknown;
+}
+
+function settingUrl(code: string, tail = ''): string {
+  return `/api/v1/admin/settings/${encodeURIComponent(code)}${tail}`;
+}
+
+/**
+ * Read the probe setting while the module is on, so the positive control can
+ * restore it afterwards. A secret setting with a stored value is refused here,
+ * before anything is written: its `globalValue` is redacted on every read, so
+ * the harness could overwrite it but never put it back.
+ */
+async function snapshotSetting(
+  server: ServerLike,
+  moduleId: string,
+  surfaces: OffStateSurfaces,
+): Promise<SettingSnapshot | null> {
+  if (!surfaces.settingWrite) return null;
+  const { code, cookies } = surfaces.settingWrite;
+  const res = await server.app.inject({ method: 'GET', url: settingUrl(code), cookies });
+  expect(
+    res.statusCode,
+    `[off-state:before] "${code}" must be readable while "${moduleId}" is on: ${JSON.stringify(res.json())}`,
+  ).toBe(200);
+  const body = res.json() as unknown as {
+    ownerModule?: string;
+    valueType?: string;
+    globalValue?: unknown;
+    globalValueIsSet?: boolean;
+  };
+  if (body.ownerModule !== undefined && body.ownerModule !== moduleId) {
+    throw new Error(
+      `[off-state] "${code}" is owned by "${body.ownerModule}", not "${moduleId}", so ` +
+        `switching "${moduleId}" off says nothing about whether it is editable.`,
+    );
+  }
+  if (body.valueType === 'secret' && body.globalValueIsSet === true) {
+    throw new Error(
+      `[off-state] "${code}" is a secret setting with a stored value. Its value is ` +
+        `redacted on read, so the positive control could not restore it — ` +
+        `probe an ordinary setting instead.`,
+    );
+  }
+  return { globalValue: body.globalValue ?? null };
+}
+
+/**
+ * Constitution XVII — an absent module's configuration is not editable.
+ *
+ * The body is one `SetValueRequestSchema` accepts (issue #174: without `scope`
+ * the route's own parse refused it, so the assertion held whether the module
+ * was off or on), and the refusal asserted is the one the settings service
+ * gives for an absent owner, not any 4xx.
+ */
 async function expectSettingWriteRefused(
   server: ServerLike,
   moduleId: string,
@@ -330,16 +443,63 @@ async function expectSettingWriteRefused(
   phase: string,
 ): Promise<void> {
   if (!surfaces.settingWrite) return;
+  const { code, value, cookies } = surfaces.settingWrite;
   const res = await server.app.inject({
     method: 'PUT',
-    url: `/api/v1/admin/settings/${surfaces.settingWrite.code}/value`,
-    cookies: surfaces.settingWrite.cookies,
-    payload: { value: surfaces.settingWrite.value },
+    url: settingUrl(code, '/value'),
+    cookies,
+    payload: { scope: 'all', value },
+  });
+  const body = res.json();
+  const detail = JSON.stringify(body);
+  expect(
+    { status: res.statusCode, code: body.error?.code },
+    `[off-state:${phase}] "${code}" must not be editable while "${moduleId}" is off: ${detail}`,
+  ).toEqual({ status: 400, code: 'MODULE_SETTING_READ_ONLY' });
+}
+
+/**
+ * The positive control for `expectSettingWriteRefused`: once the module is back,
+ * the very same write succeeds. Without it, a probe refused for any other reason
+ * — a bad value, a missing permission, the activation control — reads as the
+ * module being absent. The stored value is then put back the way it was found:
+ * a value that was never set is reset rather than written, so the setting keeps
+ * following its default.
+ */
+async function expectSettingWriteAccepted(
+  server: ServerLike,
+  moduleId: string,
+  surfaces: OffStateSurfaces,
+  snapshot: SettingSnapshot | null,
+): Promise<void> {
+  if (!surfaces.settingWrite || !snapshot) return;
+  const { code, value, cookies } = surfaces.settingWrite;
+  const res = await server.app.inject({
+    method: 'PUT',
+    url: settingUrl(code, '/value'),
+    cookies,
+    payload: { scope: 'all', value },
   });
   expect(
     res.statusCode,
-    `[off-state:${phase}] "${surfaces.settingWrite.code}" must not be editable while "${moduleId}" is off`,
-  ).toBeGreaterThanOrEqual(400);
+    `[off-state:restored] "${code}" must be editable again once "${moduleId}" is back — ` +
+      `otherwise its refusal while off was not about the module: ${JSON.stringify(res.json())}`,
+  ).toBe(200);
+
+  const restore =
+    snapshot.globalValue === null
+      ? await server.app.inject({ method: 'DELETE', url: settingUrl(code, '/values'), cookies })
+      : await server.app.inject({
+          method: 'PUT',
+          url: settingUrl(code, '/value'),
+          cookies,
+          payload: { scope: 'all', value: snapshot.globalValue },
+        });
+  expect(
+    restore.statusCode,
+    `[off-state:restored] could not put "${code}" back after the positive control: ` +
+      JSON.stringify(restore.json()),
+  ).toBe(200);
 }
 
 /**
@@ -380,12 +540,14 @@ export async function expectModuleAbsent(
     );
   }
 
+  let snapshot: SettingSnapshot | null = null;
   try {
     // Precondition: the module answers to begin with. Without this an
     // always-broken route would read as a successful absence.
     await expectRoutesAnswering(server, moduleId, surfaces, 'before');
     await expectPresenceReports(server, moduleId, surfaces, true, 'before');
     expectPermissionCatalogueReflects(server, moduleId, true, 'before');
+    snapshot = await snapshotSetting(server, moduleId, surfaces);
 
     // Axis 1 — the operator switched it off; the platform still offers it.
     // This is the case Constitution XVII calls out by name.
@@ -434,4 +596,5 @@ export async function expectModuleAbsent(
   await expectRoutesAnswering(server, moduleId, surfaces, 'restored');
   await expectPresenceReports(server, moduleId, surfaces, true, 'restored');
   expectPermissionCatalogueReflects(server, moduleId, true, 'restored');
+  await expectSettingWriteAccepted(server, moduleId, surfaces, snapshot);
 }

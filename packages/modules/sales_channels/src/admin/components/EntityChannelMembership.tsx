@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { ImmediateBadge, useConfirmDialog } from '@endora-commerce/admin-kit/components';
 import type {
   ChannelMemberEntityType,
+  EntityMembershipListResponse,
   SalesChannelListResponse,
   SalesChannelSummary,
 } from '@endora-commerce/contracts';
@@ -10,10 +12,7 @@ import {
   AlertDescription,
   Badge,
   Button,
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
+  EditorSection,
   Select,
 } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
@@ -60,6 +59,12 @@ import { DefaultChannelBadge } from './DefaultChannelBadge.js';
  *
  * The `entityId` guard below is unreachable under a zone — all three mounts
  * have an id before they mount — and stays as the component's own contract.
+ *
+ * **A section, not a card** (issue #1488, UX audit CAT-06): its one mount is
+ * the product editor's Channels tab, inside the editor's card. It is the tab's
+ * section — its heading carries "Applies immediately", because adding and
+ * removing a channel are writes of their own — and its channels are rows
+ * divided by a rule, not a bordered box each.
  */
 
 export interface EntityChannelMembershipProps {
@@ -67,12 +72,12 @@ export interface EntityChannelMembershipProps {
   entityId: string | null | undefined;
   /** When set, called after every successful add / remove / fallback so the parent can refetch. */
   onChanged?: () => void;
-}
-
-interface ChannelsForEntityResponse {
-  entityType: ChannelMemberEntityType;
-  entityId: string;
-  channels: SalesChannelSummary[];
+  /**
+   * Shows the channels only: no picker, no *Add*, no *Remove* and no "Applies immediately"
+   * badge, for an operator the server would refuse (issue #1644). The mount decides, because
+   * which permission writes an entity's membership is the entity editor's to say.
+   */
+  readOnly?: boolean;
 }
 
 const BASE = '/api/v1/admin/sales-channels';
@@ -81,8 +86,10 @@ export function EntityChannelMembership({
   entityType,
   entityId,
   onChanged,
+  readOnly = false,
 }: EntityChannelMembershipProps): ReactNode {
   const t = useTranslation('sales_channels');
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [channels, setChannels] = useState<SalesChannelSummary[]>([]);
   const [allChannels, setAllChannels] = useState<SalesChannelSummary[]>([]);
   const [loading, setLoading] = useState(false);
@@ -96,7 +103,7 @@ export function EntityChannelMembership({
     setError(null);
     try {
       const [forEntity, all] = await Promise.all([
-        apiClient.get<ChannelsForEntityResponse>(
+        apiClient.get<EntityMembershipListResponse>(
           `${BASE}/by-entity/${entityType}/${encodeURIComponent(entityId)}`,
         ),
         apiClient.get<SalesChannelListResponse>(`${BASE}?activeOnly=true`),
@@ -105,14 +112,12 @@ export function EntityChannelMembership({
       setAllChannels(all.items);
     } catch (err) {
       setError(
-        err instanceof ApiError
-          ? err.envelope.error.message
-          : 'Failed to load channel memberships.',
+        err instanceof ApiError ? err.envelope.error.message : t('membership.error.load'),
       );
     } finally {
       setLoading(false);
     }
-  }, [entityType, entityId]);
+  }, [entityType, entityId, t]);
 
   useEffect(() => {
     void refresh();
@@ -136,11 +141,11 @@ export function EntityChannelMembership({
       await refresh();
       onChanged?.();
     } catch (err) {
-      setError(err instanceof ApiError ? err.envelope.error.message : 'Add failed.');
+      setError(err instanceof ApiError ? err.envelope.error.message : t('membership.error.add'));
     } finally {
       setBusy(false);
     }
-  }, [pickerCode, entityType, entityId, refresh, onChanged]);
+  }, [pickerCode, entityType, entityId, refresh, onChanged, t]);
 
   const handleRemove = useCallback(
     async (code: string): Promise<void> => {
@@ -156,11 +161,16 @@ export function EntityChannelMembership({
             err instanceof ApiError &&
             err.envelope.error.code === 'ENTITY_WOULD_HAVE_ZERO_CHANNELS'
           ) {
-            if (
-              window.confirm(
-                `${err.envelope.error.message}\n\nRebind this ${entityType} to the system default channel and continue?`,
-              )
-            ) {
+            const rebind = await confirm({
+              message: (
+                <>
+                  <p>{err.envelope.error.message}</p>
+                  <p className="mt-2">{t('membership.rebindConfirm', { entityType })}</p>
+                </>
+              ),
+              confirmLabel: t('membership.action.rebind'),
+            });
+            if (rebind) {
               await apiClient.delete(`${path}?fallbackToDefault=true`);
             } else {
               return;
@@ -172,54 +182,58 @@ export function EntityChannelMembership({
         await refresh();
         onChanged?.();
       } catch (err) {
-        setError(err instanceof ApiError ? err.envelope.error.message : 'Remove failed.');
+        setError(err instanceof ApiError ? err.envelope.error.message : t('membership.error.remove'));
       } finally {
         setBusy(false);
       }
     },
-    [entityType, entityId, refresh, onChanged],
+    [entityType, entityId, refresh, onChanged, confirm, t],
   );
 
   if (!entityId) return null;
 
   return (
-    <Card className="mb-4">
-      <CardHeader>
-        <CardTitle className="text-base">{t('membership.title')}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        {error && (
-          <Alert variant="destructive" className="mb-4">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-        {loading ? (
-          <p className="text-sm text-muted-foreground">{t('membership.loading')}</p>
-        ) : (
-          <>
-            {channels.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                {t('membership.empty', { entityType })}
-              </p>
-            ) : (
-              <ul className="grid gap-2">
-                {channels.map((c) => (
-                  <li
-                    key={c.id}
-                    className="flex items-center justify-between rounded-md border border-input p-2"
-                  >
-                    <span className="flex items-center gap-2">
-                      <span className="font-mono text-xs">{c.code}</span>
-                      <DefaultChannelBadge systemDefault={c.systemDefault} />
-                      {!c.active && (
-                        <Badge variant="outline" className="text-[10px]">
-                          {t('status.inactive')}
-                        </Badge>
-                      )}
-                      <span className="text-xs text-muted-foreground">
-                        {c.name['en-US'] ?? c.name['en'] ?? Object.values(c.name)[0] ?? ''}
-                      </span>
+    <EditorSection
+      title={
+        <>
+          {t('membership.title')}
+          {readOnly ? null : <ImmediateBadge />}
+        </>
+      }
+    >
+      {error && (
+        <Alert variant="destructive" className="mb-4">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+      {loading ? (
+        <p className="text-sm text-muted-foreground">{t('membership.loading')}</p>
+      ) : (
+        <>
+          {channels.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {t('membership.empty', { entityType })}
+            </p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {channels.map((c) => (
+                <li
+                  key={c.id}
+                  className="flex items-center justify-between py-2 first:pt-0 last:pb-0"
+                >
+                  <span className="flex items-center gap-2">
+                    <span className="font-mono text-xs">{c.code}</span>
+                    <DefaultChannelBadge systemDefault={c.systemDefault} />
+                    {!c.active && (
+                      <Badge variant="outline" className="text-[10px]">
+                        {t('status.inactive')}
+                      </Badge>
+                    )}
+                    <span className="text-xs text-muted-foreground">
+                      {c.name['en-US'] ?? c.name['en'] ?? Object.values(c.name)[0] ?? ''}
                     </span>
+                  </span>
+                  {readOnly ? null : (
                     <Button
                       variant="ghost"
                       size="sm"
@@ -228,33 +242,34 @@ export function EntityChannelMembership({
                     >
                       {t('membership.action.remove')}
                     </Button>
-                  </li>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {!readOnly && candidates.length > 0 && (
+            <div className="mt-4 grid grid-cols-[1fr_auto] gap-2">
+              <Select
+                value={pickerCode}
+                onChange={(e) => setPickerCode(e.target.value)}
+                disabled={busy}
+              >
+                <option value="">{t('membership.action.pickChannel')}</option>
+                {candidates.map((c) => (
+                  <option key={c.id} value={c.code}>
+                    {c.code}
+                    {c.systemDefault ? t('membership.defaultSuffix') : ''}
+                  </option>
                 ))}
-              </ul>
-            )}
-            {candidates.length > 0 && (
-              <div className="mt-4 grid grid-cols-[1fr_auto] gap-2">
-                <Select
-                  value={pickerCode}
-                  onChange={(e) => setPickerCode(e.target.value)}
-                  disabled={busy}
-                >
-                  <option value="">{t('membership.action.pickChannel')}</option>
-                  {candidates.map((c) => (
-                    <option key={c.id} value={c.code}>
-                      {c.code}
-                      {c.systemDefault ? t('membership.defaultSuffix') : ''}
-                    </option>
-                  ))}
-                </Select>
-                <Button onClick={() => void handleAdd()} disabled={busy || !pickerCode}>
-                  {t('membership.action.add')}
-                </Button>
-              </div>
-            )}
-          </>
-        )}
-      </CardContent>
-    </Card>
+              </Select>
+              <Button variant="outline" onClick={() => void handleAdd()} disabled={busy || !pickerCode}>
+                {t('membership.action.add')}
+              </Button>
+            </div>
+          )}
+        </>
+      )}
+      {confirmDialog}
+    </EditorSection>
   );
 }

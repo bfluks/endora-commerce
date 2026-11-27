@@ -2,11 +2,18 @@ import { Redis } from 'ioredis';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   attachEscapeHatchAuditWriter,
+  attachOperatorDiagnostics,
   runStatusCommand,
   type OperatorResources,
   type OperatorRuntime,
 } from '@endora-commerce/platform/lifecycle';
 import { initOrm, closeOrm } from '../../db/index.js';
+// The order `migrate` runs — core, installed packages and the selected
+// deployment's overlay modules, with origins — so a module's row lists the
+// migrations it owns and whether this database has applied them
+// (`specs/190-overlay-full-modules/` FR-045). Discovery, not composition: it is
+// the same value `mikro-orm.config.ts` builds the ORM from (D-157.2).
+import { configuredMigrations } from '../../db/configured-migrations.js';
 import { resolvedManifestEntries } from '../registered-manifests.js';
 import { enterSystemScope } from '../../kernel/scope.js';
 
@@ -29,6 +36,11 @@ import { enterSystemScope } from '../../kernel/scope.js';
  */
 let auditEm: (() => EntityManager) | undefined;
 const escapeHatchAudit = attachEscapeHatchAuditWriter({ em: () => auditEm?.() });
+
+// Issue #819 — the platform's own log lines (the ORM bootstrap's tenancy-chain
+// notice among them) go to stderr: stdout is this command's answer, and with
+// `--json` a machine parses it. The process exits, so nothing detaches.
+attachOperatorDiagnostics((line) => void process.stderr.write(line));
 
 async function main(): Promise<number> {
   let entries;
@@ -65,6 +77,7 @@ async function main(): Promise<number> {
       return opened;
     },
     entries,
+    migrations: () => configuredMigrations(),
     out: (line) => void process.stdout.write(line),
     err: (line) => void process.stderr.write(line),
   };

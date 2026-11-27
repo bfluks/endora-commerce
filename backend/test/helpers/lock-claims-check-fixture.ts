@@ -1,10 +1,10 @@
-import { spawnSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { CHECK_LIB_ROOT } from './check-lib-root.js';
+import { spawnCheckSync, verdictOf } from './check-process.js';
 
 /**
  * A synthetic repository with a copy of `check-lock-claims` inside it (issue
@@ -39,6 +39,10 @@ const SCRIPT = join(REPO_ROOT, 'backend', 'scripts', 'check-lock-claims.ts');
  * specifier no staged tree can resolve (see {@link CHECK_LIB_ROOT}).
  */
 const LIBS: readonly string[] = [
+  // `module-roots.ts` refuses a stale emitted manifest itself (issue #104), so
+  // the freshness derivation and the package reader it rests on come with it.
+  'emitted-freshness.ts',
+  'module-packages.ts',
   'module-population.ts',
   'module-roots.ts',
   'platform-root.ts',
@@ -144,13 +148,15 @@ export function createLockClaimsFixture(): LockClaimsFixture {
     },
     removeContract: (name) => rmSync(join(contracts, name), { force: true }),
     writeBarrel: (source) => writeFileSync(join(contracts, 'index.ts'), source, 'utf8'),
-    run: (args = []) => {
-      const result = spawnSync(TSX, [join(scripts, 'check-lock-claims.ts'), ...args], {
-        encoding: 'utf8',
-        cwd: join(root, 'backend'),
-      });
-      return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
-    },
+    // A child that reached no verdict of its own — killed, or never started —
+    // throws with the report that says so (issue #80).
+    run: (args = []) =>
+      verdictOf(
+        'check-lock-claims.ts',
+        spawnCheckSync(TSX, [join(scripts, 'check-lock-claims.ts'), ...args], {
+          cwd: join(root, 'backend'),
+        }),
+      ),
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 

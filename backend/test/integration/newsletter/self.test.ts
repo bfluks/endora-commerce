@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import type { z } from 'zod';
 import { setupTestDb, type TestDb } from '../../helpers/test-db.js';
 import { customerAccountPortsFor } from '../../helpers/customer-account-ports.js';
+import { newsletterTestCommandBus } from '../../helpers/newsletter-command-bus.js';
 import { NewsletterTokenHelper } from '../../../../packages/modules/newsletter/src/backend/services/token.helper.js';
 import { NewsletterOptInService } from '../../../../packages/modules/newsletter/src/backend/services/opt-in.service.js';
 import { NewsletterSubscriberService } from '../../../../packages/modules/newsletter/src/backend/services/subscriber.service.js';
@@ -57,7 +58,7 @@ describe('newsletter self-service (US9)', () => {
         country: 'PL',
       },
     });
-    await em.persistAndFlush(organization);
+    await em.persist(organization).flush();
     organizationId = organization.id;
 
     const account = em.create(CustomerAccount, {
@@ -67,7 +68,7 @@ describe('newsletter self-service (US9)', () => {
       firstName: 'Self',
       lastName: 'Service',
     });
-    await em.persistAndFlush(account);
+    await em.persist(account).flush();
     accountId = account.id;
 
     const optIn = new NewsletterOptInService(new FakeSettings() as unknown as SettingsService, new NewsletterTokenHelper('s'));
@@ -80,6 +81,7 @@ describe('newsletter self-service (US9)', () => {
       // rather than one a stub asserted.
       customerAccounts: customerAccountPortsFor(() => db.em()).read,
       links: { confirm: (t) => `c?${t}`, unsubscribe: (t) => `u?${t}` },
+      commandBus: newsletterTestCommandBus(() => db.em()),
     });
     self = new NewsletterSelfService(() => db.em(), subscribers);
   });

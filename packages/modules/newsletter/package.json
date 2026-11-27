@@ -1,6 +1,6 @@
 {
   "name": "@endora-commerce/mod-newsletter",
-  "version": "0.106.0",
+  "version": "0.112.0",
   "type": "module",
   "sideEffects": false,
   "description": "Own-infrastructure newsletter: subscribers with tags + custom fields, campaigns, linear automations, email-safe templates and variables, engagement stats, and a configurable bulk-sending provider.",
@@ -41,13 +41,14 @@
     "dist",
     "i18n",
     "docs",
-    "tailwind.css"
+    "tailwind.css",
+    "!dist/**/*.map"
   ],
   "engines": {
     "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.ui.json",
+    "build": "node ../../../scripts/clean-package-dist.mjs --src src --out dist && tsc -p tsconfig.build.json && tsc -p tsconfig.ui.build.json",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.ui.json --noEmit",
     "lint": "eslint src",
     "test": "vitest run"
@@ -59,14 +60,16 @@
     "@endora-commerce/page-builder-admin": "workspace:*",
     "@endora-commerce/page-builder-core": "workspace:*",
     "@endora-commerce/platform": "workspace:*",
-    "@mikro-orm/core": "^6",
-    "@mikro-orm/migrations": "^6",
-    "@mikro-orm/postgresql": "^6",
+    "@mikro-orm/core": "^7.2.11",
+    "@mikro-orm/decorators": "^7.2.11",
+    "@mikro-orm/migrations": "^7.2.11",
+    "@mikro-orm/postgresql": "^7.2.11",
     "@puckeditor/core": "^0",
     "bullmq": "^5",
     "echarts": "^6",
     "fastify": "^5.11.0",
     "ioredis": "^5",
+    "lucide-react": "^1",
     "nodemailer": "^10",
     "react": "^19",
     "react-router-dom": "^7",
@@ -85,6 +88,9 @@
     "echarts": {
       "optional": true
     },
+    "lucide-react": {
+      "optional": true
+    },
     "react": {
       "optional": true
     },
@@ -99,21 +105,24 @@
     "@endora-commerce/page-builder-admin": "workspace:*",
     "@endora-commerce/page-builder-core": "workspace:*",
     "@endora-commerce/platform": "workspace:*",
-    "@mikro-orm/core": "^6.6.13",
-    "@mikro-orm/migrations": "^6.6.13",
-    "@mikro-orm/postgresql": "^6.6.13",
+    "@endora-commerce/test-kit": "workspace:*",
+    "@mikro-orm/core": "^7.2.11",
+    "@mikro-orm/decorators": "^7.2.11",
+    "@mikro-orm/migrations": "^7.2.11",
+    "@mikro-orm/postgresql": "^7.2.11",
     "@puckeditor/core": "^0.23.0",
     "@types/node": "^22.9.0",
     "@types/react": "^19.2.14",
     "bullmq": "^5.76.1",
     "echarts": "^6.1.0",
-    "fastify": "^5.12.5",
+    "fastify": "^5.12.8",
     "ioredis": "^5.10.1",
-    "nodemailer": "^10.0.13",
+    "lucide-react": "^1.11.0",
+    "nodemailer": "^10.1.4",
     "react": "^19.2.5",
     "react-router-dom": "^7.18.2",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11",
+    "vitest": "^4.1.12",
     "zod": "^4.2.0"
   }
 }

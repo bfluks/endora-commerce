@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { parseBundleKeywords } from '@endora-commerce/contracts';
 import { manifest } from '../manifest.js';
 
 /**
@@ -59,21 +60,17 @@ describe('seo manifest — custom robots.txt instructions', () => {
     expect(setting?.salesChannelCodes).toBeUndefined();
   });
 
+  // Issue #1522 (UX audit SHELL-23) — the description is one row of the
+  // Settings screen, at most 120 characters (`check:text-budget`). It keeps
+  // the two facts an operator must have before typing; the rest (a group for
+  // one crawler replaces the generated rules for it, the 64 KiB limit) is in
+  // `docs/seo.md`, pinned by the bundle test below.
   it('says what an operator needs before writing a rule (FR-008)', () => {
     // Appended to the system-generated rules, never instead of them…
-    expect(setting?.description).toMatch(/added after the rules the storefront generates/);
+    expect(setting?.description).toMatch(/added after the generated robots\.txt rules/);
     // …and a Disallow is not a way out of search results.
-    expect(setting?.description).toMatch(/does not remove pages from search results/);
-    // The limit is named where the text is typed, not only in the refusal.
-    expect(setting?.description).toMatch(/64 KiB/);
-    // "Cannot be edited" is true of the generated lines and not of their
-    // effect: a crawler obeys the most specific group that names it, so a
-    // group written for one crawler replaces the generated one for it.
-    expect(setting?.description).toMatch(
-      /a group written for one crawler .* replaces them for that crawler/,
-    );
-    // The Settings store refuses a longer description.
-    expect(setting?.description?.length).toBeLessThanOrEqual(2000);
+    expect(setting?.description).toMatch(/To keep pages out of search results, use Default robots/);
+    expect(setting?.description?.length).toBeLessThanOrEqual(120);
   });
 
   it('declares the refusal for a text over the limit', () => {
@@ -100,14 +97,11 @@ describe('seo manifest — additional llms.txt content', () => {
 
   it('says what an operator needs before writing it', () => {
     // It follows what the storefront generates, never replaces it…
-    expect(setting?.description).toMatch(/added after the part the storefront generates/);
-    // …the file is withdrawn with indexing (FR-027)…
-    expect(setting?.description).toMatch(/not served .* asks search engines not to index/);
-    // …and the limit is named where the text is typed.
+    expect(setting?.description).toMatch(/added after the generated part of llms\.txt/);
+    // …and the limit is named where the text is typed. That the file is
+    // withdrawn with indexing (FR-027) is in `docs/seo.md` (issue #1522).
     expect(setting?.description).toMatch(/64 KiB/);
-    // No longer than the robots one, which was cut down for the row it sits in.
-    const robots = manifest.settings?.settings.find((s) => s.code === 'seo.robots_txt_custom');
-    expect(setting?.description?.length).toBeLessThanOrEqual(robots?.description?.length ?? 0);
+    expect(setting?.description?.length).toBeLessThanOrEqual(120);
   });
 
   it('declares the three settings of the feature beside the activation control, and no other', () => {
@@ -149,9 +143,15 @@ describe('seo manifest — command palette', () => {
 
   it('is findable by the words an operator would type', () => {
     const keywords = manifest.actions?.flatMap((a) => a.keywords ?? []) ?? [];
-    for (const word of ['robots', 'noindex', 'llms', 'seo', 'sitemap', 'indeksowanie']) {
+    for (const word of ['robots', 'noindex', 'llms', 'seo', 'sitemap']) {
       expect(keywords).toContain(word);
     }
+    // Issue #573 — the Polish word is in `pl.json`, under the action's `keywordsKey`.
+    const polish = JSON.parse(
+      readFileSync(new URL('../../i18n/pl.json', import.meta.url), 'utf8'),
+    ) as Record<string, string>;
+    const key = action('open-search-engine-robots')?.keywordsKey ?? '';
+    expect(parseBundleKeywords(polish[key] ?? '')).toContain('indeksowanie');
   });
 });
 
@@ -171,6 +171,8 @@ describe('seo manifest — what switching the module off withdraws (FR-033)', ()
   it('says so on the activation setting', () => {
     expect(activation?.description).toMatch(/sends no default robots directive/);
     expect(activation?.description).toMatch(CONSEQUENCE);
+    // Switching the module off also stops serving llms.txt; the English must say so as the Polish does.
+    expect(activation?.description).toMatch(/llms\.txt/);
   });
 });
 
@@ -199,7 +201,7 @@ describe('seo bundles', () => {
     'settingLabels.seo.llms_txt_additional.name',
     'settingLabels.seo.llms_txt_additional.description',
     'errors.SEO_CRAWLER_TEXT_TOO_LARGE',
-    ...(manifest.actions ?? []).flatMap((a) => [a.labelKey, a.descriptionKey]),
+    ...(manifest.actions ?? []).flatMap((a) => (a.descriptionKey === undefined ? [a.labelKey] : [a.labelKey, a.descriptionKey])),
   ];
 
   it.each(['en', 'pl'])('%s carries every key', (language) => {
@@ -258,21 +260,26 @@ describe('seo bundles', () => {
     );
   });
 
-  it('says in Polish, too, where the llms.txt content goes and when the file is withdrawn', () => {
-    const polish = bundle('pl')['settingLabels.seo.llms_txt_additional.description'];
-    expect(polish).not.toBe(bundle('en')['settingLabels.seo.llms_txt_additional.description']);
-    expect(polish).toMatch(/po części generowanej przez sklep/);
-    expect(polish).toMatch(/nie jest serwowany/);
-    expect(polish).toMatch(/64 KiB/);
+  // Issue #1522 (UX audit SHELL-23) — a setting's description is one row of
+  // the Settings screen (at most 120 characters, `check:text-budget`). What
+  // the long descriptions used to explain lives in the module's documentation
+  // page now, so that is where it is pinned.
+  it('says in Polish, too, where the llms.txt content and the robots.txt rules go', () => {
+    const llms = bundle('pl')['settingLabels.seo.llms_txt_additional.description'];
+    expect(llms).not.toBe(bundle('en')['settingLabels.seo.llms_txt_additional.description']);
+    expect(llms).toMatch(/po generowanej części llms\.txt/);
+    expect(llms).toMatch(/64 KiB/);
+    const robots = bundle('pl')['settingLabels.seo.robots_txt_custom.description'];
+    expect(robots).not.toBe(bundle('en')['settingLabels.seo.robots_txt_custom.description']);
+    expect(robots).toMatch(/po generowanych regułach robots\.txt/);
   });
 
-  it('says in Polish, too, that the text is appended and that Disallow does not de-index', () => {
-    const polish = bundle('pl')['settingLabels.seo.robots_txt_custom.description'];
-    expect(polish).not.toBe(bundle('en')['settingLabels.seo.robots_txt_custom.description']);
-    expect(polish).toMatch(/po regułach generowanych przez sklep/);
-    expect(polish).toMatch(/nie usuwa stron z wyników wyszukiwania/);
-    expect(polish).toMatch(/64 KiB/);
-    expect(polish).toMatch(/zastępuje je dla tego robota/);
+  it('keeps the long explanation of the crawler texts in the documentation page', () => {
+    const page = readFileSync(new URL('../../docs/seo.md', import.meta.url), 'utf8');
+    expect(page).toMatch(/64 KiB/);
+    expect(page).toMatch(/User-agent/);
+    expect(page).toMatch(/Disallow/);
+    expect(page).toMatch(/noindex/);
   });
 
   it.each(['en', 'pl'])('names the limit in the %s refusal, from what the raise carries', (language) => {
@@ -286,7 +293,5 @@ describe('seo bundles', () => {
     expect(bundle('pl')['settingLabels.seo.default_robots.description']).not.toBe(
       bundle('en')['settingLabels.seo.default_robots.description'],
     );
-    // The tokens stay as they are in every language.
-    expect(bundle('pl')['settingLabels.seo.default_robots.description']).toMatch(/NOINDEX/);
   });
 });

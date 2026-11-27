@@ -1,9 +1,9 @@
 ---
-title: Admin Command Palette Actions
+title: Admin command palette actions
 description: Module-contributed action registry surfaced in the Admin Command Palette (⌘K Actions group)
 ---
 
-# Admin Command Palette Actions
+# Admin command palette actions
 
 A registry-backed contribution point that lets every backend module add action buttons to
 the Admin UI's command palette (the `⌘K` / `Ctrl+K` modal — what the operator sees as the
@@ -35,7 +35,8 @@ export const manifest = defineModuleManifest({
       icon: 'Plus',
       targetRoute: '/catalog/products/new',
       requiredPermission: 'catalog:write',
-      keywords: ['product', 'new', 'add', 'create', 'produkt', 'nowy', 'dodaj'],
+      keywords: ['product', 'new', 'add', 'create'],
+      keywordsKey: 'actions.newProduct.keywords',
       weight: 100,
     },
   ],
@@ -44,7 +45,15 @@ export const manifest = defineModuleManifest({
 
 Each entry MUST carry a stable `id`, a translatable `labelKey`, an `icon` from the closed
 allowlist, and a `targetRoute`. Optional fields are `descriptionKey`, `requiredPermission`,
-`keywords` (up to 10), and `weight` (default 100).
+`entryApiRoute`, `keywords` (up to 10), `keywordsKey`, and `weight` (default 100).
+
+`keywords` are English and match in every admin language. Search words in another language
+do not go into the manifest: `keywordsKey` names an entry in the module's own bundles —
+relative to the module namespace, like `labelKey` — whose value is a comma-separated list,
+for example `"actions.newProduct.keywords": "produkt, nowy, dodaj"` in `i18n/pl.json` and
+`"product, new, add"` in `i18n/en.json`. The server resolves it in the operator's language
+(falling back to English) and serves those words after the manifest's `keywords`, so a
+Polish operator finds the action by a Polish word and still by an English one.
 
 `requiredPermission` is optional in the schema and all but mandatory in practice: it must be
 **the code the backend enforces on the route behind `targetRoute`**, so the palette never
@@ -58,6 +67,28 @@ and the permission inventory could not see either, because it sweeps whether a c
 destination genuinely has no gate; where the screen is read-gated but the action's label
 promises a write, the field cannot say both, and the disagreement is recorded in that check's
 ledger rather than guessed at.
+
+The check finds that route from the URL: an API path equal to the target, then the shallowest
+one under it, then the closest one the module registers. That guess is wrong when the screen
+is served by an API its admin path does not name. The command outbox is a tab of
+`/platform/command-hooks`, but its data comes from `GET /api/v1/admin/command-outbox`. For a
+screen like that, `entryApiRoute` names the admin API route the screen opens on, and the check
+compares `requiredPermission` against that route alone:
+
+```ts
+{
+  id: 'open-command-outbox',
+  targetRoute: '/platform/command-hooks/outbox',
+  requiredPermission: 'platform.command_outbox.read',
+  entryApiRoute: '/api/v1/admin/command-outbox',
+  // …
+}
+```
+
+The value is a path under `/api/v1/admin/`, written exactly as the route registers it. The
+method follows the target: `GET`, or the write verbs for a `/new` form. If no registration
+answers the declared path, the check reports it rather than falling back to the guess.
+Nothing reads the field at runtime. Declare it only where the guess picks the wrong route.
 
 Within-module `id` uniqueness is enforced by the manifest's Zod schema — installing a
 manifest with two actions sharing an id fails the install with a clear, indexed error.
@@ -125,6 +156,7 @@ longer reads it behind the platform's back.
 | `target_route` | `varchar(255)` | Admin route. |
 | `required_permission` | `varchar(64) NULL` | Permission code, any notation. |
 | `keywords` | `jsonb` | Array of strings. |
+| `keywords_key` | `varchar(255) NULL` | i18n key of the per-language search words, resolved at read time. |
 | `weight` | `integer` | Sort key (default 100). |
 | `version` | `bigint` | Per-row sequence; bumped on every UPSERT. |
 | `installed_at`, `updated_at` | `timestamptz` | Row metadata. |
@@ -150,8 +182,8 @@ Weights are advisory but reviewers expect new actions to land in the appropriate
 ## Icon allowlist
 
 Allowed icon names are an enum in `packages/contracts/src/admin-actions.ts`. Adding a new
-icon is a one-line PR that edits both the enum and the admin shell's `icon-map.ts`
-(`@endora-commerce/admin-shell`, `src/lib/admin-actions/icon-map.ts`).
+icon is a one-line PR that edits both the enum and the admin design system's `icon-map.ts`
+(`@endora-commerce/admin-kit`, `src/lib/admin-actions/icon-map.ts`).
 
 ## Which actions exist
 

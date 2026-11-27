@@ -1,11 +1,15 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   isProductVisibleTo,
+  type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
   type CatalogProductRecord,
+  type CatalogProductUrlKeyReadPort,
   type ProductAudience,
+  type UpsellProduct,
 } from '@endora-commerce/contracts';
 import { CartItem } from '../entities/cart-item.entity.js';
+import { basketNamesAt, effectiveKeysAt } from './cart-availability.js';
 
 /**
  * Cart up-sell aggregator (feature 027 §R9 / FR-039).
@@ -20,13 +24,12 @@ import { CartItem } from '../entities/cart-item.entity.js';
  * placement is the cart UI; the relation type is the same.
  */
 
-export interface CartUpsellCandidate {
-  productId: string;
-  productName: string;
-  productSlug: string;
-  productThumbnailUrl: string | null;
-  matchCount: number;
-}
+/**
+ * One up-sell, as `GET /api/v1/cart/upsells` answers it — the published
+ * `upsellProductSchema` (issue #599). `unitPrice` is `null`: the strip
+ * resolves no price, and the storefront shows its "no price" label.
+ */
+export type CartUpsellCandidate = UpsellProduct;
 
 export class CartUpsellService {
   constructor(
@@ -38,6 +41,17 @@ export class CartUpsellService {
      * cart's up-sell strip with products the platform had stopped serving.
      */
     private readonly catalogProducts: CatalogProductReadPort,
+    /**
+     * Feature 163 — `catalog`'s availability answer for the strip's targets.
+     * Optional only in the signature: a call that names a channel without it
+     * fails loudly rather than showing the strip unfiltered.
+     */
+    private readonly availability?: Pick<CatalogProductAvailabilityPort, 'filterAvailable' | 'effectiveTexts'>,
+    /**
+     * Feature 163 (T113a, R28) — with a scope, a target links to its effective
+     * key at the basket's (channel, language); without one, its global key.
+     */
+    private readonly urlKeys?: Pick<CatalogProductUrlKeyReadPort, 'effectiveKeys'>,
   ) {}
 
   async forCart(
@@ -50,6 +64,11 @@ export class CartUpsellService {
      * defaulted its audience would silently show the wrong one.
      */
     audience: ProductAudience,
+    /**
+     * Feature 163 — the basket's channel and scope language. A target is shown
+     * only where it is effectively available there to `audience`, now.
+     */
+    scope?: { channelId: string; languageCode: string | null },
   ): Promise<CartUpsellCandidate[]> {
     if (limit <= 0) return [];
     const em = this.emFactory();
@@ -80,19 +99,43 @@ export class CartUpsellService {
     // Issue #227 — an up-sell target is a product the buyer never named, so
     // the strip is a listing. A link from a product they may see to one they
     // may not does not make the second one theirs to see.
-    const products = (await this.catalogProducts.findByIds(targetIds)).filter((p) =>
-      isProductVisibleTo(p, audience),
-    );
+    // Feature 163 — with a scope, `catalog`'s availability answer holds the
+    // channel-effective audience already, so it is the whole filter; without
+    // one (outside a request) the global audience rule is, as before.
+    let products = await this.catalogProducts.findByIds(targetIds);
+    if (scope) {
+      if (!this.availability) {
+        throw new Error('[carts] CartUpsellService: the availability port is not wired.');
+      }
+      const available = await this.availability.filterAvailable(
+        products.map((p) => p.id),
+        { channelId: scope.channelId, languageCode: scope.languageCode, audience },
+      );
+      products = products.filter((p) => available.has(p.id));
+    } else {
+      products = products.filter((p) => isProductVisibleTo(p, audience));
+    }
     const byId = new Map(products.map((p) => [p.id, p]));
+    // Feature 174 (FR-030) — a candidate is named as the basket's (channel, language) shows it.
+    const names =
+      scope && this.availability
+        ? await basketNamesAt(this.availability, products.map((p) => p.id), scope.channelId, scope.languageCode)
+        : new Map<string, string>();
+    const keys =
+      scope && this.urlKeys
+        ? await effectiveKeysAt(this.urlKeys, products.map((p) => p.id), scope.channelId, scope.languageCode)
+        : new Map<string, string>();
 
     const candidates: CartUpsellCandidate[] = targetIds
       .map((id) => byId.get(id))
       .filter((p): p is CatalogProductRecord => Boolean(p))
       .map((p) => ({
         productId: p.id,
-        productName: this.localizedName(p),
-        productSlug: p.slug,
+        productName: names.get(p.id) || this.globalName(p),
+        productSlug: keys.get(p.id) ?? p.slug,
         productThumbnailUrl: this.thumbnailFor(p),
+        // No price is resolved for the strip; the contract's `null`, never an absent key.
+        unitPrice: null,
         matchCount: matchCountByTarget.get(p.id) ?? 0,
       }));
 
@@ -120,18 +163,8 @@ export class CartUpsellService {
     return typeof url === 'string' && url.length > 0 ? url : null;
   }
 
-  /**
-   * Picks the most useful locale from the multilingual `name` JSONB. The
-   * cart UI hands the buyer's session locale to the API; the resolver in
-   * front of this service is expected to use that. For now we fall
-   * through to the first available locale, matching the foundation's
-   * "best-effort" rendering pattern.
-   */
-  private localizedName(product: CatalogProductRecord): string {
-    if (!product.name || typeof product.name !== 'object') return product.id;
-    const en = product.name['en-US'] ?? product.name['en'];
-    if (typeof en === 'string' && en.length > 0) return en;
-    const first = Object.values(product.name).find((v) => typeof v === 'string' && v.length > 0);
-    return (first as string) ?? product.id;
+  /** Feature 174 (FR-031) — outside a basket scope, the Global name. */
+  private globalName(product: CatalogProductRecord): string {
+    return product.name || product.id;
   }
 }

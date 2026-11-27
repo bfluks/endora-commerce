@@ -21,20 +21,20 @@ export interface ValueOrderDocument {
   sourceQuoteRequestId?: string | null;
 }
 
-/** One line of a linked Quote Request. */
-export interface ValueQuoteRequestLine {
-  quantity: number;
-  /** The price the line is valued at, or `null` when it carries none. */
-  unitPrice: string | null;
-  currency: string;
-}
-
+/**
+ * A linked Quote Request, at the amount `quote_requests` publishes for it
+ * (`quoteRequestReadPort.amountOf`, issue #456) — this module does not value
+ * the lines itself.
+ */
 export interface ValueQuoteRequestDocument {
   id: string;
   status: string;
   /** The Order placed from this Quote Request, once there is one. */
   convertedOrderId: string | null;
-  lines: readonly ValueQuoteRequestLine[];
+  /** Two places, net of tax; `null` when no line has a price — it adds nothing. */
+  amount: string | null;
+  /** The amount's currency; `null` for a Quote Request without a line. */
+  currency: string | null;
 }
 
 export interface OpportunityValueInput {
@@ -56,8 +56,8 @@ export interface OpportunityValueResult {
 export const VALUE_EXCLUSION_CURRENCY_MISMATCH = 'currency_mismatch';
 
 /**
- * Fractional digits kept while adding. A unit price may carry more places than
- * a total does; the sum is rounded to two once, at the end.
+ * Fractional digits kept while adding. Every figure here arrives at two
+ * places; the scale is what the parser reads, not a precision anything needs.
  */
 const SCALE_DIGITS = 6;
 const SCALE = 10n ** BigInt(SCALE_DIGITS);
@@ -82,26 +82,6 @@ function formatScaled(scaled: bigint): string {
   const whole = cents / 100n;
   const fraction = (cents % 100n).toString().padStart(2, '0');
   return `${whole}.${fraction}`;
-}
-
-function sumLines(lines: readonly ValueQuoteRequestLine[]): bigint {
-  let total = 0n;
-  for (const line of lines) {
-    if (line.unitPrice === null) continue;
-    const price = parseDecimal(line.unitPrice);
-    if (price === null || !Number.isInteger(line.quantity) || line.quantity <= 0) continue;
-    total += price * BigInt(line.quantity);
-  }
-  return total;
-}
-
-/**
- * What a Quote Request is worth: the sum of `quantity × unit price` over its
- * lines — the quote desk's own arithmetic, done exactly. A line without a
- * price adds nothing.
- */
-export function quoteRequestAmount(lines: readonly ValueQuoteRequestLine[]): string {
-  return formatScaled(sumLines(lines));
 }
 
 export function calculateOpportunityValue(input: OpportunityValueInput): OpportunityValueResult {
@@ -132,15 +112,17 @@ export function calculateOpportunityValue(input: OpportunityValueInput): Opportu
     // subscriber of its own, which may not have run yet when this is asked.
     if (quoteRequest.convertedOrderId !== null && countedOrderIds.has(quoteRequest.convertedOrderId)) continue;
     if (countedThroughOrder.has(quoteRequest.id)) continue;
-    const matching = quoteRequest.lines.filter((line) => line.currency === input.currency);
-    if (matching.length !== quoteRequest.lines.length) {
+    // No price, or no line: it is worth nothing, and nothing was left out.
+    if (quoteRequest.amount === null || quoteRequest.currency === null) continue;
+    if (quoteRequest.currency !== input.currency) {
       excludedDocuments.push({
         kind: 'quote_request',
         id: quoteRequest.id,
         reason: VALUE_EXCLUSION_CURRENCY_MISMATCH,
       });
+      continue;
     }
-    total += sumLines(matching);
+    total += parseDecimal(quoteRequest.amount) ?? 0n;
   }
 
   return { value: formatScaled(total), excludedDocuments };

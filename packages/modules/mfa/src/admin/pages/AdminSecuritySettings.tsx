@@ -5,18 +5,17 @@ import {
   AlertDescription,
   AlertTitle,
   Button,
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
+  EditorSection,
+  FormField,
   Input,
-  Label,
 } from '@endora-commerce/admin-kit/ui';
 import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';
+import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 
 /**
- * Admin self-service 2FA (feature 042, US2). Lets the signed-in admin enable
+ * Admin self-service 2FA (feature 042, US2) — the `profile.security` zone's
+ * one contribution, rendered as the body of the Profile's *Security* tab
+ * (issue #1519). Lets the signed-in admin enable
  * TOTP (scan → confirm → save recovery codes), disable it, and regenerate
  * recovery codes. The admin SPA sends the `b2b_admin_session` cookie with each
  * request, so the component calls the backend directly.
@@ -25,16 +24,55 @@ interface MfaStatus {
   totpActive: boolean;
   recoveryCodesRemaining: number;
   totpEnabledForScope: boolean;
+  /**
+   * Issue #935 — the server's verdict on switching the factor off: refused
+   * while it is the last one and a setting or the admin's role requires it.
+   */
+  canDisable: boolean;
+  disableBlockedReason: 'factor_required' | null;
 }
 
 const BASE = '/api/v1/admin/account/mfa';
 
+/** What `POST {BASE}/setup` answers: the manual key, the URI, and a QR code of the URI as SVG. */
+interface MfaSetup {
+  secret: string;
+  otpauthUri: string;
+  qrSvg: string;
+}
+
+/**
+ * Which form a failure belongs to. A refused code is reported on the field that
+ * sent it (issue #1481); `page` is a failure no field caused — starting the
+ * setup.
+ */
+type ErrorTarget = 'page' | 'confirm' | 'disable' | 'regenerate';
+
+/**
+ * What every code field shares. `one-time-code` lets the browser and the phone
+ * offer the code. The keyboard is **not** forced numeric here: the disable and
+ * regenerate fields also take a recovery code, which is hexadecimal, so only
+ * the setup confirmation — a TOTP code alone — asks for `inputMode="numeric"`.
+ */
+const CODE_INPUT = {
+  autoComplete: 'one-time-code',
+  autoCapitalize: 'off',
+  autoCorrect: 'off',
+  spellCheck: false,
+  required: true,
+} as const;
+
 export default function AdminSecuritySettings(): ReactNode {
   const [status, setStatus] = useState<MfaStatus | null>(null);
-  const [setup, setSetup] = useState<{ secret: string; otpauthUri: string } | null>(null);
+  const t = useTranslation('mfa');
+  const [setup, setSetup] = useState<MfaSetup | null>(null);
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
-  const [code, setCode] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  // One code per form (issue #1481): the disable and regenerate fields were
+  // bound to one state, so typing in either filled both.
+  const [confirmCode, setConfirmCode] = useState('');
+  const [disableCode, setDisableCode] = useState('');
+  const [regenerateCode, setRegenerateCode] = useState('');
+  const [error, setError] = useState<{ target: ErrorTarget; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
   const loadStatus = useCallback(async (): Promise<void> => {
@@ -47,47 +85,52 @@ export default function AdminSecuritySettings(): ReactNode {
   }, [loadStatus]);
 
   const run = useCallback(
-    async (fn: () => Promise<void>): Promise<void> => {
+    async (target: ErrorTarget, fn: () => Promise<void>): Promise<void> => {
       setBusy(true);
       setError(null);
       try {
         await fn();
       } catch (err) {
-        setError(err instanceof ApiError ? err.envelope.error.message : 'Something went wrong.');
+        setError({
+          target,
+          message: err instanceof ApiError ? err.envelope.error.message : t('security.error.generic'),
+        });
       } finally {
         setBusy(false);
       }
     },
-    [],
+    [t],
   );
 
+  const errorFor = (target: ErrorTarget): string | undefined =>
+    error?.target === target ? error.message : undefined;
+
   const startSetup = (): void =>
-    void run(async () => {
-      const res = await apiClient.post<{ data: { secret: string; otpauthUri: string } }>(
-        `${BASE}/setup`,
-      );
+    void run('page', async () => {
+      const res = await apiClient.post<{ data: MfaSetup }>(`${BASE}/setup`);
       setSetup(res.data);
       setRecoveryCodes(null);
     });
 
   const confirm = (e: FormEvent): void => {
     e.preventDefault();
-    void run(async () => {
+    void run('confirm', async () => {
       const res = await apiClient.post<{ data: { recoveryCodes: string[] } }>(`${BASE}/activate`, {
-        code,
+        code: confirmCode,
       });
       setRecoveryCodes(res.data.recoveryCodes);
       setSetup(null);
-      setCode('');
+      setConfirmCode('');
       await loadStatus();
     });
   };
 
   const disable = (e: FormEvent): void => {
     e.preventDefault();
-    void run(async () => {
-      await apiClient.post(`${BASE}/disable`, { code });
-      setCode('');
+    void run('disable', async () => {
+      await apiClient.post(`${BASE}/disable`, { code: disableCode });
+      setDisableCode('');
+      setRegenerateCode('');
       setRecoveryCodes(null);
       await loadStatus();
     });
@@ -95,101 +138,147 @@ export default function AdminSecuritySettings(): ReactNode {
 
   const regenerate = (e: FormEvent): void => {
     e.preventDefault();
-    void run(async () => {
+    void run('regenerate', async () => {
       const res = await apiClient.post<{ data: { recoveryCodes: string[] } }>(
         `${BASE}/recovery-codes/regenerate`,
-        { code },
+        { code: regenerateCode },
       );
       setRecoveryCodes(res.data.recoveryCodes);
-      setCode('');
+      setRegenerateCode('');
       await loadStatus();
     });
   };
 
+  const pageError = errorFor('page');
+
+  // Issue #1519 (UX audit SHELL-11, DEC-02) — the body of the Profile's
+  // *Security* tab: the page's `h1` is the Profile's, so this panel is one card
+  // titled at `h2`, and its two forms are `h3` sections inside it.
   return (
-    <div className="mx-auto max-w-2xl space-y-6 p-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <ShieldCheck className="size-5 text-primary" />
-            Two-factor authentication
-          </CardTitle>
-          <CardDescription>
-            Protect your admin account with a time-based code from an authenticator app.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {error ? (
-            <Alert variant="destructive">
-              <ShieldAlert className="size-4" />
-              <AlertTitle>Error</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          ) : null}
+    <EditorSection
+      chrome="card"
+      className="max-w-2xl"
+      contentClassName="space-y-4"
+      title={
+        <span className="inline-flex items-center gap-2">
+          <ShieldCheck className="size-5 text-primary" aria-hidden="true" />
+          {t('security.page.title')}
+        </span>
+      }
+      description={t('security.page.description')}
+    >
+      {pageError ? (
+        <Alert variant="destructive">
+          <ShieldAlert className="size-4" />
+          <AlertTitle>{t('security.error.title')}</AlertTitle>
+          <AlertDescription>{pageError}</AlertDescription>
+        </Alert>
+      ) : null}
 
-          {recoveryCodes ? (
-            <Alert>
-              <AlertTitle>Save your recovery codes</AlertTitle>
-              <AlertDescription>
-                <p>Each code works once. They are shown only now.</p>
-                <ul className="mt-2 grid grid-cols-2 gap-1 font-mono text-sm">
-                  {recoveryCodes.map((c) => (
-                    <li key={c}>{c}</li>
-                  ))}
-                </ul>
-              </AlertDescription>
-            </Alert>
-          ) : null}
+      {recoveryCodes ? (
+        <Alert>
+          <AlertTitle>{t('security.recoveryCodes.title')}</AlertTitle>
+          <AlertDescription>
+            <p>{t('security.recoveryCodes.body')}</p>
+            <ul className="mt-2 grid grid-cols-2 gap-1 font-mono text-sm">
+              {recoveryCodes.map((c) => (
+                <li key={c}>{c}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
-          {status === null ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : status.totpActive ? (
-            <div className="space-y-6">
-              <p className="text-sm">
-                2FA is <strong>enabled</strong>. Unused recovery codes: {status.recoveryCodesRemaining}.
-              </p>
-              <form className="space-y-2" onSubmit={disable}>
-                <Label htmlFor="disable-code">Enter a current code to disable 2FA</Label>
-                <Input id="disable-code" value={code} onChange={(e): void => setCode(e.target.value)} required />
-                <Button type="submit" variant="destructive" disabled={busy}>
-                  Disable 2FA
-                </Button>
-              </form>
-              <form className="space-y-2" onSubmit={regenerate}>
-                <Label htmlFor="regen-code">Enter a current code to regenerate recovery codes</Label>
-                <Input id="regen-code" value={code} onChange={(e): void => setCode(e.target.value)} required />
-                <Button type="submit" variant="outline" disabled={busy}>
-                  Regenerate recovery codes
-                </Button>
-              </form>
-            </div>
-          ) : setup ? (
-            <form className="space-y-3" onSubmit={confirm}>
-              <p className="text-sm">Add this account to your authenticator app:</p>
-              <p className="break-all rounded bg-muted px-2 py-1 font-mono text-xs">{setup.otpauthUri}</p>
-              <p className="text-sm">
-                Manual key: <code className="font-mono">{setup.secret}</code>
-              </p>
-              <Label htmlFor="confirm-code">Enter the 6-digit code to confirm</Label>
-              <Input
-                id="confirm-code"
-                inputMode="numeric"
-                value={code}
-                onChange={(e): void => setCode(e.target.value)}
+      {status === null ? (
+        <p className="text-sm text-muted-foreground">{t('security.loading')}</p>
+      ) : status.totpActive ? (
+        // Two sections in the one card (issue #1437, DS-03): the routine recovery codes first and
+        // switching the factor off last, away from it (Fitts), each form named by its heading.
+        <div className="space-y-6">
+          <p className="text-sm">
+            {t('security.status.enabled', { count: status.recoveryCodesRemaining })}
+          </p>
+          <EditorSection as="h3" title={t('security.recoveryCodes.sectionTitle')}>
+            <form className="space-y-2" onSubmit={regenerate}>
+              <FormField
+                label={t('security.regenerate.label')}
+                hint={t('security.code.hint')}
+                error={errorFor('regenerate')}
                 required
-                placeholder="123456"
-              />
-              <Button type="submit" disabled={busy}>
-                Confirm and enable
+              >
+                <Input
+                  {...CODE_INPUT}
+                  value={regenerateCode}
+                  onChange={(e): void => setRegenerateCode(e.target.value)}
+                />
+              </FormField>
+              <Button type="submit" variant="outline" disabled={busy}>
+                {t('security.regenerate.submit')}
               </Button>
             </form>
-          ) : (
-            <Button onClick={startSetup} disabled={busy}>
-              Enable 2FA
-            </Button>
-          )}
-        </CardContent>
-      </Card>
-    </div>
+          </EditorSection>
+          <EditorSection as="h3" title={t('security.disable.sectionTitle')}>
+            {status.canDisable ? (
+              <form className="space-y-2" onSubmit={disable}>
+                <FormField
+                  label={t('security.disable.label')}
+                  hint={t('security.code.hint')}
+                  error={errorFor('disable')}
+                  required
+                >
+                  <Input
+                    {...CODE_INPUT}
+                    value={disableCode}
+                    onChange={(e): void => setDisableCode(e.target.value)}
+                  />
+                </FormField>
+                <Button type="submit" variant="destructive" disabled={busy}>
+                  {t('security.disable.submit')}
+                </Button>
+              </form>
+            ) : (
+              <Alert data-testid="mfa-disable-blocked">
+                <ShieldCheck className="size-4" />
+                <AlertTitle>{t('security.disableBlocked.title')}</AlertTitle>
+                <AlertDescription>{t('security.disableBlocked.body')}</AlertDescription>
+              </Alert>
+            )}
+          </EditorSection>
+        </div>
+      ) : setup ? (
+        <form className="space-y-3" onSubmit={confirm}>
+          <p className="text-sm">{t('security.setup.intro')}</p>
+          {/* An <img> of the server-drawn SVG, never inserted as markup. */}
+          <img
+            src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(setup.qrSvg)}`}
+            alt={t('security.setup.qrAlt')}
+            width={192}
+            height={192}
+            className="rounded border bg-white p-2"
+          />
+          <p className="text-sm text-muted-foreground">{t('security.setup.qrHint')}</p>
+          <p className="break-all rounded bg-muted px-2 py-1 font-mono text-xs">{setup.otpauthUri}</p>
+          <p className="text-sm">
+            {t('security.setup.manualKey')} <code className="font-mono">{setup.secret}</code>
+          </p>
+          <FormField label={t('security.setup.codeLabel')} error={errorFor('confirm')} required>
+            <Input
+              {...CODE_INPUT}
+              inputMode="numeric"
+              value={confirmCode}
+              onChange={(e): void => setConfirmCode(e.target.value)}
+              placeholder="123456"
+            />
+          </FormField>
+          <Button type="submit" disabled={busy}>
+            {t('security.setup.submit')}
+          </Button>
+        </form>
+      ) : (
+        <Button onClick={startSetup} disabled={busy}>
+          {t('security.enable.submit')}
+        </Button>
+      )}
+    </EditorSection>
   );
 }

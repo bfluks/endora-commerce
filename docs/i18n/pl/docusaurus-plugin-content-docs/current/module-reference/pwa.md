@@ -16,7 +16,7 @@ Strona wygenerowana z manifestu modułu, bez żadnych ręcznych zmian. Co moduł
 | | |
 | --- | --- |
 | Identyfikator modułu | `pwa` |
-| Nazwa | Progressive Web App |
+| Nazwa | Progressive web app |
 | Wersja | `1.0.0` |
 | Pakiet | `@endora-commerce/mod-pwa` |
 | Licencja | `MIT` |
@@ -38,7 +38,6 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 | `organizations` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `sales_channels` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `settings` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
-| `quote_requests` | nie | degrades-without `quoteRequestReadPort` — klienci przestają otrzymywać powiadomienia push o swoich zapytaniach ofertowych, a przełącznik i wybór dla zapytań nie są oferowane; powiadomienia o zamówieniach działają dalej |
 
 ## Uprawnienia
 

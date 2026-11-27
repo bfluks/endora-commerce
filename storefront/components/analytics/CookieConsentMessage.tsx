@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
 import { getCmsBlockByCode } from '../../lib/api/cms';
 import type { RequestContext } from '../../lib/api/client';
-import { PageBuilderRender } from '../PageBuilderRender';
+import { CmsStandaloneBlock } from '../CmsStandaloneBlock';
+import { tForLocale } from '../../lib/i18n/messages';
 
 /**
  * Renders the cookie-consent banner message from the predefined CMS block
@@ -11,8 +12,6 @@ import { PageBuilderRender } from '../PageBuilderRender';
  */
 export async function CookieConsentMessage({ ctx }: { ctx: RequestContext }): Promise<ReactNode> {
   const block = await getCmsBlockByCode('cookieconsent.message', ctx).catch(() => null);
-  if (block) return <PageBuilderRender data={block.content.data} />;
-  return (
-    <>Używamy plików cookie do analityki (Google Analytics). Możesz zaakceptować lub odrzucić statystyki.</>
-  );
+  if (block) return <CmsStandaloneBlock block={block} />;
+  return <>{tForLocale(ctx.locale ?? '')('chrome.consent.defaultMessage')}</>;
 }

@@ -1,0 +1,10 @@
+{
+  // The second backend type-check program (issue #421): the three suites that
+  // need services. Compiler options are `../tsconfig.json`'s, unchanged; only the
+  // population differs, and `../tsconfig.json` excludes exactly these three, so
+  // no file is a root of both. Its `exclude` is reset here because an inherited
+  // one would be resolved against `backend/` and would exclude these very files.
+  "extends": "../tsconfig.json",
+  "include": ["contract/**/*", "integration/**/*", "perf/**/*"],
+  "exclude": []
+}

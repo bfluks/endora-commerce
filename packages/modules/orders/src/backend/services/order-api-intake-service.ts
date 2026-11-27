@@ -2,15 +2,20 @@ import { createHash } from 'node:crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { Redis } from 'ioredis';
 import {
+  ANONYMOUS_PRODUCT_AUDIENCE,
   ERROR_CODES,
   type AddressServicePort,
   type ApiPlaceOrderRequest,
   type CartWritePort,
+  type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
   type CatalogProductRecord,
   type LinePricePort,
+  type LinePricesPort,
   type OrganizationDetailsPort,
   type OrganizationRecord,
+  type ProductAudience,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
@@ -20,13 +25,16 @@ import { Order } from '../entities/order.entity.js';
 import { OrderPlacementIntent } from '../entities/order-placement-intent.entity.js';
 import type { OrderService } from './order-service.js';
 import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
+import { assertWithinAdminOrderItemBound } from './request-minimums.js';
+import { assertChannelAllowedForOrganization } from './organization-channel-gate.js';
+import { apiKeyPlacementAuditState } from './order-audit-state.js';
 
 /**
  * OrderApiIntakeService — feature 062 (research §R8, contracts/orders-api-key-intake.md §1).
  *
  * Order intake for BOUND api keys: line items by SKU + quantity, durable
  * idempotency, and the org capability envelope inherited BY CONSTRUCTION —
- * the service seeds the designated service account's cart via the injected
+ * the service writes a working basket of the designated service account's via the injected
  * `CartService` and delegates to `OrderService.placeOrder` (the
  * `OrderCreationAdminService` pattern), so every guard the org's own buyer is
  * subject to runs unchanged: transact-status, address ownership, method
@@ -53,10 +61,18 @@ export interface OrderApiIntakeDeps {
   organizationDetails: OrganizationDetailsPort;
   /**
    * Sanctioned bridge accessor (feature 052 pattern) — the bound channel's
-   * published assortment gate. Absent (legacy rigs) ⇒ fail closed: every SKU
-   * is out of assortment.
+   * published assortment gate, and the bound Organization's channel
+   * assignment (issue #699). Absent (legacy rigs) ⇒ fail closed: the channel
+   * gate refuses with `500 INTERNAL` before any line is resolved.
    */
   salesChannelMembership?: SalesChannelMembershipPort | undefined;
+  /**
+   * Feature 163 (owner decision W5 = A) — `catalog`'s availability answer at
+   * the key's channel (its default language) for the caller: effective status,
+   * publication window and the channel's audience rule. Required: an absent
+   * gate would be an intake that answers without one.
+   */
+  catalogAvailability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>;
   /**
    * The SAME resolver cart pricing uses.
    *
@@ -65,7 +81,7 @@ export interface OrderApiIntakeDeps {
    * catalogue attribute whenever the pricing engine was not wired — including
    * with `price_lists` switched off, which is exactly when nobody was watching.
    */
-  pricingService: LinePricePort;
+  pricingService: LinePricePort & LinePricesPort;
   /** Per-key intake lock (research §R8 step 2). Absent ⇒ no serialization. */
   redis?: Redis | undefined;
   /** Audit attribution of key placements (`order.place_via_api_key`). */
@@ -83,11 +99,28 @@ const LOCK_TTL_MS = 30_000;
 export class OrderApiIntakeService {
   constructor(private readonly deps: OrderApiIntakeDeps) {}
 
+  /**
+   * `options.language` names a product refused for its minimum (the request's
+   * `Accept-Language`); absent, the product record's own fallback chain.
+   */
   async place(
     binding: ApiKeyOrderBinding,
     idempotencyKey: string | undefined,
     body: ApiPlaceOrderRequest,
+    options: {
+      language?: string | undefined;
+      /**
+       * Feature 163 (W5) — the caller's audience, from the request's resolved
+       * actor (`productAudienceOf`). Absent: the anonymous audience, the
+       * fail-closed end.
+       */
+      audience?: ProductAudience | undefined;
+    } = {},
   ): Promise<IntakeResult> {
+    // Feature 155 (FR-038, owner ruling 2026-10-16) — first, before the
+    // idempotency record, the lock or any line is resolved: a request no basket
+    // could hold is refused whole, and leaves no intent behind.
+    assertWithinAdminOrderItemBound(body.lines.length);
     // command-coverage-ignore: the domain write is delegated to
     // OrderService.placeOrder (its guards + audit apply); local mutations are
     // the intent bookkeeping rows, audited via `order.place_via_api_key`.
@@ -131,7 +164,7 @@ export class OrderApiIntakeService {
           payloadFingerprint: fingerprint,
           status: 'pending',
         });
-        await em.persistAndFlush(intent);
+        await em.persist(intent).flush();
       } else {
         intent.status = 'pending';
         intent.lastError = null;
@@ -139,7 +172,7 @@ export class OrderApiIntakeService {
       }
 
       try {
-        const order = await this.#placeGuarded(binding, body);
+        const order = await this.#placeGuarded(binding, body, options.language, options.audience);
         await this.#settleIntent(intent.id, { status: 'succeeded', orderId: order.id });
         await this.#auditPlacement(binding, order);
         return { order, replayed: false };
@@ -157,7 +190,23 @@ export class OrderApiIntakeService {
    * Line resolution + cart seed + delegation to `placeOrder` — the
    * OrderCreationAdminService pattern, including inline-address create/cleanup.
    */
-  async #placeGuarded(binding: ApiKeyOrderBinding, body: ApiPlaceOrderRequest): Promise<Order> {
+  async #placeGuarded(
+    binding: ApiKeyOrderBinding,
+    body: ApiPlaceOrderRequest,
+    language: string | undefined,
+    audience: ProductAudience | undefined,
+  ): Promise<Order> {
+    // Issue #699 — the key's channel must be one of the bound Organization's
+    // active assigned channels: the rule the admin order create (#515) and the
+    // quote request follow, with the same refusal. Asked at placement, since
+    // the assignment can change after the key is issued, and first, because
+    // the service account's basket is replaced below.
+    await assertChannelAllowedForOrganization(
+      this.deps.salesChannelMembership,
+      binding.organizationId,
+      binding.salesChannelId,
+    );
+
     const em = this.deps.emFactory();
     const channel = await em.findOne(SalesChannel, { id: binding.salesChannelId });
     const organization = await this.deps.organizationDetails.findById(binding.organizationId);
@@ -185,11 +234,10 @@ export class OrderApiIntakeService {
 
     // Step 4 — SKU → product + bound-channel assortment + resolvable price.
     // Refusals are whole-order 422 with per-line issues; nothing persists.
+    // Feature 163 — the SKU read applies no status of its own: the effective
+    // status at the channel is the availability rule's (step 4b).
     const skus = Array.from(new Set(body.lines.map((l) => l.sku)));
-    const products = await this.deps.catalogProductRead.findBySkus(skus, {
-      liveOnly: true,
-      activeOnly: true,
-    });
+    const products = await this.deps.catalogProductRead.findBySkus(skus, { liveOnly: true });
     const productBySku = new Map(products.map((p) => [p.sku, p]));
     const inChannel = new Set<string>();
     for (const product of products) {
@@ -201,10 +249,24 @@ export class OrderApiIntakeService {
 
     const issues: Array<{ path: string; issue: string; sku: string }> = [];
     const resolvedLines: Array<{ productId: string; quantity: number }> = [];
+    // Feature 160 — the "no resolvable org price" probe of every line in one
+    // batched resolution (it was one `resolveLinePrice` per line), with no
+    // `defaultPrice` fallback (FR-018): a line the buyer's own cart would refuse
+    // as unpriced is refused here too.
+    const assorted = new Map<number, CatalogProductRecord>();
     for (const [index, line] of body.lines.entries()) {
       const product = productBySku.get(line.sku);
-      if (!product || !inChannel.has(product.id)) {
-        // Unknown / inactive / unpublished are indistinguishable — no leak.
+      if (product && inChannel.has(product.id)) assorted.set(index, product);
+    }
+    const priced = await this.#resolvablePrices(
+      [...assorted].map(([index, product]) => ({ key: String(index), product, quantity: body.lines[index]!.quantity })),
+      organization,
+      channel,
+    );
+    for (const [index, line] of body.lines.entries()) {
+      const product = assorted.get(index);
+      if (!product) {
+        // Unknown / unpublished are indistinguishable — no leak.
         issues.push({
           path: `lines.${index}.sku`,
           issue: ERROR_CODES.SKU_NOT_IN_ASSORTMENT,
@@ -212,8 +274,7 @@ export class OrderApiIntakeService {
         });
         continue;
       }
-      const priced = await this.#hasResolvablePrice(product, organization, channel, line.quantity);
-      if (!priced) {
+      if (!priced.has(String(index))) {
         issues.push({
           path: `lines.${index}.sku`,
           issue: ERROR_CODES.PRICE_UNAVAILABLE,
@@ -224,18 +285,39 @@ export class OrderApiIntakeService {
       resolvedLines.push({ productId: product.id, quantity: line.quantity });
     }
     if (issues.length > 0) {
-      throw new HttpError(
-        422,
-        ERROR_CODES.VALIDATION_FAILED,
-        'One or more order lines were refused.',
-        issues,
-      );
+      // Its own code since issue #627. `details` stays the per-line array an
+      // integration reads; an array fills no placeholder, so the sentence
+      // names no count.
+      throw new HttpError(422, ERROR_CODES.ORDER_INTAKE_LINES_REFUSED, 'One or more order lines were refused.', issues);
+    }
+
+    // Step 4b — feature 163 (owner decision W5 = A): every resolved line's
+    // product must be available at the key's channel (its default language —
+    // an API order carries no storefront language) to the caller, now. A
+    // product that is not — switched off there, outside its window or outside
+    // the channel's audience — answers exactly what a product hidden from the
+    // bound Organization always answered here (feature 155, F1 / US4 #16): the
+    // basket's `404 PRODUCT_NOT_FOUND`, no name, no minimum, nothing placed.
+    // It is asked after the per-line 422 so that answer keeps its precedence.
+    const available = await this.deps.catalogAvailability.filterAvailable(
+      [...new Set(resolvedLines.map((line) => line.productId))],
+      {
+        channelId: binding.salesChannelId,
+        languageCode: null,
+        audience: audience ?? ANONYMOUS_PRODUCT_AUDIENCE,
+      },
+    );
+    if (resolvedLines.some((line) => !available.has(line.productId))) {
+      throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'Product not found.');
     }
 
     const customerCtx = {
       customerAccountId: binding.customerAccountId,
       organizationId: binding.organizationId,
     };
+    // The basket of the channel the key is bound to, which is the channel the
+    // order is placed on (`specs/154-sales-channel-access/`).
+    const basketCtx = { ...customerCtx, salesChannelId: binding.salesChannelId };
 
     // Address sides — an existing org address id OR an inline address created
     // in the org book (so placeOrder can snapshot it); one-time addresses are
@@ -289,24 +371,36 @@ export class OrderApiIntakeService {
         body.billingAddress,
       );
 
-      // Seed the service account's cart (single-active-cart model) with real
-      // org pricing, then run the FULL placement pipeline.
-      await this.deps.cartService.clearForCustomer(customerCtx);
-      for (const line of resolvedLines) {
-        await this.deps.cartService.addItem(
-          { customer: customerCtx },
-          { productId: line.productId, quantity: line.quantity },
-        );
-      }
-
-      order = await this.deps.orderService.placeOrder(customerCtx, {
-        deliveryAddressId,
-        billingAddressId,
-        deliveryMethodId: body.deliveryMethodId,
-        paymentMethodId: body.paymentMethodId,
-        salesChannelId: binding.salesChannelId,
-        ...(body.customerReference ? { customerNote: body.customerReference } : {}),
+      // Write the lines into a working basket of the service account's, with
+      // real org pricing, then run the FULL placement pipeline from it. The
+      // account's own active basket — the one a buyer signed in as it shops
+      // into — is not touched (issue #169).
+      //
+      // Feature 155 (FR-009, R8): one batch, so a product's minimum is judged
+      // on its total across the request's lines (D1). A line the Organization
+      // may not see is thrown before anything is written, as `addItem` threw
+      // it (FR-035); any line below a minimum refuses the whole request, keyed
+      // by its index in `lines`. Both refusals come before the working basket
+      // exists. Placement checks the basket again (FR-037).
+      const working = await this.deps.cartService.addItems({ customer: basketCtx }, resolvedLines, {
+        onLineError: 'throw',
+        onBelowMinimum: 'throw',
+        workingBasket: true,
+        ...(language ? { language } : {}),
       });
+
+      order = await this.deps.orderService.placeOrder(
+        customerCtx,
+        {
+          deliveryAddressId,
+          billingAddressId,
+          deliveryMethodId: body.deliveryMethodId,
+          paymentMethodId: body.paymentMethodId,
+          salesChannelId: binding.salesChannelId,
+          ...(body.customerReference ? { customerNote: body.customerReference } : {}),
+        },
+        { ...(language ? { language } : {}), workingBasketId: working.cart.id },
+      );
     } catch (err) {
       await cleanupTransient();
       throw err;
@@ -317,34 +411,26 @@ export class OrderApiIntakeService {
 
   /**
    * "No resolvable org price" probe (contract §4 `PRICE_UNAVAILABLE`): the
-   * pricing-engine resolution at the requested quantity, with the same
-   * catalog `defaultPrice` fallback the storefront cart applies — a product
-   * the org's own buyer can put in a cart is never refused here.
+   * keys of the lines the price books price at their quantities, in one
+   * batched resolution. No `catch` (issue #84): an unreachable engine must not
+   * read as "unpriced" or as "priced".
    */
-  async #hasResolvablePrice(
-    product: CatalogProductRecord,
+  async #resolvablePrices(
+    lines: ReadonlyArray<{ key: string; product: CatalogProductRecord; quantity: number }>,
     organization: OrganizationRecord | null,
     channel: SalesChannel | null,
-    quantity: number,
-  ): Promise<boolean> {
-    // No `catch` (issue #84): `resolveLinePrice` returns `null` for "nothing
-    // resolves", which is the answer this probe wants, and the fall-through to
-    // the catalogue default below already covers it. Catching turned "the
-    // pricing engine is unreachable" into "this product is priced at the
-    // catalogue default", and the API accepted an order at that price.
-    if (channel) {
-      const resolved = await this.deps.pricingService.resolveLinePrice({
-        product,
-        context: {
-          quantity,
-          organization,
-          salesChannel: { id: channel.id, defaultCurrency: channel.defaultCurrency },
-        },
-      });
-      if (resolved) return true;
-    }
-    const fallback = product.attributeValues['defaultPrice'] ?? product.attributeValues['price'];
-    return fallback !== undefined && fallback !== null;
+  ): Promise<Set<string>> {
+    const out = new Set<string>();
+    if (!channel || lines.length === 0) return out;
+    const resolved = await this.deps.pricingService.resolveLinePrices({
+      lines: lines.map((l) => ({ key: l.key, product: l.product, quantity: l.quantity })),
+      context: {
+        organization,
+        salesChannel: { id: channel.id, defaultCurrency: channel.defaultCurrency },
+      },
+    });
+    for (const [key, price] of resolved) if (price) out.add(key);
+    return out;
   }
 
   /** Settle the intent on a FRESH em — the placement error may have aborted the caller's. */
@@ -355,6 +441,7 @@ export class OrderApiIntakeService {
     // command-coverage-ignore: idempotency bookkeeping row (queue-state class),
     // not domain state; the order write itself is audited in placeOrder.
     const em = this.deps.emFactory();
+    if (!isUuidShape(intentId)) return;
     const intent = await em.findOne(OrderPlacementIntent, { id: intentId });
     if (!intent) return;
     intent.status = patch.status;
@@ -375,12 +462,7 @@ export class OrderApiIntakeService {
         objectType: 'order',
         objectId: order.id,
         stateBefore: null,
-        stateAfter: {
-          apiKeyId: binding.apiKeyId,
-          organizationId: binding.organizationId,
-          customerAccountId: binding.customerAccountId,
-          businessId: order.businessId,
-        },
+        stateAfter: apiKeyPlacementAuditState(binding, order),
       });
     } catch {
       // Attribution is best-effort; the order itself is already committed.
@@ -394,11 +476,11 @@ export class OrderApiIntakeService {
       .digest('hex');
     const ok = await this.deps.redis.set(lockKey, token, 'PX', LOCK_TTL_MS, 'NX');
     if (ok !== 'OK') {
+      // One code, one reason: the `intake_busy` token is gone (issue #627).
       throw new HttpError(
         409,
-        ERROR_CODES.VALIDATION_FAILED,
+        ERROR_CODES.ORDER_INTAKE_BUSY,
         'Another order intake for this API key is in progress; retry with the same Idempotency-Key.',
-        { code: 'intake_busy' },
       );
     }
     return token;

@@ -1,9 +1,8 @@
 import { useCallback, useState, type ReactNode } from 'react';
-import { Power, PowerOff } from 'lucide-react';
 import type { ModulePresence } from '@endora-commerce/contracts';
-import { Button } from '../../components/ui/button.js';
-import { ApiError } from '../../lib/api-client.js';
-import { setModuleActivation, useModulePresence } from '../../lib/module-presence/index.js';
+import { useConfirmDialog } from '@endora-commerce/admin-kit/components';
+import { Switch } from '@endora-commerce/admin-kit/ui';
+import { ApiError, setModuleActivation, useModulePresence } from '@endora-commerce/admin-kit/lib';
 
 /**
  * A module's one activation control — Constitution XVII, relocated by D-36.
@@ -102,12 +101,17 @@ export function ModuleActivationControl({
 }: Props): ReactNode {
   const { refresh } = useModulePresence();
   const [pending, setPending] = useState(false);
+  const { confirm, confirmDialog } = useConfirmDialog();
   const activated = presence.activated;
 
   const toggle = useCallback(async (): Promise<void> => {
     if (
       activated &&
-      !window.confirm(t('platform.modules.action.confirmDisable', { name: moduleName }))
+      !(await confirm({
+        message: t('platform.modules.action.confirmDisable', { name: moduleName }),
+        confirmLabel: t('platform.modules.action.disable'),
+        destructive: true,
+      }))
     ) {
       return;
     }
@@ -120,24 +124,31 @@ export function ModuleActivationControl({
     } finally {
       setPending(false);
     }
-  }, [activated, moduleId, moduleName, onError, refresh, t]);
+  }, [activated, confirm, moduleId, moduleName, onError, refresh, t]);
 
+  // Issue #1520 (SHELL-12): a `Switch`, not a filled "Switch on" button per
+  // switched-off row — the screen used to carry as many primaries as it had
+  // modules off (Von Restorff). The switch takes effect at once, so it is busy
+  // while the write is in flight and cannot be pressed twice (Doherty); turning
+  // a module off still asks first. The visible word beside it says the state in
+  // text, so it is never carried by the track's colour alone (SC 1.4.1).
   return (
-    <Button
-      type="button"
-      variant={activated ? 'outline' : 'default'}
-      size="sm"
-      disabled={pending}
-      onClick={() => void toggle()}
-    >
-      {activated ? (
-        <PowerOff className="mr-1 size-3.5" />
-      ) : (
-        <Power className="mr-1 size-3.5" />
-      )}
-      {activated
-        ? t('platform.modules.action.disable')
-        : t('platform.modules.action.enable')}
-    </Button>
+    <>
+      <span className="inline-flex items-center gap-2">
+        <Switch
+          checked={activated}
+          busy={pending}
+          onCheckedChange={() => void toggle()}
+          aria-label={t('platform.modules.activation.switchLabel', { name: moduleName })}
+          data-testid={`module-activation-${moduleId}`}
+        />
+        <span className="text-sm">
+          {activated
+            ? t('platform.modules.activation.on')
+            : t('platform.modules.activation.off')}
+        </span>
+      </span>
+      {confirmDialog}
+    </>
   );
 }

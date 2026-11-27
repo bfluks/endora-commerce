@@ -37,6 +37,8 @@ import {
   PaymentMethod,
   StockAllocation,
 } from '../../helpers/package-entities.js';
+import { predefinedRoleIdOf } from '../../helpers/seed-organization-roles.js';
+import { addOrganizationChannels } from '../../helpers/sales-channel-access.js';
 
 /**
  * An Organization's payment- and delivery-method allow-lists bind order
@@ -149,7 +151,12 @@ describe('order placement honours the Organization method allow-lists', () => {
   ): void => {
     expect(res.statusCode, res.body).toBe(400);
     const { error } = res.json() as ErrorBody;
-    expect(error.code).toBe(ERROR_CODES.VALIDATION_FAILED);
+    // Issue #86 — the method's own code; the token in `details.code` is unchanged.
+    expect(error.code).toBe(
+      detailsCode.startsWith('delivery_')
+        ? ERROR_CODES.ORDER_DELIVERY_METHOD_UNAVAILABLE
+        : ERROR_CODES.ORDER_PAYMENT_METHOD_UNAVAILABLE,
+    );
     expect(error.details?.code).toBe(detailsCode);
   };
 
@@ -214,9 +221,11 @@ describe('order placement honours the Organization method allow-lists', () => {
       customerAccountId: BUYER_B_ID,
       organizationId: OTHER_TEST_ORGANIZATION_ID,
       status: 'active',
+      // The basket of the channel buyer B places on — the system default.
+      salesChannelId: await systemDefaultSalesChannelId(em),
     });
-    await em.persistAndFlush(cart);
-    await em.persistAndFlush(
+    await em.persist(cart).flush();
+    await em.persist(
       em.create(CartItem, {
         cartId: cart.id,
         productId: SEED_PRODUCT_101_ID,
@@ -224,7 +233,7 @@ describe('order placement honours the Organization method allow-lists', () => {
         unitPrice: '19.99',
         currency: 'PLN',
       }),
-    );
+    ).flush();
   };
 
   const place = (cookies: Record<string, string>, payload: Record<string, unknown>) =>
@@ -328,7 +337,7 @@ describe('order placement honours the Organization method allow-lists', () => {
       statusOnSuccess: 'paid',
       statusOnFailure: 'cancelled',
     });
-    await em.persistAndFlush([delivery, payment]);
+    await em.persist([delivery, payment]).flush();
     excludedDeliveryId = delivery.id;
     excludedPaymentId = payment.id;
 
@@ -341,7 +350,7 @@ describe('order placement honours the Organization method allow-lists', () => {
       passwordHash: await hashPassword(STUB_CUSTOMER_PASSWORD),
       firstName: 'Buyer',
       lastName: 'B',
-      role: 'organization_admin',
+      organizationRoleId: await predefinedRoleIdOf(em, OTHER_TEST_ORGANIZATION_ID, 'administrator'),
       emailVerifiedAt: new Date(),
     });
     for (const [id, kind] of [
@@ -372,10 +381,13 @@ describe('order placement honours the Organization method allow-lists', () => {
       currencies: ['PLN'],
       defaultCurrency: 'PLN',
       active: true,
-      isPublic: true,
     });
-    await em.persistAndFlush(channel);
+    await em.persist(channel).flush();
     await h.salesChannels.cache.invalidate('allow-list-intake');
+    // Issue #699 — the intake places only on one of the bound Organization's
+    // active assigned channels.
+    await addOrganizationChannels(h, TEST_ORGANIZATION_ID, ['allow-list-intake']);
+    await addOrganizationChannels(h, OTHER_TEST_ORGANIZATION_ID, ['allow-list-intake']);
     await em
       .getConnection()
       .execute('insert into sales_channel_products (sales_channel_id, product_id) values (?,?)', [
@@ -657,7 +669,9 @@ describe('order placement honours the Organization method allow-lists', () => {
         const res = await oneClick();
         expect(res.statusCode, res.body).toBe(422);
         const { error } = res.json() as ErrorBody;
-        expect(error.details?.code).toBe('one_click_unavailable');
+        // Issue #641 — `ONE_CLICK_UNAVAILABLE`, its token the eligibility reason.
+        expect(error.code).toBe('ONE_CLICK_UNAVAILABLE');
+        expect(error.details?.code).toBe('missing_defaults');
         expect(error.details?.reason).toBe('missing_defaults');
         expect(await snapshot(TEST_CUSTOMER_ID)).toEqual(before);
       });

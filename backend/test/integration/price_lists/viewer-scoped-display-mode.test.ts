@@ -156,8 +156,26 @@ describe('GET /api/v1/storefront/pricing/display-mode/:productId — for the vie
       expect((await displayModeFor(ORG_B_BUYER)).displayMode).toBe('net_only');
     });
 
-    it('answers a buyer whose Organization row is gone as the price path does', async () => {
-      expect((await displayModeFor(DANGLING_ORG_BUYER)).displayMode).toBe('gross_only');
+    it('refuses a buyer whose Organization row is gone, on both surfaces alike', async () => {
+      // Feature 154 — an Organization that does not exist is assigned no sales
+      // channel, so its session may use no store: both reads are refused by the
+      // access step before either decides a display mode, which keeps them in
+      // agreement (issue #271) rather than answering it as a signed-out visitor.
+      for (const url of [
+        `/api/v1/storefront/pricing/display-mode/${VIEWER_PRICED_PRODUCT_ID}`,
+        `/api/v1/storefront/products/${VIEWER_PRICED_PRODUCT_ID}/resolved-price`,
+      ]) {
+        const res = await h.app.inject({
+          method: 'GET',
+          url,
+          headers: RETAIL_CHANNEL,
+          cookies: DANGLING_ORG_BUYER,
+        });
+        expect(res.statusCode, url).toBe(403);
+        expect((res.json() as { error: { code: string } }).error.code).toBe(
+          'SALES_CHANNEL_NOT_PERMITTED',
+        );
+      }
     });
   });
 
@@ -187,7 +205,8 @@ describe('GET /api/v1/storefront/pricing/display-mode/:productId — for the vie
     });
 
     it('agrees for every viewer, settings differing', async () => {
-      for (const cookies of [undefined, ORG_A_BUYER, ORG_B_BUYER, DANGLING_ORG_BUYER]) {
+      // The dangling-Organization buyer is refused on both surfaces (above).
+      for (const cookies of [undefined, ORG_A_BUYER, ORG_B_BUYER]) {
         const endpoint = (await displayModeFor(cookies)).displayMode;
         expect(endpoint).toBe(await resolvedPriceDisplayModeFor(cookies));
       }

@@ -1,7 +1,9 @@
 import { cookies } from 'next/headers';
 import {
+  CART_MERGE_FLASH_COOKIE_NAME,
   CUSTOMER_KNOWN_DEVICE_COOKIE_NAME,
   MFA_CHALLENGE_COOKIE_NAME,
+  RETURNS_GUEST_SESSION_COOKIE,
 } from '@endora-commerce/contracts';
 
 /**
@@ -16,7 +18,15 @@ import {
 
 const SESSION_COOKIE = 'b2b_session';
 const ANON_CART_COOKIE = 'b2b_cart_anon';
-const CART_MERGE_FLASH_COOKIE = 'b2b_cart_merge_flash';
+/**
+ * The signed-out comparison's owner token, set by the `comparisons` backend
+ * module on the browser's own calls (`httpOnly`). The storefront never writes
+ * it; it only forwards it with a sign-in (issue #1189).
+ */
+const ANON_COMPARE_COOKIE = 'compare_token';
+// Published by the contracts package: the backend sets the same cookie when a
+// federated sign-in carries the signed-out basket over (issue #1188).
+const CART_MERGE_FLASH_COOKIE = CART_MERGE_FLASH_COOKIE_NAME;
 // Published by the contracts package: the backend sets the same cookie when a
 // federated sign-in hands over to the second step.
 const MFA_CHALLENGE_COOKIE = MFA_CHALLENGE_COOKIE_NAME;
@@ -186,6 +196,19 @@ export async function getAnonCartCookie(): Promise<string | null> {
   return jar.get(ANON_CART_COOKIE)?.value ?? null;
 }
 
+/**
+ * `specs/181-guest-complaints/` research R-4 — the guest complaint session, or `null`.
+ *
+ * Read on its own, as the anonymous cart's cookie is: the guest API client
+ * (`lib/api/returns-guest.ts`) forwards this one value in an allow-listed `Cookie` header and
+ * nothing else of the jar, so a customer session the same browser holds never reaches the
+ * guest routes. The cookie is set and deleted by the guest flow's route handlers.
+ */
+export async function getReturnsGuestSession(): Promise<string | null> {
+  const jar = await cookies();
+  return jar.get(RETURNS_GUEST_SESSION_COOKIE)?.value ?? null;
+}
+
 /** Persist the anon cart cookie returned by the backend on first add. */
 export async function setAnonCartCookie(value: string): Promise<void> {
   const jar = await cookies();
@@ -260,9 +283,33 @@ export async function readAndClearCartMergeFlash(): Promise<CartMergeFlashOutcom
 
 /** The `Cookie` header value forwarding the browser's known-device cookie, or `null`. */
 export async function knownDeviceCookieHeader(): Promise<string | null> {
+  return allowListedCookieHeader([CUSTOMER_KNOWN_DEVICE_COOKIE_NAME]);
+}
+
+/**
+ * The `Cookie` header value for the calls that can establish a customer
+ * session — the password sign-in (issue #358), the second-step verify and the
+ * enforced-enrolment completion (issue #368) — or `null`: the known-device
+ * cookie, the signed-out basket's `b2b_cart_anon` and the signed-out
+ * comparison's `compare_token` (issue #1189).
+ * The backend's post-sign-in step hands the anonymous basket to its merge
+ * (`specs/154-sales-channel-access/contracts/basket-attribution.md` §3) and the
+ * anonymous comparison to its adoption; it sees either only if it is forwarded
+ * from here. Nothing else the browser holds is sent.
+ */
+export async function signInCookieHeader(): Promise<string | null> {
+  return allowListedCookieHeader([CUSTOMER_KNOWN_DEVICE_COOKIE_NAME, ANON_CART_COOKIE, ANON_COMPARE_COOKIE]);
+}
+
+/** The named cookies of the browser's jar, in the order named, as one `Cookie` header value. */
+async function allowListedCookieHeader(names: readonly string[]): Promise<string | null> {
   const jar = await cookies();
-  const value = jar.get(CUSTOMER_KNOWN_DEVICE_COOKIE_NAME)?.value;
-  return value ? `${CUSTOMER_KNOWN_DEVICE_COOKIE_NAME}=${encodeURIComponent(value)}` : null;
+  const pairs: string[] = [];
+  for (const name of names) {
+    const value = jar.get(name)?.value;
+    if (value) pairs.push(`${name}=${encodeURIComponent(value)}`);
+  }
+  return pairs.length > 0 ? pairs.join('; ') : null;
 }
 
 /**

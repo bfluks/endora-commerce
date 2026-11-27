@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { defineModuleManifest, type ModuleManifest } from '@endora-commerce/contracts';
 import {
@@ -71,7 +74,13 @@ function gate(moduleId: string | null, file: string, ...codes: string[]): Enforc
     expression: codes.map((code) => `'${code}'`).join(', '),
     resolution: 'code',
     codes,
+    surface: 'enforcement',
   };
+}
+
+/** The same site, written in an Admin UI layer: it decides whether a control is shown. */
+function control(moduleId: string | null, file: string, ...codes: string[]): EnforcedGateSite {
+  return { ...gate(moduleId, file, ...codes), surface: 'admin-control' };
 }
 
 /** Sites and manifests in; the owner map derived by the real merge. */
@@ -256,6 +265,40 @@ describe('foreign-gate sweep — the shapes it refuses', () => {
   });
 
   /**
+   * Issue #458 — the same narrowing, reached from an Admin UI any-of the
+   * scanner reads rather than a site the fixture builds. The `@@` document list
+   * used to be gated as `groups.some((group) => hasPermission(group.code))`,
+   * which the scanner could only call a `runtime-value`, so none of its codes
+   * was judged. Written as `hasAnyPermission([...])`, every member is judged,
+   * against every other.
+   */
+  it('judges the members of a scanned hasAnyPermission any-of as alternatives', () => {
+    const root = mkdtempSync(join(tmpdir(), 'foreign-gates-any-of-'));
+    try {
+      mkdirSync(join(root, 'crm'), { recursive: true });
+      writeFileSync(
+        join(root, 'crm', 'references.ts'),
+        `const ok = canWrite && hasAnyPermission(['orders:read', 'tasks:read']);`,
+        'utf8',
+      );
+      const scanned = scanEnforcedPermissionGates([{ dir: join(root, 'crm'), moduleId: 'crm' }]);
+      const found = classifyForeignGates(
+        input(scanned.sites, [
+          manifest('crm'),
+          locked('orders', { permissions: [{ code: 'orders:read', label: 'View orders' }] }),
+          manifest('tasks', { permissions: [{ code: 'tasks:read', label: 'View tasks' }] }),
+        ]),
+      );
+      expect(found.map((finding) => [finding.code, finding.kind])).toEqual([
+        ['orders:read', 'owner-locked'],
+        ['tasks:read', 'sufficient-alternative'],
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
    * The alternative has to be one an operator cannot withdraw. Two switchable
    * foreign codes on one any-of strand the route exactly as one does, so the
    * narrowing must not reach them — otherwise every violation is escapable by
@@ -277,6 +320,110 @@ describe('foreign-gate sweep — the shapes it refuses', () => {
       ),
     );
     expect(found.map((finding) => finding.verdict)).toEqual(['violation', 'violation']);
+  });
+
+  /**
+   * Issue #1105 — a foreign code that decides whether an Admin UI **control**
+   * is shown (a button, a tile, a nav entry) is the off-state working, not a
+   * stranded screen: when the owner is switched off the code leaves
+   * `/admin-roles` and the control disappears with the capability it reaches
+   * (Constitution XVII). It is reported, with a kind naming why, and passes.
+   */
+  it('passes a foreign code gating an Admin UI control, and says so', () => {
+    const found = classifyForeignGates(
+      input(
+        [control('customers', 'modules/customers/src/admin/pages/CustomersList.tsx', 'mfa:reset')],
+        [manifest('customers'), manifest('mfa', { permissions: [{ code: 'mfa:reset', label: 'Reset MFA' }] })],
+      ),
+    );
+    expect(found.map((finding) => [finding.code, finding.kind, finding.verdict])).toEqual([
+      ['mfa:reset', 'admin-ui-control', 'pass'],
+    ]);
+  });
+
+  it('passes a control in a locked consumer or a host file too', () => {
+    const found = classifyForeignGates(
+      input(
+        [
+          control('price_lists', 'modules/price_lists/src/admin/Page.tsx', 'rfqs:handle'),
+          control(null, 'admin-shell/src/components/AppShell.tsx', 'rfqs:handle'),
+        ],
+        [
+          locked('price_lists'),
+          manifest('quote_requests', { permissions: [{ code: 'rfqs:handle', label: 'Handle quote requests' }] }),
+        ],
+      ),
+    );
+    expect(found.map((finding) => finding.kind)).toEqual(['admin-ui-control', 'admin-ui-control']);
+  });
+
+  /** The same code on an enforcement site is still judged as D-173 judges it. */
+  it('still judges the same foreign code on an enforcement site', () => {
+    const found = findingsOfKind(
+      [gate('customers', 'modules/customers/src/backend/routes.ts', 'mfa:reset')],
+      [manifest('customers'), manifest('mfa', { permissions: [{ code: 'mfa:reset', label: 'Reset MFA' }] })],
+      'undeclared-owner',
+    );
+    expect(found.map((finding) => finding.verdict)).toEqual(['violation']);
+  });
+
+  /** Read off a real component file, not built by the fixture. */
+  it('classifies a scanned component-level hasPermission gate as a control', () => {
+    const root = mkdtempSync(join(tmpdir(), 'foreign-gates-control-'));
+    try {
+      mkdirSync(join(root, 'customers', 'src', 'admin', 'pages'), { recursive: true });
+      writeFileSync(
+        join(root, 'customers', 'src', 'admin', 'pages', 'CustomersList.tsx'),
+        `export const Reset = () => (hasPermission('mfa:reset') ? <Button /> : null);`,
+        'utf8',
+      );
+      const scanned = scanEnforcedPermissionGates([{ dir: join(root, 'customers'), moduleId: 'customers' }]);
+      const found = classifyForeignGates(
+        input(scanned.sites, [
+          manifest('customers'),
+          manifest('mfa', { permissions: [{ code: 'mfa:reset', label: 'Reset MFA' }] }),
+        ]),
+      );
+      expect(found.map((finding) => [finding.code, finding.kind])).toEqual([['mfa:reset', 'admin-ui-control']]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Issue #1106 — an admin-shell nav any-of is read as one host site, so its
+   * members are judged as alternatives of one another exactly as a scanned
+   * `hasAnyPermission` is; a shell UI check on a switchable module's code is a
+   * control.
+   */
+  it('judges a scanned admin-shell nav any-of and a shell UI check', () => {
+    const root = mkdtempSync(join(tmpdir(), 'foreign-gates-shell-'));
+    try {
+      mkdirSync(join(root, 'components'), { recursive: true });
+      writeFileSync(
+        join(root, 'components', 'AppShell.tsx'),
+        [
+          `const items = [{ to: '/x', requiredPermission: ['orders:read', 'tasks:read'], module: null }];`,
+          `const mayUseAssistant = hasPermission('prompt_actions:use');`,
+        ].join('\n'),
+        'utf8',
+      );
+      const scanned = scanEnforcedPermissionGates([{ dir: root, moduleId: null, adminLayer: true }]);
+      const found = classifyForeignGates(
+        input(scanned.sites, [
+          locked('orders', { permissions: [{ code: 'orders:read', label: 'View orders' }] }),
+          manifest('tasks', { permissions: [{ code: 'tasks:read', label: 'View tasks' }] }),
+          manifest('prompt_actions', { permissions: [{ code: 'prompt_actions:use', label: 'Use prompts' }] }),
+        ]),
+      );
+      expect(found.map((finding) => [finding.consumer, finding.code, finding.kind])).toEqual([
+        [null, 'orders:read', 'owner-locked'],
+        [null, 'prompt_actions:use', 'admin-ui-control'],
+        [null, 'tasks:read', 'sufficient-alternative'],
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   /**
@@ -359,6 +506,7 @@ describe('foreign-gate sweep — this build', () => {
   const findings = (async (): Promise<{
     input: ForeignGateInput;
     findings: readonly ForeignGateFinding[];
+    scan: ReturnType<typeof scanEnforcedPermissionGates>;
   }> => {
     const manifests = await resolvedManifestEntries();
     const scan = scanEnforcedPermissionGates(await permissionScanRoots());
@@ -367,7 +515,7 @@ describe('foreign-gate sweep — this build', () => {
       manifests,
       owners: new PermissionCatalogueService({ registryEntries: manifests }).listOwnersByCode(),
     };
-    return { input: built, findings: classifyForeignGates(built) };
+    return { input: built, findings: classifyForeignGates(built), scan };
   })();
 
   it('read a population worth reporting on', async () => {
@@ -396,6 +544,71 @@ describe('foreign-gate sweep — this build', () => {
     ).toEqual([]);
   });
 
+  /**
+   * Issue #458 — the two `@@` document-list gates are judged, not passed over
+   * as runtime values: each is one site naming every group's code — the
+   * module's own read code included (issue #498): the own kind is a document
+   * kind like any other.
+   */
+  it('reads the @@ document-list any-ofs as codes it judges', async () => {
+    const scan = scanEnforcedPermissionGates(await permissionScanRoots());
+    const documentLists = scan.sites
+      .filter((site) => /admin[\\/]lib[\\/]references\.ts$/.test(site.file))
+      .filter((site) => site.codes.includes('orders:read'))
+      .map((site) => [site.moduleId, site.resolution, [...site.codes].sort()]);
+    expect(documentLists.sort()).toEqual([
+      ['crm', 'code', ['crm:read', 'orders:read', 'projects:read', 'rfqs:handle', 'tasks:read']],
+      ['projects', 'code', ['crm:read', 'orders:read', 'projects:read', 'rfqs:handle', 'tasks:read']],
+    ]);
+    const runtime = scan.runtimeValue
+      .filter((site) => /admin[\\/]lib[\\/]references\.ts$/.test(site.file))
+      .map((site) => `${site.file}: ${site.expression}`);
+    expect(runtime).toEqual([]);
+  });
+
+  /** Issue #1106 — the shell is in the population, and its nav data is read. */
+  it('reads the admin-shell nav any-of as one host-owned site', async () => {
+    const { scan } = await findings;
+    const commandHooks = scan.sites
+      .filter((site) => /AppShell\.tsx$/.test(site.file))
+      .filter((site) => site.codes.includes('platform.command_outbox.read'))
+      .map((site) => [site.moduleId, site.surface, site.codes]);
+    expect(commandHooks).toEqual([
+      [null, 'admin-control', ['platform.modules.read', 'platform.command_outbox.read']],
+    ]);
+  });
+
+  /**
+   * Issue #1123 — a module's admin contributions are in the population too, and
+   * `requiredPermission: [...CONSTANT]` resolves to the constant's members: one
+   * any-of per declaration, a route an enforcement site and a nav entry a control.
+   */
+  it('reads module admin requiredPermission spreads as one any-of site each', async () => {
+    const { scan } = await findings;
+    const spreadSites = (moduleId: string, expression: string) =>
+      scan.sites
+        .filter((site) => site.moduleId === moduleId && /admin[\\/]index\.ts$/.test(site.file))
+        .filter((site) => site.expression === expression)
+        .map((site) => [site.surface, site.resolution, site.codes]);
+    const importExport = [
+      'catalog:read',
+      'catalog:write',
+      'customers:read',
+      'inventory:read',
+      'inventory:write',
+      'orders:read',
+    ];
+    expect(spreadSites('import_export', '[...REQUIRED_PERMISSION]')).toEqual([
+      ['enforcement', 'code', importExport],
+      ['admin-control', 'code', importExport],
+    ]);
+    expect(spreadSites('organizations', '[...READ_PERMISSION]')).toEqual([
+      ['enforcement', 'code', ['customers:read', 'customers:manage']],
+      ['enforcement', 'code', ['customers:read', 'customers:manage']],
+      ['admin-control', 'code', ['customers:read', 'customers:manage']],
+    ]);
+  });
+
   it('carries no ledger entry describing a finding that is gone', async () => {
     const { findings: found } = await findings;
     expect(staleForeignGateLedgerEntries(found)).toEqual([]);
@@ -408,7 +621,9 @@ describe('foreign-gate sweep — this build', () => {
     // `GET /admin/order-statuses` gate, whose any-of names `payment_methods`'
     // own read code beside `delivery_methods`'. Both kinds are passes and both
     // are derived from the manifests on every run.
-    expect(kinds).toEqual(['owner-locked', 'sufficient-alternative']);
+    // `admin-ui-control` joined with issue #1105, when the walk started reading
+    // component files: a foreign code there decides whether a control is shown.
+    expect(kinds).toEqual(['admin-ui-control', 'owner-locked', 'sufficient-alternative']);
     // Non-vacuity of the live half: the population is real gates, not an empty
     // walk that agrees with everything.
     expect(found.length).toBeGreaterThan(0);

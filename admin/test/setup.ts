@@ -1,6 +1,8 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, configure } from '@testing-library/react';
-import { afterEach, beforeEach, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, vi } from 'vitest';
+import { installMemoryStorage } from './helpers/memory-storage';
+import { outlivePuckLoaderTimer, trackPuckMounts } from './helpers/puck-loader-timer';
 
 /**
  * The budget a DOM assertion gets before it gives up, declared rather than
@@ -66,9 +68,31 @@ configure({ asyncUtilTimeout: 5_000 });
  * than inventing a third behaviour. A test that needs a response stubs its
  * collaborator — `vi.mock('@endora-commerce/admin-kit/lib', …)` replacing
  * `apiClient` is the seam every packaged screen's test uses.
+ *
+ * **One request is answered here, and only one** (issue #463): the i18n bundle
+ * the shell's own `TranslationProvider` asks for on boot. It goes through the
+ * kit's internal client, which a test's `vi.mock` of the kit's public `lib`
+ * barrel does not replace, so no test file could stub it through its usual
+ * seam — every file mounting `<App/>` or the shell logged
+ * `[i18n] bundle fetch failed … unstubbed network call` and depended on the
+ * refusal being harmless. The answer is an empty bundle, which is what the
+ * provider held while the refusal left it unanswered, so every screen renders
+ * exactly as it did; a test that wants real copy hands the provider an
+ * `initialBundle` (`renderWithI18n`), and a test about a *failing* bundle fetch
+ * replaces `globalThis.fetch` itself.
  */
+const I18N_BUNDLES_PATH = '/api/v1/admin/i18n/bundles';
+
 globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  const parsed = new URL(url, 'http://localhost');
+  if (parsed.pathname === I18N_BUNDLES_PATH) {
+    const language = parsed.searchParams.get('language') ?? 'en';
+    return new Response(JSON.stringify({ data: { language, version: 0, bundles: {} } }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
   throw new Error(
     `[admin test] unstubbed network call to ${url} — stub the collaborator this screen calls ` +
       '(see admin/test/setup.ts).',
@@ -107,6 +131,29 @@ if (!('ResizeObserver' in globalThis)) {
   };
 }
 
+/**
+ * Every test gets its own empty, in-memory `localStorage` and `sessionStorage`
+ * (issue #442).
+ *
+ * jsdom's own storage cannot be relied on to reach the global: from Node 25 the
+ * runtime defines `localStorage` and `sessionStorage` itself, and vitest's jsdom
+ * environment copies a window key onto the global only when the global lacks it.
+ * Node's then wins — `undefined` on Node 26 without `--localstorage-file`, so
+ * every test calling `window.localStorage.clear()` failed with a `TypeError`.
+ * Installing our own storage in the setup file makes the suite independent of
+ * the Node major, and installing a fresh one per test means nothing a test
+ * stored, or a storage a test swapped in, leaks into the next.
+ *
+ * Installed once at load as well, so a module that touches storage while the
+ * test file is being imported finds a working one.
+ */
+const STORAGE_NAMES = ['localStorage', 'sessionStorage'] as const;
+const installStorages = (): void => {
+  for (const name of STORAGE_NAMES) installMemoryStorage(globalThis, name);
+};
+installStorages();
+beforeEach(installStorages);
+
 // jsdom does not implement scrollIntoView; components that call it (e.g. the
 // organization picker's active-option scroll) would throw under test. Polyfill
 // it globally so tests don't depend on call ordering across files.
@@ -123,6 +170,15 @@ afterEach(() => {
   cleanup();
   setMobileViewport(false);
 });
+
+/**
+ * A file that mounted Puck outlives Puck's never-cleared 500 ms loader timer
+ * before its jsdom goes (PR #478, issue #1035) — one wait per such file, none
+ * for any other. `helpers/puck-loader-timer.ts` carries why, and why the mount
+ * is watched for rather than looked for in an `afterEach`.
+ */
+const puckMounts = trackPuckMounts();
+afterAll(() => outlivePuckLoaderTimer(puckMounts));
 
 /** Default: desktop tier (min-width 1024px) for layout tests. */
 let mobileViewport = false;
@@ -151,3 +207,22 @@ beforeEach(() => {
     })),
   });
 });
+
+/**
+ * jsdom lays nothing out, and ProseMirror — the editor under the CRM's
+ * formatted fields (`specs/158-crm-opportunity-inline-editing/`) — asks the
+ * layout where the caret is after every keystroke it reads. These answer "at
+ * the origin, with no size", which is what a DOM without layout means; a
+ * screen that positions something by them falls back as it would in a browser
+ * that could not say.
+ */
+const emptyRect = (): DOMRect =>
+  ({ x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) }) as DOMRect;
+const emptyRects = (): DOMRectList => Object.assign([], { item: () => null }) as unknown as DOMRectList;
+if (typeof document !== 'undefined') {
+  document.elementFromPoint ??= (() => null) as typeof document.elementFromPoint;
+  Range.prototype.getClientRects ??= emptyRects;
+  Range.prototype.getBoundingClientRect ??= emptyRect;
+  const text = Text.prototype as unknown as { getClientRects?: () => DOMRectList };
+  text.getClientRects ??= emptyRects;
+}

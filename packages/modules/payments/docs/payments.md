@@ -1,22 +1,24 @@
 ---
-title: payments
+title: Payments
 description: Payment driver dispatch + settlement events
 ---
 
-# `payments`
+# Payments (`payments`)
 
-Payment driver dispatch + settlement events. The module owns the driver
-port (`gateway-adapter-port.ts`) and concrete in-tree drivers; per-vendor
-adapters live in dedicated integration modules.
+Payment driver dispatch + settlement events. The module owns the `Payment`
+record and the four built-in payment adapters
+(`src/backend/adapters/built-in-adapters.ts`), which it contributes to the
+`payment_methods` module's `paymentAdapterRegistry`; per-vendor
+adapters live in dedicated gateway modules.
 
 ## Drivers
 
-| Driver | Behaviour |
+| Adapter key | Behaviour |
 | --- | --- |
-| `bank-transfer-driver.ts` | Returns `NextAction.kind='awaiting_transfer'`; settlement happens out-of-band when the operator marks the order paid |
-| `pickup-driver.ts` | `NextAction.kind='none'` for cash-on-pickup |
-| `credit-limit-driver.ts` | Calls `CreditLimitService.reserve` inside the order-placement transaction |
-| `gateway-adapter-port.ts` | Interface stub for external gateways; per-vendor implementations live outside the core |
+| `bank_transfer` | Returns `NextAction.kind='awaiting_transfer'` with an `ORDER-…` reference; settlement happens out-of-band when the operator marks the order paid |
+| `pickup` | `NextAction.kind='none'` for cash-on-pickup |
+| `credit_limit` | `NextAction.kind='none'`; the reservation itself is made by `orders` (`order-service.ts#placeOrder()` calls `credit_limits`' `CreditLimitService.reserve`) inside the order-placement transaction |
+| `gateway` | Placeholder returning `NextAction.kind='none'`; a gateway module registers its own adapter that returns the redirect |
 
 ## Public surface
 
@@ -49,12 +51,59 @@ back in full, so what an operator may write into it is bounded by our schema
 rather than by the caller's payload. Gateway integrations build the payload in
 code and are not subject to that bound.
 
-Beyond the routes, orders consume the drivers via
+Beyond the routes, orders dispatch to the adapters via
 `order-service.ts#placeOrder()`, and admin payment-status mutations go through
 `/api/v1/admin/orders/:id/payment-status`, which `orders` owns.
 
 The buyer's own retry (`POST /api/v1/orders/:orderId/payments/retry`) is a
 customer route and authorises through `requireCustomer`, not a permission.
+
+## Refusals
+
+A retry or a settlement the payment's own state refuses has its own code and a
+sentence in English and Polish, read in the operator's language (the buyer's,
+on the buyer's retry). Until issue #630 these were `409 VALIDATION_FAILED`; the
+status is unchanged.
+
+| Code | Status | When | `details` |
+| --- | --- | --- | --- |
+| `PAYMENT_ALREADY_PAID` | `409` | a retry of a paid order (`code` `retry`), or `POST /api/v1/payments/receive` with `outcome: "failure"` for a paid payment (`code` `mark_failed`; nothing is downgraded) | `orderId`, `paymentId`, `status` |
+| `PAYMENT_REFUNDED` | `409` | a retry of a refunded or partially refunded payment | `orderId`, `paymentId`, `status` |
+| `PAYMENT_SETTLED_OUT_OF_BAND` | `409` | a retry of an order settled out of band (`deferred`) | `orderId`, `paymentId` |
+
+The buyer's retry answers `PAYMENT_NOT_DUE`, `PAYMENT_ORDER_CLOSED` or
+`PAYMENT_ADAPTER_UNAVAILABLE` from its own gates first; it reaches the three
+above only when the latest attempt changed after those gates read the order.
+
+## When the order refuses the move
+
+The order's payment status follows the transition graph the `orders` module
+documents, and settlement follows it too. When a gateway reports something the
+order's current payment status does not allow — a decline for an order an
+operator has already marked paid, a success for a refunded order, a full refund
+for an order that was never paid — the payment still records what the gateway
+reported, and the order keeps its payment status. The method's status on success
+or on failure is then not applied, so a paid order is not put on hold by a late
+decline. The refusal is logged with the payment, the order and both statuses. A
+full refund for an unpaid order still puts the order on hold, for an operator to
+review.
+
+The `payment.received.v1` and `payment.failed.v1` events are still emitted,
+because they describe the payment. The buyer's payment-status e-mail is sent
+only when it matches the order: "paid" while the order is paid, "failed" while
+it is failed.
+
+## Gateway refunds
+
+A gateway reports each refund — made from its dashboard or by a return
+settlement — through its webhook, with the cumulative refunded amount, and the
+payment records it. An amount with more than two decimal places is **refused,
+not rounded**: the payment's refunded amount and status stay as they were, the
+refusal is logged with the payment, the order, the reported amount and the
+gateway's refund reference, and the payment is marked for manual attention
+(`providerDetails.refundAnomaly` in the payment history). The webhook is still
+acknowledged, so the gateway does not deliver it again; an operator checks the
+refund with the gateway and settles it by hand.
 
 ## Events emitted
 
@@ -64,8 +113,9 @@ webhooks.
 
 ## Extension points
 
-- **New gateway** — implement `gateway-adapter-port.ts`, register the
-  driver in the composition root, expose a configuration through the
-  `integrations` module.
-- **Fraud / 3DS hooks** — slot in front of the driver's `reserve` call
+- **New gateway** — ship a module that implements `PaymentAdapter` and
+  contributes it to `paymentAdapterRegistry` from its boot hook, as described
+  on the `payment_methods` module's page (*Build your own payment-method
+  module*).
+- **Fraud / 3DS hooks** — slot in front of the adapter's start call
   before the order-placement transaction commits.

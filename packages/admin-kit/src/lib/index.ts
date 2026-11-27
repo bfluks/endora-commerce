@@ -23,12 +23,25 @@
  * structural comparison, which a second React context would pass.
  */
 export { resolveIcon } from './admin-actions/icon-map.js';
-export { ApiError, apiBaseUrl, apiClient, onUnauthorized } from './api-client.js';
+export { ApiError, apiBaseUrl, apiClient, onUnauthorized, postMultipart, storefrontBaseUrl } from './api-client.js';
 export { toAbsoluteAssetUrl } from './asset-url.js';
 export { AuthProvider, useAuth } from './auth.js';
-export type { AdminMe, AuthProviderProps } from './auth.js';
-export { formatDateTime } from './format.js';
-export { formatMoney, localeForCurrency } from './money.js';
+export {
+  useAdminPreference,
+  useAdminPreferencesStatus,
+  useListViewModePreference,
+} from './admin-preferences/use-admin-preference.js';
+export type { AdminPreferencesStatus, SidebarPreferenceKey } from './admin-preferences/use-admin-preference.js';
+export type { AdminMe, AuthProviderProps, LoginErrorReason } from './auth.js';
+// Issue #1450 (DS-22) — a slug, key or code proposed from the name.
+export { deriveKey, useDerivedKey } from './derive-key.js';
+export type { DerivedKeyField, DeriveKeyOptions, UseDerivedKeyOptions } from './derive-key.js';
+export { defineEnumLabels } from './enum-labels.js';
+export type { EnumLabels, EnumTranslate } from './enum-labels.js';
+export { formatDate, formatDateTime } from './format.js';
+export { RANGE_PRESETS, isDayRange, presetRange } from './range-presets.js';
+export type { DayRange, RangePreset } from './range-presets.js';
+export { formatMoney, localeForCurrency, type FormatMoneyOptions } from './money.js';
 export { invoiceEmailNotSentReason, issueInvoiceNotice, sendInvoiceEmailMessage } from './invoice-email-outcome.js';
 export type { Translate } from './invoice-email-outcome.js';
 export { getModulePresence, ModulePresenceProvider, setModuleActivation, useModulePresence } from './module-presence/index.js';
@@ -41,5 +54,36 @@ export type { GatedSurface, PermissionRequirement } from './surface-visibility.j
 export { normalize } from './text-normalization.js';
 export { usePageSizePreference } from './use-page-size-preference.js';
 export { useUnsavedChangesPrompt } from './use-unsaved-changes-prompt.js';
+// Issue #1447 (UX audit DS-14) — a detail screen's record, first load kept apart from a refresh.
+export { useDetailResource } from './use-detail-resource.js';
+export type { DetailResource } from './use-detail-resource.js';
+// Issue #1446 (DS-13) — the `dirty` an unsaved-changes guard is armed with.
+export { isDraftEqual } from './draft-equality.js';
+// Feature 180 — the save session (`specs/180-one-save-zone-editors/contracts/save-participation.md`).
+export {
+  INERT_SAVE_SESSION,
+  SaveSessionProvider,
+  useSaveParticipant,
+  useSaveSession,
+} from '../save-session/SaveSessionProvider.js';
+export type {
+  SaveParticipant,
+  SaveParticipantSpec,
+  SaveSessionProviderProps,
+  SaveSessionValue,
+} from '../save-session/SaveSessionProvider.js';
+export { hasIssues, runSave } from '../save-session/run-save.js';
+export type {
+  ParticipantIssues,
+  RunSaveOptions,
+  SaveContext,
+  SaveOutcome,
+  SaveOutcomePart,
+  SavePart,
+  SavePartResult,
+} from '../save-session/run-save.js';
+export type { ParticipantStatus, SaveParticipantHandlers } from '../save-session/session-store.js';
+export type { UnsavedChangesPromptOptions } from './use-unsaved-changes-prompt.js';
 export { cn } from './utils.js';
 export { randomUUID } from './uuid.js';
+export { readReturnTo, RETURN_TO_PARAM, withReturnTo } from './return-to.js';

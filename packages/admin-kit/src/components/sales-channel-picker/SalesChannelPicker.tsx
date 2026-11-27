@@ -11,6 +11,8 @@ import type { SalesChannelListResponse } from '@endora-commerce/contracts';
 // which `admin/test/kit/admin-kit-identity.test.ts` asserts by reference.
 import { ApiError, apiClient } from '../../lib/index.js';
 import { useAppLanguage } from '../../i18n/app-language-context.js';
+import { useTranslation } from '../../i18n/useTranslation.js';
+import { adminLanguageToLocale } from '../category-tree-picker/category-tree-utils.js';
 import { Combobox, type ComboboxOption } from '../../ui/combobox.js';
 
 /**
@@ -19,7 +21,8 @@ import { Combobox, type ComboboxOption } from '../../ui/combobox.js';
  * Channels are few and unpaged in practice, so the first (large) page is
  * fetched on mount and the <Combobox> filters client-side. The committed
  * value is the channel `id` (UUID) — the identifier persisted on
- * channel-scoped records. Labels are locale-aware; the channel `code` is
+ * channel-scoped records. Labels are in the admin language's locale (`pl` →
+ * `pl-PL`), then `en-US`, then any name, then the code; the channel `code` is
  * shown as the secondary line.
  *
  * **The request is built here** (feature 091, P2). Until this component moved
@@ -35,16 +38,27 @@ import { Combobox, type ComboboxOption } from '../../ui/combobox.js';
 
 const PICKER_PAGE_SIZE = 200;
 
-function listSalesChannels(activeOnly: boolean): Promise<SalesChannelListResponse> {
+/**
+ * Always the whole list, never `activeOnly=true` (#912): a narrowed read would
+ * leave a stored inactive channel out of the response, and the field would then
+ * show nothing and offer no Clear. `activeOnly` narrows the options instead —
+ * the rule the CRM's `SalesChannelSelect` follows.
+ */
+function listSalesChannels(): Promise<SalesChannelListResponse> {
   const qs = new URLSearchParams();
   qs.set('pageSize', String(PICKER_PAGE_SIZE));
-  qs.set('activeOnly', String(activeOnly));
+  qs.set('activeOnly', 'false');
   return apiClient.get<SalesChannelListResponse>(`/api/v1/admin/sales-channels?${qs.toString()}`);
 }
 
 export interface SalesChannelPickerProps {
   value: string | null;
   onChange: (salesChannelId: string | null) => void;
+  /**
+   * Offer only channels that are switched on as new choices. A stored value
+   * stays among the options, active or not, so it can be seen, cleared or
+   * replaced; it is marked inactive like any other inactive channel.
+   */
   activeOnly?: boolean;
   placeholder?: string;
   emptyMessage?: string;
@@ -57,33 +71,32 @@ export interface SalesChannelPickerProps {
 
 export function SalesChannelPicker(props: SalesChannelPickerProps): ReactNode {
   const { language } = useAppLanguage();
-  const [options, setOptions] = useState<ComboboxOption<string>[]>([]);
+  const t = useTranslation('core');
+  const [channels, setChannels] = useState<SalesChannelListResponse['items']>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // The server's sentence when it sent one, `null` for a failure it did not
+  // explain — translated at render, so the load effect does not depend on `t`.
+  const [error, setError] = useState<{ message: string | null } | null>(null);
 
   const activeOnly = props.activeOnly ?? false;
+  const value = props.value;
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    listSalesChannels(activeOnly)
+    setError(null);
+    listSalesChannels()
       .then((res) => {
         if (!alive) return;
-        setOptions(
-          res.items.map((ch) => {
-            const name =
-              ch.name[language] ?? ch.name['en-US'] ?? Object.values(ch.name)[0] ?? ch.code;
-            return {
-              value: ch.id,
-              label: name,
-              description: ch.active ? ch.code : `${ch.code} · inactive`,
-            };
-          }),
-        );
+        // Checked here, inside the load: a body with no list fails into the
+        // `.catch` below as a failed load. Held in state, it would throw at
+        // render instead, outside every handler.
+        if (!Array.isArray(res.items)) throw new TypeError('The sales channel list has no items.');
+        setChannels(res.items);
       })
       .catch((err: unknown) => {
         if (!alive) return;
-        setError(err instanceof ApiError ? err.envelope.error.message : 'Failed to load channels.');
+        setError({ message: err instanceof ApiError ? err.envelope.error.message : null });
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -91,12 +104,29 @@ export function SalesChannelPicker(props: SalesChannelPickerProps): ReactNode {
     return (): void => {
       alive = false;
     };
-  }, [activeOnly, language]);
+  }, []);
 
-  const emptyMessage = useMemo(
-    () => props.emptyMessage ?? error ?? 'No sales channels.',
-    [props.emptyMessage, error],
-  );
+  const options = useMemo<ComboboxOption<string>[]>(() => {
+    // Names are keyed by locale (`pl-PL`), the admin language by its short
+    // code (`pl`): map one to the other rather than index by the wrong key
+    // (#562 — the same miss `CategorySelect` had).
+    const locale = adminLanguageToLocale(language);
+    return (
+      channels
+        // A value already stored stays selectable, active or not.
+        .filter((ch) => !activeOnly || ch.active || ch.id === value)
+        .map((ch) => ({
+          value: ch.id,
+          label: ch.name[locale] ?? ch.name['en-US'] ?? Object.values(ch.name)[0] ?? ch.code,
+          description: ch.active ? ch.code : t('salesChannelPicker.inactive', { code: ch.code }),
+        }))
+    );
+  }, [activeOnly, channels, language, t, value]);
+
+  // A failure outranks the caller's empty message: otherwise it reads as
+  // "there are no channels".
+  const errorMessage = error === null ? null : (error.message ?? t('salesChannelPicker.loadError'));
+  const emptyMessage = errorMessage ?? props.emptyMessage ?? t('salesChannelPicker.empty');
 
   return (
     <Combobox<string>
@@ -106,9 +136,9 @@ export function SalesChannelPicker(props: SalesChannelPickerProps): ReactNode {
       loading={loading}
       clearable={props.clearable ?? true}
       disabled={props.disabled ?? false}
-      placeholder={props.placeholder ?? 'Select a sales channel…'}
+      placeholder={props.placeholder ?? t('salesChannelPicker.placeholder')}
       emptyMessage={emptyMessage}
-      ariaLabel={props.ariaLabel ?? 'Select sales channel'}
+      ariaLabel={props.ariaLabel ?? t('salesChannelPicker.ariaLabel')}
       id={props.id ?? ''}
       className={props.className ?? ''}
     />

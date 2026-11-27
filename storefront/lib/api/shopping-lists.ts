@@ -1,3 +1,10 @@
+import type {
+  ConvertToCartResponse,
+  ConvertToRfqResponse,
+  DefaultShoppingListSummary,
+  ShoppingList,
+  UpdateShoppingListRequest,
+} from '@endora-commerce/contracts';
 import { apiGetAuthed, apiMutate } from './mutations';
 
 /**
@@ -5,52 +12,18 @@ import { apiGetAuthed, apiMutate } from './mutations';
  * customer session.
  */
 
-export interface ShoppingListItem {
-  id: string;
-  shoppingListId: string;
-  productId: string;
-  variantId: string | null;
-  quantity: number;
-  note: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ShoppingList {
-  id: string;
-  organizationId: string;
-  customerAccountId: string;
-  name: string;
-  isDefault: boolean;
-  items: ShoppingListItem[];
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface DefaultShoppingListSummary {
-  id: string;
-  name: string;
-  itemCount: number;
-}
-
-export interface ConversionSkip {
-  itemId: string;
-  productId: string;
-  reason: 'product_archived' | 'variant_unavailable' | 'product_not_found';
-}
-
-export interface ConvertToCartResult {
-  shoppingListId: string;
-  added: number;
-  skipped: ConversionSkip[];
-}
-
-export interface ConvertToRfqResult {
-  shoppingListId: string;
-  rfqId: string;
-  added: number;
-  skipped: ConversionSkip[];
-}
+/**
+ * The reply shapes are the published contracts (issue #599). The two
+ * conversion results keep their storefront names as aliases.
+ */
+export type {
+  ConversionSkip,
+  DefaultShoppingListSummary,
+  ShoppingList,
+  ShoppingListItem,
+} from '@endora-commerce/contracts';
+export type ConvertToCartResult = ConvertToCartResponse;
+export type ConvertToRfqResult = ConvertToRfqResponse;
 
 export async function listShoppingLists(sessionCookie: string): Promise<ShoppingList[]> {
   return apiGetAuthed<ShoppingList[]>({
@@ -82,15 +55,19 @@ export async function createShoppingList(
   return res.data!;
 }
 
-export async function renameShoppingList(
+/**
+ * Issue #1251 — the list page's one *Save changes*: the name, any edited line quantities,
+ * or both, written by the API together or not at all.
+ */
+export async function updateShoppingList(
   sessionCookie: string,
   id: string,
-  name: string,
+  patch: UpdateShoppingListRequest,
 ): Promise<ShoppingList> {
   const res = await apiMutate<ShoppingList>({
     method: 'PATCH',
     path: `/api/v1/shopping-lists/${id}`,
-    body: { name },
+    body: patch,
     sessionCookie,
   });
   return res.data!;
@@ -113,21 +90,6 @@ export async function addItemToShoppingList(
     method: 'POST',
     path: `/api/v1/shopping-lists/${id}/items`,
     body: payload,
-    sessionCookie,
-  });
-  return res.data!;
-}
-
-export async function updateShoppingListItem(
-  sessionCookie: string,
-  listId: string,
-  itemId: string,
-  patch: { quantity?: number; note?: string | null },
-): Promise<ShoppingList> {
-  const res = await apiMutate<ShoppingList>({
-    method: 'PATCH',
-    path: `/api/v1/shopping-lists/${listId}/items/${itemId}`,
-    body: patch,
     sessionCookie,
   });
   return res.data!;

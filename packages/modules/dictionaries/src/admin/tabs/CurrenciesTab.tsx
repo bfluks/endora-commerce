@@ -1,12 +1,16 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type ReactNode,
+  type RefObject,
 } from 'react';
-import { ArrowDown, ArrowUp, Plus, Star, Trash2 } from 'lucide-react';
+import { useConfirmDialog } from '@endora-commerce/admin-kit/components';
+import { Coins, Plus } from 'lucide-react';
 import type {
   CreateDictionaryCurrencyRequest,
   DictionaryCurrency,
@@ -14,12 +18,18 @@ import type {
   SymbolPosition,
   UpdateDictionaryCurrencyRequest,
 } from '@endora-commerce/contracts';
-import { ApiError, normalize } from '@endora-commerce/admin-kit/lib';
-import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Checkbox, Input, Label, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@endora-commerce/admin-kit/ui';
+import { normalize } from '@endora-commerce/admin-kit/lib';
+import { Alert, AlertDescription, Button, Card, CardContent, CardHeader, CardTitle, Checkbox, EmptyState, FormField, InlineStatus, Input, Label, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, useInlineStatus } from '@endora-commerce/admin-kit/ui';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { dictionaryClient } from '../api/client.js';
+import { DictionaryRowActions } from '../components/DictionaryRowActions.js';
 import { EntryStatusBadges } from '../components/EntryStatusBadges.js';
+import { RowReorder } from '../components/RowReorder.js';
 import { TranslationsDrawer } from '../components/TranslationsDrawer.js';
+import { useDictionaryTab, type DictionaryTabProps } from '../lib/dictionary-tab.js';
+import { formatDictionaryError } from '../lib/format-error.js';
+import { symbolPositionLabels } from '../lib/labels.js';
+
 interface CurrencyFormState {
   code: string;
   label: string;
@@ -40,8 +50,9 @@ const emptyCurrency: CurrencyFormState = {
   sortOrder: 1000,
 };
 
-export function CurrenciesTab(): ReactNode {
+export function CurrenciesTab({ ref, onEmptyChange }: DictionaryTabProps = {}): ReactNode {
   const t = useTranslation('dictionaries');
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [rows, setRows] = useState<DictionaryCurrency[]>([]);
   const [languages, setLanguages] = useState<DictionaryLanguage[]>([]);
   const [translationCompleteness, setTranslationCompleteness] = useState<Record<string, boolean>>({});
@@ -49,11 +60,19 @@ export function CurrenciesTab(): ReactNode {
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState<CurrencyFormState>(emptyCurrency);
   const [search, setSearch] = useState('');
-  const [draggingCode, setDraggingCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
+  // An action's result is said beside the list's toolbar, in an always-mounted
+  // polite region, not as a success banner (issue #1499, DEC-12 a).
+  const actionStatus = useInlineStatus();
+  const searchId = useId();
+  // Where focus returns after the empty state's "Clear filters" (WCAG 2.2 SC 2.4.3).
+  const searchRef = useRef<HTMLInputElement>(null);
+  // Read through a ref so `load` keeps one identity while the bundle arrives.
+  const tRef = useRef(t);
+  tRef.current = t;
+  const formatError = (err: unknown, fallback: string): string => formatDictionaryError(err, fallback, tRef.current);
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -73,7 +92,7 @@ export function CurrenciesTab(): ReactNode {
         ),
       );
     } catch (err) {
-      setError(formatError(err, 'Failed to load currencies.'));
+      setError(formatDictionaryError(err, tRef.current('currencies.error.load'), tRef.current));
     } finally {
       setLoading(false);
     }
@@ -92,10 +111,24 @@ export function CurrenciesTab(): ReactNode {
   }, [rows, search]);
 
   const openCreate = (): void => {
+    actionStatus.clear();
     setCreating(true);
     setSelected(null);
     setForm({ ...emptyCurrency, sortOrder: nextSortOrder(rows) });
   };
+
+  const { firstFieldRef, create } = useDictionaryTab({
+    ref,
+    onEmptyChange,
+    empty: !loading && error === null && rows.length === 0,
+    openCreate,
+  });
+  const addButton = (
+    <Button type="button" onClick={create}>
+      <Plus aria-hidden="true" />
+      {t('currencies.addCurrency')}
+    </Button>
+  );
 
   const openEdit = (row: DictionaryCurrency): void => {
     setCreating(false);
@@ -126,7 +159,7 @@ export function CurrenciesTab(): ReactNode {
           sortOrder: form.sortOrder,
         };
         await dictionaryClient.createCurrency(input);
-        setInfo(`Currency ${input.code} created.`);
+        actionStatus.show(t('currency.created', { code: input.code }));
       } else if (selected) {
         const input: UpdateDictionaryCurrencyRequest = {
           label: form.label.trim(),
@@ -137,13 +170,14 @@ export function CurrenciesTab(): ReactNode {
           sortOrder: form.sortOrder,
         };
         await dictionaryClient.updateCurrency(selected.code, input);
-        setInfo(`Currency ${selected.code} saved.`);
+        actionStatus.show(t('currency.saved', { code: selected.code }));
       }
       await load();
       setCreating(false);
       setSelected(null);
     } catch (err) {
-      setError(formatError(err, 'Save failed.'));
+      actionStatus.clear();
+      setError(formatError(err, t('error.save')));
     } finally {
       setSaving(false);
     }
@@ -152,21 +186,28 @@ export function CurrenciesTab(): ReactNode {
   const setDefault = async (code: string): Promise<void> => {
     try {
       await dictionaryClient.setDefaultCurrency(code);
-      setInfo(`Currency ${code} is now default.`);
+      actionStatus.show(t('currency.madeDefault', { code }));
       await load();
     } catch (err) {
-      setError(formatError(err, 'Failed to set default currency.'));
+      actionStatus.clear();
+      setError(formatError(err, t('error.setDefault')));
     }
   };
 
   const remove = async (code: string): Promise<void> => {
-    if (!confirm(`Delete currency ${code}?`)) return;
+    const ok = await confirm({
+      message: t('currency.deleteConfirm', { code }),
+      confirmLabel: t('action.delete'),
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await dictionaryClient.deleteCurrency(code);
-      setInfo(`Currency ${code} deleted.`);
+      actionStatus.show(t('currency.deleted', { code }));
       await load();
     } catch (err) {
-      setError(formatError(err, 'Delete failed.'));
+      actionStatus.clear();
+      setError(formatError(err, t('error.delete')));
     }
   };
 
@@ -180,40 +221,29 @@ export function CurrenciesTab(): ReactNode {
       await dictionaryClient.updateCurrency(other.code, { sortOrder: row.sortOrder });
       await load();
     } catch (err) {
-      setError(formatError(err, 'Reorder failed.'));
-    }
-  };
-
-  const dropOn = async (target: DictionaryCurrency): Promise<void> => {
-    if (!draggingCode || draggingCode === target.code) return;
-    const source = rows.find((row) => row.code === draggingCode);
-    setDraggingCode(null);
-    if (!source) return;
-    try {
-      await dictionaryClient.updateCurrency(source.code, { sortOrder: target.sortOrder });
-      await dictionaryClient.updateCurrency(target.code, { sortOrder: source.sortOrder });
-      await load();
-    } catch (err) {
-      setError(formatError(err, 'Reorder failed.'));
+      actionStatus.clear();
+      setError(formatError(err, t('error.reorder')));
     }
   };
 
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
       <Card>
-        <CardHeader className="gap-3 md:flex-row md:items-center md:justify-between md:space-y-0">
-          <CardTitle>{t('currencies.title')}</CardTitle>
+        <CardHeader className="gap-3 md:flex-row md:items-center md:space-y-0">
           <div className="flex w-full flex-wrap gap-2 md:w-auto">
+            <Label htmlFor={searchId} className="sr-only">
+              {t('currencies.searchLabel')}
+            </Label>
             <Input
+              ref={searchRef}
+              id={searchId}
+              type="search"
               className="min-w-56 md:w-72"
               placeholder={t('currencies.searchPlaceholder')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
-            <Button type="button" onClick={openCreate}>
-              <Plus />
-              {t('currencies.addCurrency')}
-            </Button>
+            <InlineStatus {...actionStatus.props} className="self-center" />
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -222,35 +252,45 @@ export function CurrenciesTab(): ReactNode {
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           ) : null}
-          {info ? (
-            <Alert variant="success">
-              <AlertDescription>{info}</AlertDescription>
-            </Alert>
-          ) : null}
           {loading ? (
             <p className="text-sm text-muted-foreground">{t('currencies.loading')}</p>
+          ) : filtered.length === 0 ? (
+            // "The dictionary holds none" and "the filters hide them all" are
+            // two situations with two next steps (#1448, DS-15). While the
+            // dictionary is empty its Add is here and not in the page header
+            // (#1562): one primary per view.
+            search.trim() !== '' ? (
+              <EmptyState
+                variant="no-results"
+                title={t('currencies.empty')}
+                onClearFilters={() => {
+                  setSearch('');
+                }}
+                focusAfterClear={searchRef}
+              />
+            ) : (
+              <EmptyState
+                icon={<Coins size={20} />}
+                title={t('currencies.emptyState.title')}
+                description={t('currencies.emptyState.body')}
+                action={addButton}
+              />
+            )
           ) : (
-            <Table>
+            <Table aria-label={t('currencies.title')}>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Code</TableHead>
-                  <TableHead>Label</TableHead>
-                  <TableHead>Format</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Sort</TableHead>
-                  <TableHead className="w-[1%] whitespace-nowrap">Actions</TableHead>
+                  <TableHead>{t('column.code')}</TableHead>
+                  <TableHead>{t('column.label')}</TableHead>
+                  <TableHead>{t('column.format')}</TableHead>
+                  <TableHead>{t('column.status')}</TableHead>
+                  <TableHead>{t('column.sort')}</TableHead>
+                  <TableHead className="w-[1%] whitespace-nowrap">{t('column.actions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filtered.map((row, index) => (
-                  <TableRow
-                    key={row.code}
-                    draggable
-                    onDragStart={() => setDraggingCode(row.code)}
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={() => void dropOn(row)}
-                    className={draggingCode === row.code ? 'opacity-50' : undefined}
-                  >
+                  <TableRow key={row.code}>
                     <TableCell className="font-mono text-xs">{row.code}</TableCell>
                     <TableCell>{row.label}</TableCell>
                     <TableCell>
@@ -270,50 +310,23 @@ export function CurrenciesTab(): ReactNode {
                     </TableCell>
                     <TableCell>{row.sortOrder}</TableCell>
                     <TableCell>
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          disabled={index === 0}
-                          title={t('action.moveUp')}
-                          onClick={() => void move(row, -1)}
-                        >
-                          <ArrowUp />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          disabled={index === filtered.length - 1}
-                          title={t('action.moveDown')}
-                          onClick={() => void move(row, 1)}
-                        >
-                          <ArrowDown />
-                        </Button>
-                        <Button type="button" variant="outline" size="sm" onClick={() => openEdit(row)}>
-                          {t('action.edit')}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          title={t('action.setDefault')}
-                          disabled={row.isDefault || !row.isActive}
-                          onClick={() => void setDefault(row.code)}
-                        >
-                          <Star />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          size="icon"
-                          title={t('action.delete')}
-                          disabled={row.isDefault}
-                          onClick={() => void remove(row.code)}
-                        >
-                          <Trash2 />
-                        </Button>
+                      <div className="flex items-center justify-end gap-1">
+                        <RowReorder
+                          onMove={(direction) => void move(row, direction)}
+                          first={index === 0}
+                          last={index === filtered.length - 1}
+                        />
+                        <DictionaryRowActions
+                          code={row.code}
+                          isDefault={row.isDefault}
+                          isActive={row.isActive}
+                          onEdit={() => {
+                            actionStatus.clear();
+                            openEdit(row);
+                          }}
+                          onSetDefault={() => void setDefault(row.code)}
+                          onDelete={() => void remove(row.code)}
+                        />
                       </div>
                     </TableCell>
                   </TableRow>
@@ -329,6 +342,7 @@ export function CurrenciesTab(): ReactNode {
         form={form}
         setForm={setForm}
         languages={languages}
+        firstFieldRef={firstFieldRef}
         lockedCode={!creating}
         disabled={!creating && !selected}
         saving={saving}
@@ -338,6 +352,7 @@ export function CurrenciesTab(): ReactNode {
           setSelected(null);
         }}
       />
+      {confirmDialog}
     </div>
   );
 }
@@ -347,6 +362,7 @@ function CurrencyEditor({
   form,
   setForm,
   languages,
+  firstFieldRef,
   lockedCode,
   disabled,
   saving,
@@ -357,6 +373,8 @@ function CurrencyEditor({
   form: CurrencyFormState;
   setForm: (value: CurrencyFormState) => void;
   languages: DictionaryLanguage[];
+  /** The code field — focused when the header's Add opens the editor (#1562). */
+  firstFieldRef: RefObject<HTMLInputElement | null>;
   lockedCode: boolean;
   disabled: boolean;
   saving: boolean;
@@ -379,44 +397,48 @@ function CurrencyEditor({
           <p className="text-sm text-muted-foreground">{t('currencies.editor.selectHint')}</p>
         ) : (
           <form className="space-y-4" onSubmit={submit}>
-            <Field label="Code">
+            <FormField label={t('field.code')}>
               <Input
+                ref={firstFieldRef}
                 value={form.code}
                 disabled={lockedCode}
                 maxLength={3}
                 onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
                 required
               />
-            </Field>
-            <Field label="Label">
+            </FormField>
+            <FormField label={t('field.label')}>
               <Input
                 value={form.label}
                 onChange={(e) => setForm({ ...form, label: e.target.value })}
                 required
               />
-            </Field>
+            </FormField>
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Symbol">
+              <FormField label={t('field.symbol')}>
                 <Input
                   value={form.symbol}
                   onChange={(e) => setForm({ ...form, symbol: e.target.value })}
                   required
                 />
-              </Field>
-              <Field label="Symbol position">
+              </FormField>
+              <FormField label={t('field.symbolPosition')}>
                 <Select
                   value={form.symbolPosition}
                   onChange={(e) =>
                     setForm({ ...form, symbolPosition: e.target.value as SymbolPosition })
                   }
                 >
-                  <option value="prefix">Prefix</option>
-                  <option value="suffix">Suffix</option>
+                  {symbolPositionLabels.options(t).map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
                 </Select>
-              </Field>
+              </FormField>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Decimal places">
+              <FormField label={t('field.decimalPlaces')}>
                 <Input
                   type="number"
                   min={0}
@@ -424,28 +446,28 @@ function CurrencyEditor({
                   value={form.decimalPlaces}
                   onChange={(e) => setForm({ ...form, decimalPlaces: Number(e.target.value) })}
                 />
-              </Field>
-              <Field label="Sort order">
+              </FormField>
+              <FormField label={t('field.sortOrder')}>
                 <Input
                   type="number"
                   value={form.sortOrder}
                   onChange={(e) => setForm({ ...form, sortOrder: Number(e.target.value) })}
                 />
-              </Field>
+              </FormField>
             </div>
             <label className="flex items-center gap-2 text-sm">
               <Checkbox
                 checked={form.isActive}
                 onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
               />
-              Active
+              {t('field.active')}
             </label>
             <div className="flex justify-end gap-2 border-t pt-4">
               <Button type="button" variant="outline" onClick={onCancel}>
-                Cancel
+                {t('action.cancel')}
               </Button>
-              <Button type="submit" disabled={saving}>
-                Save
+              <Button type="submit" disabled={saving} aria-busy={saving}>
+                {t('action.save')}
               </Button>
             </div>
             <TranslationsDrawer
@@ -460,27 +482,8 @@ function CurrencyEditor({
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }): ReactNode {
-  return (
-    <div className="space-y-1">
-      <Label>{label}</Label>
-      {children}
-    </div>
-  );
-}
-
 function nextSortOrder(rows: Array<{ sortOrder: number }>): number {
   return rows.reduce((max, row) => Math.max(max, row.sortOrder), 0) + 10;
-}
-
-function formatError(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    if (err.status === 409 && err.envelope.error.code === 'DICTIONARY_ENTRY_HAS_DEPENDENTS') {
-      return `${err.envelope.error.message} Disable the entry instead or remove dependent records first.`;
-    }
-    return err.envelope.error.message;
-  }
-  return fallback;
 }
 
 async function loadTranslationCompleteness(

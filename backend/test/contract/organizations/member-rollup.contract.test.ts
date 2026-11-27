@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { AuditLogEntry } from '@endora-commerce/platform/kernel';
 import { Organization } from '../../helpers/package-entities.js';
 import {
   setupBackendServer,
@@ -6,6 +7,7 @@ import {
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
 import { CustomerAccount } from '../../helpers/package-entities.js';
+import { predefinedRoleIdOf } from '../../helpers/seed-organization-roles.js';
 
 /**
  * Feature 056 (T032) — admin toggles the customer-side roll-up capability.
@@ -27,7 +29,7 @@ describe('admin set member roll-up capability (T032)', () => {
       vatStatus: 'vat_payer',
       registeredAddress: { street: '-', city: '-', postalCode: '-', country: 'PL' },
     });
-    await em.persistAndFlush(org);
+    await em.persist(org).flush();
     org.path = `/${org.id}/`;
     await em.flush();
     orgId = org.id;
@@ -37,9 +39,9 @@ describe('admin set member roll-up capability (T032)', () => {
       passwordHash: 'x',
       firstName: 'Mem',
       lastName: 'Ber',
-      role: 'organization_admin',
+      organizationRoleId: await predefinedRoleIdOf(em, orgId, 'administrator'),
     });
-    await em.persistAndFlush(member);
+    await em.persist(member).flush();
     memberId = member.id;
   });
 
@@ -56,6 +58,10 @@ describe('admin set member roll-up capability (T032)', () => {
     });
     expect(on.statusCode).toBe(200);
     expect((on.json() as { data: { subtreeRollupEnabled: boolean } }).data.subtreeRollupEnabled).toBe(true);
+    // `specs/170-organization-roles/` FR-008, FR-073 — the member names its role, not the legacy enum.
+    const onMember = (on.json() as { data: Record<string, unknown> }).data;
+    expect(onMember['organizationRole']).toMatchObject({ kind: 'administrator', name: 'Administrator' });
+    expect(onMember).not.toHaveProperty('role');
 
     const em = h.em();
     em.clear();
@@ -70,6 +76,23 @@ describe('admin set member roll-up capability (T032)', () => {
     expect(off.statusCode).toBe(200);
     em.clear();
     expect((await em.findOneOrFail(CustomerAccount, { id: memberId })).subtreeRollupEnabled).toBe(false);
+
+    // Issue #1338 — each toggle is one `customer_account.set_subtree_rollup`
+    // Command, committed with the write: one entry per request, the flag only,
+    // and no hand-written `.admin_rollup_change` beside it.
+    const entries = await em.find(AuditLogEntry, { objectType: 'customer_account', objectId: memberId });
+    expect(entries.map((entry) => entry.action)).toEqual([
+      'customer_account.set_subtree_rollup',
+      'customer_account.set_subtree_rollup',
+    ]);
+    // Two writes inside one millisecond tie on `actedAt`; the states say which is which.
+    expect(entries.map((entry) => [entry.stateBefore, entry.stateAfter])).toEqual(
+      expect.arrayContaining([
+        [{ subtreeRollupEnabled: false }, { subtreeRollupEnabled: true }],
+        [{ subtreeRollupEnabled: true }, { subtreeRollupEnabled: false }],
+      ]),
+    );
+    expect(entries.every((entry) => entry.actorAdminUserId !== null)).toBe(true);
   });
 
   it('returns 404 for an unknown member', async () => {

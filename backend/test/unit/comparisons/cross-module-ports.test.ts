@@ -10,7 +10,6 @@ import type {
   CustomerAccountRecord,
 } from '@endora-commerce/contracts';
 import type { SettingsService } from '../../../src/kernel/settings/settings.service.js';
-import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { ComparableAttributeProjection } from '../../../../packages/modules/comparisons/src/backend/services/comparable-attribute-projection.js';
 import { ComparisonAdminService } from '../../../../packages/modules/comparisons/src/backend/services/comparison-admin.service.js';
 import {
@@ -26,14 +25,18 @@ import { ShareTokenGenerator } from '../../../../packages/modules/comparisons/sr
  * absent, or the exercise is a read), so a port that throws on every method is
  * the assertion that they do not.
  */
-const refusingChannelMembership = new Proxy(
-  {},
-  {
-    get: (_target, property) => () => {
-      throw new Error(`comparisons unexpectedly called the channel bridge.${String(property)}`);
-    },
-  },
-) as SalesChannelMembershipPort;
+/**
+ * Feature 163 — `catalog`'s availability answer, which replaced the channel
+ * bridge in this service: every column is available, so the cases here read
+ * as they did.
+ */
+const availableEverywhere = {
+  filterAvailable: async (ids: readonly string[]) => new Set(ids),
+  // Feature 163 (FR-100) — no channel rule here: each record's own minimum stands.
+  effectiveOrderRules: async () => new Map<string, { minOrderQuantity: number | null; returnable: boolean }>(),
+  // Feature 163 (SEC-2) — consulted only for an id `filterAvailable` dropped, and it drops none here.
+  describeChannelAvailability: async () => new Map(),
+};
 
 
 /**
@@ -52,7 +55,7 @@ const refusingChannelMembership = new Proxy(
  * fake that would notice the old query is what makes the test able to fail.
  */
 
-const OWNER: ComparisonOwner = { kind: 'customer', customerAccountId: 'cust-1' };
+const OWNER: ComparisonOwner = { kind: 'customer', customerAccountId: '00000000-0000-4000-8000-781000000106' };
 
 function productRecord(id: string): CatalogProductRecord {
   return {
@@ -61,8 +64,8 @@ function productRecord(id: string): CatalogProductRecord {
     slug: `slug-${id}`,
     type: 'simple',
     status: 'active',
-    name: { en: `Product ${id}` },
-    description: {},
+    name: `Product ${id}`,
+    description: null,
     stockMode: null,
     visibility: 'public',
     attributeValues: {},
@@ -80,6 +83,8 @@ function productRecord(id: string): CatalogProductRecord {
     lowStockThresholdMode: 'cumulative',
     fulfilmentStrategy: null,
     fulfilmentStrategyWarehouseOrder: null,
+    minOrderQuantity: null,
+    returnable: false,
   };
 }
 
@@ -90,7 +95,7 @@ function accountRecord(id: string, email: string): CustomerAccountRecord {
     email,
     firstName: 'Ada',
     lastName: 'Lovelace',
-    role: 'regular_user',
+    organizationRoleId: '00000000-0000-4000-8000-0000000170b2',
     emailVerifiedAt: null,
     twoFactorEnabled: false,
     lastLoginAt: null,
@@ -107,6 +112,7 @@ function accountRecord(id: string, email: string): CustomerAccountRecord {
     blockedByCustomerAccountId: null,
     deletionRequestedByAdminUserId: null,
     anonymizedAt: null,
+    preferredLanguage: null,
   };
 }
 
@@ -167,13 +173,17 @@ describe('comparisons — catalog rows arrive over catalogProductReadPort', () =
       findBySkus: async () => [],
       countByIds: async () => 0,
       listAll: async () => [],
+      listPricingRefs: async () => [],
+      findPricingRefsByIds: async () => [],
       listVariantsByProductIds: async () => [],
       findVariantsBySkus: async () => [],
       findVariantInProduct: async () => null,
       findPackagingUnitInProduct: async () => null,
+      listPackagingUnitsByProductIds: async () => [],
       listLinksBySourceIds: async () => [],
       listValueOverridesByProductIds: async () => [],
       listProductIdsByAttributeValue: async () => [],
+      pageProductsByAdminName: async () => ({ ids: [], total: 0 }),
     };
 
     const service = new ComparisonService(
@@ -181,7 +191,7 @@ describe('comparisons — catalog rows arrive over catalogProductReadPort', () =
       new ComparableAttributeProjection(),
       new ShareTokenGenerator(),
       catalogProducts,
-      refusingChannelMembership,
+      availableEverywhere,
       imagelessGallery,
       settingsStub,
       attributePortStub,
@@ -205,13 +215,17 @@ describe('comparisons — catalog rows arrive over catalogProductReadPort', () =
       findBySkus: async () => [],
       countByIds: async () => 0,
       listAll: async () => [],
+      listPricingRefs: async () => [],
+      findPricingRefsByIds: async () => [],
       listVariantsByProductIds: async () => [],
       findVariantsBySkus: async () => [],
       findVariantInProduct: async () => null,
       findPackagingUnitInProduct: async () => null,
+      listPackagingUnitsByProductIds: async () => [],
       listLinksBySourceIds: async () => [],
       listValueOverridesByProductIds: async () => [],
       listProductIdsByAttributeValue: async () => [],
+      pageProductsByAdminName: async () => ({ ids: [], total: 0 }),
     };
 
     const service = new ComparisonService(
@@ -224,7 +238,7 @@ describe('comparisons — catalog rows arrive over catalogProductReadPort', () =
       new ComparableAttributeProjection(),
       new ShareTokenGenerator(),
       catalogProducts,
-      refusingChannelMembership,
+      availableEverywhere,
       imagelessGallery,
       settingsStub,
       attributePortStub,
@@ -233,7 +247,7 @@ describe('comparisons — catalog rows arrive over catalogProductReadPort', () =
 
     const view = await service.buildOwnerView(
       {
-        id: 'cmp-1',
+        id: '00000000-0000-4000-8000-781000000107',
         shareToken: 'tok',
         displayMode: 'all',
         createdAt: new Date('2026-01-01T00:00:00.000Z'),
@@ -261,9 +275,9 @@ describe('comparisons — owner e-mail arrives over customerAccountReadPort', ()
     const admin = new ComparisonAdminService(
       fakeEm({
         Comparison: {
-          id: 'cmp-1',
+          id: '00000000-0000-4000-8000-781000000107',
           shareToken: 'tok',
-          customerAccountId: 'cust-1',
+          customerAccountId: '00000000-0000-4000-8000-781000000106',
           anonymousToken: null,
           salesChannelId: 'channel-1',
           displayMode: 'all',
@@ -274,7 +288,7 @@ describe('comparisons — owner e-mail arrives over customerAccountReadPort', ()
       }),
       {
         buildOwnerView: async () => ({
-          id: 'cmp-1',
+          id: '00000000-0000-4000-8000-781000000107',
           shareToken: 'tok',
           displayMode: 'all' as const,
           maxProducts: 4,
@@ -287,15 +301,65 @@ describe('comparisons — owner e-mail arrives over customerAccountReadPort', ()
       customerAccounts,
     );
 
-    const detail = await admin.detail('cmp-1');
+    const detail = await admin.detail('00000000-0000-4000-8000-781000000107');
 
-    expect(asked).toEqual(['cust-1']);
+    expect(asked).toEqual(['00000000-0000-4000-8000-781000000106']);
     expect(detail.owner).toEqual({
       kind: 'customer',
-      customerAccountId: 'cust-1',
+      customerAccountId: '00000000-0000-4000-8000-781000000106',
       email: 'buyer@example.test',
       anonymousToken: null,
     });
     expect(detail.salesChannel.code).toBe('web');
+  });
+});
+
+describe('comparisons — a column carries the product’s values in the reader’s channel (spec 163)', () => {
+  it('T113a links to the effective key at (channel, language); FR-100 shows the channel’s minimum', async () => {
+    const catalogProducts = {
+      findByIds: async (ids: readonly string[]) => ids.map((id) => productRecord(id)),
+      listValueOverridesByProductIds: async () => [],
+    } as unknown as CatalogProductReadPort;
+    const askedKeys: Array<[string[], string]> = [];
+    const service = new ComparisonService(
+      fakeEm({
+        ComparisonProduct: [{ productId: 'prod-1', position: 0, addedAt: new Date('2026-02-01T00:00:00.000Z') }],
+        SalesChannel: { id: 'channel-1', defaultCurrency: 'PLN', defaultLanguage: 'de-DE' },
+      }),
+      new ComparableAttributeProjection(),
+      new ShareTokenGenerator(),
+      catalogProducts,
+      {
+        filterAvailable: async (ids: readonly string[]) => new Set(ids),
+        effectiveOrderRules: async (ids: readonly string[]) =>
+          new Map(ids.map((id) => [id, { minOrderQuantity: 7, returnable: false }] as const)),
+
+        describeChannelAvailability: async () => new Map(),
+      },
+      imagelessGallery,
+      settingsStub,
+      attributePortStub,
+      { resolveListingPrices: async () => new Map() },
+      undefined,
+      undefined,
+      {
+        effectiveKeys: async (ids: readonly string[], channelId: string) => {
+          askedKeys.push([[...ids], channelId]);
+          return new Map([['prod-1', new Map([['de-DE', 'bohrer-kit'], ['pl-PL', 'zestaw']])]]);
+        },
+      },
+    );
+    const view = await service.buildOwnerView(
+      {
+        id: '00000000-0000-4000-8000-781000000107',
+        shareToken: 'tok',
+        displayMode: 'all',
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      } as never,
+      'channel-1',
+    );
+    expect(askedKeys).toEqual([[['prod-1'], 'channel-1']]);
+    expect(view.products[0]).toMatchObject({ slug: 'bohrer-kit', minOrderQuantity: 7 });
   });
 });

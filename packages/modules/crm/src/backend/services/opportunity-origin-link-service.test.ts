@@ -31,6 +31,8 @@ function service(overrides: { opportunity?: unknown; scope?: unknown } = {}) {
     links: { linkAutomatically: vi.fn(async () => 'linked' as const) },
     adminScope: { resolveForAdmin: vi.fn(async () => overrides.scope ?? { allowAll: true }) },
     warn: vi.fn(),
+    // Feature 162 — the Opportunity's values pushed to the document it linked.
+    carryIntoDocument: vi.fn(async () => undefined),
   };
   return { deps, subject: new OpportunityOriginLinkService(deps as never as OpportunityOriginLinkServiceDeps) };
 }
@@ -126,5 +128,45 @@ describe('readEventOrigin', () => {
     ['no payload', null],
   ])('answers null for %s', (_label, payload) => {
     expect(readEventOrigin(payload)).toBeNull();
+  });
+});
+
+/** Feature 162 (US3, research R-10) — the carry follows the link, and only a link just made. */
+describe('OpportunityOriginLinkService — carrying the Opportunity’s values', () => {
+  it('pushes the values once, after the link is made, naming the document and the Opportunity', async () => {
+    const { deps, subject } = service();
+    expect(await subject.link(origin, order)).toBe('linked');
+    expect(deps.carryIntoDocument).toHaveBeenCalledTimes(1);
+    expect(deps.carryIntoDocument).toHaveBeenCalledWith(
+      order,
+      expect.objectContaining({ id: OPPORTUNITY_ID, organizationId: ORGANIZATION_ID }),
+    );
+  });
+
+  it('pushes nothing for a document that was linked already', async () => {
+    const { deps, subject } = service();
+    deps.links.linkAutomatically.mockResolvedValueOnce('already-linked' as never);
+    await subject.link(origin, order);
+    expect(deps.carryIntoDocument).not.toHaveBeenCalled();
+  });
+
+  it('keeps the link when the carry throws, and says so in the log only (review fix 2026-10-21)', async () => {
+    const { deps, subject } = service();
+    deps.carryIntoDocument.mockRejectedValueOnce(new Error('receiver failed'));
+    expect(await subject.link(origin, order)).toBe('linked');
+    expect(deps.warn).toHaveBeenCalledTimes(1);
+    const [fields, message] = deps.warn.mock.calls[0] as unknown as [Record<string, unknown>, string];
+    expect(fields).toMatchObject({ opportunityId: OPPORTUNITY_ID, documentKind: 'order', documentId: ORDER_ID });
+    expect(fields.error).toBeInstanceOf(Error);
+    expect(message).toContain('custom-field carry');
+  });
+
+  it('pushes nothing for a refused claim or an origin of another type', async () => {
+    const refused = service({ opportunity: null });
+    expect(await refused.subject.link(origin, order)).toBe('refused');
+    expect(refused.deps.carryIntoDocument).not.toHaveBeenCalled();
+    const other = service();
+    expect(await other.subject.link({ type: 'somebody_elses_thing', id: OPPORTUNITY_ID }, order)).toBe('not-ours');
+    expect(other.deps.carryIntoDocument).not.toHaveBeenCalled();
   });
 });

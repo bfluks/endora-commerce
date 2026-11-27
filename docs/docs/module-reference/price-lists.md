@@ -16,7 +16,7 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 | | |
 | --- | --- |
 | Module id | `price_lists` |
-| Name | Price Lists |
+| Name | Price lists |
 | Version | `1.0.0` |
 | Ships from | `@endora-commerce/mod-price-lists` |
 | Licence | `MIT` |
@@ -29,31 +29,37 @@ Rendered from the module's own manifest, and from nothing written by hand. What 
 
 | Module | Binding | What it means |
 | --- | --- | --- |
+| `admin_users` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `audit_logs` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `catalog` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `currencies` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `customer_accounts` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `organizations` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
 | `settings` | yes | installs and migrates after it, and an operator cannot switch it off underneath this module |
+| `product_visibility_rules` | no | degrades-without `adminProductVisibilityPort` — the price book grid is not narrowed by role: every administrator sees every product and variant line, exactly as before the feature |
 
 ## Permissions
 
 | Code | Label | Also needs |
 | --- | --- | --- |
-| `price_lists:read` | View price lists and pricing rules | — |
-| `price_lists:write` | Edit price lists, brackets and display modes | — |
+| `price_lists:read` | View price books and display modes | — |
+| `price_lists:write` | Edit price books, base prices and display modes | `catalog:read` |
 
 ## Command palette
 
 | Action | Opens | Permission |
 | --- | --- | --- |
+| `new-price-book` | `/price-lists/new` | `price_lists:write` |
+| `open-price-explainer` | `/price-lists/explain` | `price_lists:read` |
 | `open-price-lists` | `/price-lists` | `price_lists:read` |
+| `open-pricing-settings` | `/price-lists/display-modes` | `price_lists:read` |
 
 ## Settings
 
 | Code | Name | Type |
 | --- | --- | --- |
 | `pricing.default_display_mode` | Default price display mode | `string` |
+| `pricing.show_list_price` | Show list price beside the buyer price | `boolean` |
 | `pricing.unauthenticated_display_mode` | Unauthenticated price display mode | `string` |
 
 ## Translations

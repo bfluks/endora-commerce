@@ -1,3 +1,4 @@
+import { decimalSum, percentOfHalfUp } from '@endora-commerce/contracts';
 import { Cart } from '../../helpers/package-entities.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -57,7 +58,7 @@ describe('placeOrder — coupon discount stamped on the order (feature 036)', ()
     // leaves `salesChannelId` unset, which no real cart is (D-47…D-51), so the
     // cart is placed in the default channel here.
     cart!.salesChannelId = (await h.salesChannels.resolver.getSystemDefault()).id;
-    await em.persistAndFlush(cart!);
+    await em.persist(cart!).flush();
   });
   afterAll(async () => {
     await teardownBackendServer(h);
@@ -95,7 +96,12 @@ describe('placeOrder — coupon discount stamped on the order (feature 036)', ()
     );
 
     const subtotal = Number(order.subtotal);
-    const expectedDiscount = Math.round(subtotal * 0.1 * 100) / 100;
+    // Issue #1350 — 10 % of what the buyer pays for the goods: the gross,
+    // net plus the VAT per rate on the nets, not 10 % of the net.
+    expect(Number(order.taxTotal)).toBeGreaterThan(0);
+    const expectedDiscount = Number(
+      percentOfHalfUp(decimalSum(order.subtotal, order.taxTotal), 10),
+    );
 
     expect(order.promotionCode).toBe('CHECKOUT10');
     expect(Number(order.discountTotal)).toBeCloseTo(expectedDiscount, 2);

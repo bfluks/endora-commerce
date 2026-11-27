@@ -92,15 +92,20 @@ built. **This rung is real and undiscoverable**, and that is stated here rather
 than left for you to find out.
 :::
 
-:::note Not on this rung: the Command Bus
-`CommandBus.run(command)` takes a command object and executes it in a
-transaction. There is no handler registry and nothing to hook. It is the uniform
-write path, not an extension point.
+:::note Not on this rung: taking part in the write itself
+A subscriber runs after the commit and cannot change or refuse what was written.
+To act **inside** an owner's write — add your own row in the same transaction,
+or refuse it — use a command hook, which is rung 2 (2b below).
 :::
 
 ---
 
 ## Rung 2 — run before or after what the owner already serves
+
+Two mechanisms, one rung: around an endpoint (2a) or inside a write (2b). Both
+are a published identity the owner versions, and both may refuse.
+
+### 2a — an API interceptor
 
 **Mechanism.** `ctx.interceptors([{ id, target, phase, order, handler }])`. The
 target is the stable endpoint identity `"<METHOD> <route pattern>"` — the pattern
@@ -127,6 +132,33 @@ deployment's divergence check reconciles every target against the route table an
 fails the build with `unmatched-interceptor-target`, which is the only thing that
 will.
 :::
+
+### 2b — a command hook
+
+**Mechanism.** `ctx.commandHooks([{ id, on, phase: 'beforeCommit', handler }])`,
+where `on` is a ref the owner publishes in `@endora-commerce/contracts` for a
+Command it declared hookable (`ORGANIZATION_HOOKABLE_ACTIONS.register`). The hook
+runs inside the owner's transaction, after its write and before its audit entry.
+The details are on [Command Bus](./command-bus.md#command-hooks-beforecommit).
+
+**Costs.** A coupling to the hookable action and its data shape, which are public
+API the owner versions, and a dependency edge in your manifest on the owner. A
+hook holds the owner's transaction open while it runs, so it makes no remote call.
+
+**Loses.** Nothing structural. The owner's write, its single audit entry and the
+bus itself stay the owner's: a hook can add its own rows (through its own tables
+or a Command run with `ctx.run`) and refuse the whole write, and nothing else.
+
+**Who.** Everyone, across owners — core modules, your deployment's overlay modules
+and installed packages alike — but only on actions the owner declared. A hook on
+an undeclared action, two unordered hook modules on one action, or a hook module
+that does not depend on the owner refuses the composition at boot. Your
+deployment orders two unrelated hook modules in its `divergence.ts`
+(`commandHookOrder`).
+
+**When it is the answer.** A rule of your own that must hold for every write of a
+record, whichever endpoint or port it came through; data of your own that must
+commit with the core row or not at all.
 
 ---
 
@@ -165,6 +197,12 @@ name in its doc block is contract and a check holds you to it; and an **optional
 method on a published port is refused**, because the resolution proxy answers
 every property with a function and feature detection through it is impossible by
 construction.
+
+A **write** port is the port of its aggregate — extend the aggregate's
+`<aggregate>CommandPort` rather than publishing one shaped by a single request
+(see [the kernel guide](./kernel.md)) — and every published port method is on
+the [contract surface](./contract-surface.md): it is deprecated for a release
+before it is removed or changed.
 :::
 
 ---
@@ -247,22 +285,41 @@ highest price on this list for something rung 2 would have done.
 
 ---
 
-## Never a rung: schema
+## The data ladder: where new data lives
 
-**Core entities and migrations are never overridden.** Your own tables belong to
-a module you own; an extra field on a core entity goes through runtime custom
-fields. A per-deployment overlay module ships no entity class and no migration at
-all, and the generator refuses both.
+The rungs above change **behaviour**. New **data** has a ladder of its own, and
+it is ordered the same way: start at the bottom.
+
+| Rung | Mechanism | Who | Survives upgrades because |
+| --- | --- | --- | --- |
+| D0 | **Runtime custom fields** — an operator defines a field on a host entity in the admin | an operator, at run time | it is data: a definition row and a value in the host's own value bag |
+| D1 | **A side table** your module owns, keyed by the core row's id and read through your module's port | any module you own, an installed package | the table is yours; core never touches it |
+| D2 | **Declared extension columns** — additive `x_<moduleId>_*` columns on an extensible core table, declared with `defineColumnExtension` | an installed module package that depends on the host | the platform generates the DDL, records it in a ledger, verifies it at every migrate and boot, and core CI holds every open extensible table to keeping them |
+| D3 | **A variant the owning module provides** — a type, a status, a configurable shape the owner already models | the owner decides; you configure it | it is the owner's own schema |
+
+**D2 is narrow on purpose.** The extensible tables are exactly the custom-field
+host tables — derived from the custom-field binding registry, never a second
+list — and in this release only `organizations` is open (the other eight follow
+in a later release). The declaring module owns its `x_<moduleId>_*` columns and
+only its code writes them, through the platform's accessor, inside a Command or a
+command hook; the host keeps the table, its constraints and every undeclared
+column. Uninstalling the module keeps the columns (the ledger marks them
+orphaned) until an operator drops them with an audited command. The worked
+example and every rule are on [Declared extension columns](./schema-extensions.md).
+
+**Never a rung: overriding core schema.** A core column, constraint, index or
+entity class is never changed from outside its module, and a package migration
+that writes another module's table is refused at `migrate` — by the platform, not
+by review. Today a per-deployment overlay module ships no entity class and no
+migration, and both are refused: own the table from a module package of yours (D1)
+and read it from the overlay through that module's port. A later release lifts
+that refusal (see [Overlay pattern](./overlay-pattern.md)); an overlay module's
+migrations then face the same guard, with no exemption.
 
 The reason is **not** migration ordering — that argument was measured false and
 is retired. The reason is that a shared core schema is the only thing that makes
-upgrades feasible, and that an overlay lives in the same repository and the same
-build as core, so the remedy costs nothing but a directory: own the table from a
-module of yours and read it from the overlay through that module's port.
-
-An **installed extension package** is the opposite case and may ship both: a
-third-party author has no core module, so the same rule would be a prohibition on
-extension packages rather than a constraint to design around.
+upgrades feasible: D1 and D2 are the two ways to add schema that a core upgrade
+is obliged, and checked, not to break.
 
 ---
 
@@ -291,10 +348,10 @@ repository, regenerated from your tree and byte-compared in CI:
 | `backend/src/apps/<deployment>/divergence.generated.ts` | a program, and the determinism gate |
 
 Beside them sits the one file you write by hand,
-`backend/src/apps/<deployment>/divergence.ts`, which carries the three things no
-walk can produce: the modules you do not ship, the wrapping order where two of
-your overlay modules decorate one name, and **one sentence per divergence saying
-why**.
+`backend/src/apps/<deployment>/divergence.ts`, which carries the things no walk
+can produce: the modules you do not ship, the wrapping order where two of your
+overlay modules decorate one name, the order of two command-hook modules no
+dependency ranks, and **one sentence per divergence saying why**.
 
 The two are reconciled both ways. A divergence with no sentence fails the build,
 and so does a sentence describing a divergence that is gone — which is how a

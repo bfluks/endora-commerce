@@ -6,5 +6,18 @@
   "errors.ADMIN_AUTHENTICATION_UNAVAILABLE": "Sign-in is temporarily unavailable because a service it depends on is not responding. Try again in a moment; if it keeps happening, contact whoever runs this platform.",
   "errors.ADMIN_USER_ROLE_REQUIRED": "An administrator account must hold a role. Choose a role for this account.",
   "errors.NEW_PASSWORD_UNCHANGED": "The new password is the same as the current one. Choose a different password.",
-  "errors.ADMIN_USER_OUTRANKS_ACTOR": "This account's role holds permissions your own role does not ({permissions}), so you cannot change it, set its password, deactivate it or delete it."
+  "errors.ADMIN_USER_OUTRANKS_ACTOR": "This account's role holds permissions your own role does not ({permissions}), so you cannot change it, set its password, deactivate it or delete it.",
+  "errors.ADMIN_USER_AVATAR_NOT_FOUND": "The avatar must be an image from the library. Choose it again.",
+  "actions.openAdminUsers.keywords": "users, operators, accounts",
+  "errors.MFA_REQUIRED_FOR_ROLE_TWO_FACTOR": "This role cannot require two-step verification on this instance.",
+  "errors.MFA_REQUIRED_FOR_ROLE_TWO_FACTOR.mfa_off": "This role cannot require two-step verification while two-step verification (the MFA module) is switched off. Switch it on first, then save the role again.",
+  "errors.MFA_REQUIRED_FOR_ROLE_TWO_FACTOR.encryption_key_missing": "This role cannot require two-step verification because no second factor can be set up on this instance: the encryption key MFA_SECRET_ENCRYPTION_KEY is not configured. Ask whoever runs this platform to set it.",
+  "roles.twoFactor.help": "Members need a second factor; anyone without one sets it up at next sign-in.",
+  "roles.twoFactor.mfaOff": "Not applied while two-step verification is switched off.",
+  "roles.twoFactor.confirmSignOut": "Administrators with this role who have not set up two-step verification: {count}. They will be signed out now and asked to set it up at their next sign-in. Continue?",
+  "roles.twoFactor.signedOut": "Saved role {code}. Administrators signed out because they have not set up two-step verification: {count}.",
+  "roles.twoFactor.notice.encryption_key_missing": "Not in force: no encryption key (MFA_SECRET_ENCRYPTION_KEY).",
+  "module.name": "Admin users",
+  "module.description": "Admin user accounts, sessions, and impersonation flows.",
+  "module.nonDeactivatableReason": "Owns admin login, sessions and impersonation; switched off, no operator could sign in to the Admin UI at all — including to switch it back on."
 }

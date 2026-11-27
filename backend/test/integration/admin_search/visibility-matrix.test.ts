@@ -68,7 +68,7 @@ describe('admin global search — visibility matrix (spec 150, SC-003)', () => {
         ['rfqB', orgB.id, custB.id],
       ] as const) {
         const rfq = em.create(QuoteRequest, { organizationId, customerAccountId, businessId: `ACME${T}-${key}` } as never);
-        await em.persistAndFlush(rfq);
+        await em.persist(rfq).flush();
         ids[key] = (rfq as { id: string }).id;
       }
       const product = em.create(Product, {
@@ -76,13 +76,13 @@ describe('admin global search — visibility matrix (spec 150, SC-003)', () => {
         slug: `acme-${T}`,
         type: 'simple',
         status: 'active',
-        name: { 'en-US': 'Anvil' },
-        description: { 'en-US': '' },
+        name: 'Anvil',
+        description: '',
         visibility: 'public',
         attributeValues: {},
       } as never);
       const category = em.create(Category, { name: { 'en-US': `ACME${T} tools` }, slug: `tools-${T}` } as never);
-      await em.persistAndFlush([product, category]);
+      await em.persist([product, category]).flush();
       ids['product'] = (product as { id: string }).id;
       ids['category'] = (category as { id: string }).id;
     });
@@ -135,16 +135,21 @@ describe('admin global search — visibility matrix (spec 150, SC-003)', () => {
     expect(found['customers.customer']?.sort()).toEqual([ids['custA'], ids['custB']].sort());
     expect(found['catalog.product']).toEqual([ids['product']]);
     expect(found['catalog.category']).toEqual([ids['category']]);
-    expect(await capability(GS_COOKIES.admin)).toEqual(SEVEN);
+    // Offered besides the seven: the record types later features contribute
+    // (`specs/163-projects-and-tasks/`), which match nothing of this seed.
+    expect(await capability(GS_COOKIES.admin)).toEqual([...SEVEN, 'projects.project', 'tasks.task']);
   });
 
-  it('confines a sales representative to their organization, except Organizations (owner Q2)', async () => {
+  // Issue #305 — one reach rule on every record type: the representative
+  // reaches orgA (theirs) and orgB, which nobody is assigned to. Organizations
+  // are no longer the exception: they follow the same rule as the rest.
+  it('gives a sales representative their organization and every unassigned one, on every record type (#305)', async () => {
     const found = await groups(GS_COOKIES.salesRep);
-    expect(found['orders.order']).toEqual([ids['orderA']]);
-    expect(found['quote_requests.quote_request']).toEqual([ids['rfqA']]);
-    expect(found['crm.opportunity']).toEqual([ids['oppA']]);
-    expect(found['customers.customer']).toEqual([ids['custA']]);
-    // Every organization the Organizations list shows them, the assigned one first.
+    expect(found['orders.order']?.sort()).toEqual([ids['orderA'], ids['orderB']].sort());
+    expect(found['quote_requests.quote_request']?.sort()).toEqual([ids['rfqA'], ids['rfqB']].sort());
+    expect(found['crm.opportunity']?.sort()).toEqual([ids['oppA'], ids['oppB']].sort());
+    expect(found['customers.customer']?.sort()).toEqual([ids['custA'], ids['custB']].sort());
+    // The Organizations list's rows, the assigned one first.
     expect(found['organizations.organization']).toEqual([ids['orgA'], ids['orgB']]);
     expect(found['catalog.product']).toEqual([ids['product']]);
     expect(found['catalog.category']).toEqual([ids['category']]);

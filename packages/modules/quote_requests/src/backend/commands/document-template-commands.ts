@@ -3,6 +3,7 @@ import {
   type DocumentTemplateChoices,
   type SalesRepAssignmentPort,
   type TransactionalEmailSender,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import type { Command, CommandActor } from '@endora-commerce/platform/commands';
 import { HttpError } from '@endora-commerce/platform/http';
@@ -48,6 +49,7 @@ async function findVisible(
   deps: DocumentCommandDeps,
   quoteRequestId: string,
 ): Promise<QuoteRequest> {
+  if (!isUuidShape(quoteRequestId)) throw notFound();
   const quote = await em.findOne(QuoteRequest, { id: quoteRequestId });
   if (!quote) throw notFound();
   const reach = await adminCanSeeOrganization(
@@ -118,6 +120,10 @@ export interface SendDocumentInput {
   /** Recorded on the history event as the actor's role, as every admin event is. */
   readonly roleLabel: string | null;
   readonly variables: Record<string, unknown>;
+  /** Issue #1824 — the integration a `quoteRequestCommandPort` caller named, recorded as `source`. */
+  readonly source?: string;
+  /** Issue #1824 — extension input for the command hooks on the action, keyed by module id. */
+  readonly extensions?: Readonly<Record<string, unknown>>;
 }
 
 const UNAVAILABLE = new Set(['deactivated', 'no_transport', 'no_definition']);
@@ -141,6 +147,7 @@ export function makeSendDocumentCommand(
     action: 'quote_request.send_document',
     objectType: 'quote_request',
     objectId: input.quoteRequestId,
+    ...(input.extensions ? { extensions: input.extensions } : {}),
     run: async ({ em, actor }) => {
       const quote = await findVisible(em, actor, deps, input.quoteRequestId);
       const sender = deps.sender();
@@ -216,7 +223,15 @@ export function makeSendDocumentCommand(
       await em.flush();
       return {
         result: { sent, failed },
-        after: { templateId: input.pdf.templateId, language: input.language, recipients: sent, failedRecipients: failed },
+        // How many it went to, never the addresses (D-288, #470): the
+        // `pdf-sent` history event above keeps them, under the quote's reach.
+        after: {
+          templateId: input.pdf.templateId,
+          language: input.language,
+          recipientCount: sent.length,
+          failedRecipientCount: failed.length,
+          ...(input.source !== undefined ? { source: input.source } : {}),
+        },
       };
     },
   };

@@ -29,6 +29,7 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 
 | Moduł | Wiążąca | Co to oznacza |
 | --- | --- | --- |
+| `_i18n` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `admin_roles` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `assets_library` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `auth` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
@@ -39,6 +40,8 @@ Operator włącza i wyłącza ten moduł na **/platform/modules**. Decyduje o ty
 | `settings` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `transactional_emails` | tak | ten moduł instaluje się i migruje po nim, a operator nie może go wyłączyć, dopóki ten moduł działa |
 | `invoice_ledger` | nie | degrades-without `invoiceLedgerRoutingPort` — Faktury są nadal wystawiane z numeracją Endory i od razu gotowe; oczekiwanie przewidziane w trybie B jest pomijane. |
+| `payments` | nie | degrades-without `paymentReadPort` — Wystawiona faktura zapisuje jako zapłaconą zapisaną sumę zamówienia, gdy zamówienie jest opłacone, a w przeciwnym razie nic. |
+| `returns` | nie | degrades-without `returnRefundReadPort` — Wystawiona faktura odejmuje od zapłaconej kwoty tylko zwroty zapisane przez moduł płatności; zwrot rozliczony ręcznie albo uznaniem limitu kredytowego nie jest odejmowany. |
 
 ## Uprawnienia
 

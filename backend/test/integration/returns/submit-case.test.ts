@@ -4,6 +4,8 @@ import {
   teardownBackendServer,
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
+import { useTemporaryAssetStore } from '../../helpers/crm-attachment-upload.js';
+import { TINY_PNG, upload } from './off-platform-fixtures.js';
 import { ADMIN_COOKIE, CUSTOMER_COOKIE, anyReasonId, resetReturnGraph, seedReturnableOrder } from './helpers.js';
 
 /**
@@ -119,7 +121,10 @@ describe('returns — submit case (US1)', () => {
     expect(second.statusCode).toBe(422);
   });
 
-  it('attaches an uploaded asset to a case (US1, T027)', async () => {
+  // `specs/180-off-platform-complaints/` research R-12 replaced the JSON `{ assetId }`
+  // body: a file is uploaded to the case as multipart, stored by `returns` itself.
+  it('attaches an uploaded file to a case (US1, T027; 180 §C4)', async () => {
+    const store = await useTemporaryAssetStore(h);
     const { orderId, itemIds } = await seedReturnableOrder(h.em());
     const reasonId = await anyReasonId(h.em());
     const created = await h.app.inject({
@@ -130,16 +135,14 @@ describe('returns — submit case (US1)', () => {
     });
     const caseId = (created.json() as { data: { id: string } }).data.id;
 
-    const res = await h.app.inject({
-      method: 'POST',
-      url: `/api/v1/returns/${caseId}/attachments`,
-      cookies: CUSTOMER_COOKIE,
-      payload: { assetId: '00000000-0000-4000-8000-0000000000f1' },
-    });
-    expect(res.statusCode).toBe(201);
-    const data = (res.json() as { data: { assetId: string; returnCaseId: string } }).data;
-    expect(data.assetId).toBe('00000000-0000-4000-8000-0000000000f1');
-    expect(data.returnCaseId).toBe(caseId);
+    try {
+      const res = await upload(h, { type: 'photo', filename: 'defect.png', mime: 'image/png', value: TINY_PNG }, { caseId });
+      expect(res.statusCode, res.body).toBe(201);
+      const data = (res.json() as { data: { type: string; returnCaseId: string; mimeType: string } }).data;
+      expect(data).toMatchObject({ type: 'photo', returnCaseId: caseId, mimeType: 'image/png' });
+    } finally {
+      await store.undo();
+    }
   });
 
   it('does not expose a case to a different customer (admin-only detail still works)', async () => {

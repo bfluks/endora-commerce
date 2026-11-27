@@ -45,7 +45,7 @@ describe('Admin organization moderation — approve / reject + storefront gate',
         country: 'PL',
       },
     });
-    await em.persistAndFlush(org);
+    await em.persist(org).flush();
     orgId = org.id;
     pendingOrg = org;
   });
@@ -79,8 +79,10 @@ describe('Admin organization moderation — approve / reject + storefront gate',
       payload: { expectedVersion: fresh.version },
     });
     expect(res.statusCode).toBe(422);
-    const err = res.json() as { error: { code: string } };
-    expect(err.error.code).toBe(ERROR_CODES.VALIDATION_FAILED);
+    // Issue #629 (#86) — the status guard's own code, both statuses in `details`.
+    const err = res.json() as { error: { code: string; details?: Record<string, unknown> } };
+    expect(err.error.code).toBe(ERROR_CODES.ORGANIZATION_STATUS_INVALID);
+    expect(err.error.details).toMatchObject({ currentStatus: 'active', requiredStatus: 'pending_verification' });
   });
 
   it('rejects with 409 VERSION_CONFLICT when expectedVersion is stale', async () => {
@@ -97,7 +99,7 @@ describe('Admin organization moderation — approve / reject + storefront gate',
         country: 'PL',
       },
     });
-    await em.persistAndFlush(org);
+    await em.persist(org).flush();
     const res = await h.app.inject({
       method: 'POST',
       url: `/api/v1/admin/organizations/${org.id}/approve`,
@@ -124,7 +126,7 @@ describe('Admin organization moderation — approve / reject + storefront gate',
         country: 'PL',
       },
     });
-    await em.persistAndFlush(org);
+    await em.persist(org).flush();
     const res = await h.app.inject({
       method: 'POST',
       url: `/api/v1/admin/organizations/${org.id}/reject`,
@@ -160,7 +162,7 @@ describe('Admin organization moderation — approve / reject + storefront gate',
         country: 'PL',
       },
     });
-    await em.persistAndFlush(org);
+    await em.persist(org).flush();
 
     // Attempt place-order with the org context wired via the
     // `customerResolver`. The test harness defaults to a fixed Organization,

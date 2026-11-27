@@ -28,7 +28,7 @@ Authorization: Bearer sk_live_REDACTED
 - A key missing the required scope receives `403 API_KEY_OUT_OF_SCOPE`
   (audited).
 
-Keys are issued in **Admin Panel → API Keys**. The token is shown once at
+Keys are issued in **Admin Panel → API keys**. The token is shown once at
 creation; only its SHA-256 hash is stored.
 
 ## The two key modes
@@ -37,7 +37,7 @@ creation; only its SHA-256 hash is stored.
 |---|---|---|
 | Identity | Platform credential (system context) | Acts **for one Organization** on one pinned Sales Channel via a designated service Customer Account |
 | Typical use | PIM sync, feed generation | Distributor integration: org-priced catalog, ordering |
-| Catalog reads | Channel-default prices; channel resolved from the `X-Sales-Channel` header / host / default | The Organization's effective prices, availability, and quantity price tiers; channel always the bound one |
+| Catalog reads | The channel's prices for everyone (no organization); channel resolved from the `X-Sales-Channel` header / host / default | The Organization's effective prices, availability, and quantity price tiers; channel always the bound one |
 | Bulk pricing / orders | Refused (`403 API_KEY_NOT_BOUND`) | Allowed with the matching scope |
 | Allowed scopes | `catalog:read`, `catalog:write` | `catalog:read`, `orders:read`, `orders:write` (`catalog:write` is forbidden on bound keys) |
 | Expiry | Optional `expiresAt` | Optional `expiresAt` |
@@ -50,10 +50,11 @@ See [`api_keys` module docs](../modules/api_keys.md) for the creation rules.
 
 | Scope | Unbound key | Bound key |
 |---|---|---|
-| `catalog:read` | External catalog reads (channel-default prices) + PIM attribute-set reads | External catalog reads (org prices) + bulk pricing |
+| `catalog:read` | External catalog reads (the channel's prices for everyone) + PIM attribute-set reads | External catalog reads (org prices) + bulk pricing |
 | `catalog:write` | PIM by-SKU product upsert | Not grantable (creation rule) |
 | `orders:read` | Not grantable without a binding | External order list/detail |
 | `orders:write` | Not grantable without a binding | External order placement |
+| `platform.api_description.read` | The API description (`GET /api/v1/_openapi.json`) | The API description (`GET /api/v1/_openapi.json`) |
 
 ### Channel pinning (bound keys)
 
@@ -83,7 +84,8 @@ Gate: `catalog:read`.
   `cursor`), filters `categorySlug`, `q`, and `changedSince` (ISO 8601).
   Served from PostgreSQL deterministically (`x-search-backend: postgres`).
 - `GET /api/v1/external/catalog/products/:idOrSlug` — detail; for bound keys
-  includes `priceTiers` (the Organization's quantity-bracket ladder).
+  includes `priceTiers` (the Organization's quantity-tier ladder: the price at
+  each quantity where one of the price books that apply to it starts a tier).
 - `GET /api/v1/external/catalog/categories` — the resolved channel's category
   tree.
 
@@ -93,7 +95,8 @@ detail URLs return `404` — indistinguishable from non-existence. Bound-caller
 items additionally carry:
 
 - `price` — the Organization's effective unit price at quantity 1, computed by
-  the same pricing engine as the cart (`null` when unresolvable);
+  the same price-book resolution as the cart (`null` when no price book prices
+  the product for it);
 - `priceUnavailable: true` — marker when the org price could not be resolved;
 - `availability` — `{ band, inStock }`.
 
@@ -117,12 +120,18 @@ POST /api/v1/external/catalog/prices
 The response preserves line order. Each line resolves to either a priced entry
 (`amount`, `currency`, `isSale`, `bracketStartQuantity`, `priceListId`) or
 `price: null` with a `reason` of `sku_not_in_assortment` or
-`price_unavailable`. Per-line misses are data, not errors — a basket always
+`price_unavailable`. `priceListId` is the price book that priced the line and
+`bracketStartQuantity` the starting quantity of its quantity tier — the field
+names predate price books and are kept for compatibility. A line names a
+product SKU; a variant SKU is not looked up and answers
+`sku_not_in_assortment`. Per-line misses are data, not errors — a basket always
 gets a total answer. More than 200 lines is a `422 VALIDATION_FAILED`.
 
 Guarantee: for any `(sku, quantity)` the returned amount equals what the cart
 and order placement would charge the bound Organization on the bound channel
-at that quantity, to the cent.
+at that quantity, to the cent. The price is resolved for the Organization and
+its customer group; the bound service customer account's own customer group, if
+it has one, is not applied here.
 
 ## Idempotent ordering
 
@@ -147,8 +156,23 @@ Idempotency-Key: acme-order-1001
 - Reusing a key with a **different** payload ⇒ `409 IDEMPOTENCY_KEY_REUSED`.
 - Addresses: pass existing organization address ids, or inline
   `deliveryAddress` / `billingAddress` objects.
-- Per-line refusals are whole-order `422`s with per-line issues
-  (`SKU_NOT_IN_ASSORTMENT`, `PRICE_UNAVAILABLE`); nothing is persisted.
+- Per-line refusals are a whole-order `422 ORDER_INTAKE_LINES_REFUSED` whose
+  `details` is the array of per-line issues (`{ path, issue, sku }`, `issue`
+  `SKU_NOT_IN_ASSORTMENT` or `PRICE_UNAVAILABLE`); nothing is persisted. Until
+  issue #627 the code was `VALIDATION_FAILED`; the array is unchanged.
+- Another intake for the same key still in progress ⇒ `409 ORDER_INTAKE_BUSY`.
+  Retry with the same `Idempotency-Key`: the retry lands on the order the other
+  intake placed. Until issue #627 this was `409 VALIDATION_FAILED` with
+  `details.code` `intake_busy`, which is gone.
+- A line whose SKU is in the channel's assortment but whose product is not
+  available to your Organization there now — switched off in the channel,
+  archived, outside its publication window, or restricted to other
+  customers — refuses
+  the whole order with `404 PRODUCT_NOT_FOUND`, without naming the product;
+  nothing is persisted. It is asked after the per-line checks, so a `422` takes
+  precedence. The difference between the two answers is deliberate: the key is
+  bound to one Organization and one channel — your own integration — and SKUs
+  are generally public.
 - The success response (`201`) is the standard order envelope — the same shape
   customer sessions receive. Track orders with
   `GET /api/v1/external/orders` and `GET /api/v1/external/orders/:id`
@@ -160,8 +184,8 @@ A bound key can never do more than the Organization's own buyers. The same
 domain code path places the order, so every entitlement applies identically:
 suspended organization ⇒ `423`; payment or delivery method outside the
 organization's allow-list ⇒ the same refusal as customer checkout
-(`400 VALIDATION_FAILED`, `error.details.code`
-`payment_method_not_allowed_for_organization` or
+(`400 ORDER_PAYMENT_METHOD_UNAVAILABLE` or `400 ORDER_DELIVERY_METHOD_UNAVAILABLE`,
+`error.details.code` `payment_method_not_allowed_for_organization` or
 `delivery_method_not_allowed_for_organization`); credit
 limit exceeded ⇒ the same credit-guard error; minimum order value, assortment,
 warehouse strategy, and automatic promotions all behave exactly as in the
@@ -195,7 +219,10 @@ retry semantics). Two facts matter for partners:
 | `API_KEY_CHANNEL_MISMATCH` | 403 | Bound key named a foreign sales channel |
 | `IDEMPOTENCY_KEY_REQUIRED` | 422 | Missing `Idempotency-Key` on order placement |
 | `IDEMPOTENCY_KEY_REUSED` | 409 | Same idempotency key, different payload |
+| `ORDER_INTAKE_BUSY` | 409 | Another intake for the same key is in progress; retry with the same `Idempotency-Key` |
+| `ORDER_INTAKE_LINES_REFUSED` | 422 | One or more lines refused; `details` lists each line's issue |
 | `SKU_NOT_IN_ASSORTMENT` | 422 (per line) | SKU absent from the bound channel's assortment |
 | `PRICE_UNAVAILABLE` | 422 (per line) | No resolvable organization price |
+| `PRODUCT_NOT_FOUND` | 404 | A product in the assortment is not available to the Organization in the channel now |
 | `STOCK_UNAVAILABLE` | 409 | Insufficient stock at placement |
 | `FORBIDDEN` (`organization_cannot_transact`) | 423 | Organization suspended / cannot transact |

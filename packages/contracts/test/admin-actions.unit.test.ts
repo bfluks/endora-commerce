@@ -6,6 +6,7 @@ import {
   KnownIconNameSchema,
   ModuleActionSchema,
   ModuleActionsManifestSchema,
+  parseBundleKeywords,
 } from '../src/admin-actions.js';
 
 const validAction = {
@@ -91,6 +92,61 @@ describe('ModuleActionSchema', () => {
       ModuleActionSchema.parse({ ...validAction, keywords: ['   ', 'product'] }),
     ).toThrow();
   });
+
+  // Issue #560 — the per-language keywords live in the module's bundle, named
+  // the way `labelKey` and `descriptionKey` name theirs.
+  it('accepts a keywordsKey and leaves it undefined when absent', () => {
+    const parsed = ModuleActionSchema.parse({
+      ...validAction,
+      keywordsKey: 'actions.newProduct.keywords',
+    });
+    expect(parsed.keywordsKey).toBe('actions.newProduct.keywords');
+    expect(ModuleActionSchema.parse(validAction).keywordsKey).toBeUndefined();
+  });
+
+  it('rejects a keywordsKey that is not a translation key', () => {
+    for (const keywordsKey of ['.leading', 'trailing.', 'CamelTop.foo', 'a..b', '']) {
+      expect(() => ModuleActionSchema.parse({ ...validAction, keywordsKey })).toThrow();
+    }
+  });
+
+  // Issue #1088 — the admin API route the target screen opens on, for a screen
+  // whose SPA placement does not name it. Optional; absent on most actions.
+  it('accepts an entryApiRoute under the admin API and leaves it undefined when absent', () => {
+    const parsed = ModuleActionSchema.parse({
+      ...validAction,
+      entryApiRoute: '/api/v1/admin/command-outbox',
+    });
+    expect(parsed.entryApiRoute).toBe('/api/v1/admin/command-outbox');
+    expect(ModuleActionSchema.parse(validAction).entryApiRoute).toBeUndefined();
+  });
+
+  it('rejects an entryApiRoute that is not an admin API path', () => {
+    for (const entryApiRoute of [
+      '/command-outbox',
+      'api/v1/admin/x',
+      '/api/v1/admin',
+      '/api/v1/admin/',
+      '/api/v1/store/x',
+      '/api/v1/admin/x?y=1',
+      '',
+    ]) {
+      expect(() => ModuleActionSchema.parse({ ...validAction, entryApiRoute })).toThrow();
+    }
+  });
+});
+
+describe('parseBundleKeywords', () => {
+  it('splits a bundle value on commas, trimming and dropping empty entries', () => {
+    expect(parseBundleKeywords(' nowe poświadczenie,konfiguracja , ,')).toEqual([
+      'nowe poświadczenie',
+      'konfiguracja',
+    ]);
+  });
+
+  it('answers an empty list for an empty value', () => {
+    expect(parseBundleKeywords('')).toEqual([]);
+  });
 });
 
 describe('ModuleActionsManifestSchema', () => {
@@ -140,6 +196,12 @@ describe('KnownIconNameSchema', () => {
   // entry and palette action. The list held no calendar glyph.
   it('accepts the calendar icon', () => {
     expect(() => KnownIconNameSchema.parse('CalendarDays')).not.toThrow();
+  });
+
+  // `specs/180-off-platform-complaints/` (US7) — `returns`' *Return and complaint
+  // terms* palette action. The list held no glyph for accepted terms.
+  it('accepts the terms icon', () => {
+    expect(() => KnownIconNameSchema.parse('FileCheck')).not.toThrow();
   });
 });
 

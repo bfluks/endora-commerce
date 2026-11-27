@@ -1,9 +1,9 @@
 ---
-title: transactional_emails
+title: Maile transakcyjne
 description: E-maile transakcyjne edytowane w panelu administracyjnym — temat, treść i wygląd, globalnie i dla poszczególnych kanałów sprzedaży
 ---
 
-# `transactional_emails`
+# Maile transakcyjne (`transactional_emails`)
 
 E-maile transakcyjne edytowane w panelu administracyjnym. Moduł pozwala operatorom zmieniać
 **temat**, **treść** i **wygląd** każdego e-maila transakcyjnego wysyłanego przez platformę —
@@ -30,7 +30,12 @@ logika biznesowa podstawia w chwili wysyłki.
   `EmailInsertTemplate` usunięto z palety (starsze drzewa treści nadal się wyświetlają). Systemowe
   bloki tworzone przy instalacji — `default_email_header` (pokazuje oznakowanie marki przez
   `EmailLogo` / `{{var branding.logoUrl}}`) i `default_email_footer` — są automatycznie dołączane do
-  domyślnej treści.
+  domyślnej treści. Systemowego bloku ani szablonu nie można usunąć:
+  `DELETE /api/v1/admin/transactional-emails/blocks/:id` odpowiada
+  `409 TRANSACTIONAL_EMAIL_SYSTEM_BLOCK` (`details`: `blockId`, `blockCode`), a
+  `DELETE /api/v1/admin/transactional-emails/templates/:id` odpowiada
+  `409 TRANSACTIONAL_EMAIL_SYSTEM_TEMPLATE` (`details`: `templateId`, `templateCode`), z komunikatem
+  w języku operatora. Do zgłoszenia #638 obie były odpowiedzią `409 VALIDATION_FAILED`.
 - **Oznakowanie marki (Branding)** — logo w nagłówku, kolor wyróżniający oraz kody domyślnych bloków
   nagłówka i stopki, ustalane dla każdego zakresu przez moduł ustawień (`transactional_emails.*`).
   Ustalone logo jest dostępne w każdym e-mailu jako `{{var branding.logoUrl}}`.
@@ -61,12 +66,12 @@ Edytor e-maili transakcyjnych (i newslettera) korzysta ze wspólnego `EmailEdito
 - Obszar roboczy ma stałą szerokość wiadomości (**600px**) i panel Outline, tak jak w CMS. **Preview
   email** otwiera okno z wyrenderowanym HTML i przykładowymi wartościami zmiennych oraz opcjami
   **Desktop mail (600px)** / **Narrow (320px)** (płynny kontener `max-width:600px`, więc wąski
-  podgląd nie wychodzi poza okno). **Save as template** / **Apply template** korzystają z akcji
-  nagłówka CMS, ale działają na szablonach e-maili transakcyjnych (`email_templates`).
+  podgląd nie wychodzi poza okno). **Save as template** / **Apply template** są, tak jak w CMS,
+  w menu **Więcej** na pasku narzędzi, razem z **Wyczyść canvas**, ale działają na szablonach
+  e-maili transakcyjnych (`email_templates`).
 - `EmailLogo` pokazuje logo z oznakowania marki (bez pola na adres URL). `EmailImage` przyjmuje adres
   URL albo zasób z biblioteki mediów, tak jak w CMS. Pola kolorów korzystają ze wspólnej palety
-  kolorów CMS. Logo w ustawieniach oznakowania marki (`*_asset_id`) wybiera się w selektorze
-  Biblioteki mediów.
+  kolorów CMS. Samo logo ustawia się na ekranie **Branding maili** (poniżej).
 - `EmailRichText` korzysta z edytora tekstu sformatowanego TipTap z CMS (z dodatkiem zmiennych).
 - `EmailProductCard` wybiera produkt z katalogu; `EmailOrderSummary` to przełączniki kolumn i sum i
   pojawia się w palecie tylko wtedy, gdy e-mail deklaruje `order.items` (obecnie tylko **Order
@@ -78,6 +83,27 @@ Edytor e-maili transakcyjnych (i newslettera) korzysta ze wspólnego `EmailEdito
   (`EmailImage`, `EmailLogo`), handel (`EmailProductCard`, `EmailOrderSummary` i opisane wyżej bloki
   szczegółów zamówienia), `EmailSocial` (ikony, etykiety i włączanie każdego linku osobno) oraz
   `EmailInsertBlock`.
+
+## Branding maili {#email-branding}
+
+**Wiadomości → Branding maili** (`/transactional-emails/branding`, dostępny też pod ⌘K / CTRL+K)
+ustawia dwie wartości, z którymi renderuje się każdy e-mail:
+
+- **Logo nagłówka** — obraz z Biblioteki mediów. Pokazuje go wspólny blok `default_email_header`
+  i każdy blok `EmailLogo`; bez logo nagłówek go nie zawiera.
+- **Kolor akcentu** — używany przez przyciski i wyróżnienia, które nie mają własnego koloru.
+
+Lista **Zakres** wybiera *Wszystkie kanały (domyślnie)* albo jeden kanał sprzedaży. Kanał
+dziedziczy wartość wszystkich kanałów dla wszystkiego, czego nie nadpisuje: zapis wysyła tylko
+pola zmienione przy wybranym zakresie, więc zmiana koloru akcentu dla jednego kanału zostawia mu
+logo wszystkich kanałów. Pole, które wybrany kanał ustawia inaczej niż wszystkie kanały, ma opis
+**Ustawione dla tego kanału** i przycisk **Użyj wartości wszystkich kanałów**: pokazuje on wartość
+wszystkich kanałów, a najbliższy zapis usuwa własną wartość kanału, więc kanał znów podąża za
+późniejszymi zmianami dla wszystkich kanałów (`DELETE /api/v1/admin/transactional-emails/branding?salesChannelId=…&fields=…`).
+Zmiana zakresu albo przejście linkiem w inne miejsce panelu przy
+niezapisanych zmianach pyta, czy je zapisać, odrzucić, czy zostać. Podgląd wymaga `transactional_emails:read`, zapis — `transactional_emails:write`.
+Wartości to ustawienia `transactional_emails.logo_asset_id` i `transactional_emails.accent_color`,
+więc widać je także na ekranie Ustawień.
 
 ## Renderowanie
 
@@ -101,6 +127,13 @@ transactionalEmails: [
 emailDefaultsRegistry.register('order_confirmation', { defaultSubject, defaultContent });
 ```
 
+`sampleValue` zmiennej jest po angielsku. Gdy przykład w innym języku brzmi inaczej — adres,
+status — dodaj `sampleValueKey`: klucz we własnych pakietach tłumaczeń modułu, który deklaruje
+zmienną (względny wobec jego przestrzeni nazw, jak `labelKey` akcji palety), z przykładem w każdym
+dostarczanym języku; wpis angielski jest równy `sampleValue`. Lista zmiennych i podgląd na żywo
+w edytorze oraz podgląd po stronie serwera pokazują przykład w edytowanym języku; gdy klucz się
+nie rozwiązuje, obowiązuje `sampleValue` z manifestu.
+
 Moduł, do którego należy e-mail, wysyła go przez port `TransactionalEmailSender` (wstrzykiwany przez
 kompozycję), zachowując dotychczasową idempotentność opartą na `messageId`:
 
@@ -115,6 +148,14 @@ await sender.send({
 
 Gdy nadawca nie jest podłączony, moduły wracają do starszych mechanizmów budowania wiadomości w
 kodzie, więc w środowiskach bez tego modułu zachowanie się nie zmienia.
+
+Moduł, który zachowuje też mechanizm zastępczy w kodzie, korzysta zamiast tego z portu
+`templateEmailPort`, którego `trySend` odpowiada `false` tylko wtedy, gdy dla danego kodu nie ma
+definicji. Przyjmuje te same `code`, `to`, `messageId` i `variables`, a opcjonalnie także kanał
+sprzedaży odbiorcy (`salesChannelId`) i jego język (`language`): wiadomość jest renderowana z treści
+tego kanału w tym języku. Brakujący albo usunięty kanał oznacza domyślny kanał systemu, a brakujący
+język — domyślny język kanału, więc wywołanie bez żadnego z nich dostaje domyślny kanał systemu w jego
+domyślnym języku. E-mail o ponownej dostępności przekazuje kanał i język zapisane w subskrypcji.
 
 ## Podgląd
 
@@ -134,7 +175,9 @@ usuwa treści, nadpisań ani dostosowań dla kanałów. Wyłączony e-mail w chw
 `{ status: 'deactivated' }` i **nie jest wysyłana żadna wiadomość zastępcza**.
 
 E-maili potrzebnych do założenia konta lub odzyskania do niego dostępu w ogóle nie można wyłączyć:
-obecnie są to `email_verification` i `organization_invitation`. Deklaracja znajduje się we wpisie
+obecnie są to `email_verification`, `organization_invitation`, `customer_password_reset` i
+`customer_password_reset_by_admin`.
+Deklaracja znajduje się we wpisie
 rejestru modułu, do którego należy e-mail (`EmailDefaults.nonDeactivatable`), a nie na liście
 utrzymywanej przez ten moduł czy panel administracyjny, a odrzucone przełączenie zwraca
 `409 TRANSACTIONAL_EMAIL_NOT_DEACTIVATABLE` z powodem podanym przez ten moduł — w tej samej postaci,
@@ -167,6 +210,13 @@ trwałym zapisem**, a nie dostarczanie gwarantowane: nie ma kolejki ponowień an
 biznesowym a wywołaniem transportu przepada. Tabela nie ma jeszcze ekranu w panelu administracyjnym
 — odczytuje się ją bezpośrednio z bazy danych.
 
+Gdy konto klienta jest anonimizowane, moduł `customers` prosi moduł `email`
+(`emailDeliveryAnonymizationPort`) o wyczyszczenie każdego zapisu zaadresowanego na adres tego
+konta, porównywany bez rozróżniania wielkości liter: odbiorca zostaje zastąpiony znacznikiem
+anonimizacji, a temat, koperta i treść błędu serwera pocztowego są usuwane; identyfikator
+wiadomości, kod e-maila, status, powód, kanał sprzedaży, odwołanie do dokumentu i czas próby
+zostają. Każdy wyczyszczony zapis dostaje jeden wpis audytu `email_delivery.anonymized`.
+
 ## Uprawnienia
 
 - `transactional_emails:read` — przeglądanie e-maili, bloków, szablonów, oznakowania marki i podglądu.
@@ -177,7 +227,14 @@ biznesowym a wywołaniem transportu przepada. Tabela nie ma jeszcze ekranu w pan
 
 Przez ten mechanizm przechodzą wszystkie wcześniejsze e-maile transakcyjne: zamówienia (potwierdzenie,
 komentarz, ponowne zamówienie, zamówienie utworzone przez administratora), zwroty (zaakceptowany,
-odrzucony), organizacje (weryfikacja, zaproszenie, nowa rejestracja) oraz magazyn (niski stan,
+odrzucony), organizacje (weryfikacja, zaproszenie, nowa rejestracja, zatwierdzenie, odrzucenie) oraz magazyn (niski stan,
 ponowna dostępność). Zarejestrowano też dwa nowe e-maile wysyłane przez subskrybentów zdarzeń:
 płatności (`payment_status_changed`, przy otrzymaniu lub niepowodzeniu płatności) i przesyłki
 (`shipment_created`, przy utworzeniu przesyłki).
+
+Inne moduły rejestrują własne: koszyki (`cart_approval_requested`, `cart_approved`,
+`cart_rejected`), faktury (`invoice_issued`), zapytania ofertowe (`quote_request_pdf` oraz
+jedenaście e-maili powiadomień `quote_request_customer_*` / `quote_request_operator_*`), CRM
+(`crm_event_reminder`), projekty (`projects_stage_deadline_alert`) i zadania
+(`tasks_task_reminder`, `tasks_daily_digest`). To, które z nich widać w danej instancji, zależy od
+zainstalowanych modułów.

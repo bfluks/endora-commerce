@@ -2,7 +2,14 @@ import { randomUUID } from 'crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   ERROR_CODES,
+  compareDecimals,
+  lineAmountHalfUp,
+  moneySum,
+  organizationCompanyTaxId,
+  resolveScopeLanguage,
+  roundHalfUp,
   type CartSnapshot,
+  type CustomFieldCarryPort,
   type FulfilmentStrategy,
   type InventoryFulfilmentPlanningPort,
   type InventoryStockReadPort,
@@ -13,8 +20,12 @@ import {
   type PromotionApplication,
   type PromotionApplyPort,
   type StartPaymentResult,
+  type AddressRecord,
+  type RelatedPayerPolicyPort,
+  type UsablePayer,
+  isUuidShape,
+  type CartRecord,
 } from '@endora-commerce/contracts';
-import { LockMode } from '@mikro-orm/core';
 import type { EventBase, EventBus } from '@endora-commerce/platform/events';
 import { HttpError } from '@endora-commerce/platform/http';
 import {
@@ -29,13 +40,17 @@ import {
 } from './transactional-email-helper.js';
 
 import type { AuditPort, PlatformLogger } from '@endora-commerce/platform/kernel';
-import { actorFromContext } from '@endora-commerce/platform/commands';
-import { getTenantContext } from '@endora-commerce/platform/tenancy';
+import type { CommandBus } from '@endora-commerce/platform/commands';
+import { withCallerOptions, type CallerOptions } from '../commands/caller-options.js';
+import { makeOrderPaymentStatusTransitionCommand } from '../commands/order-payment-status-transition.command.js';
+import { withSystemScope } from '@endora-commerce/platform/tenancy';
 import { NoSystemDefaultChannel } from '@endora-commerce/platform/kernel';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { Order } from '../entities/order.entity.js';
 import { OrderItem } from '../entities/order-item.entity.js';
+import { OrderItemGroup } from '../entities/order-item-group.entity.js';
 import { OrderAppliedPromotion } from '../entities/order-applied-promotion.entity.js';
+import { buildCarrySkipNote } from '../order-carry-note.js';
 /**
  * The two em-carrying interfaces their owners write (D-94.5).
  *
@@ -109,8 +124,30 @@ import type { CartPlacementApplyPort } from '@endora-commerce/mod-carts/ports';
 import type { InventoryReservationApplyPort } from '@endora-commerce/mod-inventory/ports';
 import { releaseOrderAllocations } from './order-allocation-release.js';
 import type { OrderTransitionEffectService } from './order-transition-effect-service.js';
-import { effectsOwedByPaymentStatusChange } from '../domain/transition-effects.js';
 import { judgeQuoteRequestSource } from '../domain/quote-request-source.js';
+import {
+  adminLayout,
+  basketLayout,
+  carryQuoteGrouping,
+  type OrderLineGroupingInput,
+} from '../domain/quote-line-groups.js';
+import { quoteSourceHonoursExemptions } from '../domain/quote-source-exemption.js';
+import {
+  judgeQuoteCommitments,
+  quotesReliedOn,
+  type QuoteCommitmentLine,
+  type QuoteCommitmentQuote,
+} from '../domain/quote-commitment.js';
+import {
+  assertBasketMeetsMinimums,
+  belowMinimumLinesOf,
+  evaluateBasketMinimums,
+  readBasketCatalogue,
+  availableOnly,
+} from './placement-minimums.js';
+import { returnableAtPurchase } from './returnable-at-purchase.js';
+import { orderTotalsMoney } from './order-money.js';
+import { placeOnBehalfAuditState } from './order-audit-state.js';
 import type { InvoicePlacementApplyPort } from '@endora-commerce/mod-invoices/ports';
 import type { PaymentPlacementApplyPort } from '../../ports/index.js';
 import type { CreditLimitPort } from '@endora-commerce/mod-credit-limits/ports';
@@ -129,11 +166,13 @@ export type {
   PaymentPlacementApplyPort,
   PromotionUsageFinalizer,
 };
-import { OrderAccessService } from './order-access-service.js';
+import type { OrderAccessService } from './order-access-service.js';
 import { assertMethodsOfferedInChannel } from './method-channel-gate.js';
 import type {
   AddressReadPort,
   CartReadPort,
+  CatalogProductAvailabilityPort,
+  CartApprovalStatus,
   CatalogProductReadPort,
   CustomerAccountReadPort,
   DeliveryMethodReadPort,
@@ -147,12 +186,17 @@ import type {
   PaymentAdapterRegistryPort,
   PaymentMethodReadPort,
   PaymentMethodRecord,
+  OrderPreviewTotalResponse,
+  QuoteCommitmentRefusal,
+  QuoteRequestLineRecord,
   QuoteRequestReadPort,
+  QuoteRequestRecord,
   ShippingAdapterRegistryPort,
   TransactionalEmailSender,
 } from '@endora-commerce/contracts';
 import {
   buildOrderConfirmationEmail,
+  resolveOrderConfirmationProse,
   buildOrderConfirmationVariables,
   type OrderConfirmationRenderers,
 } from '../email-templates/order-confirmation.js';
@@ -164,6 +208,8 @@ import {
   assertMethodsAllowedForOrganization,
   type OrganizationMethodChoice,
 } from './organization-method-allow-list-gate.js';
+import { loadArrangedOrderLines } from './order-line-order.js';
+import type { OrdersTranslate } from '../orders-prose.js';
 
 
 export interface OrderEvents extends Record<string, EventBase> {
@@ -231,6 +277,13 @@ export interface CustomerContext {
    * (FR-042 / R-12) and emit an audit entry.
    */
   impersonatorAdminUserId?: string | null;
+  /**
+   * The customer's organization role, when the request's actor carries it
+   * (`specs/170-organization-roles/` R-15). Placement hands it to `carts`' approval
+   * rule for the customer's own basket, so the rule reads no account (FR-080).
+   * Absent — an administrator's or an API client's placement — the rule reads it.
+   */
+  organizationRoleId?: string | null;
 }
 
 /**
@@ -267,9 +320,27 @@ export interface OrderServiceNeighbourPorts {
    * port instead of reading as "no restriction".
    */
   readonly organizationRestriction: OrganizationRestrictionPort;
+  /**
+   * `specs/182-related-payers/` — `related_payers`' policy port, read only for a
+   * placement or preview that names a payer. `refuses-without` in the manifest: with
+   * the owner off the call answers `503 MODULE_DISABLED` and such an order is not
+   * placed; every other order never reaches it. Optional for a hand-built rig that
+   * places no order with a payer; absent, a payer is refused the same way.
+   */
+  readonly relatedPayerPolicy?: RelatedPayerPolicyPort;
   readonly customerAccountRead: CustomerAccountReadPort;
   readonly addressRead: AddressReadPort;
   readonly catalogProductRead: CatalogProductReadPort;
+  /**
+   * Feature 163 (FR-006) — `catalog`'s availability answer, asked again at
+   * placement: a line whose product is no longer available at the order's
+   * (channel, language) to its Organization refuses the placement with the
+   * unknown-id 404, as a line whose product is gone does.
+   */
+  readonly catalogProductAvailability: Pick<
+    CatalogProductAvailabilityPort,
+    'filterAvailable' | 'effectiveOrderRules' | 'effectiveTexts'
+  >;
   /** `null` ⇒ `payment_methods` is not effectively present. */
   readonly paymentMethodRead: () => PaymentMethodReadPort | null;
   /** `null` ⇒ `delivery_methods` is not effectively present. */
@@ -332,6 +403,13 @@ export interface OrderServiceNeighbourPorts {
    */
   readonly quoteRequestRead: () => QuoteRequestReadPort | null;
   /**
+   * `custom_fields`' carry port (`specs/162-custom-fields-value-carry/`,
+   * research R-7): which of the vouched Quote Request's custom-field values the
+   * new Order receives. Resolved per call; `custom_fields` is not
+   * deactivatable, so there is no absent state to ask about and no `catch`.
+   */
+  readonly customFieldCarry: () => CustomFieldCarryPort;
+  /**
    * The payment row placement opens — this transaction's own `EntityManager`,
    * and no accessor (feature 080, T048; D-179).
    *
@@ -344,8 +422,119 @@ export interface OrderServiceNeighbourPorts {
   readonly paymentPlacementApply: PaymentPlacementApplyPort;
 }
 
+/**
+ * What placement (and the checkout preview) concluded about the quote request a
+ * basket claims (feature 155, research R19): the source the order may name,
+ * the request as read, and whether its quote-seeded lines keep their exemption.
+ */
+interface QuoteRequestSourceAssessment {
+  sourceQuoteRequestId: string | null;
+  quoteRequest: QuoteRequestRecord | null;
+  honoursExemptions: boolean;
+  /**
+   * Feature 159 (research R-16) — the request's lines as the judgement read
+   * them, in the quote's display order; the carry-over of its grouping reads
+   * these rather than asking the port a second time. Empty when nothing was read.
+   */
+  quoteRequestLines: readonly QuoteRequestLineRecord[];
+}
+
+/**
+ * Issue #167 — the refusal of a basket priced at a quote that no longer binds:
+ * `410 QUOTE_VALIDITY_ENDED`, the code `convert-to-order` answers for the same
+ * deadline, with the reason in `details.code` — the envelope's refusal token,
+ * which selects the buyer's sentence in `quote_requests`' bundle and which a
+ * client can branch on.
+ */
+function quoteCommitmentEnded(reason: QuoteCommitmentRefusal): HttpError {
+  return new HttpError(
+    410,
+    ERROR_CODES.QUOTE_VALIDITY_ENDED,
+    reason === 'lapsed'
+      ? 'The quote these prices were agreed on has expired; ask for a new quote before ordering.'
+      : reason === 'withdrawn'
+        ? 'The quote these prices were agreed on is no longer in force; ask for a new quote before ordering.'
+        : 'Prices agreed on a quote cannot be confirmed at the moment; remove the quoted items to order at current prices.',
+    { code: reason },
+  );
+}
+
+/**
+ * Issue #648 — the refusal of a basket that awaits its Organization's approval,
+ * with a token per approval state, so the buyer is told what to do next.
+ */
+function cartApprovalRequired(cart: { id: string; approvalStatus: CartApprovalStatus }): HttpError {
+  const token =
+    cart.approvalStatus === 'pending'
+      ? 'cart_approval_pending'
+      : cart.approvalStatus === 'rejected_by_org_admin'
+        ? 'cart_approval_rejected'
+        : 'cart_approval_not_submitted';
+  return new HttpError(
+    409,
+    ERROR_CODES.ORDER_CART_APPROVAL_REQUIRED,
+    'This basket must be approved by your organization before the order can be placed.',
+    { code: token, cartId: cart.id, approvalStatus: cart.approvalStatus },
+  );
+}
+
+/**
+ * Issue #759 — the company data an order's billing snapshot carries. What the
+ * buyer typed wins; otherwise a company Organization contributes its legal (or
+ * display) name and tax id. A personal (B2C) Organization contributes nothing:
+ * it has no tax id (`specs/177-tax-id-scope/`; an internal 32-hex placeholder
+ * before) and its name is the person's, so the order is billed to the person. An absent key, not an empty string, is
+ * what every renderer (invoice, PDF, e-mail, admin) reads as "no company".
+ */
+/** `specs/182-related-payers/` — a payer vouched for by the policy port. */
+interface VouchedPayer {
+  readonly usable: UsablePayer;
+  readonly organization: OrganizationRecord;
+  /** `null` only for a preview that named no billing address. */
+  readonly billing: AddressRecord | null;
+}
+
+export function billingCompanyData(
+  org: Pick<OrganizationRecord, 'isPersonal' | 'legalName' | 'name' | 'taxId'>,
+  req: Pick<PlaceOrderRequest, 'billingCompanyName' | 'billingTaxId'>,
+  /**
+   * `specs/182-related-payers/` (FR-061, FR-067) — the payer of the order, when one is
+   * named: its company name and tax id are the billing snapshot's, read-only. The
+   * override is never consulted (the request schema refuses the pair, FR-062).
+   */
+  payer?: { readonly name: string; readonly taxId: string } | null,
+): { companyName?: string; taxId?: string } {
+  if (payer) {
+    return {
+      ...(payer.name ? { companyName: payer.name } : {}),
+      ...(payer.taxId ? { taxId: payer.taxId } : {}),
+    };
+  }
+  const companyName =
+    req.billingCompanyName?.trim() || (org.isPersonal ? '' : org.legalName || org.name);
+  const taxId = req.billingTaxId?.trim() || organizationCompanyTaxId(org);
+  return {
+    ...(companyName ? { companyName } : {}),
+    ...(taxId ? { taxId } : {}),
+  };
+}
+
+/** A basket with no claim, or a claim nothing can vouch for: no source, no exemption. */
+const NO_QUOTE_REQUEST_SOURCE: QuoteRequestSourceAssessment = Object.freeze({
+  sourceQuoteRequestId: null,
+  quoteRequest: null,
+  honoursExemptions: false,
+  quoteRequestLines: [],
+});
+
 export class OrderService {
-  private readonly accessService: OrderAccessService;
+  /**
+   * The buyer's order read scope. `null` for a service built without one — a
+   * placement-only rig — whose scoped reads then refuse rather than guess
+   * (`specs/170-organization-roles/` WP-07: the rule needs
+   * `organizationPermissionPort`, which the neighbour group does not carry).
+   */
+  private readonly accessService: OrderAccessService | null;
 
   /**
    * The two method modules' registries and the order-status references, held
@@ -445,7 +634,10 @@ export class OrderService {
     | undefined;
 
   private readonly transitionEffects: OrderTransitionEffectService | undefined;
+  private readonly commandBus: Pick<CommandBus, 'run'> | undefined;
   private readonly log: PlatformLogger | undefined;
+  /** This module's bundle, for the in-code order confirmation (issue #95). Absent, English. */
+  private readonly translate: OrdersTranslate | undefined;
 
   constructor(
     private readonly emFactory: () => EntityManager,
@@ -493,7 +685,20 @@ export class OrderService {
        * when there is nowhere to record it.
        */
       transitionEffects?: OrderTransitionEffectService;
+      /**
+       * `specs/186-aggregate-ports/` US4 — runs the operator's payment-status
+       * change as the `order.payment_status_transition` Command. Optional only
+       * so that a placement-only service can be built without it; the change
+       * itself refuses to run without it.
+       */
+      commandBus?: Pick<CommandBus, 'run'>;
       log?: PlatformLogger;
+      /**
+       * This module's bundle (`_i18n`'s `adminI18nService`), from which the
+       * in-code order confirmation takes its sentences in the channel's
+       * language. Absent, the e-mail is written in English.
+       */
+      translate?: OrdersTranslate;
       /**
        * Resolve the VAT rate (as a fraction, e.g. `0.23`) for a single product
        * line, given the billing country, the product's tax class (its `type`),
@@ -515,8 +720,7 @@ export class OrderService {
       );
     }
     this.neighbours = paymentDeps.neighbours;
-    this.accessService =
-      accessService ?? new OrderAccessService(paymentDeps.neighbours.customerAccountRead);
+    this.accessService = accessService ?? null;
     this.paymentAdaptersAccessor = paymentDeps?.paymentAdapters;
     this.orderStatusRegistryAccessor = paymentDeps?.orderStatusRegistry;
     this.shippingAdaptersAccessor = paymentDeps?.shippingAdapters;
@@ -528,6 +732,8 @@ export class OrderService {
     this.confirmationRecipients = paymentDeps?.confirmationRecipients;
     this.getTransactionalEmailSender = paymentDeps?.getTransactionalEmailSender;
     this.transitionEffects = paymentDeps?.transitionEffects;
+    this.commandBus = paymentDeps?.commandBus;
+    this.translate = paymentDeps?.translate;
     this.log = paymentDeps?.log;
     this.resolveMinOrderValue = paymentDeps?.resolveMinOrderValue;
     this.resolveChannelFulfilmentStrategy = paymentDeps?.resolveChannelFulfilmentStrategy;
@@ -622,7 +828,8 @@ export class OrderService {
     const em = this.emFactory();
     const [customer, items] = await Promise.all([
       this.neighbours.customerAccountRead.findById(order.placedByCustomerAccountId),
-      em.find(OrderItem, { orderId: order.id }),
+      // Feature 159 — the confirmation lists the lines in display order.
+      loadArrangedOrderLines(em, order.id).then((arranged) => arranged.lines),
     ]);
     if (!customer) return orderEmailNotSent(undefined, emailContext, 'no_recipient');
 
@@ -721,6 +928,7 @@ export class OrderService {
       this.shippingAdapters?.get(deliveryMethod?.adapter ?? '')?.renderers?.email ?? null;
     const channel = await em.findOne(SalesChannel, { id: order.salesChannelId });
     const language = channel?.defaultLanguage ?? 'en-US';
+    const prose = await resolveOrderConfirmationProse(this.translate, language);
     const message = buildOrderConfirmationEmail(
       {
         to: customer.email,
@@ -750,6 +958,7 @@ export class OrderService {
         })),
       },
       this.orderConfirmationRenderers(),
+      prose,
     );
     let result: OrderEmailResult;
     try {
@@ -868,10 +1077,13 @@ export class OrderService {
         ? await adapter.validateUseOnAdmin(eligCtx)
         : await adapter.validateUseOnStorefront(eligCtx);
     if (!ok) {
+      // Issue #86 — its own code, not `VALIDATION_FAILED`, whose message the
+      // envelope never replaces: the buyer read this sentence in English.
       throw new HttpError(
         400,
-        ERROR_CODES.VALIDATION_FAILED,
+        ERROR_CODES.ORDER_PAYMENT_METHOD_UNAVAILABLE,
         'The selected payment method is not available for this order.',
+        { paymentMethodId: method.id },
       );
     }
   }
@@ -920,10 +1132,12 @@ export class OrderService {
         ? await adapter.validateUseOnAdmin(eligCtx)
         : await adapter.validateUseOnStorefront(eligCtx);
     if (!ok) {
+      // Issue #86 — the payment twin's code, for the same reason.
       throw new HttpError(
         400,
-        ERROR_CODES.VALIDATION_FAILED,
+        ERROR_CODES.ORDER_DELIVERY_METHOD_UNAVAILABLE,
         'The selected shipping method is not available for this order.',
+        { deliveryMethodId: method.id },
       );
     }
   }
@@ -1063,8 +1277,8 @@ export class OrderService {
     productById: Map<string, { type: string }>;
     vatStatus: string;
     taxCountry: string | null;
-    deliveryCost: number;
-    paymentSurcharge: number;
+    deliveryCost: string | number;
+    paymentSurcharge: string | number;
     currency: string;
     appliedPromotionCode: string | null;
     salesChannelId: string | null;
@@ -1072,6 +1286,8 @@ export class OrderService {
     /** The buyer's effective group — see {@link resolveCustomerGroupId}. */
     customerGroupId: string | null;
   }): Promise<{
+    /** The same totals as two-place decimal strings — what placement stores (issue #417). */
+    money: ReturnType<typeof orderTotalsMoney>;
     subtotal: number;
     taxTotal: number;
     deliveryTotal: number;
@@ -1081,10 +1297,8 @@ export class OrderService {
     currency: string;
     appliedPromotionCode: string | null;
     appliedPromotions: PromotionApplication['appliedPromotions'];
-    rateForProductId: (productId: string) => number;
   }> {
     const { items, productById, currency } = input;
-    const subtotal = items.reduce((acc, it) => acc + Number(it.unitPrice) * it.quantity, 0);
 
     // Real VAT: resolve the rate per product tax class (its `type`) against the
     // billing country + org VAT status. VAT-exempt / reverse-charge orgs resolve
@@ -1116,16 +1330,6 @@ export class OrderService {
     // that cannot be mistaken for a resolved rate.
     const rateForProductId = (productId: string): number =>
       rateByType.get(productById.get(productId)?.type ?? 'simple') ?? 0;
-    const taxTotal =
-      Math.round(
-        items.reduce(
-          (acc, it) => acc + Number(it.unitPrice) * it.quantity * rateForProductId(it.productId),
-          0,
-        ) * 100,
-      ) / 100;
-
-    const deliveryTotal = input.deliveryCost;
-    const paymentSurcharge = input.paymentSurcharge;
 
     // Promotion engine — includes automatic (couponless) promotions plus the
     // cart's applied coupon. No-op when no promotion port is wired.
@@ -1143,8 +1347,11 @@ export class OrderService {
           categoryIds: [],
           quantity: it.quantity,
           unitPrice: { amount: Number(it.unitPrice), currency: it.currency },
+          // Issue #1350 — the rate this order charges the line at: a percent-off
+          // or free-unit promotion computes on the gross the buyer pays.
+          taxRate: rateForProductId(it.productId),
         })),
-        deliveryTotal,
+        deliveryTotal: Number(roundHalfUp(input.deliveryCost)),
         promotionCode: input.appliedPromotionCode ?? null,
         salesChannelId: input.salesChannelId ?? null,
       };
@@ -1156,21 +1363,32 @@ export class OrderService {
       }
     }
 
-    const total =
-      Math.round((subtotal + taxTotal + deliveryTotal + paymentSurcharge - discountTotal) * 100) /
-      100;
+    // The one VAT method (issue #417, owner ruling of 2026-10-24): VAT per rate
+    // on the sum of the nets at that rate (`vatByRate`), rounded once per rate;
+    // the total rounded once.
+    const money = orderTotalsMoney({
+      lines: items.map((it) => ({
+        unitPrice: it.unitPrice,
+        quantity: it.quantity,
+        taxRate: rateForProductId(it.productId),
+      })),
+      deliveryTotal: input.deliveryCost,
+      paymentSurcharge: input.paymentSurcharge,
+      discountTotal,
+    });
 
     return {
-      subtotal,
-      taxTotal,
-      deliveryTotal,
-      paymentSurcharge,
-      discountTotal,
-      total,
+      money,
+      // Two-place decimals read as numbers, losslessly.
+      subtotal: Number(money.subtotal),
+      taxTotal: Number(money.taxTotal),
+      deliveryTotal: Number(money.deliveryTotal),
+      paymentSurcharge: Number(money.paymentSurcharge),
+      discountTotal: Number(money.discountTotal),
+      total: Number(money.total),
       currency,
       appliedPromotionCode,
       appliedPromotions,
-      rateForProductId,
     };
   }
 
@@ -1180,12 +1398,122 @@ export class OrderService {
    * so the storefront can display the exact amount (e.g. for the inline Stripe
    * Payment Element) without re-deriving pricing on the client.
    */
+  /**
+   * `specs/182-related-payers/` (FR-060, FR-063, FR-068) — the payer a placement or
+   * preview names, vouched for by `relatedPayerPolicyPort` (on the placement's own
+   * transaction when given), with its allowed billing address and its record. The
+   * payer's address is read through the port, under its system scope: under the
+   * buyer's ambient context `addressRead` would answer it as absent (research R-5).
+   */
+  /**
+   * `specs/182-related-payers/` FR-112 — who promotions are evaluated (and their use recorded)
+   * for: the payer and its customer group on the payer's commercial terms, with no customer
+   * account's own group (A-18); otherwise the buyer and its effective group.
+   */
+  async #promotionBuyer(
+    ctx: CustomerContext,
+    org: OrganizationRecord | null,
+    payer: VouchedPayer | null,
+  ): Promise<{ organizationId: string; customerGroupId: string | null }> {
+    if (payer && payer.usable.commercialTerms === 'payer') {
+      return { organizationId: payer.usable.payerOrganizationId, customerGroupId: payer.organization.customerGroupId ?? null };
+    }
+    return { organizationId: ctx.organizationId, customerGroupId: await this.resolveCustomerGroupId(ctx.customerAccountId, org) };
+  }
+
+  async #vouchPayer(
+    ctx: CustomerContext,
+    payerOrganizationId: string,
+    billingAddressId: string | undefined,
+    salesChannelId: string,
+    cart: Pick<CartRecord, 'buyingForOrganizationId' | 'buyingForTerms'> | null,
+    tx?: EntityManager,
+  ): Promise<VouchedPayer> {
+    const policy = this.neighbours.relatedPayerPolicy;
+    if (!policy) {
+      throw new HttpError(503, ERROR_CODES.MODULE_DISABLED, 'Related payers are not available.', {
+        module: 'related_payers',
+      });
+    }
+    const subject = {
+      buyerOrganizationId: ctx.organizationId,
+      customerAccountId: ctx.customerAccountId,
+      salesChannelId,
+    };
+    const usable = await policy.assertUsable(subject, payerOrganizationId, {
+      ...(tx ? { tx } : {}),
+      ...(billingAddressId ? { billingAddressId } : {}),
+    });
+    // FR-060, FR-110 — a link on the payer's terms is chosen on the cart, which reprices for
+    // the payer first; placement re-checks that the cart is still in that context (FR-116).
+    if (
+      usable.commercialTerms === 'payer' &&
+      !(cart?.buyingForTerms === 'payer' && cart.buyingForOrganizationId === payerOrganizationId)
+    ) {
+      throw new HttpError(422, ERROR_CODES.RELATED_PAYER_NOT_USABLE, 'This payer cannot be used for this order right now.', {
+        reason: 'payer_terms_need_cart',
+      });
+    }
+    // FR-116 — a cart priced on the payer's terms whose link has since turned to the buyer's:
+    // its prices are no longer vouched for. Refused before anything is written; the next cart
+    // read reprices it for the buyer and says why.
+    if (
+      cart?.buyingForTerms === 'payer' &&
+      cart.buyingForOrganizationId === payerOrganizationId &&
+      usable.commercialTerms !== 'payer'
+    ) {
+      throw new HttpError(422, ERROR_CODES.RELATED_PAYER_NOT_USABLE, 'This payer cannot be used for this order right now.', {
+        reason: 'payer_terms_changed',
+      });
+    }
+    const organization = await this.neighbours.organizationDetails.findById(payerOrganizationId);
+    if (!organization) {
+      throw new HttpError(422, ERROR_CODES.RELATED_PAYER_NOT_USABLE, 'This payer cannot be used for this order right now.', {
+        reason: 'payer_missing',
+      });
+    }
+    let billing: AddressRecord | null = null;
+    if (billingAddressId) {
+      const addresses = await policy.payerBillingAddresses(subject, payerOrganizationId);
+      billing = addresses.find((a) => a.id === billingAddressId) ?? null;
+      if (!billing) {
+        throw new HttpError(403, ERROR_CODES.ADDRESS_NOT_OWNED, 'Address does not belong to the caller organization.');
+      }
+    }
+    return { usable, organization, billing };
+  }
+
+  /**
+   * The payment method checked against the **payer's** allow-list, the delivery method
+   * against the buyer's (FR-066, RP-9). The payer's rows are `@OrgScoped`: read under the
+   * buyer's context they come back empty, which the gate reads as "unrestricted" — so
+   * the read runs under a system scope with the payer id from the validated link.
+   */
+  async #assertMethodsAllowedForPayer(
+    ctx: CustomerContext,
+    payer: VouchedPayer,
+    choice: { deliveryMethodId: string; paymentMethodId: string },
+  ): Promise<void> {
+    await this.assertMethodsAllowedForOrganization({
+      organizationId: ctx.organizationId,
+      deliveryMethodId: choice.deliveryMethodId,
+    });
+    await withSystemScope('orders: payment methods of the related payer', () =>
+      this.assertMethodsAllowedForOrganization({
+        organizationId: payer.usable.payerOrganizationId,
+        paymentMethodId: choice.paymentMethodId,
+      }),
+    );
+  }
+
   async previewTotal(
     ctx: CustomerContext,
     req: {
       deliveryMethodId: string;
       paymentMethodId: string;
       billingAddressId?: string | undefined;
+      /** `specs/182-related-payers/` FR-064 — preview as placement with this payer. */
+      payerOrganizationId?: string | undefined;
       /**
        * The channel the previewed order would be placed on. The storefront
        * route passes the request's resolved channel; when it is given, the
@@ -1195,6 +1523,18 @@ export class OrderService {
        */
       salesChannelId?: string | undefined;
     },
+    options: {
+      /** The language the response is answered in — names a below-minimum line's product (feature 155). */
+      language?: string | undefined;
+      /**
+       * Issue #1373 — the channel language the request's `Accept-Language`
+       * asks for (`requestScopeLanguage`), the one the basket's lines were
+       * judged in and the one `placeOrder` takes as `languageTag`. When given,
+       * the basket's availability and names are judged in it; otherwise in the
+       * channel language `language` names, else the channel's default.
+       */
+      languageTag?: string | undefined;
+    } = {},
   ): Promise<{
     subtotal: number;
     taxTotal: number;
@@ -1203,9 +1543,14 @@ export class OrderService {
     discountTotal: number;
     total: number;
     currency: string;
+    belowMinimumLines: OrderPreviewTotalResponse['belowMinimumLines'];
+    quoteCommitmentRefusal: QuoteCommitmentRefusal | null;
   }> {
-    // No `EntityManager` at all any more: the last thing this method used one
-    // for was the basket read below, and it is a port now (feature 080, T048).
+    // No `EntityManager` for the basket: it is read through a port now
+    // (feature 080, T048). The reads this method makes itself are the
+    // system-default channel, for a caller that names no channel, and — on a
+    // fork of this module's own `Order` table — the "already ordered" count of
+    // the quote-source assessment (feature 155, research R19), never a write seam.
     const org = await this.neighbours.organizationDetails.findById(ctx.organizationId);
     // The **standalone** read, through `cartReadPort` — no `EntityManager`,
     // because this method opens no transaction and a read handed one is a
@@ -1225,30 +1570,44 @@ export class OrderService {
     // `carts.organization_id` is nullable for a customer account that has none.
     // Narrowing it would be a real change of behaviour for those rows and is
     // not this conversion's to make.
+    //
+    // The basket previewed is the one of the channel previewed
+    // (`specs/154-sales-channel-access/`), resolved the way placement resolves
+    // the order's: the channel named, else the system default.
+    const basketChannelId =
+      req.salesChannelId ??
+      (await this.emFactory().findOne(SalesChannel, { systemDefault: true }, { fields: ['id'] }))?.id;
+    if (!basketChannelId) throw new NoSystemDefaultChannel();
     const basket = await this.neighbours.cartRead.findActiveForCustomer({
       customerAccountId: ctx.customerAccountId,
       organizationId: null,
+      salesChannelId: basketChannelId,
     });
     const cart = basket?.cart ?? null;
     const items = basket?.items ?? [];
     if (!cart || items.length === 0) {
       throw new HttpError(409, ERROR_CODES.CART_EMPTY, 'Cart is empty.');
     }
+    // `specs/182-related-payers/` — the payer, vouched for as placement will (FR-064).
+    const payer = req.payerOrganizationId
+      ? await this.#vouchPayer(ctx, req.payerOrganizationId, req.billingAddressId, basketChannelId, cart)
+      : null;
+    assertCartContextNamed(cart, req.payerOrganizationId);
     // The same refusal the placement gives, so a checkout is never shown totals
-    // for a method its Organization may not use.
-    await this.assertMethodsAllowedForOrganization({
-      organizationId: ctx.organizationId,
-      deliveryMethodId: req.deliveryMethodId,
-      paymentMethodId: req.paymentMethodId,
-    });
+    // for a method its Organization — or its payer — may not use.
+    if (payer) {
+      await this.#assertMethodsAllowedForPayer(ctx, payer, req);
+    } else {
+      await this.assertMethodsAllowedForOrganization({
+        organizationId: ctx.organizationId,
+        deliveryMethodId: req.deliveryMethodId,
+        paymentMethodId: req.paymentMethodId,
+      });
+    }
     const deliveryMethod = await this.activeDeliveryMethod(req.deliveryMethodId);
-    if (!deliveryMethod) {
-      throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, 'Delivery method is not active.');
-    }
+    if (!deliveryMethod) throw deliveryMethodNotActive(req.deliveryMethodId);
     const paymentMethod = await this.activePaymentMethod(req.paymentMethodId);
-    if (!paymentMethod) {
-      throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, 'Payment method is not active.');
-    }
+    if (!paymentMethod) throw paymentMethodNotActive(req.paymentMethodId);
     if (req.salesChannelId) {
       await assertMethodsOfferedInChannel(this.neighbours, {
         salesChannelId: req.salesChannelId,
@@ -1256,16 +1615,62 @@ export class OrderService {
         paymentMethodId: paymentMethod.id,
       });
     }
-    const products =
-      items.length > 0
-        ? await this.neighbours.catalogProductRead.findByIds(items.map((i) => i.productId))
-        : [];
-    const productById = new Map(products.map((p) => [p.id, p]));
+    // Feature 163 (FR-006) — the lines whose product is no longer available
+    // in the basket's channel are reported as placement will refuse them.
+    // Issue #1373 — in the request's scope language when it is given, as
+    // placement judges them, so the preview and the order agree.
+    const basketChannel = await this.emFactory().findOne(SalesChannel, { id: basketChannelId });
+    const basketLanguage = basketChannel
+      ? resolveScopeLanguage(
+          {
+            id: basketChannel.id,
+            languages: basketChannel.languages,
+            defaultLanguage: basketChannel.defaultLanguage,
+          },
+          options.languageTag ?? options.language,
+        )
+      : null;
+    const catalogue = await readBasketCatalogue(this.neighbours.catalogProductRead, items, (products) =>
+      availableOnly(this.neighbours.catalogProductAvailability, products, {
+        channelId: basketChannelId,
+        languageCode: basketLanguage,
+        organizationId: ctx.organizationId,
+      }),
+    );
+    const productById = new Map(catalogue.products.map((p) => [p.id, p]));
+    const namesAtBasket = await this.#namesAt(
+      catalogue.products.map((p) => p.id),
+      basketChannel ? basketChannelId : null,
+      basketLanguage,
+    );
+
+    // Feature 155 (FR-008, FR-036, FR-037; research R19) — the lines placement
+    // will refuse, judged by the same rule with the quote source assessed by the
+    // lock-free twin of placement's vouch. Advisory: placement binds.
+    const quoteSource = await this.#previewedQuoteRequestSource(
+      ctx.organizationId,
+      cart.sourceQuoteRequestId,
+      items,
+    );
+    const belowMinimumLines = belowMinimumLinesOf(
+      evaluateBasketMinimums(cart, items, catalogue, quoteSource.honoursExemptions),
+      (productId) => this.#productName(productById, productId, namesAtBasket),
+    );
+    // Issue #167 — the quote prices placement will refuse, by the same rule.
+    const quoteCommitmentRefusal = await this.#quoteCommitmentRefusal(
+      ctx.organizationId,
+      cart,
+      items,
+      quoteSource.quoteRequest,
+    );
 
     // Tax country: prefer the selected billing address (matches placeOrder),
     // else the organization's registered country.
-    let taxCountry: string | null = org?.registeredAddress?.country ?? null;
-    if (req.billingAddressId) {
+    let taxCountry: string | null = (payer?.organization ?? org)?.registeredAddress?.country ?? null;
+    if (payer) {
+      // FR-064 — the payer's chosen billing address, read through the policy port.
+      if (payer.billing) taxCountry = payer.billing.country;
+    } else if (req.billingAddressId) {
       const billing = await this.neighbours.addressRead.findById(
         ctx.organizationId,
         req.billingAddressId,
@@ -1277,15 +1682,16 @@ export class OrderService {
     const totals = await this.computeMonetaryTotals({
       items,
       productById,
-      vatStatus: org?.vatStatus ?? 'vat_payer',
+      // FR-064 — tax from the payer's VAT status when one is named.
+      vatStatus: (payer?.organization ?? org)?.vatStatus ?? 'vat_payer',
       taxCountry,
-      deliveryCost: Number(deliveryMethod.cost),
-      paymentSurcharge: Number(paymentMethod.additionalPrice ?? '0'),
+      deliveryCost: deliveryMethod.cost,
+      paymentSurcharge: paymentMethod.additionalPrice ?? '0',
       currency: deliveryMethod.currency,
       appliedPromotionCode: cart.appliedPromotionCode ?? null,
       salesChannelId: cart.salesChannelId ?? null,
-      organizationId: ctx.organizationId,
-      customerGroupId: await this.resolveCustomerGroupId(ctx.customerAccountId, org),
+      // FR-112 — on the payer's terms, promotions are evaluated for the payer.
+      ...(await this.#promotionBuyer(ctx, org, payer)),
     });
 
     return {
@@ -1296,24 +1702,74 @@ export class OrderService {
       discountTotal: totals.discountTotal,
       total: totals.total,
       currency: totals.currency,
+      belowMinimumLines,
+      quoteCommitmentRefusal,
     };
   }
 
   /**
-   * The Quote Request an order may name as its source, or `null`
-   * (`specs/143-crm-sales-opportunities/`, FR-100 … FR-103).
+   * Issue #167 — whether the basket's quote prices may still be ordered at
+   * (`../domain/quote-commitment.ts`): every quote a line is priced at the
+   * agreement of is read again, **now**, over the port `quote_requests`
+   * publishes, and must still be in force and inside its validity date.
+   *
+   * Independent of {@link #vouchedQuoteRequestSource}, which decides what the
+   * order *names*; this decides whether it may be placed at those prices at
+   * all. The quote the source judgement already read is reused rather than
+   * read twice.
+   *
+   * Presence is asked first, as for the source: with `quote_requests` off
+   * nothing can confirm an agreed price, so a basket that relies on one is
+   * refused (`unavailable`, fail-closed) and an ordinary basket is untouched.
+   * No `catch` around the port — a read that fails is a failed placement, not
+   * a price taken on trust.
+   */
+  async #quoteCommitmentRefusal(
+    organizationId: string,
+    cart: { sourceQuoteRequestId: string | null },
+    items: ReadonlyArray<QuoteCommitmentLine>,
+    alreadyRead: QuoteRequestRecord | null,
+  ): Promise<QuoteCommitmentRefusal | null> {
+    const relied = quotesReliedOn(cart, items);
+    if (relied.quoteRequestIds.length === 0 && !relied.unattributed) return null;
+    const quoteRequests = this.neighbours.quoteRequestRead();
+    const quotes = new Map<string, QuoteCommitmentQuote | null>();
+    if (quoteRequests) {
+      for (const id of relied.quoteRequestIds) {
+        quotes.set(id, alreadyRead?.id === id ? alreadyRead : await quoteRequests.findById(id));
+      }
+    }
+    return judgeQuoteCommitments({
+      organizationId,
+      relied,
+      quoteDeskPresent: quoteRequests !== null,
+      quotes,
+      now: new Date(),
+    });
+  }
+
+  /**
+   * The Quote Request an order may name as its source, and whether the basket's
+   * quote-seeded lines keep their exemption from the minimums
+   * (`specs/143-crm-sales-opportunities/`, FR-100 … FR-103; feature 155,
+   * FR-036, research R19).
    *
    * The basket carries a claim, never a fact: `carts` records what the
    * converting module said and judges nothing. So the request is read again
    * here, over the port its owner publishes, and
    * {@link judgeQuoteRequestSource} decides — same Organization, still
    * convertible, an agreed line still on the basket. A refused claim is logged
-   * and dropped; it never refuses the placement, because the buyer is ordering
-   * a basket they are entitled to order and only its provenance is in doubt.
+   * and dropped; it never refuses the placement by itself, because the buyer is
+   * ordering a basket they are entitled to order and only its provenance is in
+   * doubt. What it does take away is the exemption: a seeded line below its
+   * minimum is then refused by the minimum check like any other line, and so is
+   * one whose quote's validity has lapsed ({@link quoteSourceHonoursExemptions}).
    *
    * No `catch` around the port. Presence is asked first, which is the degrade
-   * the manifest declares; a read that fails for any other reason is a failed
-   * placement, not an order silently detached from its quote.
+   * the manifest declares — and with the module off nothing can vouch for the
+   * claim, so no line is exempt (fail-closed, R17); a read that fails for any
+   * other reason is a failed placement, not an order silently detached from
+   * its quote.
    *
    * **One request, one Order — held here and not by the request's status.**
    * `quote_requests` completes a request in reaction to `order.created.v1`,
@@ -1324,46 +1780,173 @@ export class OrderService {
    * its own table whether an Order already names the request, behind a
    * transaction-scoped advisory lock on the request's id. The lock is what
    * makes two concurrent placements take turns: without it both count zero
-   * under `read committed` and both stamp. It is taken only for a basket that
-   * carries a claim, late in the transaction, and released by the commit.
+   * under `read committed`, both stamp, and both keep the exemption.
+   *
+   * **Lock order (feature 155, plan I7).** Called right after the basket and
+   * its products are read — before the minimum check, the value gate, the
+   * business id, any stock reservation and the credit reservation — so the
+   * exemption is granted under the same lock that makes "no Order names it yet"
+   * true, and the lock is held to commit. A placement therefore takes, in this
+   * order: the request's advisory lock (only for a basket that carries a mark),
+   * then the `stock_levels` row locks (`lockAvailabilityForPlacement`), then the
+   * business-id sequence and its own rows. An ordinary basket never takes the
+   * advisory lock, and no placement takes it after a row lock, so no
+   * transaction waits for the advisory lock while holding a row another one
+   * needs: there is no cycle to deadlock on. Two placements of one request
+   * simply take turns for the whole placement instead of its tail.
    */
   async #vouchedQuoteRequestSource(
     tx: EntityManager,
     organizationId: string,
     claimedQuoteRequestId: string | null,
     basketLines: ReadonlyArray<{ productId: string; variantId: string | null; unitPrice: string }>,
-  ): Promise<string | null> {
-    if (!claimedQuoteRequestId) return null;
+  ): Promise<QuoteRequestSourceAssessment> {
+    if (!claimedQuoteRequestId) return NO_QUOTE_REQUEST_SOURCE;
     const quoteRequests = this.neighbours.quoteRequestRead();
-    if (!quoteRequests) return null;
+    if (!quoteRequests) return NO_QUOTE_REQUEST_SOURCE;
     await tx.execute('select pg_advisory_xact_lock(hashtextextended(?, 0))', [
       `orders.source_quote_request_id:${claimedQuoteRequestId}`,
     ]);
-    const alreadyOrdered = (await tx.count(Order, { sourceQuoteRequestId: claimedQuoteRequestId })) > 0;
+    return this.#assessQuoteRequestSource(quoteRequests, {
+      organizationId,
+      claimedQuoteRequestId,
+      basketLines,
+      countOrdersNamingIt: () => tx.count(Order, { sourceQuoteRequestId: claimedQuoteRequestId }),
+      logRefusal: true,
+    });
+  }
+
+  /**
+   * The checkout preview's read-only twin of {@link #vouchedQuoteRequestSource}
+   * (feature 155, research R19 *Checkout preview*): the same port reads, the
+   * same judge and validity rule, and the "already ordered" count on this
+   * module's **own** `Order` table through a fresh fork — no transaction and no
+   * lock. Under a race (another basket of the same request placing between the
+   * preview and the placement) the two can disagree; placement is binding and
+   * the preview advisory, as it is for stock.
+   */
+  async #previewedQuoteRequestSource(
+    organizationId: string,
+    claimedQuoteRequestId: string | null,
+    basketLines: ReadonlyArray<{ productId: string; variantId: string | null; unitPrice: string }>,
+  ): Promise<QuoteRequestSourceAssessment> {
+    if (!claimedQuoteRequestId) return NO_QUOTE_REQUEST_SOURCE;
+    const quoteRequests = this.neighbours.quoteRequestRead();
+    if (!quoteRequests) return NO_QUOTE_REQUEST_SOURCE;
+    return this.#assessQuoteRequestSource(quoteRequests, {
+      organizationId,
+      claimedQuoteRequestId,
+      basketLines,
+      countOrdersNamingIt: () =>
+        this.emFactory().fork().count(Order, { sourceQuoteRequestId: claimedQuoteRequestId }),
+      logRefusal: false,
+    });
+  }
+
+  /**
+   * The checkout preview's quote-source answer, published as
+   * `OrderQuoteSourcePort` (feature 155, FR-039; `contracts/cart-and-checkout-api.md`
+   * §12) — so `carts`' submit-for-approval judges a basket's quote-seeded lines
+   * exactly as the preview does: {@link #previewedQuoteRequestSource}, lock-free,
+   * fail-closed while `quote_requests` is off. Advisory; placement re-checks.
+   */
+  async quoteSourceHonoursExemptions(input: {
+    organizationId: string;
+    quoteRequestId: string;
+    basketLines: ReadonlyArray<{ productId: string; variantId: string | null; unitPrice: string }>;
+  }): Promise<boolean> {
+    const assessed = await this.#previewedQuoteRequestSource(
+      input.organizationId,
+      input.quoteRequestId,
+      input.basketLines,
+    );
+    return assessed.honoursExemptions;
+  }
+
+  async #assessQuoteRequestSource(
+    quoteRequests: QuoteRequestReadPort,
+    input: {
+      organizationId: string;
+      claimedQuoteRequestId: string;
+      basketLines: ReadonlyArray<{ productId: string; variantId: string | null; unitPrice: string }>;
+      countOrdersNamingIt: () => Promise<number>;
+      logRefusal: boolean;
+    },
+  ): Promise<QuoteRequestSourceAssessment> {
+    const { organizationId, claimedQuoteRequestId } = input;
+    const alreadyOrdered = (await input.countOrdersNamingIt()) > 0;
     const quoteRequest = await quoteRequests.findById(claimedQuoteRequestId);
+    const quoteRequestLines = quoteRequest ? await quoteRequests.listItems(quoteRequest.id) : [];
     const judged = judgeQuoteRequestSource({
       orderOrganizationId: organizationId,
       quoteRequest,
       alreadyOrdered,
-      quoteRequestLines: quoteRequest ? await quoteRequests.listItems(quoteRequest.id) : [],
-      basketLines,
+      quoteRequestLines,
+      basketLines: input.basketLines,
     });
-    if (judged.accepted) return claimedQuoteRequestId;
-    this.log?.warn(
-      { claimedQuoteRequestId, organizationId, reason: judged.reason },
-      '[orders] the basket names a quote request this order may not carry; placing it without a source',
-    );
-    return null;
+    const honoursExemptions = quoteSourceHonoursExemptions(judged, quoteRequest, new Date());
+    if (judged.accepted) {
+      return { sourceQuoteRequestId: claimedQuoteRequestId, quoteRequest, honoursExemptions, quoteRequestLines };
+    }
+    if (input.logRefusal) {
+      this.log?.warn(
+        { claimedQuoteRequestId, organizationId, reason: judged.reason },
+        '[orders] the basket names a quote request this order may not carry; placing it without a source',
+      );
+    }
+    // A refused source carries nothing of the request — its grouping included (FR-052).
+    return { sourceQuoteRequestId: null, quoteRequest, honoursExemptions, quoteRequestLines: [] };
   }
 
   async placeOrder(
     ctx: CustomerContext,
     req: PlaceOrderRequest,
-    // Not on `OrderPlacementPort`: only this module's own admin create path
-    // hands an origin on. It is echoed on `order.created.v1` and read nowhere.
-    options?: { origin?: OriginReference },
+    // `origin` is not on `OrderPlacementPort`: only this module's own admin
+    // create path hands one on. It is echoed on `order.created.v1` and read
+    // nowhere. `language` (feature 155) is the language the response is
+    // answered in, which a minimum refusal names the product in.
+    // `lineGrouping` (feature 159, research R-17) is the grouping an
+    // administrator laid the order out in — likewise this module's own.
+    options?: {
+      origin?: OriginReference;
+      language?: string | undefined;
+      /**
+       * Issue #1308 — the buyer request's scope language
+       * (`requestScopeLanguage`), which the basket's lines are judged for
+       * availability and the order's lines named in. Absent: the channel
+       * language `language` names, else the channel's default, as before.
+       */
+      languageTag?: string | undefined;
+      /**
+       * Issue #1320 — judge the basket and name the order's lines at the order
+       * channel's default language, whatever `language` names: an operator
+       * naming the channel is answered in its default language (N2, feature
+       * 163), the language this module's admin create wrote the working basket
+       * in. `language` still words the messages. `languageTag` wins over it.
+       * This module's own admin create path only.
+       */
+      atChannelDefaultLanguage?: boolean | undefined;
+      lineGrouping?: OrderLineGroupingInput | undefined;
+      /**
+       * Issue #169 — the working basket to place from instead of the customer's
+       * active basket (admin create, one-click, API intake). Completed against
+       * the order, or removed when the placement is refused; the active basket
+       * is not read.
+       */
+      workingBasketId?: string | undefined;
+      /**
+       * Feature 175 (FR-017) — custom-field values the admin create has
+       * ALREADY VALIDATED (`validateAndMerge('order', {}, …)`), stored on the
+       * new order over anything carried from a quote request; the on-behalf
+       * audit row names their keys (`changedCustomFields`), never the values
+       * (`specs/conventions/audit-state.md`). This module's own admin create
+       * path only.
+       */
+      customFieldValues?: Record<string, unknown> | undefined;
+    },
   ): Promise<Order> {
     const em = this.emFactory();
+    const workingBasketId = options?.workingBasketId;
     // What this placement announces, emitted once the transaction below has
     // returned (issue #171). The storefront checkout, one-click, external
     // intake and admin create paths all reach this method outside a Command
@@ -1418,118 +2001,13 @@ export class OrderService {
         );
       }
 
-      // The basket, read on **this** transaction through the port `carts`
-      // publishes for placement (feature 080, T048). It is the same
-      // `EntityManager` the completion below writes on, which is the whole
-      // content of the seam: a read on a second one would put a commit boundary
-      // between the totals this method quotes and the basket it clears.
-      const basket = await this.neighbours.cartPlacementApply.readActiveForPlacement(tx, {
-        customerAccountId: ctx.customerAccountId,
-        // `null` for the reason `previewTotal` states above: the query this
-        // replaces filtered on the customer account and the status alone.
-        organizationId: null,
-      });
-      const cart = basket?.cart ?? null;
-      const items = basket?.items ?? [];
-      if (!cart || items.length === 0) {
-        throw new HttpError(409, ERROR_CODES.CART_EMPTY, 'Cart is empty.');
-      }
-
-      // A cart line is ordered at its stored unit price — copied onto the order
-      // line below, and the figure every total here is computed from. So the
-      // stored price has to be the price the line may be ordered at **now**: the
-      // price list's bracket for its current quantity, for this Organization, or
-      // the agreed price of an accepted quote at the agreed quantity. `carts`
-      // gives that answer, on this transaction, from the chain it stores prices
-      // from; a line it does not confirm refuses the placement before anything
-      // is reserved or written. The buyer is not charged a price they were not
-      // shown: the basket is brought up to date after the rollback and they
-      // review it before placing again.
-      const priceDrift = await this.neighbours.cartPlacementApply.findPriceDrift(tx, {
-        cartId: cart.id,
-        organizationId: ctx.organizationId,
-      });
-      if (priceDrift.length > 0) {
-        repriceCartId = cart.id;
-        throw new HttpError(
-          409,
-          ERROR_CODES.CART_PRICE_CHANGED,
-          'The prices in the cart have changed; review the cart and place the order again.',
-          {
-            lines: priceDrift.map((line) => ({
-              productId: line.productId,
-              variantId: line.variantId,
-              quantity: line.quantity,
-              previousUnitPrice: line.storedUnitPrice,
-              currentUnitPrice: line.currentUnitPrice,
-              currency: line.currentCurrency ?? line.storedCurrency,
-            })),
-          },
-        );
-      }
-
-      // Feature 038 (FR-035) — minimum order value gate (Checkout + admin
-      // create both reach here). 0 ⇒ no minimum; resolver failures ⇒ no gate.
-      if (this.resolveMinOrderValue) {
-        const min = await this.resolveMinOrderValue(req.salesChannelId ?? null).catch(() => 0);
-        if (min > 0) {
-          const cartSubtotal = items.reduce((sum, it) => sum + Number(it.unitPrice) * it.quantity, 0);
-          if (cartSubtotal < min) {
-            throw new HttpError(
-              422,
-              ERROR_CODES.VALIDATION_FAILED,
-              `Order total ${cartSubtotal.toFixed(2)} is below the minimum ${min.toFixed(2)} for this sales channel.`,
-              { code: 'order_below_minimum', minimum: min, subtotal: cartSubtotal },
-            );
-          }
-        }
-      }
-
-      const [delivery, billing] = await Promise.all([
-        this.neighbours.addressRead.findById(ctx.organizationId, req.deliveryAddressId, {
-          liveOnly: true,
-        }),
-        this.neighbours.addressRead.findById(ctx.organizationId, req.billingAddressId, {
-          liveOnly: true,
-        }),
-      ]);
-      if (!delivery || !billing) {
-        throw new HttpError(403, ERROR_CODES.ADDRESS_NOT_OWNED, 'Address does not belong to the caller organization.');
-      }
-
-      // The Organization's method allow-lists. The storefront catalogues list
-      // only the allowed methods; this is the refusal behind that listing, for
-      // every surface that places through here, against the Organization in
-      // `ctx` — the one the caller resolved, never one a request named. Before
-      // anything is written: the basket has only been read so far. No caller
-      // is exempt — an administrator placing on a customer's behalf included.
-      await this.assertMethodsAllowedForOrganization({
-        organizationId: ctx.organizationId,
-        deliveryMethodId: req.deliveryMethodId,
-        paymentMethodId: req.paymentMethodId,
-      });
-
-      const deliveryMethod = await this.activeDeliveryMethod(req.deliveryMethodId);
-      if (!deliveryMethod) {
-        throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, 'Delivery method is not active.');
-      }
-      const paymentMethod = await this.activePaymentMethod(req.paymentMethodId);
-      if (!paymentMethod) {
-        throw new HttpError(400, ERROR_CODES.VALIDATION_FAILED, 'Payment method is not active.');
-      }
-      // Feature 034 (US4/FR-015) — re-validate the selected method's adapter at
-      // submit using the surface-appropriate validator. Admin (impersonated)
-      // submissions use validateUseOnAdmin; customer submissions use
-      // validateUseOnStorefront. A stale/ineligible selection is rejected.
-      await this.assertPaymentMethodUsable(ctx, paymentMethod, req.salesChannelId ?? null);
-      // Feature 035 (FR-014/FR-015) — same re-validation for the shipping method.
-      await this.assertShippingMethodUsable(ctx, deliveryMethod, req.salesChannelId ?? null);
-
       // Resolve the order's sales channel once. Prefer the channel carried on
       // the request (Checkout / admin create); otherwise the platform's
-      // **system-default** channel. Used for candidate warehouses, the
-      // channel-level fulfilment setting, and the stamped order channel below,
-      // so all three agree.
+      // **system-default** channel. Used for the basket the order is placed
+      // from, candidate warehouses, the channel-level fulfilment setting, and
+      // the stamped order channel below, so all four agree. Resolved before the
+      // basket is read, because the basket is the one of this channel
+      // (`specs/154-sales-channel-access/`).
       //
       // Issue #85 — the fallback used to be `findOne(SalesChannel, { status:
       // 'active' })`: an arbitrary active row, ordered by nothing, read from
@@ -1556,6 +2034,254 @@ export class OrderService {
       // invariant says this cannot happen after boot — so say so, rather than
       // persisting the `randomUUID()` that used to stand here (issue #85).
       if (orderChannel === null) throw new NoSystemDefaultChannel();
+
+      // The basket, read on **this** transaction through the port `carts`
+      // publishes for placement (feature 080, T048). It is the same
+      // `EntityManager` the completion below writes on, which is the whole
+      // content of the seam: a read on a second one would put a commit boundary
+      // between the totals this method quotes and the basket it clears.
+      //
+      // The basket is the customer's basket **of this order's channel**: a
+      // customer holds one per channel, created and priced on the channel it is
+      // used on (`specs/154-sales-channel-access/`, contracts/basket-attribution.md
+      // §4).
+      //
+      // Issue #169 — or the working basket the caller wrote this order's lines
+      // into, when it names one: the customer's active basket is then not read,
+      // and so not completed either.
+      const basketCtx = {
+        customerAccountId: ctx.customerAccountId,
+        // `null` for the reason `previewTotal` states above: the query this
+        // replaces filtered on the customer account and the status alone.
+        organizationId: null,
+        salesChannelId: orderChannel.id,
+      };
+      const basket = workingBasketId
+        ? await this.neighbours.cartPlacementApply.readWorkingForPlacement(tx, { ...basketCtx, cartId: workingBasketId })
+        : await this.neighbours.cartPlacementApply.readActiveForPlacement(tx, basketCtx);
+      const cart = basket?.cart ?? null;
+      const items = basket?.items ?? [];
+      if (!cart || items.length === 0) {
+        throw new HttpError(409, ERROR_CODES.CART_EMPTY, 'Cart is empty.');
+      }
+      // Defence in depth: by construction the read above answers this channel's
+      // basket, so this refuses only a basket handed over from elsewhere. Its
+      // assortment, its line prices and its promotions were all answered for
+      // the channel it records; placed on another one it would carry them as
+      // they are. Refused rather than repriced — a silent price change at
+      // placement is what the price check below refuses as well — inside the
+      // transaction and before anything is reserved or written, so the basket
+      // survives.
+      if (cart.salesChannelId !== orderChannel.id) {
+        throw new HttpError(
+          422,
+          ERROR_CODES.ORDER_SALES_CHANNEL_MISMATCH,
+          'The basket belongs to a different sales channel than this order.',
+          { cartSalesChannelId: cart.salesChannelId, requestSalesChannelId: orderChannel.id },
+        );
+      }
+
+      // Issue #648 — a basket its Organization's cart-approval policy applies to
+      // is ordered only once approved. `carts` judges it (the policy, the
+      // self-approval exemption of the Organization administrator, the basket's
+      // approval state); a refusal lands here, before anything is reserved or
+      // written, so the basket survives as it was. A working basket is exempt:
+      // its lines are an administrator's, an API client's or a one-click buy's,
+      // never the member's basket the approval was asked for.
+      if (
+        !workingBasketId &&
+        (await this.neighbours.cartPlacementApply.awaitsApproval({
+          cart,
+          organizationId: ctx.organizationId,
+          // The placer's own role, only for the placer's own basket (FR-080).
+          ...(ctx.organizationRoleId && cart.customerAccountId === ctx.customerAccountId
+            ? { organizationRoleId: ctx.organizationRoleId }
+            : {}),
+        }))
+      ) {
+        throw cartApprovalRequired(cart);
+      }
+
+      // Feature 155 (FR-008, FR-036, FR-037; research R19; threats F2, F3) —
+      // the basket's order minimums, judged here, inside the transaction and
+      // **before the first side effect**: before the value gate, the business
+      // id, any stock reservation and the credit reservation. Every caller of
+      // this method — checkout, one-click, admin create, API intake and a
+      // direct `OrderPlacementPort` call — passes through it, so no path can
+      // place a basket another path let below a minimum.
+      //
+      // One read of the basket's products (and their packaging units), reused
+      // below for the totals and the line snapshots; then the quote source,
+      // vouched under its lock (lock order: see `#vouchedQuoteRequestSource`),
+      // whose answer is both the exemption decision here and the stamp below;
+      // then the evaluation. A line whose product record is gone refuses the
+      // placement (FR-037, fail-closed). Nothing has been written, so the
+      // rollback releases the lock and leaves the basket as it was.
+      //
+      // Issue #1308 — at the request's scope language when the caller hands it
+      // over (one-click: the language its basket add judged the line in), so a
+      // line admitted there is not refused here for being off in the channel's
+      // default; otherwise at the one the message language names, as before.
+      // Issue #1320 — admin create asks for the channel's default (N2), the
+      // language its basket add judged the lines in.
+      const orderLanguage = resolveScopeLanguage(
+        {
+          id: orderChannel.id,
+          languages: orderChannel.languages,
+          defaultLanguage: orderChannel.defaultLanguage,
+        },
+        options?.languageTag ?? (options?.atChannelDefaultLanguage ? undefined : options?.language),
+      );
+      const catalogue = await readBasketCatalogue(this.neighbours.catalogProductRead, items, (products) =>
+        availableOnly(this.neighbours.catalogProductAvailability, products, {
+          channelId: orderChannel.id,
+          languageCode: orderLanguage,
+          organizationId: ctx.organizationId,
+        }),
+      );
+      const productById = new Map(catalogue.products.map((p) => [p.id, p]));
+      // Feature 174 (FR-030, FR-032) — the names the order's lines snapshot, at the order's
+      // (channel, language): C×L → C → Global. Read once, never re-resolved afterwards.
+      const namesAtOrder = await this.#namesAt(
+        catalogue.products.map((p) => p.id),
+        orderChannel.id,
+        orderLanguage,
+      );
+      const quoteSource = await this.#vouchedQuoteRequestSource(
+        tx,
+        ctx.organizationId,
+        cart.sourceQuoteRequestId,
+        items,
+      );
+      // Issue #167 — owner ruling of 2026-11-02: a basket priced at a quote
+      // whose validity has ended cannot be ordered; a new quote must be issued.
+      // Before the minimums, because it is the buyer's real obstacle: a lapsed
+      // quote also costs its lines their exemption, and "below the minimum"
+      // would send them to fix a quantity rather than ask for a new quote.
+      // Still before the first side effect, so the basket survives as it was.
+      const quoteCommitment = await this.#quoteCommitmentRefusal(
+        ctx.organizationId,
+        cart,
+        items,
+        quoteSource.quoteRequest,
+      );
+      if (quoteCommitment !== null) throw quoteCommitmentEnded(quoteCommitment);
+      assertBasketMeetsMinimums(
+        evaluateBasketMinimums(cart, items, catalogue, quoteSource.honoursExemptions),
+        (productId) => this.#productName(productById, productId, namesAtOrder),
+      );
+
+      // A cart line is ordered at its stored unit price — copied onto the order
+      // line below, and the figure every total here is computed from. So the
+      // stored price has to be the price the line may be ordered at **now**: the
+      // price list's bracket for its current quantity, for this Organization, or
+      // the agreed price of an accepted quote at the agreed quantity. `carts`
+      // gives that answer, on this transaction, from the chain it stores prices
+      // from; a line it does not confirm refuses the placement before anything
+      // is reserved or written. The buyer is not charged a price they were not
+      // shown: the basket is brought up to date after the rollback and they
+      // review it before placing again.
+      const priceDrift = await this.neighbours.cartPlacementApply.findPriceDrift(tx, {
+        cartId: cart.id,
+        organizationId: ctx.organizationId,
+      });
+      if (priceDrift.length > 0) {
+        // A working basket is removed below rather than brought up to date:
+        // nobody goes back to review it.
+        if (!workingBasketId) repriceCartId = cart.id;
+        throw new HttpError(
+          409,
+          ERROR_CODES.CART_PRICE_CHANGED,
+          'The prices in the cart have changed; review the cart and place the order again.',
+          {
+            lines: priceDrift.map((line) => ({
+              productId: line.productId,
+              variantId: line.variantId,
+              quantity: line.quantity,
+              previousUnitPrice: line.storedUnitPrice,
+              currentUnitPrice: line.currentUnitPrice,
+              currency: line.currentCurrency ?? line.storedCurrency,
+            })),
+          },
+        );
+      }
+
+      // Feature 038 (FR-035) — minimum order value gate (Checkout + admin
+      // create both reach here). 0 ⇒ no minimum; resolver failures ⇒ no gate.
+      if (this.resolveMinOrderValue) {
+        const min = await this.resolveMinOrderValue(req.salesChannelId ?? null).catch(() => 0);
+        if (min > 0) {
+          const cartSubtotal = moneySum(items.map((it) => lineAmountHalfUp(it.unitPrice, it.quantity)));
+          if (compareDecimals(cartSubtotal, min) < 0) {
+            // Issue #86 — its own code, not `VALIDATION_FAILED` with the token
+            // `order_below_minimum` in `details.code`: the envelope never
+            // replaces that code's message, so the buyer read this sentence
+            // in English. Two-decimal strings rather than numbers, as for
+            // `LIMIT_INSUFFICIENT`: the envelope substitutes a placeholder with
+            // `String(value)`, so `99.5` is what the buyer would read. The
+            // currency is the basket's, which is what the subtotal is in.
+            const minimum = roundHalfUp(min);
+            throw new HttpError(
+              422,
+              ERROR_CODES.ORDER_BELOW_MINIMUM_VALUE,
+              `Order total ${cartSubtotal} is below the minimum ${minimum} for this sales channel.`,
+              { minimum, subtotal: cartSubtotal, currency: items[0]!.currency },
+            );
+          }
+        }
+      }
+
+      // `specs/182-related-payers/` — a named payer is vouched for inside this
+      // transaction (FR-068: nothing is reserved or written before), and its billing
+      // address comes from the payer, through the policy port (FR-063).
+      const payer = req.payerOrganizationId
+        ? await this.#vouchPayer(ctx, req.payerOrganizationId, req.billingAddressId, orderChannel.id, cart, tx)
+        : null;
+      assertCartContextNamed(cart, req.payerOrganizationId);
+      const [delivery, ownBilling] = await Promise.all([
+        this.neighbours.addressRead.findById(ctx.organizationId, req.deliveryAddressId, {
+          liveOnly: true,
+        }),
+        payer
+          ? Promise.resolve(null)
+          : this.neighbours.addressRead.findById(ctx.organizationId, req.billingAddressId, {
+              liveOnly: true,
+            }),
+      ]);
+      const billing = payer ? payer.billing : ownBilling;
+      if (!delivery || !billing) {
+        throw new HttpError(403, ERROR_CODES.ADDRESS_NOT_OWNED, 'Address does not belong to the caller organization.');
+      }
+
+      // The Organization's method allow-lists. The storefront catalogues list
+      // only the allowed methods; this is the refusal behind that listing, for
+      // every surface that places through here, against the Organization in
+      // `ctx` — the one the caller resolved, never one a request named. Before
+      // anything is written: the basket has only been read so far. No caller
+      // is exempt — an administrator placing on a customer's behalf included.
+      // With a payer, the payment method is the payer's to allow (FR-066).
+      if (payer) {
+        await this.#assertMethodsAllowedForPayer(ctx, payer, req);
+      } else {
+        await this.assertMethodsAllowedForOrganization({
+          organizationId: ctx.organizationId,
+          deliveryMethodId: req.deliveryMethodId,
+          paymentMethodId: req.paymentMethodId,
+        });
+      }
+
+      const deliveryMethod = await this.activeDeliveryMethod(req.deliveryMethodId);
+      if (!deliveryMethod) throw deliveryMethodNotActive(req.deliveryMethodId);
+      const paymentMethod = await this.activePaymentMethod(req.paymentMethodId);
+      if (!paymentMethod) throw paymentMethodNotActive(req.paymentMethodId);
+      // Feature 034 (US4/FR-015) — re-validate the selected method's adapter at
+      // submit using the surface-appropriate validator. Admin (impersonated)
+      // submissions use validateUseOnAdmin; customer submissions use
+      // validateUseOnStorefront. A stale/ineligible selection is rejected.
+      await this.assertPaymentMethodUsable(ctx, paymentMethod, req.salesChannelId ?? null);
+      // Feature 035 (FR-014/FR-015) — same re-validation for the shipping method.
+      await this.assertShippingMethodUsable(ctx, deliveryMethod, req.salesChannelId ?? null);
+
 
       // Both chosen methods must be offered in the channel this order records.
       // The storefront catalogues list only such methods; this is the refusal
@@ -1662,7 +2388,8 @@ export class OrderService {
               fulfilmentStrategy: p.fulfilmentStrategy ?? null,
               fulfilmentStrategyWarehouseOrder: p.fulfilmentStrategyWarehouseOrder ?? null,
               sku: p.sku,
-              name: this.anyValue(p.name),
+              // Feature 174 (FR-030) — a stock refusal names the product as the order does.
+              name: namesAtOrder.get(p.id) || p.name,
             },
           ]),
         );
@@ -1771,42 +2498,34 @@ export class OrderService {
         }
       }
 
-      const productIds = items.map((i) => i.productId);
-      const products =
-        productIds.length > 0
-          ? await this.neighbours.catalogProductRead.findByIds(productIds)
-          : [];
-      const productById = new Map(products.map((p) => [p.id, p]));
-
       // Resolved once and used twice: the promotion engine's audience filter
       // inside the totals below, and the redemption row `finalizeUsage` writes.
-      const customerGroupId = await this.resolveCustomerGroupId(ctx.customerAccountId, org);
+      // FR-112 — on the payer's terms, the payer and its group (`specs/182-related-payers/`).
+      const promotionBuyer = await this.#promotionBuyer(ctx, org, payer);
+      const customerGroupId = promotionBuyer.customerGroupId;
 
       // All monetary math (subtotal, per-product VAT, delivery, surcharge,
       // promotion discount) runs through one shared computation so the storefront
       // preview endpoint and order placement can never drift.
       const {
-        subtotal,
-        taxTotal,
-        deliveryTotal,
+        money,
         paymentSurcharge,
         currency,
-        discountTotal,
         total,
         appliedPromotionCode,
         appliedPromotions,
-        rateForProductId,
       } = await this.computeMonetaryTotals({
         items,
         productById,
-        vatStatus: org.vatStatus ?? 'vat_payer',
+        // FR-064 — with a payer, its VAT status and its billing address's country.
+        vatStatus: (payer?.organization ?? org).vatStatus ?? 'vat_payer',
         taxCountry: billing.country ?? delivery.country ?? null,
-        deliveryCost: Number(deliveryMethod.cost),
-        paymentSurcharge: Number(paymentMethod.additionalPrice ?? '0'),
+        deliveryCost: deliveryMethod.cost,
+        paymentSurcharge: paymentMethod.additionalPrice ?? '0',
         currency: deliveryMethod.currency,
         appliedPromotionCode: cart.appliedPromotionCode ?? null,
         salesChannelId: cart.salesChannelId ?? null,
-        organizationId: ctx.organizationId,
+        organizationId: promotionBuyer.organizationId,
         customerGroupId,
       });
 
@@ -1825,12 +2544,24 @@ export class OrderService {
         ? await this.businessId.generate(tx, channel.id)
         : undefined;
 
-      const sourceQuoteRequestId = await this.#vouchedQuoteRequestSource(
-        tx,
-        ctx.organizationId,
-        cart.sourceQuoteRequestId,
-        items,
-      );
+      // Vouched once, at the top of the transaction under the request's lock.
+      const { sourceQuoteRequestId } = quoteSource;
+
+      // Feature 162 (US1; research R-7) — the vouched request's custom-field
+      // values its definitions carry to Orders, read now, under the same lock.
+      // Only empty fields are filled (a new Order has none) and nothing here can
+      // refuse the placement: a value that cannot be carried is skipped and
+      // named in a system note below. The carried bag is not run through
+      // `validateAndMerge` — an unrelated required field must not fail checkout.
+      const carry =
+        sourceQuoteRequestId !== null && quoteSource.quoteRequest !== null
+          ? await this.neighbours.customFieldCarry().plan({
+              sourceType: 'quote_request',
+              targetType: 'order',
+              sourceValues: quoteSource.quoteRequest.customFieldValues,
+              targetValues: {},
+            })
+          : null;
 
       const order = tx.create(Order, {
         organizationId: ctx.organizationId,
@@ -1858,10 +2589,36 @@ export class OrderService {
           country: billing.country,
           phone: billing.phone ?? null,
           // Default the billing company + tax-id from the Organization; the
-          // buyer may override either at checkout for this order only.
-          companyName: req.billingCompanyName?.trim() || org.legalName || org.name,
-          taxId: req.billingTaxId?.trim() || org.taxId,
+          // buyer may override either at checkout for this order only. A
+          // personal Organization contributes no default (issue #759).
+          ...billingCompanyData(
+            org,
+            req,
+            payer ? { name: payer.usable.payerName, taxId: payer.usable.payerTaxId } : null,
+          ),
         },
+        // `specs/182-related-payers/` (FR-067) — the payer, as order data.
+        ...(payer
+          ? {
+              payerOrganizationId: payer.usable.payerOrganizationId,
+              payerLinkId: payer.usable.linkId,
+              payerTerms: payer.usable.commercialTerms,
+              payerSnapshot: {
+                organizationId: payer.usable.payerOrganizationId,
+                name: payer.usable.payerName,
+                taxId: payer.usable.payerTaxId,
+                vatStatus: payer.organization.vatStatus,
+                billingAddress: {
+                  recipientName: billing.recipientName,
+                  street: billing.street,
+                  city: billing.city,
+                  postalCode: billing.postalCode,
+                  country: billing.country,
+                  phone: billing.phone ?? null,
+                },
+              },
+            }
+          : {}),
         ...(req.deliveryPoint
           ? {
               deliveryPointSnapshot: {
@@ -1892,13 +2649,13 @@ export class OrderService {
         ...(this.resolvePendingStatus(paymentMethod.statusOnPending)
           ? { status: this.resolvePendingStatus(paymentMethod.statusOnPending)! }
           : {}),
-        subtotal: subtotal.toFixed(2),
-        taxTotal: taxTotal.toFixed(2),
-        deliveryTotal: deliveryTotal.toFixed(2),
+        subtotal: money.subtotal,
+        taxTotal: money.taxTotal,
+        deliveryTotal: money.deliveryTotal,
         // Feature 036 (US3) — coupon discount recomputed above.
-        discountTotal: discountTotal.toFixed(2),
+        discountTotal: money.discountTotal,
         ...(appliedPromotionCode ? { promotionCode: appliedPromotionCode } : {}),
-        total: total.toFixed(2),
+        total: money.total,
         currency,
         ...(req.customerNote ? { customerNote: req.customerNote } : {}),
         ...(req.shippingAdapterData
@@ -1916,8 +2673,29 @@ export class OrderService {
         // second write. The column's `false` default is the opposite answer
         // on purpose, and only for rows that predate it — see the migration.
         purchaseConversionOwed: true,
+        // Issue #417 — placed under the per-rate VAT method.
+        vatMethod: 'per_rate',
+        ...(carry && carry.carried.length > 0 ? { customFieldValues: { ...carry.values } } : {}),
+        ...(options?.customFieldValues
+          ? { customFieldValues: { ...(carry?.values ?? {}), ...options.customFieldValues } }
+          : {}),
       });
-      await tx.persistAndFlush(order);
+      await tx.persist(order).flush();
+
+      // Feature 162 (FR-010a) — what could not be carried, as one internal,
+      // author-less, non-notifying note in this transaction.
+      if (carry && carry.skipped.length > 0 && quoteSource.quoteRequest) {
+        buildCarrySkipNote(tx, {
+          orderId: order.id,
+          source: {
+            entityType: 'quote_request',
+            recordId: quoteSource.quoteRequest.id,
+            reference: quoteSource.quoteRequest.businessId,
+          },
+          skipped: carry.skipped,
+        });
+        await tx.flush();
+      }
 
       // Feature 045 (US2) — stamp the per-promotion discount breakdown.
       for (const ap of appliedPromotions) {
@@ -1926,7 +2704,7 @@ export class OrderService {
             orderId: order.id,
             promotionId: ap.promotionId,
             couponId: ap.couponId ?? null,
-            amount: ap.amount.toFixed(2),
+            amount: roundHalfUp(ap.amount),
             currency,
           }),
         );
@@ -1940,7 +2718,7 @@ export class OrderService {
           orderId: order.id,
           currency,
           ctx: {
-            organizationId: ctx.organizationId,
+            organizationId: promotionBuyer.organizationId,
             customerAccountId: ctx.customerAccountId,
             customerGroupId,
             salesChannelId: channel.id,
@@ -1953,15 +2731,49 @@ export class OrderService {
         });
       }
 
-      const orderItems = items.map((item) => {
+      // Feature 159 (contracts/orders-api.md §2; I-O1 … I-O3) — the layout of
+      // the order's lines, decided once: an administrator's grouping, else the
+      // grouping of the quote this order is vouched to be (from the lines the
+      // judgement above already read — the port is not asked again), else the
+      // basket's own order. The groups are written first and flushed: a line
+      // references its group by a plain column and the unit of work orders
+      // inserts by relations, which there are none of.
+      const placedLines = items.map((item, index) => ({
+        key: String(index),
+        productId: item.productId,
+        variantId: item.variantId ?? null,
+        unitPrice: item.unitPrice,
+        quantity: item.quantity,
+      }));
+      const lineLayout = options?.lineGrouping
+        ? adminLayout(placedLines, options.lineGrouping)
+        : quoteSource.sourceQuoteRequestId !== null
+          ? carryQuoteGrouping(quoteSource.quoteRequestLines, placedLines)
+          : basketLayout(placedLines);
+      const orderGroupIdBySource = new Map<string, string>();
+      if (lineLayout.groups.length > 0) {
+        for (const group of lineLayout.groups) {
+          const row = tx.create(OrderItemGroup, { orderId: order.id, name: group.name, position: group.position });
+          orderGroupIdBySource.set(group.sourceId, row.id);
+        }
+        await tx.flush();
+      }
+
+      const orderItems = items.map((item, index) => {
         const product = productById.get(item.productId);
+        const laidOut = lineLayout.lines.get(String(index));
+        const groupId = laidOut?.groupSourceId ? (orderGroupIdBySource.get(laidOut.groupSourceId) ?? null) : null;
         // Feature 043 — when the line was ordered as a packaging unit, append
         // the unit name to the snapshot name so every order-derived document
         // shows it, and keep a structured snapshot for programmatic use.
-        const baseName = product ? this.anyValue(product.name) : '';
+        const baseName = product ? namesAtOrder.get(product.id) || product.name : '';
         const snapshotName = item.packagingUnitName
           ? `${baseName} (${item.packagingUnitName})`
           : baseName;
+        // The line's stored gross: its net plus its share of its rate's VAT under
+        // the one VAT method (issue #417), from the totals computed above, so the
+        // order's line grosses add up to its products' gross.
+        const lineMoney = money.lines[index]!;
         return tx.create(OrderItem, {
           orderId: order.id,
           productId: item.productId,
@@ -1981,15 +2793,21 @@ export class OrderService {
           ...(item.variantId ? { variantId: item.variantId } : {}),
           quantity: item.quantity,
           unitPrice: item.unitPrice,
-          taxRate: rateForProductId(item.productId).toFixed(4),
-          lineTotal: (
-            Number(item.unitPrice) *
-            item.quantity *
-            (1 + rateForProductId(item.productId))
-          ).toFixed(2),
+          // Feature 160 (FR-030) — the tier that priced the cart line, copied.
+          priceSource: item.priceSource ?? null,
+          // Feature 155 (FR-016a, D-44) — the product's returnable flag as it
+          // stands now, from the one basket read above; copied once and never
+          // updated. Always an explicit boolean (fail-closed): `null` is kept
+          // for lines placed before the feature.
+          returnableAtPurchase: returnableAtPurchase(product),
+          // Feature 159 (I-O3) — the line's group and its place in its section.
+          groupId,
+          position: laidOut?.position ?? index,
+          taxRate: lineMoney.taxRate,
+          lineTotal: lineMoney.gross,
         });
       });
-      await tx.persistAndFlush(orderItems);
+      await tx.persist(orderItems).flush();
 
       // US7 / T079 — persist one stock_allocations row per
       // (orderItem, warehouse) pair from the plan `inventory` returned, so
@@ -1998,7 +2816,7 @@ export class OrderService {
       // plan emits multiple allocations (only the `default_first` strategy
       // does this today).
       //
-      // After `persistAndFlush(orderItems)` and required to be:
+      // After `persist(orderItems).flush()` and required to be:
       // `stock_allocations_order_item_fk` (`on delete restrict`) means this
       // row cannot exist before its order item does. See the import.
       // `allocationPlan` is empty when `inventory` is not effectively present,
@@ -2059,7 +2877,7 @@ export class OrderService {
       const payment = await this.neighbours.paymentPlacementApply.openForOrder(tx, {
         orderId: order.id,
         paymentMethodId: paymentMethod.id,
-        amount: total.toFixed(2),
+        amount: money.total,
         currency,
       });
 
@@ -2124,13 +2942,17 @@ export class OrderService {
             'Credit-limit driver is not wired into the order service.',
           );
         }
-        const result = await this.creditLimit.reserve({
-          organizationId: ctx.organizationId,
-          orderId: order.id,
-          amount: total,
-          currency,
-          tx,
-        });
+        // `specs/182-related-payers/` FR-065 — with a payer, the payer's credit (under
+        // the inheritance rule), read under a system scope with the payer id from the
+        // validated link: under the buyer's context the payer's grant reads as absent.
+        const creditLimit = this.creditLimit;
+        const reserveFor = (organizationId: string) =>
+          creditLimit.reserve({ organizationId, orderId: order.id, amount: total, currency, tx });
+        const result = payer
+          ? await withSystemScope('orders: credit of the related payer', () =>
+              reserveFor(payer.usable.payerOrganizationId),
+            )
+          : await reserveFor(ctx.organizationId);
         if (!result.ok) {
           if (result.code === 'LIMIT_INSUFFICIENT') {
             throw new HttpError(
@@ -2146,8 +2968,8 @@ export class OrderService {
               // organization's own — what `GET /me/credit-limit` already tells
               // the same buyer, and the total of the order they are placing.
               {
-                availableAmount: result.availableAmount.toFixed(2),
-                orderTotal: total.toFixed(2),
+                availableAmount: roundHalfUp(result.availableAmount),
+                orderTotal: money.total,
                 currency,
               },
             );
@@ -2205,7 +3027,7 @@ export class OrderService {
         await invoicePlacement.createProformaForOrder(tx, {
           orderId: order.id,
           currency,
-          total: total.toFixed(2),
+          total: money.total,
         });
       }
 
@@ -2273,12 +3095,34 @@ export class OrderService {
           objectType: 'order',
           objectId: order.id,
           stateBefore: null,
-          stateAfter: { total: total.toFixed(2), currency, status: order.status },
+          stateAfter: placeOnBehalfAuditState({
+            order,
+            layout: lineLayout,
+            carriedCustomFieldKeys: carry?.carried ?? [],
+            // Feature 175 (FR-021) — the keys the administrator set on the create.
+            adminCustomFieldValues: options?.customFieldValues,
+          }),
         });
       }
 
       return order;
     }).catch(async (error: unknown) => {
+      if (workingBasketId) {
+        // Issue #169 — a refused placement leaves no working basket behind. The
+        // refusal travels whatever happens here: a leftover working basket is
+        // nobody's basket and is read by nothing.
+        try {
+          await this.neighbours.cartPlacementApply.discardWorkingBasket({
+            cartId: workingBasketId,
+            customerAccountId: ctx.customerAccountId,
+          });
+        } catch (discardError) {
+          this.log?.warn(
+            { err: discardError, cartId: workingBasketId },
+            '[orders] could not remove the working basket of a refused placement',
+          );
+        }
+      }
       if (repriceCartId !== null) {
         // The refusal travels whatever happens here: a basket left stale is
         // refused again, and brought up to date again, on the next attempt.
@@ -2316,6 +3160,8 @@ export class OrderService {
   }
 
   async getById(orderId: string, ctx: CustomerContext): Promise<Order> {
+    // A malformed id names no order; PostgreSQL would answer it with a 500 (issue #753).
+    if (!isUuidShape(orderId)) throw new HttpError(404, ERROR_CODES.ORDER_NOT_FOUND, 'Order not found.');
     const em = this.emFactory();
     const where = await this.#scopedOrderWhere(em, ctx, { id: orderId });
     const order = await em.findOne(Order, where);
@@ -2330,17 +3176,20 @@ export class OrderService {
   }
 
   /**
-   * Delegates to OrderAccessService (T145). The rule itself — Organization
-   * Admin sees all org orders, Regular User sees only their own — lives
-   * there so any module that needs to enforce it imports the service
-   * rather than duplicating the SQL. Out-of-scope reads return no rows
-   * and the caller raises 404, never 403, to avoid leaking existence.
+   * Delegates to OrderAccessService (T145). The rule itself — a holder of
+   * `orders.view_organization` sees all org orders, anyone else only their
+   * own — lives there so any module that needs to enforce it imports the
+   * service rather than duplicating the SQL. Out-of-scope reads return no
+   * rows and the caller raises 404, never 403, to avoid leaking existence.
    */
   async #scopedOrderWhere(
     em: EntityManager,
     ctx: CustomerContext,
     extra: Record<string, unknown> = {},
   ): Promise<Record<string, unknown>> {
+    if (!this.accessService) {
+      throw new Error('OrderService: a scoped order read needs the OrderAccessService it was built without.');
+    }
     return this.accessService.scopedWhereWithEm(em, ctx, extra);
   }
 
@@ -2403,56 +3252,38 @@ export class OrderService {
    * credit an order actually drew. The rule reads `paymentMethodSnapshot.kind`,
    * stamped at placement from the same value that decides whether `reserve`
    * runs, so an order that is not on credit owes no follow-up at all.
+   *
+   * Issue #1574 — the move is one of `PAYMENT_STATUS_TRANSITIONS`' operator
+   * edges or it is refused with 409 `ORDER_PAYMENT_STATUS_TRANSITION_NOT_ALLOWED`
+   * and writes nothing. 404 is answered first, so a refusal never confirms
+   * that an order outside the caller's scope exists.
    */
   async transitionPaymentStatus(
     orderId: string,
     to: 'paid' | 'refunded',
+    caller: CallerOptions = {},
   ): Promise<Order> {
     const em = this.emFactory();
     // Through the tenant filter first: a caller outside the order's scope gets
     // the same 404 a missing order does, before any lock is taken.
+    if (!isUuidShape(orderId)) throw new HttpError(404, ERROR_CODES.ORDER_NOT_FOUND, 'Order not found.');
     const visible = await em.findOne(Order, { id: orderId });
     if (!visible) throw new HttpError(404, ERROR_CODES.ORDER_NOT_FOUND, 'Order not found.');
 
-    const { order, owes } = await em.transactional(async (tx) => {
-      const locked = await tx.findOne(
-        Order,
-        { id: orderId },
-        { lockMode: LockMode.PESSIMISTIC_WRITE, refresh: true },
-      );
-      if (!locked) throw new HttpError(404, ERROR_CODES.ORDER_NOT_FOUND, 'Order not found.');
-
-      const owed = effectsOwedByPaymentStatusChange(locked, to);
-      if (owed.length > 0 && !this.transitionEffects) {
-        throw new Error(
-          `OrderService: marking an order "${to}" owes ${owed.map((o) => o.effect).join(' and ')}, ` +
-            'and no effect service was supplied to record it. Refusing rather than committing ' +
-            'a payment status whose follow-up would be lost.',
-        );
-      }
-
-      const paymentBefore = locked.paymentStatus;
-      locked.paymentStatus = to;
-      // Feature 054 — audit the payment-status change co-transactionally (actor
-      // from the ambient TenantContext; the admin route always carries one).
-      if (this.auditLog) {
-        const ctx = getTenantContext();
-        const actor = ctx ? actorFromContext(ctx) : null;
-        this.auditLog.recordWithin(tx, {
-          action: 'order.payment_status_transition',
-          objectType: 'order',
-          objectId: locked.id,
-          actorAdminUserId: actor?.actorAdminUserId ?? null,
-          impersonatedCustomerAccountId: actor?.impersonatedCustomerAccountId ?? null,
-          stateBefore: { paymentStatus: paymentBefore },
-          stateAfter: { paymentStatus: to },
-        });
-      }
-      if (this.transitionEffects && owed.length > 0) {
-        await this.transitionEffects.record(tx, locked, owed, 'transition');
-      }
-      return { order: locked, owes: owed.length > 0 };
-    });
+    // `specs/186-aggregate-ports/` US4 (T058) — one Command,
+    // `order.payment_status_transition`: decided on the locked row, the new
+    // status, its entry (the ambient actor, by the bus) and the credit release
+    // it owes committed together; an order already there records nothing, and
+    // a move that is not an operator edge is refused with nothing written.
+    if (!this.commandBus) {
+      throw new Error('OrderService: a payment-status change runs on the Command Bus, and none was supplied.');
+    }
+    const { order, owes } = await this.commandBus.run(
+      withCallerOptions(
+        makeOrderPaymentStatusTransitionCommand({ effects: this.transitionEffects }, { orderId, to }),
+        caller,
+      ),
+    );
 
     if (owes && this.transitionEffects) {
       try {
@@ -2473,8 +3304,78 @@ export class OrderService {
     return order;
   }
 
+  /**
+   * The name a minimum refusal gives a product: its effective name at the basket's (channel,
+   * language) (feature 174, FR-030), else its Global name; the id when the record is gone.
+   */
+  #productName(
+    productById: ReadonlyMap<string, { name: string }>,
+    productId: string,
+    namesAtScope: ReadonlyMap<string, string>,
+  ): string {
+    const product = productById.get(productId);
+    return namesAtScope.get(productId) || (product ? product.name : '') || productId;
+  }
+
+  /**
+   * Feature 174 (FR-030) — product id → its effective name at (`channelId`, `languageCode`), as
+   * `catalog` answers it. No channel: no entry (the caller keeps the Global name, FR-031).
+   */
+  async #namesAt(
+    productIds: readonly string[],
+    channelId: string | null,
+    languageCode: string | null,
+  ): Promise<Map<string, string>> {
+    if (productIds.length === 0 || channelId === null) return new Map();
+    const texts = await this.neighbours.catalogProductAvailability.effectiveTexts([...new Set(productIds)], {
+      channelId,
+      languageCode,
+    });
+    return new Map([...texts].map(([id, text]) => [id, text.name]));
+  }
+
   private anyValue(blob: Record<string, string>): string {
     const k = Object.keys(blob)[0];
     return k ? (blob[k] ?? '') : '';
   }
+}
+
+/**
+ * Issue #86 — a delivery method that is not active, or not there, is refused
+ * with the code the method gates use, not `VALIDATION_FAILED`: the envelope
+ * never replaces that code's message, so the buyer read it in English.
+ */
+function deliveryMethodNotActive(deliveryMethodId: string): HttpError {
+  return new HttpError(
+    400,
+    ERROR_CODES.ORDER_DELIVERY_METHOD_UNAVAILABLE,
+    'Delivery method is not active.',
+    { deliveryMethodId },
+  );
+}
+
+/** The payment twin of {@link deliveryMethodNotActive}. */
+function paymentMethodNotActive(paymentMethodId: string): HttpError {
+  return new HttpError(
+    400,
+    ERROR_CODES.ORDER_PAYMENT_METHOD_UNAVAILABLE,
+    'Payment method is not active.',
+    { paymentMethodId },
+  );
+}
+
+/**
+ * `specs/182-related-payers/` FR-117, FR-060 — a cart on a payer's commercial terms is priced
+ * for that payer, so it can be placed only naming that payer: the checkout shows it fixed, and a
+ * request naming another payer, or none, is refused before anything is written.
+ */
+function assertCartContextNamed(
+  cart: Pick<CartRecord, 'buyingForOrganizationId' | 'buyingForTerms'> | null,
+  payerOrganizationId: string | undefined | null,
+): void {
+  if (cart?.buyingForTerms !== 'payer' || !cart.buyingForOrganizationId) return;
+  if (payerOrganizationId === cart.buyingForOrganizationId) return;
+  throw new HttpError(422, ERROR_CODES.RELATED_PAYER_NOT_USABLE, 'This payer cannot be used for this order right now.', {
+    reason: 'cart_bought_for_payer',
+  });
 }

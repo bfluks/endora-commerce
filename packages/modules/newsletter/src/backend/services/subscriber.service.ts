@@ -1,12 +1,27 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
-import type { CustomerAccountReadPort, EmailMailerPort } from '@endora-commerce/contracts';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import {
+  isUuidShape,
+  type CustomerAccountReadPort,
+  type EmailMailerPort,
+  type NewsletterSubscriberHookData,
+} from '@endora-commerce/contracts';
+import { randomUUID } from 'node:crypto';
+import type { CommandBus } from '@endora-commerce/platform/commands';
 import { NewsletterSubscriber } from '../entities/newsletter-subscriber.entity.js';
-import { NewsletterTag } from '../entities/newsletter-tag.entity.js';
 import { NewsletterSubscriberTag } from '../entities/newsletter-subscriber-tag.entity.js';
-import { NewsletterCustomField } from '../entities/newsletter-custom-field.entity.js';
 import { NewsletterSuppression } from '../entities/newsletter-suppression.entity.js';
+import { makeConfirmSubscriberCommand } from '../commands/confirm-subscriber.command.js';
+import { makeSubscribeSubscriberCommand } from '../commands/subscribe-subscriber.command.js';
+import {
+  makeSuppressSubscriberCommand,
+  type SuppressionTarget,
+} from '../commands/suppress-subscriber.command.js';
+import { makeUnsubscribeSubscriberCommand } from '../commands/unsubscribe-subscriber.command.js';
+import type { SubscriberEnrolmentTransition } from './automation.service.js';
 import type { NewsletterOptInService } from './opt-in.service.js';
+import type { ResolvedSubscriberOwner } from './subscriber-fields.js';
+
+export { mergeTypedCustomFields, NEWSLETTER_CUSTOM_FIELD_TEXT_MAX } from './subscriber-fields.js';
 
 export interface NewsletterLinkBuilder {
   confirm(token: string): string;
@@ -20,58 +35,6 @@ export interface SubscribeInput {
   customFields?: Record<string, string | number | boolean | null>;
   source?: string;
   customerAccountId?: string | null;
-}
-
-/**
- * The owner identity a `newsletter_subscribers` row can be written from —
- * feature 087 Group B, D-187.
- *
- * The customer arm carries the organisation because
- * `newsletter_subscribers_organization_attribution_chk` requires it, and it is
- * a type of its own rather than a second optional field on
- * {@link SubscribeInput} because the caller's identity genuinely does not
- * include it: the only route that names an account
- * (`POST /api/v1/me/newsletter/subscribe`) reads it off the session, and the
- * organisation is a fact about that account which this service resolves through
- * `customer_accounts`' read port.
- *
- * Keeping the two apart is what makes "an owned subscriber with no
- * organisation" an unrepresentable argument to {@link ownerColumns} rather than
- * a line somebody has to remember. `SubscribeInput.customerAccountId` is
- * optional and nullable — the storefront route omits it entirely — so the shape
- * a forgotten stamp needs is exactly the shape the caller hands in; this type is
- * where it stops.
- */
-type ResolvedSubscriberOwner =
-  | { kind: 'customer'; customerAccountId: string; organizationId: string }
-  | { kind: 'anonymous' };
-
-/**
- * The two attribution columns, written together from one resolved owner.
- *
- * **Both** of this module's write sites go through it — the `em.create` on a
- * first subscribe and the adoption of an already-ownerless row — which is what
- * one function has to cover here. It needs no de-association arm, unlike
- * `pwa`'s: nothing in `newsletter` ever clears `customer_account_id`, so the
- * ownerless arm below is only ever the *initial* state of a row and never a
- * transition into one.
- */
-function ownerColumns(owner: ResolvedSubscriberOwner): {
-  customerAccountId: string | null;
-  organizationId: string | null;
-} {
-  return owner.kind === 'customer'
-    ? { customerAccountId: owner.customerAccountId, organizationId: owner.organizationId }
-    : {
-        customerAccountId: null,
-        // FR-011 — a storefront sign-up belongs to no organisation, and the
-        // constraint says nothing about it. On this table that is the ordinary
-        // case: `POST /api/v1/newsletter/subscribe` passes no account. Who such
-        // a row *should* belong to is R-6's open question and is not answered
-        // here — in particular not by matching `email` against
-        // `customer_accounts.email`, which is that question guessed.
-        organizationId: null,
-      };
 }
 
 export interface SubscriberServiceDeps {
@@ -93,10 +56,9 @@ export interface SubscriberServiceDeps {
    * `customer_accounts`' read model, for the one field the owner stamp needs:
    * the organisation the owning account belongs to (feature 087, D-187).
    *
-   * **Required**, and it is the one dependency in this interface that is. The
-   * three optional slots beside it are collaborators a composition may
-   * genuinely lack — a transport, an audit sink, an event emitter — and each
-   * has a defined behaviour when absent. This one has none: there is no
+   * **Required**. The two optional slots below it are collaborators a
+   * composition may genuinely lack — a transport and an event emitter — and
+   * each has a defined behaviour when absent. This one has none: there is no
    * composition in which an owned subscriber written with no organisation is
    * correct, because
    * `newsletter_subscribers_organization_attribution_chk` refuses that row.
@@ -111,9 +73,21 @@ export interface SubscriberServiceDeps {
   customerAccounts: CustomerAccountReadPort;
   /** `emailMailer`, owned by `email`, as its published contract (feature 075). */
   mailer?: EmailMailerPort;
-  auditLog?: AuditPort;
+  /**
+   * Every subscriber write runs a Command on it (issue #1381, Principle XIII),
+   * so the write and its one audit entry commit together. Required: a consent
+   * recorded nowhere is indistinguishable from one never given.
+   */
+  commandBus: CommandBus;
   /** Optional observability emitter (wraps the in-process EventBus). */
   emitEvent?: (name: string, payload: Record<string, unknown>) => void;
+  /**
+   * Enrols a subscriber into the active automations its committed write newly
+   * matches (issue #1833) — `NewsletterAutomationService.enrolMatching`.
+   * Called after the Command commits, so a rolled-back write enrols nobody.
+   * Absent, nothing is enrolled.
+   */
+  enrolAutomations?: (transition: SubscriberEnrolmentTransition) => Promise<unknown>;
 }
 
 /**
@@ -161,84 +135,57 @@ export class NewsletterSubscriberService {
     };
   }
 
-  /** Subscribe (idempotent on email). Returns the resulting status. */
+  /**
+   * Subscribe (idempotent on email). Returns the resulting status.
+   *
+   * The write is the `newsletter_subscriber.subscribe` / `.resubscribe` Command
+   * (issue #1381, Principle XIII): the row and its one audit entry commit
+   * together. Everything that reads another module or the settings — the opt-in
+   * mode, the owner's organisation — is resolved here first, and so is whether
+   * the address already has a subscriber, which fixes the action and the
+   * `objectId` the entry carries. The confirmation e-mail and the
+   * observability event follow the commit.
+   */
   async subscribe(input: SubscribeInput): Promise<{ status: 'pending' | 'active' }> {
-    const em = this.deps.emFactory();
     const email = input.email.trim().toLowerCase();
 
     const channelId = input.salesChannelId;
     const settingsChannelId = channelId ?? (await this.deps.resolveDefaultChannelId());
     const mode = await this.deps.optIn.resolveMode(settingsChannelId);
 
-    // Suppressed (complaint/bounce) addresses are not silently re-subscribed.
-    const suppressed = await em.findOne(NewsletterSuppression, { email });
-
-    // D-187 — resolved **before** the first managed entity is touched, not
-    // between the account assignment and the flush. Both `em.create` and the
-    // adoption below register the row with the unit of work, so a throw after
-    // either would leave an owned, unattributed subscriber there for whatever
-    // flushes this request next.
+    // D-187 — resolved **before** the write, so a refusal leaves no owned,
+    // unattributed subscriber behind.
     const owner = await this.#resolveOwner(input.customerAccountId);
 
-    let subscriber = await em.findOne(NewsletterSubscriber, { email });
-    const isNew = !subscriber;
-    if (!subscriber) {
-      subscriber = em.create(NewsletterSubscriber, {
+    const em = this.deps.emFactory();
+    const existing = await em.findOne(NewsletterSubscriber, { email });
+    // The tags before the write, so enrolment can tell a newly given tag from
+    // one the subscriber already carried (issue #1833).
+    const tagIdsBefore = existing
+      ? (await em.find(NewsletterSubscriberTag, { subscriberId: existing.id })).map((link) => link.tagId)
+      : [];
+    const subscriber = await this.deps.commandBus.run(
+      makeSubscribeSubscriberCommand({
+        subscriberId: existing?.id ?? randomUUID(),
+        isNew: existing === null,
         email,
-        status: 'pending',
-        source: input.source ?? null,
         salesChannelId: channelId,
-        // D-187 — the only place a subscriber is inserted, and the organisation
-        // goes in with the account. `ownerColumns` takes a *resolved* owner, so
-        // the customer branch has no shape in which the organisation could be
-        // omitted; the anonymous branch has none to carry (FR-011).
-        ...ownerColumns(owner),
-      });
-    }
-    if (owner.kind === 'customer' && !subscriber.customerAccountId) {
-      // The adoption: a subscriber who signed up anonymously and has now signed
-      // in. D-187 — the account and the organisation move together here too.
-      // `em.assign` rather than two statements, for the same reason
-      // `ownerColumns` returns both columns as one value: two statements are two
-      // things to remember, and the second one is the one that was never
-      // written.
-      em.assign(subscriber, ownerColumns(owner));
-    }
-
-    // Activation policy: single opt-in (or already confirmed) → active now;
-    // double opt-in → pending until the email link is followed.
-    const wasActive = subscriber.status === 'active';
-    if (mode === 'single' || subscriber.confirmedAt) {
-      subscriber.status = 'active';
-      subscriber.consentAt ??= new Date();
-      if (mode === 'single') subscriber.confirmedAt ??= new Date();
-    } else if (!wasActive) {
-      subscriber.status = 'pending';
-      subscriber.consentAt ??= new Date();
-    }
-    if (suppressed && subscriber.status === 'active') {
-      // An explicit re-subscribe lifts a prior self-unsubscribe suppression.
-      if (suppressed.reason === 'unsubscribe') {
-        await em.removeAndFlush(suppressed);
-      }
-    }
-
-    await this.mergeCustomFields(em, subscriber, input.customFields);
-    await em.persistAndFlush(subscriber);
-    await this.mergeTags(em, subscriber.id, input.tags);
+        mode,
+        owner,
+        source: input.source ?? null,
+        tags: input.tags,
+        customFields: input.customFields,
+      }),
+    );
 
     if (subscriber.status === 'pending') {
-      await this.sendConfirmation(subscriber.id, email, settingsChannelId);
+      await this.sendConfirmation(subscriber.subscriberId, email, settingsChannelId);
     }
 
-    await this.deps.auditLog?.record({
-      action: isNew ? 'newsletter_subscribe' : 'newsletter_resubscribe',
-      objectType: 'newsletter_subscriber',
-      objectId: subscriber.id,
-      stateAfter: { email, status: subscriber.status, source: input.source ?? null },
-    });
+    await this.#enrol({ ...subscriber, tagIdsBefore });
+
     this.deps.emitEvent?.('newsletter.subscribed.v1', {
-      subscriberId: subscriber.id,
+      subscriberId: subscriber.subscriberId,
       email,
       status: subscriber.status,
     });
@@ -246,57 +193,62 @@ export class NewsletterSubscriberService {
     return { status: subscriber.status === 'active' ? 'active' : 'pending' };
   }
 
-  /** Confirm a double opt-in subscriber from a signed token. Idempotent. */
+  /**
+   * Confirm a double opt-in subscriber from a signed token. Idempotent: an
+   * unknown or malformed id answers `{ ok: false }`, a subscriber that is not
+   * `pending` answers `{ ok: true }`, and neither runs a Command — so a
+   * re-clicked link fires no hook (issue #1843). A pending one runs the
+   * `newsletter_subscriber.confirm` Command (issue #1381).
+   */
   async confirm(subscriberId: string): Promise<{ ok: boolean }> {
-    const em = this.deps.emFactory();
-    const subscriber = await em.findOne(NewsletterSubscriber, { id: subscriberId });
+    if (!isUuidShape(subscriberId)) return { ok: false };
+    const subscriber = await this.deps.emFactory().findOne(NewsletterSubscriber, { id: subscriberId });
     if (!subscriber) return { ok: false };
-    if (subscriber.status === 'pending') {
-      subscriber.status = 'active';
-      subscriber.confirmedAt = new Date();
-      subscriber.consentAt ??= new Date();
-      await em.persistAndFlush(subscriber);
-      await this.deps.auditLog?.record({
-        action: 'newsletter_confirm',
-        objectType: 'newsletter_subscriber',
-        objectId: subscriber.id,
-        stateAfter: { status: 'active' },
-      });
-    }
+    if (subscriber.status !== 'pending') return { ok: true };
+    const confirmed = await this.deps.commandBus.run(makeConfirmSubscriberCommand({ subscriberId }));
+    await this.#enrol({ ...confirmed, tagIdsBefore: confirmed.tagIds });
     return { ok: true };
   }
 
-  /** Unsubscribe with an optional reason; writes a suppression row. Idempotent. */
-  async unsubscribe(subscriberId: string, reason?: string): Promise<{ ok: boolean }> {
-    const em = this.deps.emFactory();
-    const subscriber = await em.findOne(NewsletterSubscriber, { id: subscriberId });
-    if (!subscriber) return { ok: false };
-    if (subscriber.status !== 'unsubscribed') {
-      subscriber.status = 'unsubscribed';
-      subscriber.unsubscribedAt = new Date();
-      subscriber.unsubscribeReason = reason ?? null;
-      const existing = await em.findOne(NewsletterSuppression, { email: subscriber.email });
-      if (!existing) {
-        em.create(NewsletterSuppression, {
-          email: subscriber.email,
-          reason: 'unsubscribe',
-          detail: reason ?? null,
-        });
-      }
-      await em.persistAndFlush(subscriber);
-      await this.deps.auditLog?.record({
-        action: 'newsletter_unsubscribe',
-        objectType: 'newsletter_subscriber',
-        objectId: subscriber.id,
-        stateAfter: { status: 'unsubscribed', reason: reason ?? null },
+  /**
+   * Automation enrolment after a committed subscribe or confirmation (issue
+   * #1833). The subscriber write has already committed, so a failure to enrol
+   * is named and does not turn the visitor's successful sign-up into an
+   * error — the same treatment as the confirmation e-mail.
+   */
+  async #enrol(written: NewsletterSubscriberHookData & { tagIdsBefore: readonly string[] }): Promise<void> {
+    if (!this.deps.enrolAutomations) return;
+    try {
+      await this.deps.enrolAutomations({
+        subscriberId: written.subscriberId,
+        previousStatus: written.previousStatus,
+        status: written.status,
+        tagIdsBefore: written.tagIdsBefore,
+        tagIdsAfter: written.tagIds,
       });
+    } catch (err) {
+      console.warn('[newsletter] automation enrolment failed after a committed subscriber write', {
+        subscriberId: written.subscriberId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Unsubscribe with an optional reason; writes a suppression row. Idempotent.
+   * The `newsletter_subscriber.unsubscribe` Command (issue #1381); the observability event
+   * follows the commit.
+   */
+  async unsubscribe(subscriberId: string, reason?: string): Promise<{ ok: boolean }> {
+    const outcome = await this.deps.commandBus.run(makeUnsubscribeSubscriberCommand({ subscriberId, reason }));
+    if (outcome.unsubscribed) {
       this.deps.emitEvent?.('newsletter.unsubscribed.v1', {
-        subscriberId: subscriber.id,
-        email: subscriber.email,
+        subscriberId: outcome.unsubscribed.subscriberId,
+        email: outcome.unsubscribed.email,
         reason: reason ?? null,
       });
     }
-    return { ok: true };
+    return { ok: outcome.ok };
   }
 
   /**
@@ -304,54 +256,24 @@ export class NewsletterSubscriberService {
    * Writes a suppression row (idempotent) so the address is excluded from all
    * future sends regardless of targeting; a complaint/bounce suppression is NOT
    * lifted by a later re-subscribe (only an explicit unsubscribe is).
+   *
+   * The `newsletter_suppression.bounce` / `newsletter_suppression.complaint` Command (issue #1381).
+   * Which row the entry is filed under is resolved here first: the address's
+   * subscriber, or else its suppression row (#470).
    */
   async suppress(email: string, reason: 'bounce' | 'complaint', detail?: string): Promise<void> {
-    const em = this.deps.emFactory();
     const normalized = email.trim().toLowerCase();
-    const existing = await em.findOne(NewsletterSuppression, { email: normalized });
-    if (existing) {
-      existing.reason = reason;
-      if (detail) existing.detail = detail;
-    } else {
-      em.create(NewsletterSuppression, { email: normalized, reason, detail: detail ?? null });
-    }
+    const em = this.deps.emFactory();
     const subscriber = await em.findOne(NewsletterSubscriber, { email: normalized });
-    if (subscriber && subscriber.status === 'active') {
-      subscriber.status = 'deactivated';
-      subscriber.deactivatedAt = new Date();
-    }
-    await em.flush();
-    await this.deps.auditLog?.record({
-      action: `newsletter_${reason}`,
-      objectType: 'newsletter_subscriber',
-      objectId: subscriber?.id ?? normalized,
-      stateAfter: { email: normalized, reason },
-    });
-  }
-
-  private async mergeCustomFields(
-    em: EntityManager,
-    subscriber: NewsletterSubscriber,
-    incoming?: Record<string, string | number | boolean | null>,
-  ): Promise<void> {
-    if (!incoming || Object.keys(incoming).length === 0) return;
-    const defined = await em.find(NewsletterCustomField, {});
-    const allowed = new Set(defined.map((f) => f.key));
-    const merged = { ...subscriber.customFields };
-    for (const [k, v] of Object.entries(incoming)) {
-      if (allowed.has(k)) merged[k] = v;
-    }
-    subscriber.customFields = merged;
-  }
-
-  private async mergeTags(em: EntityManager, subscriberId: string, codes?: string[]): Promise<void> {
-    if (!codes || codes.length === 0) return;
-    const tags = await em.find(NewsletterTag, { code: { $in: codes } });
-    for (const tag of tags) {
-      const existing = await em.findOne(NewsletterSubscriberTag, { subscriberId, tagId: tag.id });
-      if (!existing) em.create(NewsletterSubscriberTag, { subscriberId, tagId: tag.id });
-    }
-    await em.flush();
+    const suppression = subscriber ? null : await em.findOne(NewsletterSuppression, { email: normalized });
+    const target: SuppressionTarget = subscriber
+      ? { objectType: 'newsletter_subscriber', objectId: subscriber.id }
+      : {
+          objectType: 'newsletter_suppression',
+          objectId: suppression?.id ?? randomUUID(),
+          exists: suppression !== null,
+        };
+    await this.deps.commandBus.run(makeSuppressSubscriberCommand({ email: normalized, reason, detail, target }));
   }
 
   private async sendConfirmation(

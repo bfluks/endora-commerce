@@ -1,7 +1,7 @@
-import type { CartMergeOutcomePublic } from '@endora-commerce/contracts';
+import type { CartMergeOutcomePublic, CustomerSignInResponse, MfaVerifyResponse } from '@endora-commerce/contracts';
 import { apiMutate } from './mutations';
 import type { RequestContext } from './client';
-import { knownDeviceCookieHeader, rememberKnownDevice } from '../session';
+import { knownDeviceCookieHeader, rememberKnownDevice, signInCookieHeader } from '../session';
 
 /**
  * Anonymous storefront auth flows (register / verify / login / logout /
@@ -12,7 +12,11 @@ import { knownDeviceCookieHeader, rememberKnownDevice } from '../session';
  * known-device cookie to the backend, and the first two store the one the
  * backend sets on a completed sign-in (see `knownDeviceCookieHeader` in
  * `lib/session.ts`). Without it every shopper's attempt would be counted as
- * one from a device the account has never been used on.
+ * one from a device the account has never been used on. The sign-in and the
+ * second step also carry the signed-out basket's cookie and the signed-out
+ * comparison's (`signInCookieHeader`), so the backend can carry both over to
+ * the customer on whichever call establishes the session (issues #358, #368,
+ * #1189).
  */
 
 export interface RegisterOrganizationPayload {
@@ -21,14 +25,24 @@ export interface RegisterOrganizationPayload {
     taxId: string;
     registeredAddress: { street: string; city: string; postalCode: string; country: string };
     vatStatus?: 'vat_payer' | 'vat_exempt' | 'flat_rate';
+    /** Feature 175 — the Organization's custom fields open on `organization.register`. */
+    customFieldValues?: Record<string, unknown>;
   };
   firstUser: {
     email: string;
     password: string;
     firstName: string;
     lastName: string;
+    /** Feature 175 — the account owner's custom fields open on `organization.register`. */
+    customFieldValues?: Record<string, unknown>;
   };
   acceptedTermsVersion: string;
+  /**
+   * Feature 173 — the reference a registry lookup answered. The backend reads
+   * the snapshot from its own store by this id; nothing else about the lookup
+   * is sent back.
+   */
+  registryLookupId?: string;
 }
 
 export interface RegisterOrganizationResult {
@@ -68,27 +82,6 @@ export interface LoginCustomerPayload {
   password: string;
 }
 
-interface LoginCustomerResponseData {
-  /** Feature 042 — two-step login discriminator. */
-  status: 'authenticated' | 'mfaRequired' | 'mfaSetupRequired';
-  challengeId?: string;
-  setupTicket?: string;
-  customerAccount?: {
-    id: string;
-    email: string;
-    organizationId: string;
-    role: string;
-    twoFactorEnabled: boolean;
-  };
-  /**
-   * Result of the anonymous-cart → customer-cart merge that ran inside
-   * this login (feature 037-cart-merge-on-login). `null` / absent when
-   * the request carried no `b2b_cart_anon` cookie; `outcome: 'noop'`
-   * when the cookie was supplied but had no observable effect.
-   */
-  cartMerge?: CartMergeOutcomePublic | null;
-}
-
 export type LoginCustomerResult =
   | {
       status: 'authenticated';
@@ -102,20 +95,22 @@ export async function loginCustomer(
   payload: LoginCustomerPayload,
   ctx?: RequestContext,
 ): Promise<LoginCustomerResult> {
-  const result = await apiMutate<LoginCustomerResponseData>({
+  const result = await apiMutate<CustomerSignInResponse['data']>({
     method: 'POST',
     path: '/api/v1/auth/customer/login',
     body: payload,
-    rawCookieHeader: await knownDeviceCookieHeader(),
+    // The known-device cookie and the signed-out basket, which the backend
+    // merges into the customer's at sign-in (issue #358).
+    rawCookieHeader: await signInCookieHeader(),
     ...(ctx ? { ctx } : {}),
   });
   await rememberKnownDevice(result.setCookie);
   const data = result.data!;
   if (data.status === 'mfaRequired') {
-    return { status: 'mfaRequired', challengeId: data.challengeId! };
+    return { status: 'mfaRequired', challengeId: data.challengeId };
   }
   if (data.status === 'mfaSetupRequired') {
-    return { status: 'mfaSetupRequired', setupTicket: data.setupTicket! };
+    return { status: 'mfaSetupRequired', setupTicket: data.setupTicket };
   }
   // The session cookie comes back in Set-Cookie; persisted via setSessionCookie.
   return {
@@ -125,20 +120,29 @@ export async function loginCustomer(
   };
 }
 
-/** Feature 042 — complete the second step; returns the new session cookie. */
+/**
+ * Feature 042 — complete the second step; returns the new session cookie.
+ *
+ * Issue #368 — this call, not the password one, establishes the session of an
+ * account with two-step verification, so it carries the signed-out basket's
+ * cookie as well and returns the merge the backend ran.
+ */
 export async function verifyCustomerMfa(
   payload: { challengeId: string; code: string },
   ctx?: RequestContext,
-): Promise<{ sessionCookieValue: string | null }> {
-  const result = await apiMutate<{ status: 'authenticated' }>({
+): Promise<{ sessionCookieValue: string | null; cartMerge: CartMergeOutcomePublic | null }> {
+  const result = await apiMutate<MfaVerifyResponse['data']>({
     method: 'POST',
     path: '/api/v1/auth/customer/mfa/verify',
     body: payload,
-    rawCookieHeader: await knownDeviceCookieHeader(),
+    rawCookieHeader: await signInCookieHeader(),
     ...(ctx ? { ctx } : {}),
   });
   await rememberKnownDevice(result.setCookie);
-  return { sessionCookieValue: pickSessionCookie(result.setCookie) };
+  return {
+    sessionCookieValue: pickSessionCookie(result.setCookie),
+    cartMerge: result.data?.cartMerge ?? null,
+  };
 }
 
 export interface RegisterStandaloneCustomerPayload {

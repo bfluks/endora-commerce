@@ -5,10 +5,13 @@ import type { ReactElement } from 'react';
 /**
  * A federated sign-in that ends at the second factor lands on the Admin UI with
  * the pending challenge in the address fragment (`#mfa-challenge=<id>`); one
- * that is refused lands on `/login?error=<sentence>`. The sign-in screen picks
- * either up on load: the challenge opens the code form exactly as the password
- * step does, the sentence is shown on the password form, and both are taken out
- * of the address bar once read.
+ * that is refused lands on `/login?error=<code>` (`federatedSignInErrorCodeSchema`,
+ * issue #813). The sign-in screen picks either up on load: the challenge opens
+ * the code form exactly as the password step does, the code is worded on the
+ * password form from the screen's own copy, and both are taken out of the
+ * address bar once read. Anything else in `?error=` — a crafted link, or a
+ * sentence an older backend sent — is never printed: it reads as the generic
+ * sign-in failure.
  *
  * The real `AuthProvider` is driven over a stubbed transport, as in
  * `LoginPageThrottled.test.tsx`.
@@ -26,10 +29,12 @@ vi.mock('../../../packages/admin-kit/src/lib/api-client', async (importOriginal)
     delete: vi.fn(),
   },
 }));
-vi.mock(
-  '../../../packages/admin-shell/src/lib/auth',
-  async () => await import('../../../packages/admin-kit/src/lib/auth'),
-);
+// The shell names the session through the kit's barrel; this file drives the kit's
+// source `AuthProvider`, so the barrel's two auth bindings are that same module.
+vi.mock('@endora-commerce/admin-kit/lib', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@endora-commerce/admin-kit/lib')>()),
+  ...(await import('../../../packages/admin-kit/src/lib/auth')),
+}));
 
 const { ApiError } = await import('../../../packages/admin-kit/src/lib/api-client');
 const { AuthProvider, useAuth } = await import('../../../packages/admin-kit/src/lib/auth');
@@ -79,10 +84,8 @@ describe('LoginPage — handover from a federated sign-in', () => {
     );
   });
 
-  it('shows the sentence a refused federated sign-in came back with', async () => {
-    const sentence =
-      'Two-factor authentication is required for your account. Please contact a platform administrator to finish setup.';
-    window.history.replaceState(null, '', `/login?error=${encodeURIComponent(sentence)}`);
+  it('words the code a refused federated sign-in came back with', async () => {
+    window.history.replaceState(null, '', '/login?error=no_matching_account');
 
     render(
       <AuthProvider>
@@ -90,8 +93,68 @@ describe('LoginPage — handover from a federated sign-in', () => {
       </AuthProvider>,
     );
 
-    expect(await screen.findByText(sentence)).toBeTruthy();
+    expect(
+      await screen.findByText('No account matches this provider. Please contact an administrator.'),
+    ).toBeTruthy();
+    expect(screen.getByText('Sign-in failed')).toBeTruthy();
+    expect(screen.queryByText('no_matching_account')).toBeNull();
     expect(window.location.search).toBe('');
+  });
+
+  it('titles an expired sign-in attempt as expired', async () => {
+    window.history.replaceState(null, '', '/login?error=sign_in_expired');
+
+    render(
+      <AuthProvider>
+        <Screen />
+      </AuthProvider>,
+    );
+
+    expect(await screen.findByText('This sign-in attempt has expired.')).toBeTruthy();
+    expect(screen.getByText('Session expired')).toBeTruthy();
+  });
+
+  it.each([
+    ['a forged sentence', 'Your account is suspended. Call +48 000 000 000 to restore it.'],
+    ['a sentence an older backend sent', 'This sign-in attempt has expired.'],
+    ['an unknown code', 'not_a_contract_code'],
+  ])('never prints %s from ?error=, and reads it as the generic failure', async (_label, forged) => {
+    window.history.replaceState(null, '', `/login?error=${encodeURIComponent(forged)}`);
+
+    render(
+      <AuthProvider>
+        <Screen />
+      </AuthProvider>,
+    );
+
+    expect(await screen.findByText('Sign-in failed')).toBeTruthy();
+    expect(screen.queryByText(forged)).toBeNull();
+    expect(screen.queryByText('Session expired')).toBeNull();
+    expect(screen.getByRole('alert').textContent).not.toContain(forged);
+    expect(window.location.search).toBe('');
+  });
+
+  it('drops the federated refusal once the administrator signs in with a password', async () => {
+    window.history.replaceState(null, '', '/login?error=no_matching_account');
+    post.mockRejectedValue(
+      new ApiError(401, { error: { code: 'INVALID_CREDENTIALS', message: 'Invalid email or password.' } }),
+    );
+
+    render(
+      <AuthProvider>
+        <Screen />
+      </AuthProvider>,
+    );
+
+    await screen.findByText('No account matches this provider. Please contact an administrator.');
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'a@example.com' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret' } });
+    fireEvent.submit(screen.getByLabelText('Email').closest('form')!);
+
+    expect(await screen.findByText('Invalid email or password.')).toBeTruthy();
+    expect(
+      screen.queryByText('No account matches this provider. Please contact an administrator.'),
+    ).toBeNull();
   });
 
   it('starts on the password form when the address carries neither', async () => {

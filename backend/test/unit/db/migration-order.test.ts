@@ -452,6 +452,26 @@ describe('orderMigrations — J13 input errors', () => {
     );
   });
 
+  it('throws missing-class naming the entry and the rebuild for an undefined class (issue #443)', () => {
+    // What the generated registry hands over when a module package's `dist`
+    // no longer exports a class the registry imports: a named import of a
+    // missing export is `undefined` under vitest's transform, and reading
+    // `.name` off it used to be the whole diagnostic. The baseline is passed
+    // explicitly because the fixture's own derivation reads `.name` too.
+    const good = entry('orders', '20260901T090000', 'a');
+    const stale = { moduleId: 'catalog', cls: undefined } as unknown as MigrationRegistryEntry;
+    let thrown: unknown;
+    try {
+      run([good, stale], CHAIN, []);
+    } catch (error) {
+      thrown = error;
+    }
+    expect((thrown as MigrationOrderError).code).toBe('missing-class');
+    expect((thrown as MigrationOrderError).message).toContain('#1');
+    expect((thrown as MigrationOrderError).message).toContain('"catalog"');
+    expect((thrown as MigrationOrderError).message).toContain('pnpm run build:packages');
+  });
+
   it('throws unparsable-name for a stamp that is not a real UTC instant', () => {
     const bad: MigrationRegistryEntry = {
       moduleId: 'orders',
@@ -736,6 +756,57 @@ describe('orderMigrations — J14 real registry', () => {
           position,
         );
       }
+    }
+  });
+});
+
+/**
+ * `specs/178-extensible-columns/` FR-020, `contracts/generated-ddl-and-ledger.md`
+ * §1 — the generated schema-extension step of a declaring module runs at the
+ * **head** of that module's block (OD-178-1, ruled D-291): after every module it
+ * depends on, the host included, and before its own migrations. The reserved
+ * stamp is refused on any entry the platform did not generate.
+ */
+describe('generated schema-extension entries', () => {
+  const generated = (moduleId: string, tail: string): MigrationRegistryEntry => ({
+    moduleId,
+    cls: migrationClass(`Migration10000101T000000${pascal(moduleId)}SchemaExtensions${tail}`),
+    origin: 'generated',
+  });
+
+  it('places the generated entry at the head of its module block, after the host', () => {
+    const result = orderMigrations({
+      entries: [
+        entry('acme_erp', '20261201T090000', 'backfill', 'external'),
+        generated('acme_erp', 'a1b2c3d4e5f6'),
+        entry('organizations', '20260901T090000', 'init'),
+        entry('organizations', '20261101T090000', 'later'),
+      ],
+      moduleDependencies: deps({ core: [], organizations: [], acme_erp: ['organizations'] }),
+      baseline: [],
+    });
+    expect(result.migrations.map((m) => m.name)).toEqual([
+      'Migration20260901T090000OrganizationsInit',
+      'Migration20261101T090000OrganizationsLater',
+      'Migration10000101T000000AcmeErpSchemaExtensionsa1b2c3d4e5f6',
+      'Migration20261201T090000AcmeErpBackfill',
+    ]);
+  });
+
+  it('refuses the reserved stamp on an entry that is not generated', () => {
+    for (const origin of ['core', 'external'] as const) {
+      const spoof: MigrationRegistryEntry = {
+        moduleId: 'acme_erp',
+        cls: migrationClass('Migration10000101T000000AcmeErpSchemaExtensionsSpoof'),
+        origin,
+      };
+      expect(() =>
+        orderMigrations({
+          entries: [spoof],
+          moduleDependencies: deps({ acme_erp: [] }),
+          baseline: [],
+        }),
+      ).toThrow(expect.objectContaining({ code: 'reserved-stamp' }));
     }
   });
 });

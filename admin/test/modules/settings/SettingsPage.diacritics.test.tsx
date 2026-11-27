@@ -31,6 +31,12 @@ const channelsGetSpy = vi.fn(async () => ({ items: [] }));
 // resolves `apiClient` there; the admin's own path is a re-export shim of the
 // same binding, and mocking a shim leaves the module the screen actually
 // imports untouched.
+// The tab strip between the module's screens needs a router and a session this
+// file does not mount; it is covered by `settings-section-tabs.test.tsx` (#1550).
+vi.mock('../../../../packages/modules/settings/src/admin/components/SettingsSectionTabs', () => ({
+  SettingsSectionTabs: () => null,
+}));
+
 vi.mock('@endora-commerce/admin-kit/lib', async () => {
   const actual = await vi.importActual<typeof import('@endora-commerce/admin-kit/lib')>(
     '@endora-commerce/admin-kit/lib',
@@ -57,7 +63,6 @@ const { SettingsPage } = await import(
 
 const bundle = passthroughBundle('settings', [
   'page.title',
-  'page.description',
   'search.placeholder',
   'search.shortcut',
   'search.noResults',
@@ -134,10 +139,14 @@ function hosted(ui: ReactElement): ReactElement {
   });
 }
 
-/** The setting names currently rendered, in document order. */
+/**
+ * The setting names currently rendered, in document order — each row's name is
+ * the `<label>` of its control since issue #1478. Every fixture is a `string`
+ * setting, so each row holds one text input.
+ */
 function visibleSettings(): string[] {
-  return [...document.querySelectorAll('span.text-sm.font-medium')].map((el) =>
-    (el.textContent ?? '').trim(),
+  return [...document.querySelectorAll<HTMLInputElement>('fieldset input')].map((input) =>
+    (input.labels?.[0]?.textContent ?? '').trim(),
   );
 }
 

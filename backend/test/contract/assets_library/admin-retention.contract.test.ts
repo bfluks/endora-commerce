@@ -28,10 +28,11 @@ describe('asset retention setting (#322)', () => {
     em.remove(overrides);
     if (assetIds.length) em.remove(await em.find(Asset, { id: { $in: assetIds } }));
     await em.flush();
+    await h.settings.cache.invalidate('assets.soft_delete_retention_days');
     // Children first; recursive deletion normally already removed these rows.
     for (const id of folderIds.reverse()) {
       const folder = await em.findOne(AssetFolder, { id });
-      if (folder) await em.removeAndFlush(folder);
+      if (folder) await em.remove(folder).flush();
     }
     assetIds.length = 0;
     folderIds.length = 0;
@@ -49,6 +50,8 @@ describe('asset retention setting (#322)', () => {
     // The Admin Settings screen stores its all-channels override here.
     setting.globalValue = days ?? null;
     await em.flush();
+    // The platform read is cached; the admin write drops the entry, and so must this.
+    await h.settings.cache.invalidate('assets.soft_delete_retention_days');
   }
 
   async function createAsset(folderId: string | null = null) {
@@ -59,7 +62,7 @@ describe('asset retention setting (#322)', () => {
       storageLocator: 'https://example.test/retention.png',
       storageBackend: 'legacy', visibility: 'public', folderId,
     });
-    await em.persistAndFlush(asset);
+    await em.persist(asset).flush();
     assetIds.push(asset.id);
     return asset;
   }
@@ -67,7 +70,7 @@ describe('asset retention setting (#322)', () => {
   async function createFolder(parentId: string | null) {
     const em = h.em();
     const folder = em.create(AssetFolder, { name: `retention-${folderIds.length}`, parentId });
-    await em.persistAndFlush(folder);
+    await em.persist(folder).flush();
     folderIds.push(folder.id);
     return folder;
   }
@@ -80,17 +83,24 @@ describe('asset retention setting (#322)', () => {
     });
     expect(reply.statusCode).toBe(200);
     const { data } = reply.json<{ data: { deletedAt: string; purgeAfterAt: string } }>();
-    expect(Date.parse(data.purgeAfterAt) - Date.parse(data.deletedAt)).toBe((days ?? 30) * DAY_MS);
+    expect(Date.parse(data.purgeAfterAt) - Date.parse(data.deletedAt)).toBe(Math.max(1, days ?? 30) * DAY_MS);
     const stored = await h.em().fork({ clear: true }).findOneOrFail(Asset, { id: asset.id });
     expect(stored.purgeAfterAt?.toISOString()).toBe(data.purgeAfterAt);
 
-    // A later setting change must not move an existing deletion deadline.
+    // Feature 156 (owner ruling P1): a later setting change applies to an
+    // existing deletion — the repeated answer reports `deletedAt` + the current
+    // setting, which is what the sweep will use — while the stored
+    // `purge_after_at` keeps the first value as a rollback snapshot.
     await setRetention(14);
     const again = await h.app.inject({
       method: 'DELETE', url: `/api/v1/admin/assets/${asset.id}`, cookies: adminCookie,
     });
     expect(again.statusCode).toBe(200);
-    expect(again.json()).toEqual(reply.json());
+    const repeated = again.json<{ data: { deletedAt: string; purgeAfterAt: string } }>().data;
+    expect(repeated.deletedAt).toBe(data.deletedAt);
+    expect(Date.parse(repeated.purgeAfterAt) - Date.parse(repeated.deletedAt)).toBe(14 * DAY_MS);
+    const kept = await h.em().fork({ clear: true }).findOneOrFail(Asset, { id: asset.id });
+    expect(kept.purgeAfterAt?.toISOString()).toBe(data.purgeAfterAt);
   });
 
   it.each([7, 90, 0, undefined])('recursive delete uses %s days throughout the subtree', async (days) => {
@@ -110,7 +120,51 @@ describe('asset retention setting (#322)', () => {
     for (const id of [direct.id, nested.id]) {
       const stored = await fresh.findOneOrFail(Asset, { id });
       expect(stored.deletedAt).toBeInstanceOf(Date);
-      expect(stored.purgeAfterAt!.getTime() - stored.deletedAt!.getTime()).toBe((days ?? 30) * DAY_MS);
+      expect(stored.purgeAfterAt!.getTime() - stored.deletedAt!.getTime()).toBe(Math.max(1, days ?? 30) * DAY_MS);
     }
+  });
+  // Issue #332 — a retention far enough out made the purge date an invalid
+  // `Date`, so one stored value broke every asset and recursive folder delete.
+  it.each([1e15, 3651])('a stored %s days is held to 3650 and both deletes still succeed', async (days) => {
+    await setRetention(days);
+    const asset = await createAsset();
+    const single = await h.app.inject({
+      method: 'DELETE', url: `/api/v1/admin/assets/${asset.id}`, cookies: adminCookie,
+    });
+    expect(single.statusCode, single.body).toBe(200);
+    const { data } = single.json<{ data: { deletedAt: string; purgeAfterAt: string } }>();
+    expect(Date.parse(data.purgeAfterAt) - Date.parse(data.deletedAt)).toBe(3650 * DAY_MS);
+
+    const root = await createFolder(null);
+    const nested = await createAsset(root.id);
+    const recursive = await h.app.inject({
+      method: 'DELETE', url: `/api/v1/admin/assets/folders/${root.id}`, cookies: adminCookie,
+      payload: { ifNonEmpty: 'deleteRecursively' },
+    });
+    expect(recursive.statusCode, recursive.body).toBe(200);
+    const stored = await h.em().fork({ clear: true }).findOneOrFail(Asset, { id: nested.id });
+    expect(stored.purgeAfterAt!.getTime() - stored.deletedAt!.getTime()).toBe(3650 * DAY_MS);
+  });
+
+  const writeRetention = (value: unknown) =>
+    h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/admin/settings/assets.soft_delete_retention_days/value',
+      cookies: adminCookie,
+      payload: { scope: 'all', value },
+    });
+
+  it.each([0, 3651, 1e15, 2.5])('the settings write refuses %s days with a 422', async (value) => {
+    const refused = await writeRetention(value);
+    expect(refused.statusCode, refused.body).toBe(422);
+    expect(refused.json<{ error: { code: string } }>().error.code).toBe('VALIDATION_FAILED');
+    const setting = await h.em().fork({ clear: true })
+      .findOneOrFail(Setting, { code: 'assets.soft_delete_retention_days' });
+    expect(setting.globalValue ?? null).toBeNull();
+  });
+
+  it.each([1, 3650])('the settings write accepts %s days', async (value) => {
+    const accepted = await writeRetention(value);
+    expect(accepted.statusCode, accepted.body).toBeLessThan(400);
   });
 });

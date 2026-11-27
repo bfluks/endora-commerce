@@ -1,9 +1,9 @@
 ---
-title: orders
+title: Orders
 description: Order placement, status machine, payment + delivery linkage
 ---
 
-# `orders`
+# Orders (`orders`)
 
 Order placement, lifecycle, and access control. Composes the cart price
 resolution, stock reservation, payment driver dispatch, invoice generation,
@@ -16,13 +16,56 @@ Admin routes are gated by `orders:read` (read) / `orders:write` (mutations).
 | Verb + Path | Audience | Purpose |
 | --- | --- | --- |
 | `POST /api/v1/orders` | customer | Place order from active Cart |
-| `GET /api/v1/orders` | customer | List orders scoped by Role (Regular vs Org Admin) |
+| `GET /api/v1/orders` | customer | List orders: own orders, or the Organization's with `orders.view_organization` (see below) |
 | `GET /api/v1/orders/:id` | customer | Order detail |
-| `GET /api/v1/orders/:id/invoice` | customer | Download invoice PDF |
+| `GET /api/v1/orders/:id/invoice` | customer | Invoice download: the order's newest ready invoice (kind `invoice`, never a proforma or correction), rendered from the invoice template by the `invoices` module (`404 INVOICE_NOT_READY` until one is ready). Every document of the order is listed at `…/invoices` |
 | `GET /api/v1/admin/orders` | admin | List every order (cross-organization) |
 | `GET /api/v1/admin/orders/:id` | admin | Order detail (bypasses customer scope) |
 | `POST /api/v1/admin/orders/:id/status` | admin | Status transition (audited) |
 | `POST /api/v1/admin/orders/:id/payment-status` | admin | Payment status transition (audited) |
+
+Server-side code writes an order through `orderCommandPort` (see *Server-side
+writes* below).
+
+## Who sees a colleague's order
+
+A buyer sees the orders they placed. Every other order of their Organization —
+in the list, on its detail page, and in every action that reads an order as
+its source (reorder, clone to a quote request, starting a return or a complaint
+from it, its invoices) — needs the
+organization permission **View the organization's orders**
+(`orders.view_organization`), which this module declares:
+
+| Role | Holds it |
+| --- | --- |
+| *Administrator* | always (every permission, implicitly) |
+| *Member* | no, unless the Organization's administrator grants it to the role |
+| a custom role | when the role grants it |
+
+Without the permission a colleague's order answers `404`, exactly as an order
+of another Organization does, never `403`. With it the reach is the
+Organization; a head-office login with roll-up enabled reaches its subtree as
+well — roll-up widens the reach, it never grants the permission.
+
+Starting a return or a complaint from a colleague's order also needs the
+`returns` module's **Create returns and complaints** (`returns.create`); the case
+is filed in the name of the member who starts it (see the `returns` page).
+
+On the storefront the order list and the order page show a colleague's order to
+a member holding the permission exactly as their own. The order page offers
+**Request return / complaint** (or **File a complaint**) only to a member whose
+role holds `returns.create`.
+
+Reordering and cloning to a quote request are also judged by what they build:
+`POST /api/v1/orders/:id/reorder` replaces the active cart and needs
+`carts.create`, `POST /api/v1/orders/:id/clone-to-quote` creates a quote request
+and needs `quote_requests.create`. The permission is checked before the order
+is read, so a member lacking it gets `403 ORGANIZATION_PERMISSION_REQUIRED`
+whichever order the id names, and a member holding it then meets the order
+scope above. With `quote_requests` switched off its code grants nothing, so the
+buyer's clone is refused with that same `403`. The order page offers **Order
+again → cart** and **Order again → quote request** only to a member holding the
+matching code.
 
 ## Which sales channel an order records
 
@@ -44,17 +87,32 @@ is refused with `422 VALIDATION_FAILED` and
 `requestedSalesChannelId` and `resolvedSalesChannelId`), before anything is
 written — the basket is left as it was.
 
-In admin order creation the body's `salesChannelId` has to name an existing
-channel: one that names no channel is refused with `404 NOT_FOUND` before
-anything is written, the customer's basket included. The ordered products are
-checked against **that** channel's assortment, not the one the admin request
-itself resolved — a product the chosen channel does not sell is refused with
+In admin order creation the body's `salesChannelId` is required and has to be
+one of the **customer's organization's active sales channels** — the channels
+the organization is assigned to and that are switched on. Any other channel —
+one assigned only to other organizations, one that is switched off, or one
+that does not exist — is refused with `422 ORDER_SALES_CHANNEL_NOT_ALLOWED`
+before anything is written, the customer's basket and any new address
+included. `POST /api/v1/admin/orders/preview` answers the same, so the screen
+is never shown totals for an order it cannot create. There is no fallback: a
+request without `salesChannelId` is refused with `400 VALIDATION_FAILED`, never
+placed on a default channel. This is the rule a quote request created on a
+customer's behalf follows. The ordered products are checked against **that**
+channel's assortment, not the one the admin request itself resolved — a
+product the chosen channel does not sell is refused with
 `404 PRODUCT_NOT_FOUND`, and one it sells is accepted even when the system
-default does not sell it. Admin creation does accept a channel that exists but
-is switched off, which the storefront refuses with `422`
-`order_sales_channel_mismatch`; and a product outside the chosen channel's
-assortment is refused only after the customer's basket has been cleared, so
-that basket is not restored.
+default does not sell it. A product outside the chosen channel's assortment is
+refused before the customer's basket is touched, so the basket is left as it
+was.
+
+The external order API (`POST /api/v1/external/orders`) follows the same rule
+for the channel its API key is bound to: that channel has to be one of the
+bound organization's active sales channels **when the order is placed**, not
+only when the key was issued. A key whose organization was never assigned to
+the channel, or was unassigned from it later, is refused with
+`422 ORDER_SALES_CHANNEL_NOT_ALLOWED` before anything is written, the service
+account's basket included. A bound channel that is switched off is refused
+earlier, with `400 INACTIVE_SALES_CHANNEL`.
 
 What is read from an order's channel:
 
@@ -106,12 +164,36 @@ payment and shipping adapters' validators are given that channel id too, where
 they were given none. An instance that set the minimum platform-wide, or not at
 all, sees no change.
 
+## Cart approval at placement
+
+A member whose role lacks *Place orders without approval*
+(`carts.order_without_approval`, declared by the Carts module) orders a basket
+only once a colleague allowed to approve carts has approved it. Placement asks
+the Carts module before anything is reserved or written, reading the basket
+owner's role at that moment, and refuses such a basket that is not `approved`
+with `409 ORDER_CART_APPROVAL_REQUIRED`;
+`details` carries `cartId`, `approvalStatus` and a `code` naming the state:
+
+| `details.code` | Basket | Sentence (English) |
+| --- | --- | --- |
+| `cart_approval_not_submitted` | never sent for approval | *"Your role requires approval of this cart before it can be ordered. Send it for approval first."* |
+| `cart_approval_pending` | awaiting an approver | *"This cart is awaiting approval by an approver in your organization. You can place the order once it is approved."* |
+| `cart_approval_rejected` | rejected | *"This cart was rejected by an approver in your organization, so it cannot be ordered."* |
+
+The basket is kept as it was. Unaffected: the basket of every member whose role
+holds *Place orders without approval* (*Administrator* always does), and orders
+placed from a working basket — admin order
+creation, one-click buy and the external order API — which do not place the
+member's basket.
+
 ## Method allow-lists at placement
 
 An Organization can be restricted to a subset of delivery and payment methods
 (see the `organizations` module, *Per-organization commercial scoping*).
 Placement and both previews refuse a method outside a non-empty list with
-`400 VALIDATION_FAILED`:
+`400 ORDER_DELIVERY_METHOD_UNAVAILABLE` (a delivery method) or
+`400 ORDER_PAYMENT_METHOD_UNAVAILABLE` (a payment method), and
+`error.details.code` says why:
 
 | `error.details.code` | Also carries | Meaning |
 | --- | --- | --- |
@@ -131,7 +213,7 @@ Placement and both previews refuse a method outside a non-empty list with
   method, and the two lists are independent.
 - **Nothing is written** — no order, stock reservation or payment, and the
   customer's basket is unchanged. Admin create and the API-key intake check
-  before they replace the basket.
+  before they write the order's lines.
 - **Administrators are bound too** — by decision, an order created on a
   customer's behalf honours that customer's Organization allow-lists, and no
   setting exempts it. The create form lists every method; the preview and the
@@ -146,7 +228,8 @@ Placement and both previews refuse a method outside a non-empty list with
 A delivery or payment method can also be restricted to sales channels (see the
 `delivery_methods` and `payment_methods` modules, *Sales channels*). Placement
 and both previews refuse a method that is not offered on **the order's** channel
-with `400 VALIDATION_FAILED`:
+with `400 ORDER_DELIVERY_METHOD_UNAVAILABLE` or `400 ORDER_PAYMENT_METHOD_UNAVAILABLE`,
+as above:
 
 | `error.details.code` | Also carries | Meaning |
 | --- | --- | --- |
@@ -162,7 +245,7 @@ with `400 VALIDATION_FAILED`:
 - **No assignment means every channel** — a method assigned to no sales channel
   is offered on all of them.
 - **Nothing is written** — as for the allow-lists, and admin create and the
-  API-key intake check before they replace the basket.
+  API-key intake check before they write the order's lines.
 
 ### A method that fails both
 
@@ -201,12 +284,74 @@ plus the predefined edges and the universal `→ on_hold` / `→ cancelled` edge
 `/api/v1/admin/orders/statuses` + `/transitions` endpoints; the graph is
 cached in-process and re-validated on every edit.
 
+An edit the graph's state refuses has its own code and a sentence in English
+and Polish, read in the operator's language. Until issue #627 these were
+`VALIDATION_FAILED`; the status is unchanged. The status code travels as
+`details.statusCode`, because `details.code` is the slot for a refusal's token.
+
+| Code | Status | When | `details` |
+| --- | --- | --- | --- |
+| `ORDER_STATUS_CODE_TAKEN` | `409` | `POST …/statuses` — another status has the code | `statusCode` |
+| `ORDER_STATUS_TERMINAL_HAS_TRANSITIONS` | `409` / `422` | `PATCH …/statuses/:code` marking a status with outgoing transitions terminal (`code` `mark_terminal`), or `PUT …/transitions` adding one from a terminal status (`code` `add_transition`) | `statusCode`, and `outgoingCount` or `toStatusCode` |
+| `ORDER_STATUS_NOT_DELETABLE` | `409` | `DELETE …/statuses/:code` of the initial (`code` `initial`) or a system (`code` `system`) status | `statusCode` |
+| `ORDER_STATUS_IN_USE` | `409` | `DELETE …/statuses/:code` while orders are in it | `statusCode`, `orderCount` |
+
+A transition naming a status that does not exist stays `VALIDATION_FAILED`.
+
 `OrderTransitionService.apply()` is the single authoritative state machine:
 it rejects transitions with no configured edge or out of a terminal status,
 runs veto-capable **before-guards** (`onOrderTransitionGuard`), then emits the
 templated events (below). Payment/shipping events drive automatic transitions
 through the `OrderStatusRegistry` (the method `statusOn*` columns reference
 these status codes); `payment_status` is retained as a derived/secondary field.
+
+## Payment status transitions
+
+The payment status is the order's money axis, separate from the configurable
+lifecycle above. Its values are fixed — `awaiting_payment`, `deferred`, `paid`,
+`failed`, `refunded` — and so is what may follow what. The graph is
+`PAYMENT_STATUS_TRANSITIONS` in `@endora-commerce/contracts`, and
+`paymentStatusTargets(from, actor)` answers where an order may go next. It is
+not configurable.
+
+Two actors move it: an **operator** through
+`POST /api/v1/admin/orders/:id/payment-status`, and **settlement** — the
+`payments` module recording what a payment gateway reported.
+
+| From \ to | `paid` | `refunded` | `failed` |
+| --- | --- | --- | --- |
+| `awaiting_payment` | operator, settlement | refused | settlement |
+| `failed` | operator, settlement | refused | no change |
+| `deferred` | operator, settlement | refused | refused |
+| `paid` | no change | operator, settlement | refused |
+| `refunded` | refused | no change | refused |
+
+- `awaiting_payment` and `deferred` are set when the order is placed (`deferred`
+  for an order placed against a credit limit) and are never reached later.
+- `refunded` is final: nothing moves an order out of it.
+- Only a paid order can be refunded.
+- `failed` is set only by settlement, when a gateway declines a payment. The
+  operator route accepts only `paid` and `refunded`; any other value is `400`
+  `VALIDATION_FAILED`.
+- Marking an order with the payment status it already has answers `200`,
+  changes nothing, writes no audit entry and owes no follow-up — so marking a
+  credit-limit order paid twice gives its credit back once.
+
+A move outside the graph is refused with `409`
+`ORDER_PAYMENT_STATUS_TRANSITION_NOT_ALLOWED`, in the operator's language, and
+writes nothing. An order outside the caller's scope is `404` first, so a
+refusal never confirms that such an order exists.
+
+| `details.code` | When | Other `details` |
+| --- | --- | --- |
+| `payment_refunded` | The order is refunded, so its payment status can no longer change | `from`, `to` |
+| `payment_not_paid` | `refunded` was asked for an order that was never paid | `from`, `to` |
+
+Settlement follows the same graph through `orderPaymentStatusApplyPort`, whose
+answer carries `outcome` — `applied`, `unchanged` or `refused`. A refused move is
+an answer, not an error: the payment is still recorded, and the order keeps its
+payment status. The admin order page's "Change…" dialog offers exactly the
+operator's targets; for a refunded order it offers none.
 
 ## What a transition owes: follow-ups
 
@@ -294,6 +439,10 @@ records the releases through the same follow-up mechanism, attempts them at
 once, and writes one audit entry per page of orders; anything that does not
 complete is retried by the sweep. Running it again finds nothing left.
 
+The repair also finds paid credit-limit orders with active credit reservations
+but no `credit.release` follow-up row. Run the dry run first to review these
+orders, then use `--apply` to record and attempt the missing releases.
+
 **Run the dry run once after upgrading**, and read the list before applying it:
 a release changes reserved-stock counters and available credit. The repair
 never runs by itself.
@@ -320,10 +469,15 @@ once the module is back on.
 
 `Order`, `OrderItem`, `Payment`, `OrderStatus`,
 `OrderStatusTransition`, `OrderTransitionEffect`, `OrderComment`,
-`OrderListSavedView`, and the
+`OrderListSavedView`, `OrderItemGroup` (an order's line groups — see *Line
+groups*), `OrderExternalReference` (see *External system references*), and the
 `organizations.order_confirmation_emails` column (owned by `organizations`,
 read via a port). `OrderItem` snapshots the product + variant + unit price +
 tax rate at placement so historical orders survive pricing / catalog changes.
+It also copies the cart line's `price_source` — `agreed`, `base`, `catalogue`,
+`buyer` or `sale`, the price-book step (or the quote agreement) that priced the
+line — into `order_items.price_source`; the column is stored for reporting and
+for a later promotions rule, and is not part of the order API's answer.
 
 ## Events emitted
 
@@ -367,16 +521,36 @@ that fails announces nothing.
   `customerAccountId` and `salesChannelId` to preselect, and `returnTo`, a path
   inside the Admin UI to go back to once the order exists.
 - **List** — `GET /api/v1/admin/orders` server-side filter/sort/search +
-  per-status counts; `GET …/export` streams CSV; saved views via
+  per-status counts. The search (`q`) matches the order number, the
+  Organization's name, the customer, and an external system's reference for the
+  order (see *External system references*); `GET …/export` streams CSV; saved views via
   `…/list-views` — see *Saved views* below.
 - **Bulk** — `POST …/bulk/status` (eligible orders move; skipped reported with
   reason — a skipped order has not moved) and `…/bulk/print-invoices`.
 - **Comments** — admin/customer `…/:id/comments` with customer-visibility +
-  notify flags; closed on terminal orders.
+  notify flags; closed on terminal orders (`409 ORDER_COMMENTS_CLOSED`). Since
+  0.113.0 every comment, the buyer's included, is recorded in the audit log as
+  `order.comment.add` — the comment's id and its two flags, never its text. The platform also writes internal
+  **system notes** here for custom-field values not carried into the order —
+  see *The system note* below.
 - **Reorder** — `…/:id/reorder` rebuilds the cart (gated by
-  `orders.reorder_enabled`); **clone-to-quote** — `…/:id/clone-to-quote`.
+  `orders.reorder_enabled`); **clone-to-quote** — `…/:id/clone-to-quote` (an
+  order with no lines is `409 ORDER_CLONE_NO_LINES`; with `quote_requests` absent,
+  the buyer's clone is refused `403 ORGANIZATION_PERMISSION_REQUIRED` and the
+  operator's `503 MODULE_DISABLED`).
 
 ### The Create order screen
+
+**The sales channel is chosen among the customer's organization's active
+sales channels.** The **Sales channel** field offers nothing until a customer is
+chosen; it then offers exactly the channels the server accepts — never another
+active channel, nor an inactive one the organization is assigned to. The only
+channel is preselected; with several the operator chooses. A `salesChannelId`
+in the query string is preselected only when it is one of them, and dropped
+otherwise. Choosing a customer of another organization clears the choice. When
+the organization has no active sales channel the screen says so and **Create
+order** stays disabled until it is assigned to one; when its channels cannot be
+read the screen says so with a **Retry** button, and nothing can be sent.
 
 **Items and the order summary appear once the customer and the sales channel
 are chosen.** They are the two inputs pricing needs; the payment method, the
@@ -384,7 +558,8 @@ delivery method and the addresses do not gate anything. Until both are set, one
 hint names what is still missing. Clearing either field hides both sections
 again without discarding the lines, which come back when the field is set. A
 screen opened with `customerAccountId` and `salesChannelId` in its query string
-shows **Items** at once.
+shows **Items** as soon as the organization's channels are read and the named
+one is among them.
 
 **Products are added in two ways.**
 
@@ -393,8 +568,9 @@ shows **Items** at once.
   type filter and a search by SKU, slug or name. The selection survives page,
   page-size and filter changes, and **Add N** adds every ticked product as a
   line of quantity 1 — at most 200 in one step. Grouped and bundle parents,
-  draft and inactive products, and products already on the order are listed
-  with their reason and cannot be ticked.
+  and draft and inactive products, are listed with their reason and cannot be
+  ticked. A product already on the order can be added again: it becomes a line
+  of its own (for instance in another group).
 - **Quick add by name or SKU**, beside it, appends one product under the same
   rules.
 
@@ -414,18 +590,133 @@ code — the first that applies, in this order — and shows one reason:
 | Preview code | Line reason | What to change |
 | --- | --- | --- |
 | `PRODUCT_NOT_FOUND` | *No price* | The product is no longer in the catalogue: remove the line. |
+| `PRODUCT_ARCHIVED` | *Archived product* | The product is archived: restore it in the catalogue, or remove the line. |
 | `PRODUCT_NOT_VISIBLE_TO_CUSTOMER` | *The customer cannot see this product* | The product's visibility or its allowed organizations exclude the customer's Organization: change them on the product in the catalogue, choose another customer, or remove the line. |
 | `PRODUCT_NOT_IN_SALES_CHANNEL` | *Not in this sales channel's assortment* | Choose a sales channel whose assortment holds the product, add the product to this channel's assortment, or remove the line. |
 | `QUOTE_ONLY` | *No price* | The customer's price for the product is quote-only: remove the line, or create a quote request instead. |
+| `UNPRICED` | *No price* | No price book prices the product for this customer, channel and currency — not even a base price: set a base price, remove the line, or create a quote request instead. |
+| `BELOW_MINIMUM_QUANTITY` | *Below the minimum of N pcs* | The product's total on the order is below its minimum order quantity: raise the quantity, or remove the line. |
 
-A code the screen does not know is shown as *No price* as well. The other lines
+`BELOW_MINIMUM_QUANTITY` carries the `minimum` and is judged only over the
+lines that passed the checks above it, summing each product's lines. The lines
+are priced from the price books exactly as the customer's basket would price
+them — one batched resolution for every line, at each line's own quantity and
+variant — so the order created is charged what the preview showed. A
+code the screen does not know is shown as *No price* as well. The other lines
 keep their prices and the summary counts only the priced ones. The preview
 checks the assortment of exactly the sales channel the request names; a
 `salesChannelId` that names no channel is refused with `404 NOT_FOUND`, and the
 screen shows *Could not calculate prices* without marking any line. A
-soft-deleted product is priced as before. The order created is exactly the
-lines and quantities on screen, in the unchanged `POST /api/v1/admin/orders`
+soft-deleted product is `PRODUCT_NOT_FOUND`, as creating the order answers it
+(`404 PRODUCT_NOT_FOUND`). An archived product is `PRODUCT_ARCHIVED` whoever
+may see it and whichever channel is chosen, and creating the order refuses it
+with `409 PRODUCT_ARCHIVED` (*Product is archived.*), naming the archived
+products in `details.productIds` and writing nothing — the reason an
+operator's quote request gives. The order created is exactly the
+lines and quantities on screen, in the `POST /api/v1/admin/orders`
 payload.
+
+**At most 200 lines.** `POST /api/v1/admin/orders` and
+`POST /api/v1/admin/orders/preview` refuse more than 200 items as their first
+step, with `422 VALIDATION_FAILED` and `details: { code: 'too_many_items',
+maximum: 200 }`, before any line is evaluated. Create order also refuses a
+request in which a product's total is below its minimum, with the minimum
+error and `details.lines[]` keyed by the item's `index`.
+
+**Line groups.** The screen's items can be sorted into named groups — *Add
+group*, rename, delete, drag and drop, the keyboard and each line's *Move to
+group* menu, exactly as on a quote request's *Modify* tab; a group's own *Add
+product* adds to that group, anything else to *Ungrouped*. Each group shows its
+item count, net, VAT and gross next to the live price summary; for that the
+preview answers each priced line's `taxRate` (a fraction, `0.23`, from the
+same authority as the summary's tax total; absent on a line it cannot price),
+and a group's VAT is the sum of net × rate over its lines. Moving a line between groups does not price the order again. Every
+group needs a name before **Create order** enables. See *Line groups* below for
+what the order keeps.
+
+**Split line.** A line of quantity 2 or more has a *Split line* button beside
+*Move to group*. It asks for the quantity to move to a new line (from 1 to the
+line's quantity minus 1) and the group of the new line — the line's own by
+default — and adds a line of the same product with that quantity, reducing the
+original. This is how one product goes into two groups: for example 5 pieces in
+*Hall A* and 3 in *Hall B*. Each line is priced at its own quantity.
+
+**Custom fields.** With `custom_fields:read` the screen shows the order's custom
+fields, and their values are sent as `customFieldValues`. `POST
+/api/v1/admin/orders` checks them with the administrator's rules before the
+working basket or any address is written, and enforces every `required` order
+field even when the request sends no values; a refusal is
+`422 CUSTOM_FIELD_VALUE_INVALID` (`details` entries `{ path, issue }`), shown at
+the field it names, and no order is created. The values are written with the
+order, over any carried from a quote request, and the `order.place_on_behalf`
+audit entry names their keys (`changedCustomFields`), never their values.
+
+## Custom-field values carried into an order
+
+An order can receive custom-field values from the record it came from, for every field whose
+**Carry value to Order** option is on (set on **Custom fields**; the rules — same key, compatible
+type and options, the audience rule — are on that module's page). Only an empty order field is
+filled, and only once.
+
+- **From a quote request, at placement.** When the customer places an order from the basket filled
+  by ordering an accepted quote request, and the order records that quote request (the same rules
+  that decide whether it does: the request still approved, used by no other order, in the
+  customer's organization, at least one agreed line still in the basket), the request's values —
+  as they are at that moment — are written with the order itself. They are part of its creation,
+  not a later edit. Nothing is carried when the order does not record a quote request, or while
+  the Quote Requests module is switched off.
+- **From a sales opportunity.** An order an administrator creates from an opportunity (**Create
+  order** on its *Links* tab) receives the opportunity's values once the CRM module has linked it
+  to that opportunity, in a separate change attributed to the **system**; the order's creation
+  stays attributed to the administrator. An order linked to an opportunity by hand receives nothing.
+- **Not the other way.** Cloning an order into a quote request carries no value.
+- **Nothing fails.** A value that cannot be carried is skipped, and the order is placed or linked
+  all the same.
+
+For an order placed on a customer's behalf, the `order.place_on_behalf` audit entry lists the
+carried keys as `carriedCustomFieldKeys`. A customer's own checkout writes no audit entry, as
+before. The carried values are on the order from the start, so subscribers of `order.created.v1`
+read them.
+
+**What the audit log holds.** The platform audit log is read by everybody holding
+`audit_log:read`, whichever organizations they may see, so an order's entries carry names and
+structure, never its values. The custom-field change (`order.custom_fields.update`) and the carry
+from an opportunity (`order.custom_fields.carry`) name the keys that changed as
+`changedCustomFields`, without their values. Neither `order.place_on_behalf` nor
+`order.place_via_api_key` records the order's total, currency, organization or customer. The order
+itself holds the values.
+
+### The system note
+
+When a value is skipped, the order's **Comments** tab holds one note by **System** for that
+placement or link, marked *Internal*: *Not carried from quote request …:* or *Not carried from
+sales opportunity …:*, followed by one line per skipped field — the name of the field it came from, as it
+read when it was skipped, and the reason (no such field on the order, a different type, a field visible to
+customers fed by an internal one, a value the field does not accept). Anybody who can open the
+order can read it; it shows no value.
+
+The note is never shown to the customer — not in the storefront and not on the customer's comments
+endpoint — and sends no notification. It has no author: `systemNote` on the admin comment reply
+(`GET /api/v1/admin/orders/:id/comments`) holds its structure — `kind`
+(`custom_field_carry_skipped`), `source` (`entityType`, `recordId`, `reference`) and `skipped`
+(`key`, `reason`, `label`) — and `body` holds an English sentence for any reader that does not
+translate it. Every other comment answers `systemNote: null`.
+
+## Custom-field filters
+
+An order custom field whose **Use as list filter** option is on (set on **Custom fields**) is
+offered as a filter behind the order list's **More filters**, labelled in your language: the text it
+contains, a number or date range, yes or no, or one or more options. An order without a value for
+the field never matches. Each custom-field filter is shown as a removable chip beside the other
+active filters, narrows the total and every page, and returns the list to its first page when it
+changes. The filters are in the page address, so a filtered list can be bookmarked or shared, and
+the **CSV export** exports the same orders.
+
+If the address names a filter that is no longer available — its option was switched off or the
+field deleted — the list says so by the field's name and offers **Remove this filter**; the CSV
+export is not offered until it is removed. API callers send the filters as `customFieldFilters` on
+`GET /api/v1/admin/orders` and `GET /api/v1/admin/orders/export`, and read the offered fields
+from `GET /api/v1/admin/orders/custom-field-filters` (`orders:read`). An inverted range (`min` above `max`, `from` after `to`) or an operator that does not apply to the field's type answers `400` `VALIDATION_FAILED`.
 
 ## Saved views
 
@@ -440,8 +731,10 @@ is **— Select a view —**, and two buttons beside it: **Save view** and
 
 - **What a view remembers.** Every filter on the order list — status, payment
   status, sales channel, payment method, delivery method, the date range, the
-  search text, the organization and customer names and the total range — plus
-  the sort and the visible columns. Choosing a view replaces all of them with
+  search text, the organization and customer names, the total range and the
+  custom-field filters — plus the sort and the visible columns. A custom-field
+  filter that is no longer available when the view is loaded is dropped, with a
+  notice naming it, and the rest of the view loads. Choosing a view replaces all of them with
   the view's values: a filter the view does not hold is cleared, anything you
   had changed and not saved is discarded, and the list goes back to its first
   page.
@@ -561,12 +854,175 @@ logged, never shown to the buyer. No request body carries the field: the
 storefront, the admin create-order screen and the external order API cannot
 name a quote request.
 
-With the Quote Requests module switched off, orders are placed exactly as
-before and record no quote request.
+**The agreed prices are a different question, and that one can refuse the
+order.** Before anything is reserved or written, placement checks every basket
+line still priced at a quote's agreement (still at the agreed quantity) against
+that quote as it is now, and refuses with `410 QUOTE_VALIDITY_ENDED` when the
+quote's validity date has passed (`details.code` `lapsed`), when it no longer
+applies — re-opened, canceled, expired or gone (`withdrawn`) — or when the Quote
+Requests module is switched off and nothing can confirm the prices
+(`unavailable`). The basket stays as it was. A quote another order has already
+completed still binds its prices until its validity date. The Quote Requests
+module page, under *Validity date*, describes the rule from the buyer's side.
+
+With the Quote Requests module switched off, a basket without quote prices is
+placed exactly as before and records no quote request.
+
+## Line groups
+
+An order can show its lines in **named groups** — *Hall A*, *Hall B* — with the
+lines without a group under **Other items**. Groups are presentation only: they
+change no price, quantity or total. An order gets them in one of two ways, and
+**never changes them afterwards**: no screen and no API edits a placed order's
+grouping.
+
+**From an accepted quote request.** When placement records the quote request
+the basket came from (see the previous section), the order copies the quote's
+groups in the same transaction. Each order line is matched to a quote line:
+first every line with the **same product, variant, agreed quantity and agreed
+unit price**, then by product, variant and price, then by product, variant and
+quantity, and finally by **product and variant** alone, each quote line used
+once. So a product split over two groups of the quote — 5 pieces in one, 3 in
+another, at one price — keeps each line in its group.
+A matched line takes the quote line's group and order; a line that matches
+nothing — added to the basket after the conversion, or changed so it no longer
+matches — goes under *Other items*, after the matched ones. A quote group that
+receives no line is not copied. When placement does not record the quote
+request, or the Quote Requests module is switched off, the order is placed
+without groups, otherwise exactly as before. A later change to the quote leaves
+the order's groups alone.
+
+**From the Create order screen.** An operator arranges the lines into groups
+before creating the order (see *The Create order screen*); the order is created
+with them in the same transaction, and a refused creation writes no group.
+Groups without a line are not created. **One product may be on several lines**
+— in two different groups, or twice in one: each request line becomes an order
+line of its own, in its own group, priced at its own quantity (a product's
+minimum order quantity is still judged on its total across its lines).
+`POST /api/v1/admin/orders` takes an optional `groups` list
+(`{ key, name }`, in display order, at most 50, names of 1 to 120 characters)
+and per item an optional `groupKey`. The grouping is recorded in the
+`order.place_on_behalf` audit entry (each group's line count, in order; not its
+name, which is a value and stays out of the audit log); a
+buyer's own checkout stays unaudited, as before.
+
+**Where they are shown.** The admin order screen and the buyer's order page
+show each group as a headed section with its lines and a summary — item count,
+net, VAT and gross, adding up the rows above it — then *Other items*. An order
+without groups, and every order placed before groups existed, looks exactly as
+before. Every order reply — admin, customer and the external order API —
+carries `itemGroups` (`{ id, name, position }`) and, per line, `groupId` and
+`position`, lines in display order; an integration that ignores them keeps
+working.
+
+**What does not carry groups.** Invoices, returns, reorder (it fills a basket),
+*order again as a quote request*, the cart and checkout, e-mails, webhooks and
+the external order intake. There is no order PDF.
+
+## Order minimums at placement
+
+Placement applies the catalogue's minimum order quantities to every basket
+line — the product's minimum in pieces and each packaging unit's minimum in
+units, counted over every line of the product (the Catalog module's page
+defines both). It is the last word on every path that ends in an order:
+checkout, one-click buy, a reorder, a basket filled from a quote request, the
+admin's Create order and the external order API.
+
+- **Before any side effect.** The check runs inside the placement transaction
+  right after the basket is read — before the order value and credit checks,
+  the order number, and any stock or credit reservation. A refusal writes
+  nothing.
+- **What it answers.** A line whose product record is gone →
+  `404 PRODUCT_NOT_FOUND` with `details.cartItemIds`. A line below a minimum →
+  `422 PRODUCT_BELOW_MINIMUM_QUANTITY` or
+  `422 PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY` with `details.lines[]`, one entry
+  per offending line (`cartItemId`, `productId`, `productName`, `kind`,
+  `minimum`, `packagingUnitName`). The sentence and the product names are in
+  the language the response is answered in: an administrator's stored
+  language, otherwise the request's `Accept-Language` (q-weights honoured),
+  otherwise the channel's default language.
+- **The checkout preview says the same first.** `POST /api/v1/orders/preview-total`
+  answers `belowMinimumLines[]` — the lines placement would refuse, with the
+  same exemptions; a line whose product is gone has `kind: 'product_unavailable'`
+  and no name or minimum. The storefront lists them and disables **Place
+  order**. The preview takes no lock, so under a race placement decides.
+- **A basket filled from an accepted quote request.** The Carts module exempts
+  each line seeded from the quote while its quantity equals the quote's.
+  Placement and the preview honour that exemption **only while the quote
+  request is still valid at that moment**: it exists, belongs to the buyer's
+  organization, is still `Approved` — not canceled or expired, its validity not
+  ended — no order records it yet, and the basket still holds at least one of
+  its lines at the agreed price. Otherwise every line is judged like any other.
+  The check and its lock run at the start of placement, so the exemption is
+  decided before anything is written. With the Quote Requests module switched
+  off, nothing can vouch for the quote and no line is exempt.
+  The preview's check is also published as `orderQuoteSourcePort`, which the
+  Carts module asks when a basket is submitted for approval, so submit judges a
+  quote-seeded line as the preview does; placement confirms the quote again.
+- **External order API** (`POST /api/v1/external/orders`) and admin Create
+  order build a working basket from the request (the Carts module's *Working
+  baskets*) and judge each product's total over the request's lines; a
+  below-minimum request is refused whole, with `details.lines[]` keyed by
+  `index`. The request is judged on its own — the customer's basket counts
+  toward nothing — and refused **before** anything is written. The customer's
+  basket is never touched, whether the order is placed or refused. The same
+  holds for a line with no price or one sold on request only: it is priced
+  before the working basket is created. Neither carries a packaging unit, so only
+  the pieces minimum applies there. **Both refuse more than 200 lines** with
+  `422 VALIDATION_FAILED`, `details.code = 'too_many_items'` — on the external
+  API this is checked first, before the `Idempotency-Key` header is required,
+  and leaves no idempotency record.
+
+## Returnable at purchase
+
+Each order line records whether its product was returnable when the order was
+placed (`order_items.returnable_at_purchase`), on every placement path. Later
+changes to the product's **Returnable** flag do not change it. A line whose
+product record or flag cannot be read at placement is recorded as **not
+returnable**, never left empty. Lines of orders placed before this column
+existed hold `null`, which the Returns module treats as returnable. The value
+reaches Returns through `OrderReturnContextPort` (`returnableAtPurchase` on each
+line); Returns reads no Orders table. Placement records it whether or not the
+Returns module is switched on.
+
+Migration `20261016T082022_orders_order_item_returnable_at_purchase.ts` adds
+the column (nullable).
+
+## When an order was completed
+
+An order records the moment it first entered `completed`
+(`orders.completed_at`). `OrderTransitionService` stamps it in the same
+transaction as the status write, and an order created directly in `completed`
+is stamped when it is inserted. It is never rewritten: editing a completed order
+afterwards does not move it.
+
+It is the moment the Returns module counts from. `OrderReturnContextPort`
+reports it as `completingStatusEnteredAt`, and the free-return window and a
+consumer's withdrawal period run from it. An order that has never been
+completed reports `null`: its period has not started. Nothing here reads the
+Shipments module, so switching Shipments off changes nothing about it.
+
+**Complete an order when the goods have been delivered.** The platform has no
+delivery date: a shipment's success means the carrier accepted the parcel. A
+consumer's withdrawal period counts from the day they receive the goods, and
+completing the order is how the shop says that day has come. Completing it at
+dispatch starts the period early; the Returns module keeps a grace after the
+period for that reason (see the Returns page).
+
+Until this column existed, the moment was read from the order's `updated_at`,
+which every later edit moved forward. Migration
+`20261108T000543_orders_completed_at.ts` adds the column (nullable) and fills it
+with `updated_at` on every order already in `completed`. That is exactly the
+moment those orders were judged by before, so no existing order changes on
+upgrade; for an order edited after it was completed, it is the last edit rather
+than the completion, an approximation nothing recorded can improve.
 
 ## Settings
 
-`orders.min_order_value` (number, gates Checkout + admin create),
+`orders.min_order_value` (number, gates Checkout + admin create; an amount, so
+at most two decimal places — more is refused with `400 AMOUNT_PRECISION_EXCEEDED`;
+an order below it is refused with `422 ORDER_BELOW_MINIMUM_VALUE`, whose `details`
+carry `minimum`, `subtotal` and `currency`, the amounts as two-decimal strings),
 `orders.reorder_enabled` (boolean), `orders.confirmation_recipients`
 (string list) — all global or per-sales-channel. Plus per-org
 `order_confirmation_emails`. The confirmation email CCs the customer + org
@@ -584,14 +1040,215 @@ shipping and billing addresses. The payment line is rendered through the
 payment e-mail renderer registry (`payments/services/payment-email-renderer.ts`)
 — an adapter's `renderers.email` key overrides the platform default.
 
+## Billing company data
+
+An order's billing snapshot carries a company name and a tax ID only when there
+is a company to bill. For a company Organization, `placeOrder` defaults them to
+the Organization's legal name (or its name) and tax ID, and the buyer may
+override either at checkout for that one order. A personal (B2C) Organization
+is not a company, so it contributes no default: its tax ID is an internal
+placeholder and its name is the person's. Its order is billed to the person —
+no company name, no tax ID — unless the buyer ticks *I need a company invoice*
+at checkout and types the company's name and NIP, which are then validated as
+at company registration. The invoice, its PDF, the confirmation e-mail and the
+order screen print a tax-ID line only when the order carries one. An order
+keeps the snapshot it was placed with. The admin order screen's *Organization*
+panel likewise prints no tax ID for a personal Organization and labels it
+*Individual customer* instead: the admin order reply carries
+`organization.taxId: null` and `organization.isPersonal: true` for it.
+
+## Orders paid by a related payer {#orders-paid-by-a-related-payer}
+
+When the *Related payers* module is on, a buyer may name another Organization of the store as the
+payer of an order (`payerOrganizationId` on the place and preview requests). Placement then asks
+that module's policy port, inside the transaction, whether the link is usable, and:
+
+- takes the billing address from the payer's addresses the link allows, and the billing company
+  name and tax ID from the payer — the free-text billing override cannot be sent with a payer
+  (`400 VALIDATION_FAILED`, issue `payer_billing_override_conflict`);
+- computes tax from the payer's VAT status and billing country, in the preview as at placement;
+- checks the payment method against the **payer's** allow-list and reserves the **payer's**
+  credit (or its credit owner's);
+- keeps the order on the buyer's Organization, delivery included, and stores `payer_organization_id`,
+  the link, its terms (`buyer` or `payer`) and a snapshot of the payer. The order reply carries it
+  as `payer`, and the admin list accepts `?payerOrganizationId=`.
+
+On a cart bought for the payer on its own terms, the payer must be the cart's, and prices,
+promotions and the minimum order value are those of the cart's payer context. Any refusal refuses
+the whole placement; nothing is written, reserved or emitted. Without the *Related payers* module
+an order naming a payer is refused and every other order is unaffected.
+
+`orders` also publishes `paidOrderReadPort`, the payer's read-only view of the orders it pays for:
+constrained to the payer, without the delivery address, the customer note or the comments.
+
+## External system references
+
+A module that hands orders over to another system — an ERP, a warehouse system,
+a fulfilment connector — records on the order what that system answered: its
+own number for the order, where the hand-over stands, and the other system's
+own words when it refused. The operator reads it on the order page, where a
+buyer's call is answered, instead of in the connector's own screens.
+
+Each order holds **one entry per system**. An entry has:
+
+| Field | Meaning |
+| --- | --- |
+| System | The writer's stable key, normally its module id — lower-case letters, digits, `_`, `-` or `.`, starting with a letter, at most 64 characters. |
+| Reference | The other system's number for the order, once it has one (at most 255 characters). |
+| State | `pending` (handed over, no answer yet), `synced` (accepted) or `error` (refused). |
+| Message | The other system's own words, normally on `error` — plain text, at most 1000 characters. |
+| Updated | When the entry last changed. |
+
+**On the order page** the *External systems* section lists each entry with its
+state as a badge, and says so when no system has reported yet. The message is
+shown as text, never as markup. Anyone who can open the order sees it: reading
+follows `orders:read`, and a sales representative sees the entries of the orders
+they can see. Buyers never see them.
+
+**In the orders list** the search finds an order by its reference, as it finds
+an order number: a fragment, matched case-insensitively, whichever system
+recorded it. The message is not searched.
+
+**For a module author**, an entry is written with
+`orderCommandPort.setExternalReference(orderId, system, { state, reference?, message? }, options?)`
+(see *Server-side writes* below) and read through the port
+`orderExternalReferencePort` (`OrderExternalReferencePort` in
+`@endora-commerce/contracts`, container name also exported as
+`ORDER_EXTERNAL_REFERENCE_PORT`). Resolve both per use with `lazyPort`; neither
+has an admin HTTP route.
+
+- `setExternalReference` creates or updates the system's entry. An omitted
+  `reference` keeps the stored one and `null` clears it; an omitted `message`
+  means none, so reporting `synced` after an `error` does not leave the refusal
+  standing. `orderExternalReferencePort.set(orderId, system, value)` does the
+  same and is deprecated since 0.113.0.
+- `get(orderId, system)`, `listForOrder(orderId)` read entries back, and
+  `findOrderIds(system, reference)` finds the orders carrying an exact reference
+  — normally one.
+
+Every change is one Command, `order.external_reference.set`, audited with the
+calling actor, so call it inside a tenant context — a worker under
+`enterSystemScope`. A write that changes nothing records nothing and leaves
+*Updated* where it was, because a sync loop resends. An order the caller cannot
+see is refused `404 ORDER_NOT_FOUND`, and a malformed system key, state,
+reference or message `400 VALIDATION_FAILED`, before anything is written.
+
+An entry outlives its writer: uninstalling the module that wrote it leaves the
+entry on the order, as history. Migration
+`20261110T143322_orders_order_external_references.ts` creates the table
+(`order_external_references`, unique on order and system), empty.
+
+## Server-side writes
+
+Another module, an overlay module or an integration worker (an ERP, a warehouse
+system, a payment or carrier connector) changes an order through
+**`orderCommandPort`**, the Order aggregate's write port, declared as
+`OrderCommandPort` in `@endora-commerce/contracts`. It never writes this
+module's tables itself. Resolve it per use with
+`lazyPort<OrderCommandPort>(ctx, 'orderCommandPort')`, with `orders` in the
+calling module's manifest `dependencies`.
+
+| Method | Audit action | What the admin does the same way |
+| --- | --- | --- |
+| `applyStatus(id, { to, reason? }, options?)` | `order.status_transition` | `POST /api/v1/admin/orders/:id/status` |
+| `applyPaymentStatus(id, { to }, options?)` | `order.payment_status_transition` | `POST /api/v1/admin/orders/:id/payment-status` |
+| `setCustomFieldValues(id, merge, options?)` | `order.custom_fields.update` | `PATCH /api/v1/admin/orders/:id/custom-fields` |
+| `addComment(id, { body, isCustomerVisible, notifyCustomer }, options?)` | `order.comment.add` | `POST /api/v1/admin/orders/:id/comments` |
+| `setExternalReference(id, system, value, options?)` | `order.external_reference.set` | — (see *External system references*) |
+
+**One write path.** Each method runs the same Command the admin endpoint runs,
+so the two cannot write differently: one audit entry with the same state, the
+same follow-ups and the same announcements. A status change validates against
+the configured graph, runs the before-guards, records the stock and credit
+release a cancellation owes in the same transaction, attempts them once it has
+committed, and then emits the `order.status.*` events. A comment that is
+visible to the customer and asks to notify them e-mails the customer after it
+has committed, as from the admin; the comment has an author only when an
+administrator is the actor. Inputs are the endpoints' request bodies, validated
+with the same limits, and refusals are the endpoints' errors with their codes
+(`422 VALIDATION_FAILED` for an input outside them, `404 ORDER_NOT_FOUND`,
+`409 ORDER_PAYMENT_STATUS_TRANSITION_NOT_ALLOWED`, `409 ORDER_COMMENTS_CLOSED`).
+`setExternalReference` keeps the `400 VALIDATION_FAILED` it has always answered
+for a malformed value.
+
+**A status change answers an outcome rather than throwing.** `applyStatus`
+returns `{ applied: true, from, to }`, or `{ applied: false, reason, from, detail }`
+with `reason` one of `not_found`, `unknown_status`, `not_permitted` (no edge, or
+a terminal status) and `vetoed` (a before-guard refused it), or
+`{ applied: false, reason: 'already_there', from }`. Callers that answer a
+payment or carrier provider rely on this: a thrown refusal would become an
+error response the provider retries for ever. For the same reason `to` is any
+non-empty code, not only one the admin endpoint's pattern admits: a payment or
+delivery method's configured status may be spelled otherwise, and a code no
+status has is `unknown_status`. A refusal writes and records nothing, and
+neither does `already_there`. The `reason` you pass travels on the
+events and is never written into the audit entry.
+
+**Who wrote it.** The actor is the ambient one, never a parameter: an
+administrator inside an admin request, or under `withSystemScopeActingFor`; the
+**system** actor under `withSystemScope` in a worker. With no tenant context at
+all the write is refused before anything is stored. The port checks no
+permission — the caller is the gate — so never resolve it for a customer-facing
+route: the buyer's own cancellation and comments are not this port's.
+
+**Call it after your own transaction has committed**, never inside it: each call
+opens its own transaction, and one opened inside yours would commit on its own.
+
+**Options** (the last parameter of every method):
+
+- `source` — a lower-case code naming the integration (`payment`, `erp`,
+  `erp.orders`, at most 64 characters), recorded as `source` in the audit entry
+  beside the actor. It is what tells two integrations apart when both write as
+  the system. Any other value is refused with `422 VALIDATION_FAILED` before
+  anything is read or written. `payment` and `shipment` also name the actor on
+  the status events.
+- `expectedVersion` — ignored: an order has no version.
+- `extensions` — input for command hooks. No Order action is declared hookable
+  yet, so any key is refused with `422 COMMAND_EXTENSION_UNCLAIMED` before
+  anything is written.
+
+**Deliberately not offered:** placing an order (it will be added when placement
+runs as a Command), reorder (it builds a basket), clone to a quote request
+(`quoteRequestCommandPort`), the bulk status change (call `applyStatus` per
+order), the status and transition configuration, and the buyer's own
+cancellation.
+
+**Not replaced: the settlement's write.** A payment gateway's callback moves the
+payment status on the `payments` module's own transaction, together with the
+payment row, through `orderPaymentStatusApplyPort` (`@endora-commerce/mod-orders/ports`).
+That port stays: `applyPaymentStatus` is the operator's change, judged by the
+operator's moves and audited, and it opens its own transaction.
+
+`orders` cannot be switched off, so the port is always available.
+
+### Deprecated: `orderTransitionPort` and `orderExternalReferencePort.set`
+
+Deprecated since 0.113.0 and to be removed in a later release. Until then each
+delegates to its replacement, so it writes the same entries and answers the same
+outcomes and refusals as before:
+
+| Deprecated call | Use instead |
+| --- | --- |
+| `orderTransitionPort.applyStatus({ orderId, to, actor, reason })` | `orderCommandPort.applyStatus(orderId, { to, reason }, { source })` |
+| `orderTransitionPort.isTerminal(orderId)` | `orderReadPort.isTerminal(orderId)` |
+| `orderExternalReferencePort.set(orderId, system, value)` | `orderCommandPort.setExternalReference(orderId, system, value)` |
+
+The deprecated `applyStatus` no longer takes the actor from its input: the
+audit entry names the ambient actor, as every other write does, and the
+`source` of the actor you pass (`payment`, `shipment`, …) is recorded as the
+entry's `source`. The reads of `orderExternalReferencePort` stay.
+
 ## Extension points
 
 - **Payment adapters** — see the `payment_methods` module. `placeOrder`
   dispatches start-payment through the `PaymentAdapterRegistry`; new methods
   register an adapter rather than editing the order service.
 - **Access scoping** — `order-access-service.ts` is the single place that
-  enforces the Regular User / Organization Admin / Admin User scoping rule;
-  add new actor kinds here.
+  enforces the buyer's order scope (own orders, or the Organization's with
+  `orders.view_organization`, asked of `organizationPermissionPort`); the list,
+  the detail, reorder, clone to a quote request and
+  `OrderReadPort.findByIdForCustomer` all go through it. `invoices` and
+  `returns` reach it through that port.
 - **Panels on the order screen** — the admin zone `order.detail.after` is
   mounted once at the end of an order's screen, below its tabs, and hands a
   contribution `{ orderId }`. A module adds a panel by declaring
@@ -599,6 +1256,13 @@ payment e-mail renderer registry (`payments/services/payment-email-renderer.ts`)
   module names no contributor. With nothing contributed — no such module, the
   module switched off, or a person without the panel's permission — the zone
   renders nothing and the screen is exactly the one without it.
+- **The order screen's sidebar** — the admin zone `order.detail.sidebar` is
+  mounted once, in a sidebar card beside the tabs, and hands a contribution the
+  same `{ orderId }`. Each contribution is a section of that one card. The
+  sidebar is drawn only while something fills it, so with nothing contributed
+  the screen has one column, exactly as without the zone. The CRM, Projects and
+  Tasks modules contribute the linked opportunity, the project and the tasks
+  here; contributions to `order.detail.after` keep working unchanged.
 
 ## Global search
 

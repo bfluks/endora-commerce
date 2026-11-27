@@ -15,6 +15,19 @@ export const ERROR_CODES = {
   FORBIDDEN: 'FORBIDDEN',
   RATE_LIMITED: 'RATE_LIMITED',
   VERSION_CONFLICT: 'VERSION_CONFLICT',
+  // Issue #417 — a typed money amount with more than two decimal places
+  // (`money-input.ts`). Refused, never rounded.
+  AMOUNT_PRECISION_EXCEEDED: 'AMOUNT_PRECISION_EXCEEDED',
+  // Owner ruling of 2026-10-25 — a typed unit price with more than four decimal
+  // places (`money-input.ts`). Refused, never rounded.
+  UNIT_PRICE_PRECISION_EXCEEDED: 'UNIT_PRICE_PRECISION_EXCEEDED',
+  // Issue #351 — a line quantity past `LINE_QUANTITY_MAX` (`line-bounds.ts`):
+  // a request schema's tagged issue (400), or a line a merge or a packaging unit
+  // would take past the bound (422). Refused, never clamped.
+  LINE_QUANTITY_EXCEEDED: 'LINE_QUANTITY_EXCEEDED',
+  // Issue #1560 — a batch reorder (`PUT …/order`) whose list is not the
+  // current one: a row left out or named twice. 409; the client reloads.
+  ORDER_STALE: 'ORDER_STALE',
 
   // Catalog
   FILTER_NOT_ALLOWED: 'FILTER_NOT_ALLOWED',
@@ -38,6 +51,13 @@ export const ERROR_CODES = {
   SKU_ALREADY_EXISTS: 'SKU_ALREADY_EXISTS',
   VARIANT_COMBINATION_EXISTS: 'VARIANT_COMBINATION_EXISTS',
   VARIANT_AXIS_MISSING: 'VARIANT_AXIS_MISSING',
+  /**
+   * 400 — attribute values the product cannot take. Without a token, keys outside the
+   * product's attribute set (`details: [{ path, issue }]`); token `page_builder_content` —
+   * a Page Builder content attribute's key in `attributeValues` (`details.attributeKeys`,
+   * joined); token `not_content_attribute` — a content `PUT` for a key that is not a
+   * content attribute of the set (`details.attributeKey`). Issue #1223.
+   */
   ATTRIBUTE_VALUE_REJECTED: 'ATTRIBUTE_VALUE_REJECTED',
   FIELD_IMMUTABLE: 'FIELD_IMMUTABLE',
 
@@ -63,6 +83,39 @@ export const ERROR_CODES = {
   PACKAGING_UNIT_NAME_CONFLICT: 'PACKAGING_UNIT_NAME_CONFLICT',
   PACKAGING_UNIT_NOT_SUPPORTED_FOR_TYPE: 'PACKAGING_UNIT_NOT_SUPPORTED_FOR_TYPE',
 
+  // Catalog 155 — minimum order quantities (owned by `catalog`, raised by the
+  // modules that accept order lines: carts, orders, quote_requests)
+  PRODUCT_BELOW_MINIMUM_QUANTITY: 'PRODUCT_BELOW_MINIMUM_QUANTITY',
+  PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY: 'PACKAGING_UNIT_BELOW_MINIMUM_QUANTITY',
+  PACKAGING_UNIT_MISMATCH: 'PACKAGING_UNIT_MISMATCH',
+
+  // Catalog 160 — a product or variant write names an old price field; prices
+  // are set in price books (owned by `catalog`, raised by its admin writes and
+  // by the products import of `import_export`)
+  PRICE_SET_IN_PRICE_BOOKS: 'PRICE_SET_IN_PRICE_BOOKS',
+
+  // Catalog 163 — product data scopes and URL keys (owned by `catalog`)
+  SCOPE_INVALID: 'SCOPE_INVALID',
+  SCOPE_INCOMPLETE: 'SCOPE_INCOMPLETE',
+  URL_KEY_TAKEN: 'URL_KEY_TAKEN',
+  URL_KEY_REDIRECT_TAKEOVER_REQUIRED: 'URL_KEY_REDIRECT_TAKEOVER_REQUIRED',
+  URL_REDIRECT_NOT_FOUND: 'URL_REDIRECT_NOT_FOUND',
+
+  // Catalog 174 — the three-level scope model and the one write encoding (owned by `catalog`)
+  FIELD_NOT_AT_SCOPE: 'FIELD_NOT_AT_SCOPE',
+  SCOPED_VALUE_INVALID: 'SCOPED_VALUE_INVALID',
+  GLOBAL_ONLY_FIELD: 'GLOBAL_ONLY_FIELD',
+
+  // Import/export 174 — import profiles (owned by `import_export`)
+  IMPORT_PROFILE_REQUIRED: 'IMPORT_PROFILE_REQUIRED',
+  IMPORT_PROFILE_NOT_FOUND: 'IMPORT_PROFILE_NOT_FOUND',
+  IMPORT_PROFILE_NAME_TAKEN: 'IMPORT_PROFILE_NAME_TAKEN',
+  /**
+   * 405 — the entity is export-only, so its adapter accepts no import
+   * (`details.entity`). Raised as `VALIDATION_FAILED` until issue #644 (#86).
+   */
+  IMPORT_NOT_SUPPORTED: 'IMPORT_NOT_SUPPORTED',
+
   // Catalog 002 — Product Links (US4)
   SELF_LINK_NOT_ALLOWED: 'SELF_LINK_NOT_ALLOWED',
   LINK_ALREADY_EXISTS: 'LINK_ALREADY_EXISTS',
@@ -81,6 +134,58 @@ export const ERROR_CODES = {
   MAX_EXCEEDED: 'MAX_EXCEEDED',
   UNKNOWN_OPTION: 'UNKNOWN_OPTION',
 
+  // Catalog refusals the stored state makes, raised as `VALIDATION_FAILED`
+  // until issue #624 (#86). Declared by the `catalog` manifest. Three more
+  // sites reuse a code above with a token: `SKU_ALREADY_EXISTS`
+  // (`held_by_product`, `held_by_variant`), `PRODUCT_TYPE_MISMATCH`
+  // (`variants_need_configurable`) and `SELF_LINK_NOT_ALLOWED` (`grouped`).
+  /** 409 — another attribute already has this key (`details.attributeKey`). */
+  ATTRIBUTE_KEY_TAKEN: 'ATTRIBUTE_KEY_TAKEN',
+  /**
+   * 409 — the value type cannot change while products hold values (`details.attributeKey`);
+   * token `page_builder` — never to or from Page Builder content (issue #1218).
+   */
+  ATTRIBUTE_VALUE_TYPE_LOCKED: 'ATTRIBUTE_VALUE_TYPE_LOCKED',
+  /**
+   * 409 — the attribute is still in use, so it is not deleted: token `attribute_sets`
+   * (`details.attributeSetCount`) or `products` (`details.productCount`), with `attributeKey`.
+   */
+  ATTRIBUTE_IN_USE: 'ATTRIBUTE_IN_USE',
+  /** 409 — the attribute already has an option with this value (`details.attributeKey`, `value`). */
+  ATTRIBUTE_OPTION_VALUE_TAKEN: 'ATTRIBUTE_OPTION_VALUE_TAKEN',
+  /** 409 — a second default option where one is allowed (`details.attributeKey`, `value`). */
+  ATTRIBUTE_DEFAULT_OPTION_TAKEN: 'ATTRIBUTE_DEFAULT_OPTION_TAKEN',
+  /** 400 — the attribute's type takes no options (`details.attributeKey`, `valueType`). */
+  ATTRIBUTE_OPTIONS_NOT_SUPPORTED: 'ATTRIBUTE_OPTIONS_NOT_SUPPORTED',
+  /**
+   * 409 — products carry the option, so it is not deleted (`details.attributeKey`, `value`;
+   * token `products` with `productCount`).
+   */
+  ATTRIBUTE_OPTION_IN_USE: 'ATTRIBUTE_OPTION_IN_USE',
+  /** 400 — the attribute's stored type cannot be shown as a slider (`details.attributeKey`, `valueType`). */
+  ATTRIBUTE_SLIDER_NOT_SUPPORTED: 'ATTRIBUTE_SLIDER_NOT_SUPPORTED',
+  /** 400 — the product's attribute set requires values it lacks (`details.attributeKeys`, joined). */
+  ATTRIBUTE_VALUES_REQUIRED: 'ATTRIBUTE_VALUES_REQUIRED',
+  /**
+   * 422 — the product's type takes no minimum order quantity (`details.field`
+   * `minOrderQuantity`, `productType`; per channel also `channelId`).
+   */
+  MIN_ORDER_QUANTITY_NOT_SUPPORTED_FOR_TYPE: 'MIN_ORDER_QUANTITY_NOT_SUPPORTED_FOR_TYPE',
+  /** 409 — a sibling category already has this slug (`details.slug`, `parentCategoryId`). */
+  CATEGORY_SLUG_TAKEN: 'CATEGORY_SLUG_TAKEN',
+  /** 409 — the category still has subcategories, so it is not deleted (`details.categoryId`, `childCount`). */
+  CATEGORY_HAS_CHILDREN: 'CATEGORY_HAS_CHILDREN',
+  /** 409 — a category is moved beneath its own descendant (`details.categoryId`, `parentCategoryId`). */
+  CATEGORY_MOVE_CYCLE: 'CATEGORY_MOVE_CYCLE',
+  /** 409 — the child is already in the group (`details.parentProductId`, `childProductId`, `childSku`). */
+  GROUPED_ITEM_ALREADY_EXISTS: 'GROUPED_ITEM_ALREADY_EXISTS',
+  /**
+   * 400 — a stored Page Builder content attribute is patched to switch on a capability it
+   * holds off (`details.attributeKey`, `capabilities` joined). Issue #1218 (#86); on create
+   * the same rule judges the request and stays `VALIDATION_FAILED`.
+   */
+  CONTENT_ATTRIBUTE_CAPABILITY_LOCKED: 'CONTENT_ATTRIBUTE_CAPABILITY_LOCKED',
+
   // Quote Requests (RFQ)
   RFQ_NOT_DRAFT: 'RFQ_NOT_DRAFT',
   RFQ_EMPTY: 'RFQ_EMPTY',
@@ -96,6 +201,24 @@ export const ERROR_CODES = {
   // holds a view on the quote request list whose name differs only by case or
   // surrounding spaces.
   RFQ_SAVED_VIEW_NAME_TAKEN: 'RFQ_SAVED_VIEW_NAME_TAKEN',
+  // Feature 163 (security review M1) — 422: the sales channel of an operator's
+  // quote request on a customer's behalf — the one named, or the one the admin
+  // request resolved when none is named (owner decision 2026-10-29 "A") — is not
+  // one of the Organization's active channels.
+  RFQ_SALES_CHANNEL_NOT_ALLOWED: 'RFQ_SALES_CHANNEL_NOT_ALLOWED',
+  // Issue #1906 — 422: a command hook on the buyer's `quote_request.create`
+  // named an assignee who is not an active administrator holding `rfqs:handle`
+  // and reaching the request's Organization.
+  RFQ_ASSIGNEE_NOT_ELIGIBLE: 'RFQ_ASSIGNEE_NOT_ELIGIBLE',
+
+  // Quick order — one-click buy (issue #641, #86). `422 VALIDATION_FAILED` with
+  // `details.code: 'one_click_unavailable'` until then.
+  /**
+   * 422 — one-click buy is not available to the buyer. `details.code` is the
+   * eligibility reason (`setting_disabled`, `missing_defaults`), repeated as
+   * `details.reason`.
+   */
+  ONE_CLICK_UNAVAILABLE: 'ONE_CLICK_UNAVAILABLE',
   QUOTE_INCOMPLETE: 'QUOTE_INCOMPLETE',
   QUOTE_VALIDITY_ENDED: 'QUOTE_VALIDITY_ENDED',
   // Quote PDF by e-mail (`specs/153-quote-request-pdf-template/`, owner answer
@@ -116,11 +239,46 @@ export const ERROR_CODES = {
 
   // Organizations / customer accounts
   ORGANIZATION_TAX_ID_EXISTS: 'ORGANIZATION_TAX_ID_EXISTS',
+  // `specs/177-tax-id-scope/` — switching the tax-ID scope to `global` while a
+  // tax ID is on more than one organization (409, `details.code = 'shared_tax_ids'`).
+  ORGANIZATION_TAX_ID_SCOPE_DUPLICATES: 'ORGANIZATION_TAX_ID_SCOPE_DUPLICATES',
+  // `specs/177-tax-id-scope/` — a personal → company conversion refused (409,
+  // `details.code` = `not_personal` | `deleted` | `owner_not_administrator`).
+  ORGANIZATION_CONVERSION_REFUSED: 'ORGANIZATION_CONVERSION_REFUSED',
+  // Issue #1040 — an operator's tax-ID correction refused (409, `details.code` =
+  // `not_company` | `deleted`).
+  ORGANIZATION_TAX_ID_CHANGE_REFUSED: 'ORGANIZATION_TAX_ID_CHANGE_REFUSED',
+  // `specs/177-tax-id-scope/` — a write of organizations lost a lock to a
+  // concurrent one (the tax-ID scope swap, or a racing writer); retry (409).
+  ORGANIZATION_WRITE_CONTENDED: 'ORGANIZATION_WRITE_CONTENDED',
   // Feature 056 — deletion of a parent with children is blocked (reassign /
   // remove children first). Backed by the `parent_id ON DELETE RESTRICT` FK.
   ORGANIZATION_HAS_CHILDREN: 'ORGANIZATION_HAS_CHILDREN',
   // Feature 056 — a re-parent would create a cycle or exceed the depth bound.
   ORGANIZATION_TREE_INVALID: 'ORGANIZATION_TREE_INVALID',
+  // Issue #629 (#86) — a personal (B2C) organization is single-member, so the
+  // action is refused (422, `details.code` = `add_member` | `invite` |
+  // `sales_rep`, `details.organizationId`).
+  ORGANIZATION_PERSONAL: 'ORGANIZATION_PERSONAL',
+  // Issue #629 (#86) — a moderation action needs the organization in another
+  // status (422, `details.currentStatus`, `requiredStatus` and their labels).
+  ORGANIZATION_STATUS_INVALID: 'ORGANIZATION_STATUS_INVALID',
+  // Feature 170 — organization roles and permissions (`specs/170-organization-roles/`,
+  // `contracts/organization-permission-port.md` §3). Declared by `organizations`.
+  // A member's role lacks the organization permission a buyer action needs (403).
+  ORGANIZATION_PERMISSION_REQUIRED: 'ORGANIZATION_PERMISSION_REQUIRED',
+  // A custom role's name is another role's, or a predefined role's label (409).
+  ORGANIZATION_ROLE_NAME_TAKEN: 'ORGANIZATION_ROLE_NAME_TAKEN',
+  // A role write carried an `expectedVersion` that is no longer current (409).
+  ORGANIZATION_ROLE_STALE: 'ORGANIZATION_ROLE_STALE',
+  // The Organization already holds the maximum number of custom roles (422).
+  ORGANIZATION_ROLE_LIMIT_REACHED: 'ORGANIZATION_ROLE_LIMIT_REACHED',
+  // An edit, rename or delete a predefined role does not allow (409).
+  ORGANIZATION_ROLE_PROTECTED: 'ORGANIZATION_ROLE_PROTECTED',
+  // Deleting a role somebody holds needs a different replacement role (422).
+  ORGANIZATION_ROLE_REPLACEMENT_REQUIRED: 'ORGANIZATION_ROLE_REPLACEMENT_REQUIRED',
+  // A submitted permission code no module declares (422).
+  ORGANIZATION_PERMISSION_UNKNOWN: 'ORGANIZATION_PERMISSION_UNKNOWN',
   EMAIL_ALREADY_REGISTERED: 'EMAIL_ALREADY_REGISTERED',
   EMAIL_ALREADY_IN_ORGANIZATION: 'EMAIL_ALREADY_IN_ORGANIZATION',
   EMAIL_BELONGS_TO_ANOTHER_ORGANIZATION: 'EMAIL_BELONGS_TO_ANOTHER_ORGANIZATION',
@@ -144,11 +302,22 @@ export const ERROR_CODES = {
   REGISTRATION_REQUIRES_ORGANIZATION: 'REGISTRATION_REQUIRES_ORGANIZATION',
   ACCOUNT_BLOCKED: 'ACCOUNT_BLOCKED',
   CUSTOMER_NOT_FOUND: 'CUSTOMER_NOT_FOUND',
-  CUSTOMER_ADDRESS_NOT_FOUND: 'CUSTOMER_ADDRESS_NOT_FOUND',
+  /**
+   * `specs/173-b2c-address-book-merge/` release 1 (OD-8): every former
+   * personal-address-book endpoint answers `410 Gone` with this code. The one
+   * address book is the customer's Organization's. Removed in release 2.
+   */
+  CUSTOMER_ADDRESS_BOOK_RETIRED: 'CUSTOMER_ADDRESS_BOOK_RETIRED',
   CUSTOMER_ALREADY_DELETED: 'CUSTOMER_ALREADY_DELETED',
   CUSTOMER_NOT_DELETED: 'CUSTOMER_NOT_DELETED',
   CUSTOMER_RESTORE_WINDOW_ELAPSED: 'CUSTOMER_RESTORE_WINDOW_ELAPSED',
   ORG_OWNER_DEPLETION: 'ORG_OWNER_DEPLETION',
+  /**
+   * Issue #652 (D-292): `PATCH /api/v1/me/customer/preferred-language` names a
+   * language the request's sales channel does not offer (422). Owned by
+   * `customers`.
+   */
+  PREFERRED_LANGUAGE_NOT_OFFERED: 'PREFERRED_LANGUAGE_NOT_OFFERED',
 
   // Orders + Carts (feature 027)
   CART_EMPTY: 'CART_EMPTY',
@@ -166,11 +335,112 @@ export const ERROR_CODES = {
    * the buyer reviews it before placing again.
    */
   CART_PRICE_CHANGED: 'CART_PRICE_CHANGED',
+  // Issue #86 — the cart-approval and admin-reject refusals, raised as
+  // `VALIDATION_FAILED` with a machine token as the message until then.
+  /**
+   * The buyer's role holds `carts.order_without_approval`, so the cart is not
+   * sent for approval (`specs/170-organization-roles/`; was: the Organization
+   * requires no approval).
+   */
+  CART_APPROVAL_NOT_REQUIRED: 'CART_APPROVAL_NOT_REQUIRED',
+  /** The cart has already been sent for approval (`details.approvalStatus`). */
+  CART_APPROVAL_ALREADY_SUBMITTED: 'CART_APPROVAL_ALREADY_SUBMITTED',
+  /**
+   * An approver may not approve or reject their own pending cart
+   * (`specs/170-organization-roles/` FR-032, R-36; `details.cartId`). A cart that
+   * is not pending is refused `CART_APPROVAL_NOT_PENDING` first.
+   */
+  CART_APPROVAL_SELF_APPROVE: 'CART_APPROVAL_SELF_APPROVE',
+  /** The cart is not awaiting approval, so it cannot be approved or rejected (`details.approvalStatus`). */
+  CART_APPROVAL_NOT_PENDING: 'CART_APPROVAL_NOT_PENDING',
+  /** The cart is already completed or rejected, so it cannot be rejected (`details.status`). */
+  CART_ALREADY_TERMINAL: 'CART_ALREADY_TERMINAL',
   STOCK_UNAVAILABLE: 'STOCK_UNAVAILABLE',
   PROMOTION_INVALID: 'PROMOTION_INVALID',
+  // Seven `promotions` refusals raised as `VALIDATION_FAILED` with a machine token
+  // glued to an English message until issue #628 (#86). Declared by the
+  // `promotions` manifest.
+  /**
+   * 409 — a promotion's usage limit was reached between the cart and placement
+   * (`details.promotionId`; with a coupon, token `with_coupon` and `couponCode`).
+   */
+  PROMOTION_USAGE_LIMIT_REACHED: 'PROMOTION_USAGE_LIMIT_REACHED',
+  /** 409 — another coupon already has this code (`details.couponCode`). */
+  PROMOTION_COUPON_CODE_TAKEN: 'PROMOTION_COUPON_CODE_TAKEN',
+  /** 400 — the length and format hold fewer unique codes than asked for (`details.requested`, `generated`). */
+  PROMOTION_COUPON_SPACE_EXHAUSTED: 'PROMOTION_COUPON_SPACE_EXHAUSTED',
+  /** 409 — another named promotion rule already has this name (`details.name`). */
+  PROMOTION_RULE_NAME_TAKEN: 'PROMOTION_RULE_NAME_TAKEN',
+  /** 409 — a named rule promotions use is not deleted (`details.ruleId`, `promotionCount`). */
+  PROMOTION_RULE_IN_USE: 'PROMOTION_RULE_IN_USE',
+  /** 400 — a criterion names an attribute not flagged usable in promotion rules (`details.attributeKey`). */
+  PROMOTION_ATTRIBUTE_NOT_ELIGIBLE: 'PROMOTION_ATTRIBUTE_NOT_ELIGIBLE',
   ORGANIZATION_SUSPENDED: 'ORGANIZATION_SUSPENDED',
   ORDER_NOT_FOUND: 'ORDER_NOT_FOUND',
   ORDER_NOT_CANCELLABLE: 'ORDER_NOT_CANCELLABLE',
+  // Issue #86 — order-path refusals raised as `VALIDATION_FAILED` with an
+  // English sentence until then.
+  /**
+   * The chosen delivery method cannot be used for this order: not active, not
+   * usable on this surface, outside the Organization's allow-list
+   * (`details.code = 'delivery_method_not_allowed_for_organization'`) or not
+   * offered in the order's sales channel (`'delivery_method_not_in_sales_channel'`).
+   */
+  ORDER_DELIVERY_METHOD_UNAVAILABLE: 'ORDER_DELIVERY_METHOD_UNAVAILABLE',
+  /** The payment twin of `ORDER_DELIVERY_METHOD_UNAVAILABLE`, with the `payment_method_…` tokens. */
+  ORDER_PAYMENT_METHOD_UNAVAILABLE: 'ORDER_PAYMENT_METHOD_UNAVAILABLE',
+  /** The basket is below the channel's minimum order value (`details.minimum`, `subtotal`, `currency`). */
+  ORDER_BELOW_MINIMUM_VALUE: 'ORDER_BELOW_MINIMUM_VALUE',
+  /** The order is in a terminal status, so it takes no more comments. */
+  ORDER_COMMENTS_CLOSED: 'ORDER_COMMENTS_CLOSED',
+  /** The order has no lines, so there is nothing to copy into a quote request. */
+  ORDER_CLONE_NO_LINES: 'ORDER_CLONE_NO_LINES',
+  // The admin's order-status configuration and the external API intake (issue
+  // #627, #86), raised as `VALIDATION_FAILED` with an English sentence until
+  // then. The status code travels as `details.statusCode`: `details.code` is the
+  // envelope's refusal-token slot. `returns` mints the `RETURN_STATUS_*` twins.
+  /** 409 — another order status already has this code (`details.statusCode`). */
+  ORDER_STATUS_CODE_TAKEN: 'ORDER_STATUS_CODE_TAKEN',
+  /**
+   * 409 / 422 — a terminal status cannot have outgoing transitions: marking a
+   * status with them terminal (token `mark_terminal`, `details.outgoingCount`) or
+   * adding one from a terminal status (token `add_transition`, `details.toStatusCode`).
+   */
+  ORDER_STATUS_TERMINAL_HAS_TRANSITIONS: 'ORDER_STATUS_TERMINAL_HAS_TRANSITIONS',
+  /** 409 — the initial (token `initial`) or a system (token `system`) status is not deleted. */
+  ORDER_STATUS_NOT_DELETABLE: 'ORDER_STATUS_NOT_DELETABLE',
+  /** 409 — orders are in the status, so it is not deleted (`details.statusCode`, `orderCount`). */
+  ORDER_STATUS_IN_USE: 'ORDER_STATUS_IN_USE',
+  /**
+   * 409 — the order's payment status may not move to the one asked for (issue
+   * #1574): token `payment_refunded` (nothing follows a refund) or
+   * `payment_not_paid` (only a paid order is refunded); `details.from`, `details.to`.
+   */
+  ORDER_PAYMENT_STATUS_TRANSITION_NOT_ALLOWED: 'ORDER_PAYMENT_STATUS_TRANSITION_NOT_ALLOWED',
+  /**
+   * 422 — the external API intake refused one or more lines; `details` stays the
+   * per-line array of `{ path, issue, sku }` (`SKU_NOT_IN_ASSORTMENT`, `PRICE_UNAVAILABLE`).
+   */
+  ORDER_INTAKE_LINES_REFUSED: 'ORDER_INTAKE_LINES_REFUSED',
+  /** 409 — another intake for the same API key holds its lock; retry with the same Idempotency-Key. */
+  ORDER_INTAKE_BUSY: 'ORDER_INTAKE_BUSY',
+  /** 422 — the basket handed to placement belongs to another sales channel (feature 154). */
+  ORDER_SALES_CHANNEL_MISMATCH: 'ORDER_SALES_CHANNEL_MISMATCH',
+  /**
+   * 422 — the sales channel of an order an operator creates on a customer's
+   * behalf (`POST /api/v1/admin/orders`, and its `/preview`) is not one of the
+   * customer's Organization's active assigned channels — an unassigned, an
+   * inactive or a nonexistent one alike (issue #515).
+   */
+  ORDER_SALES_CHANNEL_NOT_ALLOWED: 'ORDER_SALES_CHANNEL_NOT_ALLOWED',
+  /**
+   * 409 — the basket's Organization requires cart approval, its owner is not
+   * the Organization administrator and the basket is not `approved` (issue
+   * #648). `details: { code, cartId, approvalStatus }`, the token
+   * `cart_approval_not_submitted`, `cart_approval_pending` or
+   * `cart_approval_rejected`.
+   */
+  ORDER_CART_APPROVAL_REQUIRED: 'ORDER_CART_APPROVAL_REQUIRED',
   // Saved list views (`specs/147-saved-views/`, FR-022) — an admin already
   // holds a view on the order list whose name differs only by case or
   // surrounding spaces.
@@ -183,7 +453,131 @@ export const ERROR_CODES = {
   // configuration, the second refuses the document.
   INVOICE_NUMBER_PATTERN_COLLIDES: 'INVOICE_NUMBER_PATTERN_COLLIDES',
   INVOICE_NUMBER_ALREADY_ISSUED: 'INVOICE_NUMBER_ALREADY_ISSUED',
+  // Invoices — an order whose payments were refunded in full before it was
+  // invoiced has no sale left to document (issue #417, owner ruling of
+  // 2026-10-24), so issuance refuses it.
+  INVOICE_ORDER_REFUNDED: 'INVOICE_ORDER_REFUNDED',
+  // Invoices — business refusals of issuance and correction (issue #633, #86),
+  // `VALIDATION_FAILED` with an English sentence until then.
+  /** 422 — the seller's VAT number and company data are not configured (`details.setting`). */
+  INVOICE_SELLER_DATA_MISSING: 'INVOICE_SELLER_DATA_MISSING',
+  /**
+   * 422 — a correction asked for in another currency than the corrected
+   * invoice's (`details.requestedCurrency`, `invoiceCurrency`, `originalInvoiceId`).
+   */
+  INVOICE_CORRECTION_CURRENCY_MISMATCH: 'INVOICE_CORRECTION_CURRENCY_MISMATCH',
+  /**
+   * 400 — the correction total is more than its lines add up to, or (token
+   * `below_charges`) less than the charges it credits (`details.total`,
+   * `linesTotal`, `currency`).
+   */
+  INVOICE_CORRECTION_TOTAL_EXCEEDS_LINES: 'INVOICE_CORRECTION_TOTAL_EXCEEDS_LINES',
+  /**
+   * 422 — the correction credits more goods at one VAT rate than the invoice
+   * still charges there (`details.taxRate`, `vatRatePercent`, `remaining`, `currency`).
+   */
+  INVOICE_CORRECTION_EXCEEDS_RATE_REMAINING: 'INVOICE_CORRECTION_EXCEEDS_RATE_REMAINING',
+  /**
+   * 422 — the correction credits more of an order charge than the invoice still
+   * charges for it; the token is the charge, `delivery` or `payment_surcharge`
+   * (`details.chargeKind`, `remaining`, `currency`).
+   */
+  INVOICE_CORRECTION_EXCEEDS_CHARGE_REMAINING: 'INVOICE_CORRECTION_EXCEEDS_CHARGE_REMAINING',
   INVALID_TRANSITION: 'INVALID_TRANSITION',
+
+  // Returns 155 — a `return`-kind case naming an order line recorded as not
+  // returnable at purchase (owned and raised by `returns`; complaints are
+  // never refused by it).
+  RETURN_LINE_NOT_RETURNABLE: 'RETURN_LINE_NOT_RETURNABLE',
+  // Saved list views (#312, the rules of `specs/147-saved-views/` FR-022) — an
+  // admin already holds a view on the return list whose name differs only by
+  // case or surrounding spaces.
+  RETURN_SAVED_VIEW_NAME_TAKEN: 'RETURN_SAVED_VIEW_NAME_TAKEN',
+  // Shipments (issue #637, #86) — the module's first code. Generating a shipment
+  // for an order that already has a successful one, and marking a successful
+  // shipment failed, were `409 VALIDATION_FAILED` with an English literal.
+  /**
+   * 409 — the shipment, or the order's latest one, was already generated
+   * successfully. `details.code` names the refused write: `generate`
+   * (`details.orderId`, `shipmentId`) or `mark_failed` (`details.shipmentId`,
+   * `orderId`, `status`).
+   */
+  SHIPMENT_ALREADY_GENERATED: 'SHIPMENT_ALREADY_GENERATED',
+  // Issue #905 — a consumer withdrawal settled as a credit, a replacement or a
+  // repair without the consumer's consent to that resolution on record.
+  RETURN_ALTERNATIVE_RESOLUTION_CONSENT_REQUIRED: 'RETURN_ALTERNATIVE_RESOLUTION_CONSENT_REQUIRED',
+  // Returns — business-state refusals raised as `VALIDATION_FAILED` until issue
+  // #625 (#86): the buyer's request, the closed case, settlement and the
+  // admin's return-status configuration. The status code travels as
+  // `details.statusCode`: `details.code` is the envelope's refusal-token slot.
+  /** 422 — the order is not completed yet, so it takes no return (`details.orderId`). */
+  RETURN_ORDER_NOT_ELIGIBLE: 'RETURN_ORDER_NOT_ELIGIBLE',
+  /** 422 — more is asked for than the line can still return (`details.orderItemId`, `requested`, `remaining`). */
+  RETURN_QUANTITY_EXCEEDS_RETURNABLE: 'RETURN_QUANTITY_EXCEEDS_RETURNABLE',
+  /** 422 — the chosen reason exists but is switched off (`details.reasonId`); an unknown one stays `VALIDATION_FAILED`. */
+  RETURN_REASON_INACTIVE: 'RETURN_REASON_INACTIVE',
+  /** 409 — the case is in a terminal status, so it takes no more comments (`details.returnCaseId`, `statusCode`). */
+  RETURN_COMMENTS_CLOSED: 'RETURN_COMMENTS_CLOSED',
+  /** 409 — the case is in a terminal status, so it takes no delivery method (`details.returnCaseId`, `statusCode`). */
+  RETURN_CASE_CLOSED: 'RETURN_CASE_CLOSED',
+  /** 422 — the return delivery method is not offered (`details.returnDeliveryMethodId`). */
+  RETURN_DELIVERY_METHOD_UNAVAILABLE: 'RETURN_DELIVERY_METHOD_UNAVAILABLE',
+  /** 409 — another return of the order is being settled; retryable (`details.orderId`). */
+  RETURN_SETTLEMENT_IN_PROGRESS: 'RETURN_SETTLEMENT_IN_PROGRESS',
+  /**
+   * 422 — a refund above what may be refunded, for a line (`details.returnCaseItemId`)
+   * or a charge (token `delivery` / `surcharge`); `requested`, `maximum` as
+   * two-decimal strings and `currency`.
+   */
+  RETURN_REFUND_EXCEEDS_PAID: 'RETURN_REFUND_EXCEEDS_PAID',
+  /** 502 — the payment gateway refused the refund (`details.settlementState`, `failureReason`, `providerDetails`). */
+  RETURN_REFUND_GATEWAY_FAILED: 'RETURN_REFUND_GATEWAY_FAILED',
+  /** 409 — another return status already has this code (`details.statusCode`). */
+  RETURN_STATUS_CODE_TAKEN: 'RETURN_STATUS_CODE_TAKEN',
+  /**
+   * 409 / 422 — a terminal status cannot have outgoing transitions: marking a
+   * status with them terminal (token `mark_terminal`, `details.outgoingCount`) or
+   * adding one from a terminal status (token `add_transition`, `details.toStatusCode`).
+   */
+  RETURN_STATUS_TERMINAL_HAS_TRANSITIONS: 'RETURN_STATUS_TERMINAL_HAS_TRANSITIONS',
+  /** 409 — the initial status (token `initial`) is not deleted (`details.statusCode`). */
+  RETURN_STATUS_NOT_DELETABLE: 'RETURN_STATUS_NOT_DELETABLE',
+  /** 409 — cases are in the status, so it is not deleted (`details.statusCode`, `caseCount`). */
+  RETURN_STATUS_IN_USE: 'RETURN_STATUS_IN_USE',
+  // `specs/180-off-platform-complaints/` — the complaint without a platform order.
+  RETURN_OFF_PLATFORM_DISABLED: 'RETURN_OFF_PLATFORM_DISABLED',
+  RETURN_PROOF_OF_PURCHASE_REQUIRED: 'RETURN_PROOF_OF_PURCHASE_REQUIRED',
+  RETURN_CLAUSES_NOT_ACCEPTED: 'RETURN_CLAUSES_NOT_ACCEPTED',
+  RETURN_ATTACHMENT_REJECTED: 'RETURN_ATTACHMENT_REJECTED',
+  RETURN_RESOLUTION_UNAVAILABLE_OFF_PLATFORM: 'RETURN_RESOLUTION_UNAVAILABLE_OFF_PLATFORM',
+  // `specs/181-guest-complaints/` — the complaint from a guest without an account
+  // (settings-emails-events.md §4). Each code joined with its first raise site, as
+  // `check:error-translations` P7 requires.
+  RETURN_GUEST_COMPLAINTS_DISABLED: 'RETURN_GUEST_COMPLAINTS_DISABLED',
+  RETURN_GUEST_SESSION_REQUIRED: 'RETURN_GUEST_SESSION_REQUIRED',
+  RETURN_GUEST_LINK_INVALID: 'RETURN_GUEST_LINK_INVALID',
+  RETURN_TRACKING_LINK_INVALID: 'RETURN_TRACKING_LINK_INVALID',
+  RETURN_GUEST_LIMIT_REACHED: 'RETURN_GUEST_LIMIT_REACHED',
+  RETURN_GUEST_DATA_ERASED: 'RETURN_GUEST_DATA_ERASED',
+
+  // Related payers — `specs/182-related-payers/` (contracts/ports.md §5). Each code
+  // lands with its first raise site (check:error-translations P7).
+  /** 422 — the pair already has a non-revoked link (FR-010). */
+  RELATED_PAYER_LINK_EXISTS: 'RELATED_PAYER_LINK_EXISTS',
+  /** 422 — the pair can never be linked: one Organization twice, or a personal one (FR-010). */
+  RELATED_PAYER_INVALID_PAIR: 'RELATED_PAYER_INVALID_PAIR',
+  /**
+   * 422 — the named payer's link is not usable for this buyer, person and channel now
+   * (FR-012, FR-068); `details.reason` names why, for logs — the sentence is one.
+   */
+  RELATED_PAYER_NOT_USABLE: 'RELATED_PAYER_NOT_USABLE',
+  /**
+   * 429 — the sender's Organization reached its daily number of payer requests and
+   * invitations (FR-046). Checked before the tax ID is looked up, so it reveals nothing.
+   */
+  RELATED_PAYER_REQUEST_LIMIT: 'RELATED_PAYER_REQUEST_LIMIT',
+  /** 409 — the request was already decided, or decided concurrently (FR-045). */
+  RELATED_PAYER_REQUEST_DECIDED: 'RELATED_PAYER_REQUEST_DECIDED',
 
   // Credit Limit
   CREDIT_LIMIT_NOT_GRANTED: 'CREDIT_LIMIT_NOT_GRANTED',
@@ -194,6 +588,28 @@ export const ERROR_CODES = {
   ACTIVE_RESERVATIONS_EXIST: 'ACTIVE_RESERVATIONS_EXIST',
   ALREADY_SUBSCRIBED: 'ALREADY_SUBSCRIBED',
   PRODUCT_IN_STOCK: 'PRODUCT_IN_STOCK',
+
+  // Newsletter — the admin refusals that were `VALIDATION_FAILED` with an
+  // English literal until issue #626 (#86). None carries a `details.code`
+  // token: each code is one refusal.
+  /** 422 — an active automation cannot be edited; pause it first (`details.automationId`, `status`). */
+  NEWSLETTER_AUTOMATION_ACTIVE: 'NEWSLETTER_AUTOMATION_ACTIVE',
+  /** 422 — only a draft or scheduled campaign can be edited (`details.campaignId`, `status`). */
+  NEWSLETTER_CAMPAIGN_NOT_EDITABLE: 'NEWSLETTER_CAMPAIGN_NOT_EDITABLE',
+  /** 422 — only a draft or scheduled campaign can be cancelled (`details.campaignId`, `status`). */
+  NEWSLETTER_CAMPAIGN_NOT_CANCELLABLE: 'NEWSLETTER_CAMPAIGN_NOT_CANCELLABLE',
+  /** 422 — a campaign cannot be sent while no sending provider is configured. */
+  NEWSLETTER_PROVIDER_NOT_CONFIGURED: 'NEWSLETTER_PROVIDER_NOT_CONFIGURED',
+  /** 409 — a custom field with this key already exists (`details.key`). */
+  NEWSLETTER_CUSTOM_FIELD_KEY_TAKEN: 'NEWSLETTER_CUSTOM_FIELD_KEY_TAKEN',
+  /** 409 — an email block with this code already exists (`details.blockCode`). */
+  NEWSLETTER_EMAIL_BLOCK_CODE_TAKEN: 'NEWSLETTER_EMAIL_BLOCK_CODE_TAKEN',
+  /** 422 — a system email block cannot be deleted (`details.blockId`, `blockCode`). */
+  NEWSLETTER_EMAIL_BLOCK_SYSTEM: 'NEWSLETTER_EMAIL_BLOCK_SYSTEM',
+  /** 409 — a tag with this code already exists (`details.tagCode`). */
+  NEWSLETTER_TAG_CODE_TAKEN: 'NEWSLETTER_TAG_CODE_TAKEN',
+  /** 409 — a campaign or an automation uses the tag, so it cannot be deleted (`details.tagId`, `tagCode`). */
+  NEWSLETTER_TAG_IN_USE: 'NEWSLETTER_TAG_IN_USE',
 
   // API keys / webhooks / integrations
   API_KEY_OUT_OF_SCOPE: 'API_KEY_OUT_OF_SCOPE',
@@ -209,6 +625,14 @@ export const ERROR_CODES = {
   // Distributor API (feature 062)
   API_KEY_NOT_BOUND: 'API_KEY_NOT_BOUND',
   API_KEY_CHANNEL_MISMATCH: 'API_KEY_CHANNEL_MISMATCH',
+  /**
+   * 422 — the bound key's service account exists in the bound organization but
+   * is blocked (token `blocked`) or deleted / anonymized (token `removed`)
+   * (`details.field`, `customerAccountId`, `organizationId`). Raised only when
+   * it is the sole binding problem; otherwise the aggregate `VALIDATION_FAILED`
+   * lists it (issue #644, #86).
+   */
+  API_KEY_SERVICE_ACCOUNT_INACTIVE: 'API_KEY_SERVICE_ACCOUNT_INACTIVE',
   IDEMPOTENCY_KEY_REQUIRED: 'IDEMPOTENCY_KEY_REQUIRED',
   IDEMPOTENCY_KEY_REUSED: 'IDEMPOTENCY_KEY_REUSED',
   SKU_NOT_IN_ASSORTMENT: 'SKU_NOT_IN_ASSORTMENT',
@@ -298,9 +722,20 @@ export const ERROR_CODES = {
   CANNOT_MODIFY_SYSTEM_DEFAULT: 'CANNOT_MODIFY_SYSTEM_DEFAULT',
   SALES_CHANNEL_HAS_ATTRIBUTIONS: 'SALES_CHANNEL_HAS_ATTRIBUTIONS',
   ENTITY_WOULD_HAVE_ZERO_CHANNELS: 'ENTITY_WOULD_HAVE_ZERO_CHANNELS',
+  /**
+   * Spec 193 (FR-054, R-10) — a manual membership write on a channel whose membership a governor
+   * (the website rule) decides; `details[].issue` is the channel id, the message names the rule.
+   */
+  CHANNEL_MEMBERSHIP_GOVERNED: 'CHANNEL_MEMBERSHIP_GOVERNED',
   STALE_SALES_CHANNEL_WRITE: 'STALE_SALES_CHANNEL_WRITE',
   SALES_CHANNEL_ATTRIBUTION_IMMUTABLE: 'SALES_CHANNEL_ATTRIBUTION_IMMUTABLE',
   SALES_CHANNEL_CODE_IMMUTABLE: 'SALES_CHANNEL_CODE_IMMUTABLE',
+  // Sales-channel access (feature 154). Raised by the kernel's access step
+  // after a request's channel is resolved; `details.channelCode` names it.
+  /** 403 — an anonymous request on a channel closed to anonymous visitors. */
+  SALES_CHANNEL_SIGN_IN_REQUIRED: 'SALES_CHANNEL_SIGN_IN_REQUIRED',
+  /** 403 — a customer request on a channel its Organization is not assigned to. */
+  SALES_CHANNEL_NOT_PERMITTED: 'SALES_CHANNEL_NOT_PERMITTED',
 
   // Compare (feature 007)
   COMPARISON_FULL: 'COMPARISON_FULL',
@@ -339,7 +774,14 @@ export const ERROR_CODES = {
   ASSET_LEGACY_LOCATOR_CANNOT_HARDEN: 'ASSET_LEGACY_LOCATOR_CANNOT_HARDEN',
   ASSET_FILE_MISSING: 'ASSET_FILE_MISSING',
   ASSET_GONE: 'ASSET_GONE',
-  ASSET_ACCESS_DENIED: 'ASSET_ACCESS_DENIED',
+  // Assets Library — stable asset URLs (specs/156-asset-stable-url/)
+  ASSET_REPLACE_KIND_MISMATCH: 'ASSET_REPLACE_KIND_MISMATCH',
+  ASSET_LEGACY_CANNOT_REPLACE: 'ASSET_LEGACY_CANNOT_REPLACE',
+  ASSET_REPLACE_CONFLICT: 'ASSET_REPLACE_CONFLICT',
+  ASSET_NO_PREVIOUS_VERSION: 'ASSET_NO_PREVIOUS_VERSION',
+  ASSET_PERMALINK_TAKEN: 'ASSET_PERMALINK_TAKEN',
+  ASSET_PERMALINK_PREVIOUSLY_USED: 'ASSET_PERMALINK_PREVIOUSLY_USED',
+  ASSET_PERMALINK_INVALID: 'ASSET_PERMALINK_INVALID',
 
   // CMS (feature 014)
   CMS_PAGE_NOT_FOUND: 'CMS_PAGE_NOT_FOUND',
@@ -362,6 +804,15 @@ export const ERROR_CODES = {
   CMS_TRANSLATION_SELECTION_NOT_FOUND: 'CMS_TRANSLATION_SELECTION_NOT_FOUND',
   CMS_TRANSLATION_PROVIDER_FAILED: 'CMS_TRANSLATION_PROVIDER_FAILED',
   CMS_SCHEMA_UPGRADE_FAILED: 'CMS_SCHEMA_UPGRADE_FAILED',
+  // Feature 163 — page-builder section anchors and the page tree
+  // (`specs/163-page-builder-marketing-pages/` data-model §6). The two anchor
+  // codes name the offending anchor through `details` → `{anchor}`.
+  CMS_DUPLICATE_ANCHOR: 'CMS_DUPLICATE_ANCHOR',
+  CMS_RESERVED_ANCHOR: 'CMS_RESERVED_ANCHOR',
+  CMS_PAGE_PARENT_CYCLE: 'CMS_PAGE_PARENT_CYCLE',
+  // Feature 169 — the contact form on a sales channel with no recipients configured
+  // (`specs/169-page-builder-contact-form/` data-model §3.2). HTTP 409.
+  CMS_CONTACT_FORM_UNAVAILABLE: 'CMS_CONTACT_FORM_UNAVAILABLE',
 
   // Megamenu (feature 015)
   MEGAMENU_NOT_FOUND: 'MEGAMENU_NOT_FOUND',
@@ -372,8 +823,18 @@ export const ERROR_CODES = {
   MEGAMENU_LANGUAGE_NOT_IN_CHANNEL_SCOPE: 'MEGAMENU_LANGUAGE_NOT_IN_CHANNEL_SCOPE',
   MEGAMENU_TARGET_OUT_OF_SCOPE: 'MEGAMENU_TARGET_OUT_OF_SCOPE',
   MEGAMENU_ASSET_KIND_MISMATCH: 'MEGAMENU_ASSET_KIND_MISMATCH',
+  /**
+   * 400 — a free-URL asset item: importing an asset from a URL is not supported
+   * yet, so the asset is uploaded to the Assets Library and referenced by id
+   * (`details.itemId`). `VALIDATION_FAILED` until issue #640 (#86).
+   */
+  MEGAMENU_ASSET_URL_UNSUPPORTED: 'MEGAMENU_ASSET_URL_UNSUPPORTED',
   MEGAMENU_REFERENCED: 'MEGAMENU_REFERENCED',
   MEGAMENU_DEPTH_EXCEEDED: 'MEGAMENU_DEPTH_EXCEEDED',
+  // Feature 168 — the navigation bar's tree rules (data-model §3).
+  MEGAMENU_KIND_NOT_ALLOWED_AS_TAB: 'MEGAMENU_KIND_NOT_ALLOWED_AS_TAB',
+  MEGAMENU_LINK_TAB_INVALID: 'MEGAMENU_LINK_TAB_INVALID',
+  MEGAMENU_LABEL_REQUIRED: 'MEGAMENU_LABEL_REQUIRED',
 
   // Blog (feature 016)
   BLOG_SLUG_INVALID: 'BLOG_SLUG_INVALID',
@@ -392,6 +853,18 @@ export const ERROR_CODES = {
   BLOG_TAG_IN_USE: 'BLOG_TAG_IN_USE',
   BLOG_URL_PREFIX_INVALID: 'BLOG_URL_PREFIX_INVALID',
   BLOG_URL_PREFIX_RESERVED: 'BLOG_URL_PREFIX_RESERVED',
+  // Feature 171 — a prefix equal to a language prefix or a CMS page's first segment; a former prefix to forget that is not one.
+  BLOG_URL_PREFIX_CONFLICT: 'BLOG_URL_PREFIX_CONFLICT',
+  BLOG_URL_PREFIX_NOT_FOUND: 'BLOG_URL_PREFIX_NOT_FOUND',
+  // Feature 171 — a post or category not written in every language assigned to it.
+  BLOG_LANGUAGE_INCOMPLETE: 'BLOG_LANGUAGE_INCOMPLETE',
+  // Feature 171 — an author's avatar names no library asset, and a post's author no active administrator.
+  ADMIN_USER_AVATAR_NOT_FOUND: 'ADMIN_USER_AVATAR_NOT_FOUND',
+  BLOG_AUTHOR_NOT_FOUND: 'BLOG_AUTHOR_NOT_FOUND',
+  // Feature 171 — per-language URL keys of posts and categories.
+  BLOG_URL_KEY_TAKEN: 'BLOG_URL_KEY_TAKEN',
+  BLOG_URL_KEY_REDIRECT_TAKEOVER_REQUIRED: 'BLOG_URL_KEY_REDIRECT_TAKEOVER_REQUIRED',
+  BLOG_URL_REDIRECT_NOT_FOUND: 'BLOG_URL_REDIRECT_NOT_FOUND',
   BLOG_DISABLED: 'BLOG_DISABLED',
   BLOG_ASSET_KIND_MISMATCH: 'BLOG_ASSET_KIND_MISMATCH',
   BLOG_RELATED_POST_SELF_REFERENCE: 'BLOG_RELATED_POST_SELF_REFERENCE',
@@ -408,9 +881,44 @@ export const ERROR_CODES = {
   DICTIONARY_FALLBACK_CYCLE: 'DICTIONARY_FALLBACK_CYCLE',
   DICTIONARY_CODE_IMMUTABLE: 'DICTIONARY_CODE_IMMUTABLE',
   DICTIONARY_TRANSLATION_LANGUAGE_INACTIVE: 'DICTIONARY_TRANSLATION_LANGUAGE_INACTIVE',
+  // Issue #643 (#86) — raised by `dictionaries` (countries), `currencies` and
+  // `languages`, `409 VALIDATION_FAILED` until then. `details.code` names the
+  // dictionary (`country`, `currency`, `language`); the entry's own code is
+  // `details.entryCode`.
+  /** 409 — an entry with this code already exists in the dictionary. */
+  DICTIONARY_ENTRY_CODE_TAKEN: 'DICTIONARY_ENTRY_CODE_TAKEN',
+  /** 409 — an inactive entry cannot be made the dictionary's default. */
+  DICTIONARY_DEFAULT_ENTRY_INACTIVE: 'DICTIONARY_DEFAULT_ENTRY_INACTIVE',
 
   // Module Lifecycle (feature 018)
   MODULE_DISABLED: 'MODULE_DISABLED',
+
+  // Command hooks (`specs/176-command-hooks-outbox/` P2) — the platform's answer
+  // to a misused hook seam; `command-hooks.ts` documents each.
+  COMMAND_EXTENSION_UNCLAIMED: 'COMMAND_EXTENSION_UNCLAIMED',
+  COMMAND_HOOK_CYCLE: 'COMMAND_HOOK_CYCLE',
+  COMMAND_HOOK_DATA_MISSING: 'COMMAND_HOOK_DATA_MISSING',
+  /** A retry of a command outbox row that is not dead (176 P4): only a failed delivery can be retried. */
+  COMMAND_OUTBOX_NOT_DEAD: 'COMMAND_OUTBOX_NOT_DEAD',
+
+  // Command middleware (`specs/189-command-middleware/` FR-060) — the Command
+  // Bus's answers when an admission rule cannot decide, or a middleware runs a
+  // Command. A contributor's own refusal codes are its module's.
+  /** An `admit` middleware did not settle within its budget; nothing was written (503). */
+  COMMAND_ADMISSION_TIMEOUT: 'COMMAND_ADMISSION_TIMEOUT',
+  /** An `admit` middleware threw something other than a refusal; nothing was written (503). */
+  COMMAND_ADMISSION_FAILED: 'COMMAND_ADMISSION_FAILED',
+  /** A command middleware called `CommandBus.run` (500). */
+  COMMAND_MIDDLEWARE_REENTRY: 'COMMAND_MIDDLEWARE_REENTRY',
+
+  // Side-table extensions (`specs/187-side-table-extensions/` FR-054) — a host
+  // read port's answer to an `include` no composed module claims.
+  /**
+   * 422 — `include` named `extensions.<moduleId>` for a host no loader of that
+   * module serves in this build; `details: [{ path, issue: 'unclaimed' }, …]`.
+   * Raised before any loader runs, and independent of either presence axis.
+   */
+  ENTITY_EXTENSION_UNCLAIMED: 'ENTITY_EXTENSION_UNCLAIMED',
 
   // Module Lifecycle (feature 073 — operator activation)
   /** No manifest and no registry row answer to this module id. */
@@ -451,9 +959,20 @@ export const ERROR_CODES = {
    * same "there is nothing here to switch, ever", same carried reason.
    */
   TRANSACTIONAL_EMAIL_NOT_DEACTIVATABLE: 'TRANSACTIONAL_EMAIL_NOT_DEACTIVATABLE',
+  // A system block or template that cannot be deleted (issue #638, #86).
+  // Raised as `VALIDATION_FAILED` with an English sentence until then.
+  /** 409 — a system email block cannot be deleted (`details.blockId`, `blockCode`). */
+  TRANSACTIONAL_EMAIL_SYSTEM_BLOCK: 'TRANSACTIONAL_EMAIL_SYSTEM_BLOCK',
+  /** 409 — a system email template cannot be deleted (`details.templateId`, `templateCode`). */
+  TRANSACTIONAL_EMAIL_SYSTEM_TEMPLATE: 'TRANSACTIONAL_EMAIL_SYSTEM_TEMPLATE',
 
   // Catalog (feature 022 — Products Bulk Edit)
   BULK_TOO_LARGE: 'BULK_TOO_LARGE',
+  // Issue #501 — why an undo of a bulk operation is refused (409), one code per
+  // reason: still in flight, already undone, or nothing it can restore.
+  BULK_OPERATION_RUNNING: 'BULK_OPERATION_RUNNING',
+  BULK_OPERATION_ALREADY_REVERTED: 'BULK_OPERATION_ALREADY_REVERTED',
+  BULK_OPERATION_NOT_REVERSIBLE: 'BULK_OPERATION_NOT_REVERSIBLE',
   ATTRIBUTE_NOT_MASS_EDITABLE: 'ATTRIBUTE_NOT_MASS_EDITABLE',
 
   // Catalog (feature 033 — Products collection selection)
@@ -465,6 +984,19 @@ export const ERROR_CODES = {
    * with a second factor; the requirement is turned off first.
    */
   MFA_DEACTIVATION_BLOCKED: 'MFA_DEACTIVATION_BLOCKED',
+  /**
+   * A role cannot start requiring a second factor that this instance cannot
+   * enrol: `mfa` is off, or has no encryption key (issue #349). Raised by
+   * `admin_users`' role write; `details.reason` says which.
+   */
+  MFA_REQUIRED_FOR_ROLE_TWO_FACTOR: 'MFA_REQUIRED_FOR_ROLE_TWO_FACTOR',
+  /**
+   * Administrators cannot be required to use a second factor that this
+   * instance cannot enrol: `mfa` has no encryption key (issue #930). Raised by
+   * the `mfa.admin.totp_enforced` write; `details.reason` is
+   * `encryption_key_missing`.
+   */
+  MFA_ENFORCEMENT_UNAVAILABLE: 'MFA_ENFORCEMENT_UNAVAILABLE',
   MFA_INVALID_CODE: 'MFA_INVALID_CODE',
   MFA_INVALID_CHALLENGE: 'MFA_INVALID_CHALLENGE',
   MFA_TOO_MANY_ATTEMPTS: 'MFA_TOO_MANY_ATTEMPTS',
@@ -478,6 +1010,21 @@ export const ERROR_CODES = {
   // credential is refused: an account created by a social sign-in holds a
   // random password nobody knows, so the link is the way back in.
   MFA_SOCIAL_LAST_CREDENTIAL: 'MFA_SOCIAL_LAST_CREDENTIAL',
+  /**
+   * Issue #935 — removing the account's last second factor is refused while
+   * a requirement is in force: `mfa.admin.totp_enforced` or a role's
+   * `requiresTwoFactor` for an administrator, `mfa.storefront.totp_enforced`
+   * at the request's sales channel or the organization's policy for a
+   * customer. Raised by the self-service `POST …/mfa/disable`.
+   */
+  MFA_LAST_FACTOR_REQUIRED: 'MFA_LAST_FACTOR_REQUIRED',
+  /**
+   * Issue #1279 — the one answer of `POST /api/v1/auth/customer/oauth/exchange`
+   * for a hand-off code it will not redeem: unknown, expired, already used,
+   * presented with another browser's binding or on another sales channel, or
+   * withdrawn with the account's pending sign-ins.
+   */
+  MFA_FEDERATED_HANDOFF_INVALID: 'MFA_FEDERATED_HANDOFF_INVALID',
   // Feature 055 — Custom Fields Layer.
   CUSTOM_FIELD_NOT_FOUND: 'CUSTOM_FIELD_NOT_FOUND',
   CUSTOM_FIELD_KEY_CONFLICT: 'CUSTOM_FIELD_KEY_CONFLICT',
@@ -487,6 +1034,23 @@ export const ERROR_CODES = {
   // definitions are mutated only through the owning host module's surface
   // (generic admin mutations refuse with 409 "host_managed").
   CUSTOM_FIELD_HOST_MANAGED: 'CUSTOM_FIELD_HOST_MANAGED',
+  // Feature 157 — an admin list was asked to filter on a custom field it does
+  // not offer as a list filter (the definition's list-filter option is off,
+  // the definition is gone, or its entity type is not served).
+  CUSTOM_FIELD_FILTER_UNAVAILABLE: 'CUSTOM_FIELD_FILTER_UNAVAILABLE',
+  // Feature 157 — three 409 refusals of a definition change that used to share
+  // `CUSTOM_FIELD_DEFINITION_INVALID` and an English message: an option records
+  // still hold (`details.value`, `details.label`), a value type records hold
+  // values under (`details.key`), and a customer-visible field over values a
+  // deleted field left (`details.key`).
+  CUSTOM_FIELD_OPTION_IN_USE: 'CUSTOM_FIELD_OPTION_IN_USE',
+  CUSTOM_FIELD_VALUE_TYPE_LOCKED: 'CUSTOM_FIELD_VALUE_TYPE_LOCKED',
+  CUSTOM_FIELD_STORED_VALUES_EXIST: 'CUSTOM_FIELD_STORED_VALUES_EXIST',
+  // Feature 162 — turning on a definition's "carry value to" option for a
+  // target that cannot take the values: no same-key field, another value type,
+  // missing options, an internal value into a customer-visible field, a pair the
+  // registry does not offer, or a target whose module is off (`details.code`).
+  CUSTOM_FIELD_CARRY_INCOMPATIBLE: 'CUSTOM_FIELD_CARRY_INCOMPATIBLE',
 
   // Feature 058 — Credentials (reusable credential configurations).
   CREDENTIAL_NOT_FOUND: 'CREDENTIAL_NOT_FOUND',
@@ -532,6 +1096,23 @@ export const ERROR_CODES = {
    * from `PRODUCT_FEED_ERROR_CODES` (feature 067, FR-087, FR-095, FR-096).
    */
   PRODUCT_FEED_TAXONOMY_CONFLICT: 'PRODUCT_FEED_TAXONOMY_CONFLICT',
+  // The feed form's state refusals (issue #631, #86). Raised as
+  // `VALIDATION_FAILED` with an English `field: message` literal until then.
+  // Unlike the five above, `product_feeds` declares these itself, and each
+  // keeps `details.field` so the form can place the sentence.
+  /**
+   * 400 — the language exists on the installation but is switched off
+   * (`details.field`, `languageCode`).
+   */
+  PRODUCT_FEED_LANGUAGE_INACTIVE: 'PRODUCT_FEED_LANGUAGE_INACTIVE',
+  /**
+   * 400 — the feed's sales channel does not offer the currency
+   * (`details.field`, `currencyCode`, `salesChannelId`, `allowed` as a
+   * comma-joined string).
+   */
+  PRODUCT_FEED_CURRENCY_NOT_OFFERED: 'PRODUCT_FEED_CURRENCY_NOT_OFFERED',
+  /** 400 — another feed already uses the slug (`details.field`, `slug`). */
+  PRODUCT_FEED_SLUG_TAKEN: 'PRODUCT_FEED_SLUG_TAKEN',
 
   /**
    * A price binding named a price list that does not exist. Named after the
@@ -540,14 +1121,39 @@ export const ERROR_CODES = {
    * identifiers says nothing about which one was wrong.
    */
   PRICE_LIST_NOT_FOUND: 'PRICE_LIST_NOT_FOUND',
-  /** Feature 148 — a price matrix entry that does not exist on this list, or is out of scope. */
-  PRICE_MATRIX_ENTRY_NOT_FOUND: 'PRICE_MATRIX_ENTRY_NOT_FOUND',
-  /** Feature 148 — an entry with the same coordinates and an overlapping window exists (FR-005). */
-  PRICE_MATRIX_ENTRY_OVERLAP: 'PRICE_MATRIX_ENTRY_OVERLAP',
-  /** Feature 148 — the attribute may not select prices (`details.reason`, FR-008/FR-009). */
-  PRICE_MATRIX_ATTRIBUTE_NOT_ELIGIBLE: 'PRICE_MATRIX_ATTRIBUTE_NOT_ELIGIBLE',
-  /** Feature 148 — the list already holds the maximum number of entries (FR-007). */
-  PRICE_MATRIX_ENTRY_LIMIT: 'PRICE_MATRIX_ENTRY_LIMIT',
+  /** Feature 160 — a channel of a price book's set does not offer the book's currency (FR-003). */
+  PRICE_BOOK_CHANNEL_CURRENCY: 'PRICE_BOOK_CHANNEL_CURRENCY',
+  /** Feature 160 — an audience set names members of another kind, or that do not exist (FR-002, A4). */
+  PRICE_BOOK_AUDIENCE_KIND: 'PRICE_BOOK_AUDIENCE_KIND',
+  /** Feature 160 — the currency, or the audience kind of a book once active, may not change (FR-004). */
+  PRICE_BOOK_IMMUTABLE_FIELD: 'PRICE_BOOK_IMMUTABLE_FIELD',
+  /** Feature 160 — the book would apply nowhere or to no one, so it cannot be activated. */
+  PRICE_BOOK_NOT_APPLICABLE: 'PRICE_BOOK_NOT_APPLICABLE',
+  /** Feature 160 — two rows of one selection overlap in their quantity windows (FR-006); `details.errors` names them. */
+  PRICE_BOOK_ROW_OVERLAP: 'PRICE_BOOK_ROW_OVERLAP',
+  /** Feature 160 — rows break a shape rule (FR-005–FR-009); `details.errors` names every failing row. */
+  PRICE_BOOK_ROW_SHAPE: 'PRICE_BOOK_ROW_SHAPE',
+  /** Feature 160 — a row names a product, variant, category or attribute value that does not exist or cannot select prices. */
+  PRICE_BOOK_ROW_TARGET: 'PRICE_BOOK_ROW_TARGET',
+  /** Feature 160 — the book would hold more rows than its limit. */
+  PRICE_BOOK_ROW_LIMIT: 'PRICE_BOOK_ROW_LIMIT',
+  /** Feature 160 — the book changed since the version the write was made against; `details.currentVersion`. */
+  PRICE_BOOK_STALE: 'PRICE_BOOK_STALE',
+  /** Issue #1028 — a base book's rows are base prices, written through `priceBookWritePort` or the base-price API. */
+  PRICE_BOOK_BASE_BOOK: 'PRICE_BOOK_BASE_BOOK',
+  /** Issue #1028 — an expired book prices nothing and takes no row write from another module. */
+  PRICE_BOOK_EXPIRED: 'PRICE_BOOK_EXPIRED',
+  // Two `price_lists` refusals raised as `VALIDATION_FAILED` until issue #636
+  // (#86). Declared by the `price_lists` manifest.
+  /**
+   * 400 — a variant's percentage or amount adjustment would lose the product's own
+   * base price in that currency (`details.productId`, `currency`, `issues`).
+   */
+  PRICE_BOOK_BASE_PRICE_REQUIRED: 'PRICE_BOOK_BASE_PRICE_REQUIRED',
+  /** 400 — a base book is channel-independent and takes no channel set (`details.priceBookId`, `currency`). */
+  PRICE_BOOK_BASE_HAS_NO_CHANNELS: 'PRICE_BOOK_BASE_HAS_NO_CHANNELS',
+  /** Feature 160 — the precedence is read-only until the change flow ships (FR-023). */
+  PRECEDENCE_CHANGE_UNAVAILABLE: 'PRECEDENCE_CHANGE_UNAVAILABLE',
 
   // Shared PIM connector layer (feature 089).
   /** Another PIM connector is operator-active; activation refused (FR-003). */
@@ -560,8 +1166,31 @@ export const ERROR_CODES = {
   INVOICE_LEDGER_CREDENTIALS_MISSING: 'INVOICE_LEDGER_CREDENTIALS_MISSING',
   /** Delivery is succeeded or otherwise not eligible for operator retry. */
   INVOICE_LEDGER_DELIVERY_NOT_RETRYABLE: 'INVOICE_LEDGER_DELIVERY_NOT_RETRYABLE',
+  /**
+   * 400 — a routing write changes the stored numbering mode without
+   * `confirm: true` (`details.field: 'confirm'`, `from`, `to`). Raised as
+   * `VALIDATION_FAILED` until issue #644 (#86).
+   */
+  INVOICE_LEDGER_NUMBERING_CHANGE_UNCONFIRMED: 'INVOICE_LEDGER_NUMBERING_CHANGE_UNCONFIRMED',
   // `INFAKT_CONNECTION_FAILED` and `INFAKT_WEBHOOK_UNAUTHORIZED` left with the
   // `infakt` module (feature 134, T069), which declares them as `infaktErrorCodes`.
+
+  // Delivery methods — a method shipments were created against (issue #632, #86).
+  // Raised as `VALIDATION_FAILED` with an English sentence until then. The
+  // `details.code` token names the write that was refused: `delete` or
+  // `change_adapter`.
+  /**
+   * 409 — shipments reference the method, so it cannot be deleted or rebound to
+   * another adapter (`details.deliveryMethodId`, `deliveryMethodCode`,
+   * `shipmentCount`; `adapter` for `change_adapter`).
+   */
+  DELIVERY_METHOD_IN_USE: 'DELIVERY_METHOD_IN_USE',
+  /**
+   * 409 — the `shipments` module is off, so nobody can count the shipments that
+   * may reference the method, and the delete or the adapter change is refused
+   * (`details.deliveryMethodId`, `module`).
+   */
+  DELIVERY_METHOD_USAGE_UNKNOWN: 'DELIVERY_METHOD_USAGE_UNKNOWN',
 
   // Shared ERP connector layer (feature 119).
   /** Another ERP connector is operator-active; activation refused (FR-006). */
@@ -584,6 +1213,33 @@ export const ERROR_CODES = {
    * neither claimant.
    */
   PAYMENT_ADAPTER_UNAVAILABLE: 'PAYMENT_ADAPTER_UNAVAILABLE',
+  // Payments — the payment's own state refuses an admin retry or the
+  // `receive_payment` ingress (issue #630, #86). Raised as `VALIDATION_FAILED`
+  // with an English literal until then.
+  /**
+   * 409 — the payment is already paid: a retry (token `retry`) or the ingress
+   * marking it failed (token `mark_failed`); `details.orderId`, `paymentId`, `status`.
+   */
+  PAYMENT_ALREADY_PAID: 'PAYMENT_ALREADY_PAID',
+  /** 409 — the payment was refunded, so it cannot be retried (`details.orderId`, `paymentId`, `status`). */
+  PAYMENT_REFUNDED: 'PAYMENT_REFUNDED',
+  /** 409 — the order is settled out of band, so there is nothing to retry (`details.orderId`, `paymentId`). */
+  PAYMENT_SETTLED_OUT_OF_BAND: 'PAYMENT_SETTLED_OUT_OF_BAND',
+
+  // Payment methods — a method payments reference (issue #635, #86). Raised as
+  // `VALIDATION_FAILED` with an English sentence until then; issue #632 gives
+  // the delivery-method guard the same pair.
+  /**
+   * 409 — payments reference the method, so it cannot be deleted
+   * (`details.paymentMethodId`, `paymentMethodCode`, `paymentCount`).
+   */
+  PAYMENT_METHOD_IN_USE: 'PAYMENT_METHOD_IN_USE',
+  /**
+   * 409 — the `payments` module is off, so nobody can count the payments that
+   * may reference the method, and the delete is refused
+   * (`details.paymentMethodId`, `module`).
+   */
+  PAYMENT_METHOD_USAGE_UNKNOWN: 'PAYMENT_METHOD_USAGE_UNKNOWN',
 
   // CRM — Sales Opportunities (`specs/143-crm-sales-opportunities/`,
   // `contracts/admin-api.md` §13). Each is declared by the `crm` module's
@@ -613,10 +1269,136 @@ export const ERROR_CODES = {
   CRM_ASSIGNEE_INVALID: 'CRM_ASSIGNEE_INVALID',
   /** The uploaded file is larger than an Opportunity attachment may be. */
   CRM_ATTACHMENT_TOO_LARGE: 'CRM_ATTACHMENT_TOO_LARGE',
+  /**
+   * 422 — an attachment must be a private file of the library (`details.assetId`, `visibility`).
+   * `VALIDATION_FAILED` until issue #639 (#86); the twin of `projects`'
+   * `PROJECT_ATTACHMENT_NOT_PRIVATE` (issue #634).
+   */
+  CRM_ATTACHMENT_NOT_PRIVATE: 'CRM_ATTACHMENT_NOT_PRIVATE',
   /** Another CRM tag already has this name, whatever its case. */
   CRM_TAG_NAME_TAKEN: 'CRM_TAG_NAME_TAKEN',
+  /** A saved Opportunities view name its owner already uses, case-insensitively (#1734). */
+  CRM_SAVED_VIEW_NAME_TAKEN: 'CRM_SAVED_VIEW_NAME_TAKEN',
   /** A message on an Opportunity cannot be edited or deleted once sent. */
   CRM_MESSAGE_IMMUTABLE: 'CRM_MESSAGE_IMMUTABLE',
+
+  // Tasks (`specs/163-projects-and-tasks/`, `contracts/admin-api.md` §1) — the
+  // spellings of `TASKS_ERROR_CODES`. Each is declared by the `tasks` module's
+  // manifest and joins this block in the change that adds its first raise site.
+  /** No such Task, or one whose context the caller may not see — indistinguishable. */
+  TASK_NOT_FOUND: 'TASK_NOT_FOUND',
+  /** The context's type is not registered by a present module, or the caller may not see the id. */
+  TASK_CONTEXT_INVALID: 'TASK_CONTEXT_INVALID',
+  /** The assignee is not an active administrator. */
+  TASK_ASSIGNEE_INVALID: 'TASK_ASSIGNEE_INVALID',
+  /** A status code that is not in the Task workflow (`specs/165-task-management/` R-1). */
+  TASK_STATUS_UNKNOWN: 'TASK_STATUS_UNKNOWN',
+  /** A Task status move the workflow does not permit; carries `allowedTargets`. */
+  TASK_TRANSITION_FORBIDDEN: 'TASK_TRANSITION_FORBIDDEN',
+  /** The Task left the status the caller saw before the move. */
+  TASK_TRANSITION_CONFLICT: 'TASK_TRANSITION_CONFLICT',
+  /** A Task workflow or priority-list change that breaks a rule; carries `rule` (`specs/165-task-management/` FR-013, FR-016, FR-024). */
+  TASK_WORKFLOW_INVALID: 'TASK_WORKFLOW_INVALID',
+  /** A Task status or priority removal that would move more Tasks than one Command moves (R-1, R-9). */
+  TASK_STATUS_IN_USE_TOO_MANY: 'TASK_STATUS_IN_USE_TOO_MANY',
+  /** A change to someone else's private Task by a holder of `tasks:see_private` (R-3). */
+  TASK_PRIVATE_READ_ONLY: 'TASK_PRIVATE_READ_ONLY',
+  /** A private Task given an assignee other than its Creator (R-3, FR-038). */
+  TASK_PRIVATE_ASSIGNEE: 'TASK_PRIVATE_ASSIGNEE',
+  /** Publishing a Task that is no longer a draft: publishing is one-way (R-3, FR-037). */
+  TASK_ALREADY_PUBLISHED: 'TASK_ALREADY_PUBLISHED',
+  /** A Task priority code that is not configured (R-9). */
+  TASK_PRIORITY_UNKNOWN: 'TASK_PRIORITY_UNKNOWN',
+  /** A Task tag id that does not exist (R-10). */
+  TASK_TAG_UNKNOWN: 'TASK_TAG_UNKNOWN',
+  /** A Task tag name already taken, case-insensitively (R-10). */
+  TASK_TAG_NAME_TAKEN: 'TASK_TAG_NAME_TAKEN',
+  /**
+   * A Task attachment refused: too large, or a document a browser would run (R-7) — or, since
+   * issue #642, a library file that is not private (422, refusal token `not_private`,
+   * `details.assetId`, `visibility`).
+   */
+  TASK_ATTACHMENT_REFUSED: 'TASK_ATTACHMENT_REFUSED',
+  /** A saved Tasks list view name its owner already uses, case-insensitively (R-13). */
+  TASK_VIEW_NAME_TAKEN: 'TASK_VIEW_NAME_TAKEN',
+  /** A Task parent that would close a cycle — the Task itself or one of its descendants (R-15). */
+  TASK_PARENT_CYCLE: 'TASK_PARENT_CYCLE',
+  /** A Task parent that would nest sub-tasks deeper than `TASK_HIERARCHY_DEPTH_MAX` levels (R-15). */
+  TASK_HIERARCHY_TOO_DEEP: 'TASK_HIERARCHY_TOO_DEEP',
+  /** A record a Task cannot be linked to: its owner absent, no read permission for it, or not found (R-16). */
+  TASK_LINK_INVALID: 'TASK_LINK_INVALID',
+  /** A Task reminder that cannot be set: a recipient not the caller or an assignee, too many, or no due moment (R-17). */
+  TASK_REMINDER_INVALID: 'TASK_REMINDER_INVALID',
+
+  // Projects (`specs/163-projects-and-tasks/`, `contracts/admin-api.md` §2) —
+  // the spellings of `PROJECTS_ERROR_CODES`. Each is declared by the `projects`
+  // module's manifest and joins this block in the change that adds its first
+  // raise site.
+  /** No such Project, or one out of the caller's reach or visibility — indistinguishable. */
+  PROJECT_NOT_FOUND: 'PROJECT_NOT_FOUND',
+  /** A Project with linked records cannot be deleted; unlink them first. */
+  PROJECT_HAS_LINKS: 'PROJECT_HAS_LINKS',
+  /** A saved Projects list view name its owner already uses, case-insensitively (#1734). */
+  PROJECT_SAVED_VIEW_NAME_TAKEN: 'PROJECT_SAVED_VIEW_NAME_TAKEN',
+  /** An Organization outside the caller's reach, or one that does not exist — indistinguishable. */
+  PROJECT_ORGANIZATION_OUT_OF_SCOPE: 'PROJECT_ORGANIZATION_OUT_OF_SCOPE',
+  /** The Stage the Project is in cannot be deleted. */
+  PROJECT_STAGE_CURRENT: 'PROJECT_STAGE_CURRENT',
+  /** A Project's only Stage cannot be deleted. */
+  PROJECT_STAGE_LAST: 'PROJECT_STAGE_LAST',
+  /** The Project's workflow has no such move, or the Project is not in a state to make it. */
+  PROJECT_MOVE_NOT_PERMITTED: 'PROJECT_MOVE_NOT_PERMITTED',
+  /** The version sent is stale: the Project changed since it was read. */
+  PROJECT_CHANGED: 'PROJECT_CHANGED',
+  /** A registered Stage guard refused; `details.reason` is its sentence. */
+  PROJECT_GUARD_REFUSED: 'PROJECT_GUARD_REFUSED',
+  /** Completing the Project is not permitted from its current Stage. */
+  PROJECT_COMPLETION_NOT_PERMITTED: 'PROJECT_COMPLETION_NOT_PERMITTED',
+  /** The loss reason is unknown or archived. */
+  PROJECT_LOSS_REASON_INVALID: 'PROJECT_LOSS_REASON_INVALID',
+  /** A Member or listed person is not an active administrator, or a Role is unknown. */
+  PROJECT_MEMBER_INVALID: 'PROJECT_MEMBER_INVALID',
+  /** A Stage that holds Tasks cannot be deleted. */
+  PROJECT_STAGE_HAS_TASKS: 'PROJECT_STAGE_HAS_TASKS',
+  /** The Stage's completion gate is closed; `details.openTaskCount` counts the open Tasks, `details.openTasks` names them to a reader of Tasks. */
+  PROJECT_STAGE_GATE_OPEN_TASKS: 'PROJECT_STAGE_GATE_OPEN_TASKS',
+  /** Creating a Stage's Tasks again was asked of a Stage whose last entry did not fail to create them. */
+  PROJECT_STAGE_TASKS_NOT_RETRYABLE: 'PROJECT_STAGE_TASKS_NOT_RETRYABLE',
+  /** The Template is unknown, or archived when a Project is created from it. */
+  PROJECT_TEMPLATE_NOT_FOUND: 'PROJECT_TEMPLATE_NOT_FOUND',
+  /** No Project Role or loss reason with that id. */
+  PROJECT_DICTIONARY_ENTRY_NOT_FOUND: 'PROJECT_DICTIONARY_ENTRY_NOT_FOUND',
+  /** A seeded Project Role or loss reason is renamable and archivable, never deleted. */
+  PROJECT_DICTIONARY_ENTRY_SYSTEM: 'PROJECT_DICTIONARY_ENTRY_SYSTEM',
+  /** A Project or a Template uses the Project Role or loss reason, so it is archived rather than deleted. */
+  PROJECT_DICTIONARY_ENTRY_IN_USE: 'PROJECT_DICTIONARY_ENTRY_IN_USE',
+  /** Another Project Role (or loss reason) already has this default name, whatever its case. */
+  PROJECT_DICTIONARY_NAME_TAKEN: 'PROJECT_DICTIONARY_NAME_TAKEN',
+  /** A record of the Organization being removed is linked to the Project; unlink it first. */
+  PROJECT_ORGANIZATION_IN_USE: 'PROJECT_ORGANIZATION_IN_USE',
+  /** The record to link does not exist, or is out of the caller's reach — indistinguishable. */
+  PROJECT_RECORD_NOT_FOUND: 'PROJECT_RECORD_NOT_FOUND',
+  /** The record already belongs to a Project; `details.project` names it only to a caller who may see it. */
+  PROJECT_RECORD_ALREADY_LINKED: 'PROJECT_RECORD_ALREADY_LINKED',
+  /** The record belongs to an Organization the Project does not have. */
+  PROJECT_LINK_ORGANIZATION_MISMATCH: 'PROJECT_LINK_ORGANIZATION_MISMATCH',
+  /** Only a note's author edits or deletes it — whatever else the caller holds. */
+  PROJECT_NOTE_NOT_AUTHOR: 'PROJECT_NOTE_NOT_AUTHOR',
+  /** A message of a Project is never edited or deleted, by anybody. */
+  PROJECT_MESSAGE_IMMUTABLE: 'PROJECT_MESSAGE_IMMUTABLE',
+  /** The uploaded file is larger than an attachment of a Project may be; `details.maxMb` names the limit. */
+  PROJECT_ATTACHMENT_TOO_LARGE: 'PROJECT_ATTACHMENT_TOO_LARGE',
+  // Three state refusals raised as `VALIDATION_FAILED` with an English literal
+  // until issue #634 (#86).
+  /** 422 — the Project already has the most Stages it may have (`details.projectId`, `maximum`). */
+  PROJECT_STAGE_LIMIT: 'PROJECT_STAGE_LIMIT',
+  /**
+   * 422 — an attachment must be a private file of the library (`details.assetId`, `visibility`).
+   * `crm`'s twin is to be `CRM_ATTACHMENT_NOT_PRIVATE` (issue #639).
+   */
+  PROJECT_ATTACHMENT_NOT_PRIVATE: 'PROJECT_ATTACHMENT_NOT_PRIVATE',
+  /** 422 — an archived Role is not added to a Template that does not hold it (`details.roleId`). */
+  PROJECT_TEMPLATE_ROLE_ARCHIVED: 'PROJECT_TEMPLATE_ROLE_ARCHIVED',
 
   // SEO — search engine robots (`specs/144-seo-search-engine-robots/`, FR-006).
   // Declared by the `seo` module's manifest.
@@ -641,6 +1423,66 @@ export const ERROR_CODES = {
   DOCUMENT_TEMPLATE_NOT_SELECTABLE: 'DOCUMENT_TEMPLATE_NOT_SELECTABLE',
   /** Producing the document failed. */
   DOCUMENT_RENDER_FAILED: 'DOCUMENT_RENDER_FAILED',
+
+  // Admin feedback (issue #379) — declared in the `admin_feedback` module's
+  // manifest; the same spellings as `ADMIN_FEEDBACK_ERROR_CODES`.
+  /** The relay address is empty or not an http(s) URL: sending is switched off. */
+  ADMIN_FEEDBACK_NOT_CONFIGURED: 'ADMIN_FEEDBACK_NOT_CONFIGURED',
+  /** The relay could not be reached in time, refused the message, or redirected. */
+  ADMIN_FEEDBACK_DELIVERY_FAILED: 'ADMIN_FEEDBACK_DELIVERY_FAILED',
+
+  // Product visibility rules (`specs/193-product-visibility-rules/`, events-and-errors.md §2) —
+  // the spellings of `PRODUCT_VISIBILITY_ERROR_CODES`, each declared by the
+  // `product_visibility_rules` manifest and joining this block with its first raise site.
+  /** Deleting a visibility category a role is mapped to; `details[].issue` names each role id (FR-013). */
+  VISIBILITY_CATEGORY_IN_USE: 'VISIBILITY_CATEGORY_IN_USE',
+  /** Mapping `platform_admin` or a role holding a self-lifting permission (FR-022, FR-026). */
+  ROLE_NOT_MAPPABLE: 'ROLE_NOT_MAPPABLE',
+  /** A designated book that is missing, not regular / for everyone / of the currency, or not on the channel (RQ-1 A). */
+  DESIGNATION_INVALID: 'DESIGNATION_INVALID',
+  /** Deleting a product rule that governs a sales channel. */
+  PRODUCT_RULE_ATTACHED: 'PRODUCT_RULE_ATTACHED',
+  /** A definition change of an attached product rule without a preview (FR-053). */
+  WEBSITE_RULE_PREVIEW_REQUIRED: 'WEBSITE_RULE_PREVIEW_REQUIRED',
+  /** The per-administrator preview cap or the preview snapshot cap is reached (TM-11). */
+  WEBSITE_RULE_PREVIEW_LIMIT: 'WEBSITE_RULE_PREVIEW_LIMIT',
+  /** A preview that expired, is not ready, or whose rule moved since (FR-053). */
+  WEBSITE_RULE_PREVIEW_STALE: 'WEBSITE_RULE_PREVIEW_STALE',
+  /** A second product rule on a sales channel (FR-051). */
+  CHANNEL_ALREADY_GOVERNED: 'CHANNEL_ALREADY_GOVERNED',
+
+  // Forms (`specs/170-forms-module/`, research R-25) — the spellings of
+  // `FORMS_ERROR_CODES`. Each is declared by the `forms` module's manifest and
+  // joins this block in the change that adds its first raise site.
+  /** No such form (or form version) — a malformed id answers the same. */
+  FORM_NOT_FOUND: 'FORM_NOT_FOUND',
+  /** Another form already uses this key. */
+  FORM_KEY_TAKEN: 'FORM_KEY_TAKEN',
+  /** The definition breaks a publish rule; `details.issues` lists `{ code, elementId, path }`. */
+  FORM_DEFINITION_INVALID: 'FORM_DEFINITION_INVALID',
+  /** The form changed since the caller read it (`expectedRevision`, R-26). */
+  FORM_REVISION_CONFLICT: 'FORM_REVISION_CONFLICT',
+  /** The form has entries; deleting it needs the confirmation (`details.entryCount`). */
+  FORM_HAS_ENTRIES: 'FORM_HAS_ENTRIES',
+  /**
+   * The form takes no submission now; `details.code` says why: `closed`, `not_yet_open`, `full`,
+   * `sign_in_required` or `unavailable` (a draft, a deleted form or one that never existed).
+   */
+  FORM_NOT_ACCEPTING: 'FORM_NOT_ACCEPTING',
+  /** A submission body over the 256 KiB limit (FR-036). */
+  FORM_SUBMISSION_TOO_LARGE: 'FORM_SUBMISSION_TOO_LARGE',
+  /** Some answers break the rules of the served version; `details.fields` lists `{ fieldKey, code, message }`. */
+  FORM_SUBMISSION_INVALID: 'FORM_SUBMISSION_INVALID',
+  /** No such entry — or one outside the caller's organisations, or a malformed id: all answered the same. */
+  FORM_ENTRY_NOT_FOUND: 'FORM_ENTRY_NOT_FOUND',
+  /** The entry is no longer in the status the caller named (`expectedStatus`); `details.status` is its status now. */
+  FORM_ENTRY_STATUS_CONFLICT: 'FORM_ENTRY_STATUS_CONFLICT',
+  /** A write that removes entries across organisations — deleting a form with entries, changing its retention — needs an unrestricted administrator. */
+  FORM_SCOPE_REQUIRED: 'FORM_SCOPE_REQUIRED',
+  /** The CAPTCHA provider did not verify the submission, or no CAPTCHA response was sent (feature 170, R-14). */
+  FORM_CAPTCHA_FAILED: 'FORM_CAPTCHA_FAILED',
+  /** The CAPTCHA provider could not be reached to verify a submission; retryable (feature 170, R-14). */
+  FORM_CAPTCHA_UNAVAILABLE: 'FORM_CAPTCHA_UNAVAILABLE',
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

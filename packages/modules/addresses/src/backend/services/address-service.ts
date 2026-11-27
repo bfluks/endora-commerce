@@ -1,14 +1,20 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
+import type { FilterQuery } from '@mikro-orm/core';
 import {
   DictionaryReferenceError,
   ERROR_CODES,
   dispatchValidatorMode,
   type DictionaryValidator,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import { Address } from '../entities/address.entity.js';
+import { addressCreatedAuditState, addressUpdatedAuditState, addressValues } from './address-audit-state.js';
+
+/** What an anonymized address's personal fields read (OD-7). */
+const ANONYMIZED = '-';
 
 /**
  * AddressService (T120).
@@ -32,6 +38,7 @@ export class AddressService {
   }
 
   async list(organizationId: string, kind?: 'delivery' | 'billing'): Promise<Address[]> {
+    if (!isUuidShape(organizationId)) return [];
     const em = this.emFactory();
     const where: Record<string, unknown> = { organizationId, deletedAt: null };
     if (kind) where['kind'] = kind;
@@ -74,7 +81,7 @@ export class AddressService {
         isDefault: input.isDefault ?? false,
       });
       txEm.persist(address);
-      this.#audit(txEm, 'address.create', address.id, null, { organizationId, kind: address.kind });
+      this.#audit(txEm, 'address.create', address.id, null, addressCreatedAuditState(address));
       await txEm.flush();
       return address;
     });
@@ -95,6 +102,9 @@ export class AddressService {
   ): Promise<Address> {
     const em = this.emFactory();
     return em.transactional(async (txEm) => {
+      if (!isUuidShape(addressId)) {
+        throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Address not found.');
+      }
       const address = await txEm.findOne(Address, { id: addressId, organizationId, deletedAt: null });
       if (!address) {
         throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Address not found.');
@@ -112,6 +122,7 @@ export class AddressService {
           dispatchValidatorMode(address.country, patch.country),
         );
       }
+      const before = addressValues(address);
       if (patch.recipientName !== undefined) address.recipientName = patch.recipientName;
       if (patch.street !== undefined) address.street = patch.street;
       if (patch.city !== undefined) address.city = patch.city;
@@ -119,7 +130,7 @@ export class AddressService {
       if (patch.country !== undefined) address.country = patch.country.toUpperCase();
       if (patch.phone !== undefined) address.phone = patch.phone;
       if (patch.isDefault !== undefined) address.isDefault = patch.isDefault;
-      this.#audit(txEm, 'address.update', address.id, null, { organizationId, kind: address.kind });
+      this.#audit(txEm, 'address.update', address.id, null, addressUpdatedAuditState(before, address));
       await txEm.flush();
       return address;
     });
@@ -127,6 +138,9 @@ export class AddressService {
 
   async deleteAddress(organizationId: string, addressId: string): Promise<void> {
     const em = this.emFactory();
+    if (!isUuidShape(addressId)) {
+      throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Address not found.');
+    }
     const address = await em.findOne(Address, { id: addressId, organizationId, deletedAt: null });
     if (!address) {
       throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Address not found.');
@@ -135,8 +149,55 @@ export class AddressService {
     // entity there references addresses via snapshot, so a true "in-use" block
     // must query the Orders table. For now we soft-delete.
     address.deletedAt = new Date();
-    this.#audit(em, 'address.delete', address.id, { organizationId, kind: address.kind }, null);
+    this.#audit(em, 'address.delete', address.id, { kind: address.kind }, null);
     await em.flush();
+  }
+
+  /**
+   * Clear **and** blank every address of the Organization
+   * (`specs/173-b2c-address-book-merge/` OD-7) — the retention sweep's call
+   * for a personal Organization it has just anonymized. The personal fields
+   * become `'-'`, the phone `null`, the default flag `false`; the country stays
+   * (as it does on the Organization's registered address) and the row is
+   * soft-deleted. One `address.anonymized` entry per row, with a null actor and
+   * no personal data, in the same transaction as the scrub. Order snapshots are
+   * copies on `orders`' rows and are not touched. Answers the number of rows.
+   *
+   * **Every row, the soft-deleted ones included (issue #927).** An address the
+   * customer deleted before the sweep reached them still holds the street, the
+   * phone and the name, so it is blanked too; it keeps its own `deletedAt`,
+   * and its entry says `wasDeleted: true`. A row is selected only while some
+   * part of the scrub is missing from it ({@link anonymizationResidue}), so a
+   * repeat call scrubs and records nothing.
+   */
+  async anonymizeForOrganization(organizationId: string): Promise<number> {
+    const em = this.emFactory();
+    return em.transactional(async (txEm) => {
+      const rows = await txEm.find(Address, { organizationId, ...anonymizationResidue() });
+      const now = new Date();
+      for (const address of rows) {
+        const wasDeleted = address.deletedAt != null;
+        // command-coverage-ignore: the retention sweep's system-initiated scrub,
+        // audited below with the null actor that fact deserves.
+        address.recipientName = ANONYMIZED;
+        address.street = ANONYMIZED;
+        address.city = ANONYMIZED;
+        address.postalCode = ANONYMIZED;
+        address.phone = null;
+        address.isDefault = false;
+        address.deletedAt ??= now;
+        this.auditLog?.recordWithin(txEm, {
+          actorAdminUserId: null,
+          action: 'address.anonymized',
+          objectType: 'address',
+          objectId: address.id,
+          stateBefore: { kind: address.kind, wasDeleted },
+          stateAfter: { anonymizedAt: now.toISOString() },
+        });
+      }
+      await txEm.flush();
+      return rows.length;
+    });
   }
 
   private async validateCountry(
@@ -160,4 +221,26 @@ export class AddressService {
       throw err;
     }
   }
+}
+
+/**
+ * The rows {@link AddressService.anonymizeForOrganization} still has work on:
+ * any field of the scrub not yet written, `deletedAt` included (issue #927).
+ * The negation of a fully scrubbed row, as a filter over this module's own
+ * table; a field added to the scrub is added here, or a row missing only that
+ * field is never selected again. Built per call: the ORM may rewrite a filter
+ * object it is handed.
+ */
+export function anonymizationResidue(): { $or: Array<FilterQuery<Address>> } {
+  return {
+    $or: [
+      { deletedAt: null },
+      { recipientName: { $ne: ANONYMIZED } },
+      { street: { $ne: ANONYMIZED } },
+      { city: { $ne: ANONYMIZED } },
+      { postalCode: { $ne: ANONYMIZED } },
+      { phone: { $ne: null } },
+      { isDefault: true },
+    ],
+  };
 }

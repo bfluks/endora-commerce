@@ -1,16 +1,30 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import { Meilisearch, type Index } from 'meilisearch';
 import {
-  resolveAttribute,
-  SYSTEM_ATTRIBUTE_SCOPES,
   type CatalogAttributeReadPort,
+  type CatalogAttributeView,
   type CatalogCategoryReadPort,
   type CatalogProductReadPort,
+  type CatalogProductAvailabilityPort,
   type CatalogProductRecord,
   type CatalogProductValueOverrideRecord,
+  type ChannelAvailability,
   type OverrideRow,
-  type ResolverContext,
 } from '@endora-commerce/contracts';
+import {
+  AVAILABILITY_FILTERABLE_ATTRIBUTES,
+  documentAvailabilityFields,
+  pendingAvailabilitySettings,
+} from './search-availability.js';
+import {
+  SEARCHABLE_ATTRIBUTES,
+  documentAttributes,
+  documentTexts,
+  indexLanguagesOf,
+  sortableAttributesFor,
+  type DocumentTexts,
+  type SearchableTextAttribute,
+} from './search-document.js';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { SalesChannel } from '@endora-commerce/platform/kernel';
 import { DEFAULT_INDEX_TASK_TIMEOUT_SECONDS, SEARCH_SETTING_CODES } from '../../manifest.js';
@@ -33,8 +47,6 @@ import { DEFAULT_INDEX_TASK_TIMEOUT_SECONDS, SEARCH_SETTING_CODES } from '../../
  * field that was not written before.
  */
 
-const FALLBACK_LOCALE = 'en-US';
-
 /**
  * How many member ids one `listEntityIdsForChannel` page carries. The accessor
  * is paginated and defaults to 100; a full channel reindex wants the whole
@@ -49,32 +61,23 @@ const MEMBERSHIP_PAGE_SIZE = 500;
  * Meilisearch refuses a sort on any field outside `sortableAttributes`, and
  * this indexer never called `updateSortableAttributes`, so the setting was `[]`
  * on all five live indexes and `name:asc` came back as `invalid_search_sort`.
- * Three of the four sorts the listing contract offers were therefore answered
- * by the unreachable-index fallback — correct results, re-read from the very
- * Postgres query the index exists to spare, under a log line that called a
- * healthy engine unavailable.
  *
- * The declaration is single on purpose: this constant is what the indexer
- * applies to every index **and** the alphabet `buildSort` may emit (its return
- * type is built from it). A sort token cannot be added on the query side
- * without appearing here, which is the only structural guarantee that stops
- * the two halves drifting apart again.
- *
- * Every entry costs index size and settings-update time, so this is the sorts
- * the contract actually offers, not a list of fields that might one day be
- * sorted on. `updatedAt` is deliberately absent: no sort token names it, it is
- * the freshness marker rather than an ordering, and it is what `-createdAt`
- * used to be mistranslated into.
+ * The declaration is single on purpose: `sortableAttributesFor` (`search-document.ts`) is what
+ * the indexer applies to every index **and** the alphabet `buildSort` may emit (its return type
+ * is built from {@link SortableAttribute}). Feature 174 — the name is sorted in the shopper's
+ * language, `texts.<L>.name`, declared for every language the channel offers. `updatedAt` is
+ * deliberately absent: no sort token names it.
  */
-export const SORTABLE_ATTRIBUTES = ['createdAt', 'name'] as const;
-
-/** One field of {@link SORTABLE_ATTRIBUTES}. */
-export type SortableAttribute = (typeof SORTABLE_ATTRIBUTES)[number];
+/** One sortable field of a channel index. */
+export type SortableAttribute = 'createdAt' | `texts.${string}.name`;
 
 export interface SearchIndexerOptions {
   meilisearchHost?: string;
   meilisearchApiKey?: string;
-  /** Override the indexed locale, defaults to en-US. */
+  /**
+   * Retired by feature 174: a document carries every channel language's texts, so there is no
+   * one indexed locale. Accepted and ignored, so a caller passing it keeps compiling.
+   */
   locale?: string;
   /**
    * Feature 061 — the catalog's composed attribute read model (Principle I:
@@ -116,6 +119,13 @@ export interface SearchIndexerOptions {
    */
   channelMembership: SalesChannelMembershipPort;
   /**
+   * Feature 163 — `catalog`'s availability projection per channel (R8): which
+   * members are on in which channel language, with the effective window and
+   * audience a document carries. Required: an index built without it would
+   * publish products switched off where they are off.
+   */
+  availability: Pick<CatalogProductAvailabilityPort, 'describeChannelAvailability'>;
+  /**
    * How long to wait for one Meilisearch task, in milliseconds, re-read per
    * wait so an operator raising `search.index_task_timeout_seconds` takes
    * effect without a restart — the property `search.reindex_interval_minutes`
@@ -148,14 +158,13 @@ export interface SearchIndexerOptions {
  * A per-buyer price cannot live here in any case: there is one index per sales
  * channel and one document per product, so pricing the document would multiply
  * the corpus by the customer base. Feature 086 sorts by price without
- * Meilisearch for that reason. The legacy attribute itself is untouched and
- * still indexed under `attributes.defaultPrice`, where its name says what it is.
+ * Meilisearch for that reason. The legacy attribute itself is gone: feature 160
+ * stripped `defaultPrice` and `price` from every product (FR-042), so a product
+ * has no price of its own to index.
  */
 export interface IndexedDocument {
   id: string;
   sku: string;
-  name: string;
-  description: string;
   type: string;
   status: string;
   visibility: string;
@@ -164,20 +173,21 @@ export interface IndexedDocument {
   categoryIds: string[];
   categorySlugs: string[];
   // Flattened attribute values. Meilisearch's filtering is type-tolerant
-  // for primitive values; complex types should be projected via the
-  // service layer when they appear.
-  attributes: Record<string, string | number | boolean | null>;
+  // for primitive values. A multiselect is the array of its options, each
+  // rendered as `String` renders it: an equality filter on an array field
+  // matches when any element equals the value (issue #684), which is what
+  // `filter[attr.<key>]` means on the Postgres listing too. Any other
+  // complex value is its JSON text, which no filter is built against.
+  // Feature 174 — the values of searchable text attributes no filter names
+  // are not here: they are searched in `texts.<L>.attributes`, at the
+  // shopper's language.
+  attributes: Record<string, string | number | boolean | string[] | null>;
   /**
-   * Feature 012 / FR-035 — for every `isSearchable = true` attribute of
-   * a select-style type (`select` / `enum` / `multiselect`), this array
-   * carries the resolved per-locale option label(s). The customer can
-   * then search for the rendered text they see (e.g. "brass" matches a
-   * product whose `material` option is keyed `brass_001` but rendered
-   * as "Brass" in their locale). The array is part of Meilisearch's
-   * `searchableAttributes` settings, so it participates in lexical +
-   * (when enabled) semantic search alongside `name` / `description`.
+   * Feature 174 (`contracts/search-index.md` §1, FR-033) — per language the channel offers, the
+   * texts effective at (channel, L): name, description, searchable text attributes and the
+   * option labels of searchable select attributes in L. A query in L searches `texts.<L>.*`.
    */
-  searchableOptions: string[];
+  texts: Record<string, DocumentTexts>;
   /**
    * Epoch milliseconds. Sortable — it is what `-createdAt` means, on both
    * backends of the listing route (issue #287).
@@ -185,6 +195,16 @@ export interface IndexedDocument {
   createdAt: number;
   /** Epoch milliseconds. The freshness marker; no sort token names it. */
   updatedAt: number;
+  /**
+   * Feature 163 (R8, data-model §11) — the channel languages the product is
+   * effectively on in, its effective window and its channel-effective audience
+   * (`visibility` above is the channel-effective one too). Filter inputs; the
+   * query never retrieves the allow-list. See `search-availability.ts`.
+   */
+  liveLanguages: string[];
+  publishFromMs: number;
+  publishUntilMs: number;
+  allowedOrganizationIds: string[];
 }
 
 /**
@@ -319,13 +339,29 @@ export async function awaitIndexTask(
   });
 }
 
+/**
+ * Feature 174 (code review, note 5) — what one indexing run reads once and every channel batch
+ * of the run shares: the searchable select attributes and, per language, their option labels.
+ * A run is one {@link SearchIndexer.reindexAllChannels}, one {@link SearchIndexer.ensureQuerySettings},
+ * one category-subtree reindex or one incremental upsert; the next run reads them again, so a
+ * relabelled option reaches it.
+ */
+export interface IndexingRun {
+  searchableOptionAttributes?: Promise<CatalogAttributeView[]>;
+  readonly optionLabels: Map<string, Map<string, Map<string, string>>>;
+}
+
+export function newIndexingRun(): IndexingRun {
+  return { optionLabels: new Map() };
+}
+
 export class SearchIndexer {
   private readonly client: Meilisearch;
-  private readonly locale: string;
   private readonly attributeRead: CatalogAttributeReadPort;
   private readonly products: CatalogProductReadPort;
   private readonly categories: CatalogCategoryReadPort;
   private readonly channelMembership: SalesChannelMembershipPort;
+  private readonly availability: Pick<CatalogProductAvailabilityPort, 'describeChannelAvailability'>;
   private readonly resolveTaskTimeoutMs: () => Promise<number>;
 
   constructor(options: SearchIndexerOptions) {
@@ -338,11 +374,11 @@ export class SearchIndexer {
       process.env['MEILISEARCH_API_KEY'] ??
       undefined;
     this.client = new Meilisearch(apiKey ? { host, apiKey } : { host });
-    this.locale = options.locale ?? FALLBACK_LOCALE;
     this.attributeRead = options.attributeRead;
     this.products = options.products;
     this.categories = options.categories;
     this.channelMembership = options.channelMembership;
+    this.availability = options.availability;
     this.resolveTaskTimeoutMs =
       options.resolveTaskTimeoutMs ?? (async () => DEFAULT_INDEX_TASK_TIMEOUT_MS);
   }
@@ -370,7 +406,7 @@ export class SearchIndexer {
    * sortable settings, then push every product visible in that channel.
    * Returns counts so callers can log a summary.
    */
-  async reindexChannel(em: EntityManager, channel: SalesChannel): Promise<{
+  async reindexChannel(em: EntityManager, channel: SalesChannel, run: IndexingRun = newIndexingRun()): Promise<{
     indexUid: string;
     documentCount: number;
     searchableAttributes: string[];
@@ -380,12 +416,15 @@ export class SearchIndexer {
     const indexUid = indexUidFor(channel);
     const index = await this.ensureIndex(indexUid);
 
-    // The membership accessor answers which products the channel carries; the
-    // publishable narrowing that used to ride along in the same join is now
-    // `isPublishable`, the one predicate the incremental upsert already used.
-    // Two owners, two reads, one definition of publishable.
+    // The membership accessor answers which products the channel carries;
+    // `catalog` answers which of them are on in at least one channel language
+    // (feature 163, R8) — the one definition of publishable, shared with the
+    // incremental upsert. No status is tested here.
     const memberIds = await this.channelMemberProductIds(channel.id);
-    const products = (await this.products.findByIds(memberIds)).filter(isPublishable);
+    const availability = await this.availability.describeChannelAvailability(memberIds, channel.id);
+    const products = (await this.products.findByIds(memberIds)).filter((p) =>
+      isPublishableIn(availability.get(p.id)),
+    );
     const productIds = products.map((p) => p.id);
     // Feature 068 — an inactive category must not survive in the indexed
     // `categorySlugs`, or it keeps working as a storefront PLP filter.
@@ -399,28 +438,15 @@ export class SearchIndexer {
       categoriesByProduct.set(row.productId, list);
     }
 
-    // Feature 012 / FR-035 — pre-load every searchable select-style
-    // attribute and its option labels so buildDocument() can render the
-    // per-locale text for each product's selected value(s).
-    const optionLookup = await this.loadSearchableOptionLookup(em, this.locale);
-
-    // Feature 022 — fetch every override row for this batch of products
-    // in one query, then bucket by productId. Each document is built
-    // with the channel's defaultLanguage so per-(channel, language)
-    // overrides for system Name / Description flow through.
-    const overrideRows = await this.products.listValueOverridesByProductIds(productIds);
-    const overridesByProduct = new Map<string, CatalogProductValueOverrideRecord[]>();
-    for (const row of overrideRows) {
-      const list = overridesByProduct.get(row.productId) ?? [];
-      list.push(row);
-      overridesByProduct.set(row.productId, list);
-    }
-
+    // Feature 174 (`contracts/search-index.md` §2) — the texts of every channel language, from
+    // one read of this batch's override rows and of the searchable attributes.
+    const languages = indexLanguagesOf(channel);
+    const textInputs = await this.textInputs(em, languages, productIds, run);
     const documents: IndexedDocument[] = products.map((p) =>
-      buildDocument(p, categoriesByProduct.get(p.id) ?? [], this.locale, optionLookup, {
-        overrides: overridesByProduct.get(p.id) ?? [],
+      buildDocument(p, categoriesByProduct.get(p.id) ?? [], availability.get(p.id)!, {
+        ...textInputs,
         channelId: channel.id,
-        languageCode: channel.defaultLanguage,
+        languages,
       }),
     );
 
@@ -444,10 +470,11 @@ export class SearchIndexer {
     // the settings task settling was answered `invalid_search_sort` and
     // degraded to Postgres.
     const { searchable, filterable } = await this.attributeSettings();
+    const sortable = sortableAttributesFor(languages);
     const settingsTasks = await Promise.all([
       index.updateSearchableAttributes(searchable),
       index.updateFilterableAttributes(filterable),
-      index.updateSortableAttributes([...SORTABLE_ATTRIBUTES]),
+      index.updateSortableAttributes(sortable),
     ]);
     for (const task of settingsTasks) {
       // O(1) by construction — this is the ordering the comment above is about.
@@ -470,7 +497,7 @@ export class SearchIndexer {
       documentCount: documents.length,
       searchableAttributes: searchable,
       filterableAttributes: filterable,
-      sortableAttributes: [...SORTABLE_ATTRIBUTES],
+      sortableAttributes: sortable,
     };
   }
 
@@ -484,7 +511,7 @@ export class SearchIndexer {
    * Returns the channel codes that were touched so callers can log a
    * one-line summary.
    */
-  async upsertProduct(em: EntityManager, productId: string): Promise<string[]> {
+  async upsertProduct(em: EntityManager, productId: string, run: IndexingRun = newIndexingRun()): Promise<string[]> {
     const product = await this.products.findById(productId);
     if (!product) return [];
 
@@ -498,25 +525,24 @@ export class SearchIndexer {
       activeOnly: true,
     });
     const categories = categoryRows.map((r) => ({ id: r.categoryId, slug: r.slug }));
-    // Feature 012 / FR-035 — same per-locale option-label projection
-    // used by the offline reindex. Per-product upsert is incremental,
-    // so we only build the lookup once per call.
-    const optionLookup = await this.loadSearchableOptionLookup(em, this.locale);
-    // Feature 022 — per-channel overrides for system Name / Description.
-    // Fetch once; the resolver then runs per (channel, channel.defaultLanguage).
-    const overrides = await this.products.listValueOverridesByProductIds([productId]);
-
-    const publishable = isPublishable(product);
+    // Feature 174 — the override rows and searchable attributes once; the texts per channel below.
+    const allLanguages = [...new Set(channels.flatMap((channel) => indexLanguagesOf(channel)))];
+    const textInputs = await this.textInputs(em, allLanguages, [productId], run);
 
     const touched: string[] = [];
     for (const channel of channels) {
       const indexUid = indexUidFor(channel);
       const index = await this.ensureIndex(indexUid);
-      if (linkedChannelIds.has(channel.id) && publishable) {
-        const document = buildDocument(product, categories, this.locale, optionLookup, {
-          overrides,
+      // Feature 163 — on in at least one language of this channel, as `catalog`
+      // answers it; a non-member is absent from the answer.
+      const availability = linkedChannelIds.has(channel.id)
+        ? (await this.availability.describeChannelAvailability([productId], channel.id)).get(productId)
+        : undefined;
+      if (availability !== undefined && isPublishableIn(availability)) {
+        const document = buildDocument(product, categories, availability, {
+          ...textInputs,
           channelId: channel.id,
-          languageCode: channel.defaultLanguage,
+          languages: indexLanguagesOf(channel),
         });
         const task = await index.addDocuments([document], { primaryKey: 'id' });
         await this.awaitTask(task, `upsert of product ${productId} into ${indexUid}`);
@@ -542,8 +568,10 @@ export class SearchIndexer {
    */
   async reindexCategorySubtree(em: EntityManager, categoryId: string): Promise<number> {
     const productIds = await this.categories.listProductIdsInSubtree(categoryId);
+    // One run for the whole subtree: the option labels are read once, not once per product.
+    const run = newIndexingRun();
     for (const productId of productIds) {
-      await this.upsertProduct(em, productId);
+      await this.upsertProduct(em, productId, run);
     }
     return productIds.length;
   }
@@ -578,11 +606,9 @@ export class SearchIndexer {
    */
   async refreshAttributeSettings(em: EntityManager): Promise<string[]> {
     const channels = await em.find(SalesChannel, {});
-    // Feature 012 — keep `searchableOptions` in the searchable list so
-    // toggling isSearchable on a select-style attribute takes effect
-    // without a full reindex. The aggregated field stays in the index
-    // documents from the previous reindex; settings refresh just opts
-    // it back into the search rank.
+    // Feature 174 — the searchable set is fixed (`texts`, `sku`, `attributes`); which attribute
+    // a query searches is the query's `attributesToSearchOn`, so a flipped `isSearchable` on a
+    // text or select attribute takes effect at the next reindex of its documents' texts.
     const { searchable, filterable } = await this.attributeSettings();
     const touched: string[] = [];
     for (const channel of channels) {
@@ -590,7 +616,7 @@ export class SearchIndexer {
       const index = await this.ensureIndex(indexUid);
       const searchableTask = await index.updateSearchableAttributes(searchable);
       const filterableTask = await index.updateFilterableAttributes(filterable);
-      const sortableTask = await index.updateSortableAttributes([...SORTABLE_ATTRIBUTES]);
+      const sortableTask = await index.updateSortableAttributes(sortableAttributesFor(indexLanguagesOf(channel)));
       // Settings updates are async tasks; wait so callers reading the
       // settings immediately after see the new values.
       // Unlike the identical-looking three in `reindexChannel`, these land on
@@ -607,13 +633,66 @@ export class SearchIndexer {
     return touched;
   }
 
+  /**
+   * Feature 163 (code review W1) — bring every **existing** channel index up to
+   * the settings this release's queries need, without a reindex: the
+   * availability fields filterable and the language-keyed `texts` searched. Run once at
+   * boot. An index already carrying them is only read (one settings read per
+   * channel); one built before the upgrade gets the missing settings once, so
+   * its queries stop falling back to Postgres. Documents indexed before the
+   * upgrade carry none of the fields and are served as before (R8) until the
+   * reindex the release note asks for. A channel with no index yet is left to
+   * its first reindex, which writes every setting.
+   */
+  async ensureQuerySettings(em: EntityManager): Promise<string[]> {
+    const channels = await em.find(SalesChannel, {});
+    const wanted = await this.attributeSettings();
+    const run = newIndexingRun();
+    const touched: string[] = [];
+    for (const channel of channels) {
+      const indexUid = indexUidFor(channel);
+      let index: Index;
+      try {
+        index = await this.client.getIndex(indexUid);
+      } catch {
+        continue;
+      }
+      const [filterable, searchable] = await Promise.all([
+        index.getFilterableAttributes(),
+        index.getSearchableAttributes(),
+      ]);
+      const pending = pendingAvailabilitySettings(
+        {
+          filterable: (filterable ?? []).flatMap((f) => (typeof f === 'string' ? [f] : f.attributePatterns)),
+          searchable: searchable ?? ['*'],
+        },
+        wanted,
+      );
+      // Feature 174 (`contracts/search-index.md` §2) — a pre-174 index has no `texts` in its
+      // documents: reindex the channel, which writes every setting with the documents.
+      if (pending.reindex) {
+        await this.reindexChannel(em, channel, run);
+        touched.push(channel.code);
+        continue;
+      }
+      if (pending.filterable) {
+        const task = await index.updateFilterableAttributes(pending.filterable);
+        await this.awaitTask(task, `filterable attributes for ${indexUid}`);
+        touched.push(channel.code);
+      }
+    }
+    return touched;
+  }
+
   async reindexAllChannels(em: EntityManager): Promise<
     Array<{ channelCode: string; indexUid: string; documentCount: number }>
   > {
     const channels = await em.find(SalesChannel, {});
     const results: Array<{ channelCode: string; indexUid: string; documentCount: number }> = [];
+    // One run for every channel: the option labels are read once, not per channel per language.
+    const run = newIndexingRun();
     for (const channel of channels) {
-      const summary = await this.reindexChannel(em, channel);
+      const summary = await this.reindexChannel(em, channel, run);
       results.push({
         channelCode: channel.code,
         indexUid: summary.indexUid,
@@ -689,53 +768,92 @@ export class SearchIndexer {
     _em: EntityManager,
     locale: string,
   ): Promise<Map<string, Map<string, string>>> {
-    // Feature 061 — the option labels come from the composed view (backed by
-    // `custom_field_options`), restricted to isSearchable select-style
-    // attributes; no raw SQL against catalog storage.
-    const out = new Map<string, Map<string, string>>();
-    const attrs = (await this.attributeRead.listByFlag('isSearchable')).filter(
+    return optionLookupIn(await this.searchableOptionAttributes(), locale);
+  }
+
+  /**
+   * Feature 061 — the option labels come from the composed view (backed by
+   * `custom_field_options`), restricted to isSearchable select-style
+   * attributes; no raw SQL against catalog storage.
+   */
+  private async searchableOptionAttributes(): Promise<CatalogAttributeView[]> {
+    return (await this.attributeRead.listByFlag('isSearchable')).filter(
       (a) =>
         a.valueType === 'select' || a.valueType === 'enum' || a.valueType === 'multiselect',
     );
-    if (attrs.length === 0) return out;
-    for (const attr of attrs) {
-      let bucket = out.get(attr.key);
-      if (!bucket) {
-        bucket = new Map();
-        out.set(attr.key, bucket);
-      }
-      for (const o of attr.options) {
-        const labelMap = o.label ?? {};
-        const rendered =
-          labelMap[locale] ??
-          labelMap[FALLBACK_LOCALE] ??
-          Object.values(labelMap)[0] ??
-          o.labelDefault ??
-          o.value;
-        bucket.set(o.value, rendered);
-      }
-    }
-    return out;
   }
 
-  /** Feature 061 — derive per-index searchable/filterable settings from the view. */
+  /**
+   * Feature 061 — derive per-index searchable/filterable settings from the view. Feature 174
+   * (`contracts/search-index.md` §2) — the searchable set is the language-keyed `texts`, the SKU
+   * and the attribute values; which of them a query reads is its `attributesToSearchOn`.
+   */
   private async attributeSettings(): Promise<{
     searchable: string[];
     filterable: string[];
   }> {
     const attributes = await this.attributeRead.listAll();
-    // Feature 012 — `searchableOptions` is the rendered per-locale option
-    // label aggregator for every isSearchable select-style attribute. It
-    // joins the customer's mental model ("brass") with the operator's
-    // canonical option value ("brass_001" / "Mosiądz").
-    const searchable = ['name', 'sku', 'description', 'searchableOptions'];
-    const filterable: string[] = ['categoryIds', 'categorySlugs', 'visibility', 'status'];
+    const filterable: string[] = [
+      'categoryIds',
+      'categorySlugs',
+      'status',
+      // Feature 163 — `visibility` among them (R8).
+      ...AVAILABILITY_FILTERABLE_ATTRIBUTES,
+    ];
     for (const attr of attributes) {
-      const path = `attributes.${attr.key}`;
-      if (attr.isSearchable) searchable.push(path);
-      if (attr.isFilterable) filterable.push(path);
+      if (attr.isFilterable) filterable.push(`attributes.${attr.key}`);
     }
-    return { searchable, filterable };
+    return { searchable: [...SEARCHABLE_ATTRIBUTES], filterable };
+  }
+
+  /**
+   * Feature 174 — what every document of a batch needs for its `texts`: each product's override
+   * rows (every channel; {@link documentTexts} reads the document's own), the searchable text
+   * attributes with their scope sets, the option labels of the searchable select attributes per
+   * language (read once per `run`), and the text keys `attributes` leaves out (searchable, filtered by nothing).
+   */
+  private async textInputs(
+    _em: EntityManager,
+    languages: readonly string[],
+    productIds: readonly string[],
+    run: IndexingRun,
+  ): Promise<{
+    overridesByProduct: Map<string, OverrideRow[]>;
+    textAttributes: SearchableTextAttribute[];
+    optionLabels: Map<string, Map<string, Map<string, string>>>;
+    textKeys: Set<string>;
+  }> {
+    const [rows, attributes] = await Promise.all([
+      productIds.length > 0 ? this.products.listValueOverridesByProductIds([...productIds]) : Promise.resolve([]),
+      this.attributeRead.listAll(),
+    ]);
+    const textAttributes = attributes
+      .filter((a) => a.isSearchable && a.valueType === 'string')
+      .map((a) => ({ key: a.key, scopeLevels: a.scopeLevels }));
+    const optionLabels = new Map<string, Map<string, Map<string, string>>>();
+    for (const language of languages) {
+      let lookup = run.optionLabels.get(language);
+      if (!lookup) {
+        run.searchableOptionAttributes ??= this.searchableOptionAttributes();
+        lookup = optionLookupIn(await run.searchableOptionAttributes, language);
+        run.optionLabels.set(language, lookup);
+      }
+      optionLabels.set(language, lookup);
+    }
+    const overridesByProduct = new Map<string, OverrideRow[]>();
+    for (const o of rows as CatalogProductValueOverrideRecord[]) {
+      const list = overridesByProduct.get(o.productId) ?? [];
+      list.push({ attributeKey: o.attributeKey, channelId: o.channelId, languageCode: o.languageCode ?? null, value: o.value });
+      overridesByProduct.set(o.productId, list);
+    }
+    return {
+      overridesByProduct,
+      textAttributes,
+      optionLabels,
+      textKeys: new Set(
+        attributes.filter((a) => a.isSearchable && a.valueType === 'string' && !a.isFilterable).map((a) => a.key),
+      ),
+    };
   }
 
   private async ensureIndex(uid: string): Promise<Index> {
@@ -778,13 +896,37 @@ export class SearchIndexer {
 }
 
 /**
- * What a channel index carries. Archived and soft-deleted rows are excluded
- * here and not by `CatalogProductLookupOptions`, whose `activeOnly` covers
- * `status` and `deletedAt` but not `archivedAt` — and an archived product must
- * not stay searchable.
+ * What a channel index carries (feature 163, R8): a channel member that is
+ * effectively on in at least one channel language. `catalog` answers it —
+ * archived and soft-deleted products are on in no language — and the query's
+ * filter narrows to the request's language, window and audience.
  */
-function isPublishable(product: CatalogProductRecord): boolean {
-  return product.status === 'active' && !product.deletedAt && !product.archivedAt;
+function isPublishableIn(availability: ChannelAvailability | undefined): boolean {
+  return availability !== undefined && availability.liveLanguages.length > 0;
+}
+
+/**
+ * Feature 012 / FR-035 — (attributeKey, value) → the option label in `locale`. Feature 174
+ * (FR-033) — the label in `locale` itself, else the option's default label: never another
+ * language's label, which a shopper of this language would match by.
+ */
+function optionLookupIn(
+  attrs: readonly CatalogAttributeView[],
+  locale: string,
+): Map<string, Map<string, string>> {
+  const out = new Map<string, Map<string, string>>();
+  for (const attr of attrs) {
+    let bucket = out.get(attr.key);
+    if (!bucket) {
+      bucket = new Map();
+      out.set(attr.key, bucket);
+    }
+    for (const o of attr.options) {
+      const labelMap = o.label ?? {};
+      bucket.set(o.value, labelMap[locale] ?? o.labelDefault ?? o.value);
+    }
+  }
+  return out;
 }
 
 export function indexUidFor(channel: { code: string }): string {
@@ -794,116 +936,33 @@ export function indexUidFor(channel: { code: string }): string {
 function buildDocument(
   product: CatalogProductRecord,
   categories: Array<{ id: string; slug: string }>,
-  locale: string,
-  searchableOptionLookup: Map<string, Map<string, string>>,
-  resolverInputs?: {
-    overrides: CatalogProductValueOverrideRecord[];
+  availability: ChannelAvailability,
+  texts: {
     channelId: string;
-    languageCode: string;
+    languages: readonly string[];
+    overridesByProduct: ReadonlyMap<string, readonly OverrideRow[]>;
+    textAttributes: readonly SearchableTextAttribute[];
+    optionLabels: ReadonlyMap<string, ReadonlyMap<string, ReadonlyMap<string, string>>>;
+    textKeys: ReadonlySet<string>;
   },
 ): IndexedDocument {
-  // Feature 022 — when resolver inputs are supplied, route the system
-  // Name / Description through the four-step fallback chain so
-  // per-(channel, language) overrides are visible in search. When not
-  // supplied (legacy callers), fall back to plain locale-pick.
-  let name = pickLocale(product.name, locale);
-  let description = pickLocale(product.description, locale);
-  if (resolverInputs) {
-    const overrideRows: OverrideRow[] = resolverInputs.overrides.map((o) => ({
-      attributeKey: o.attributeKey,
-      channelId: o.channelId,
-      languageCode: o.languageCode ?? null,
-      value: o.value,
-    }));
-    const ctx: ResolverContext = {
-      channelId: resolverInputs.channelId,
-      languageCode: resolverInputs.languageCode,
-      primaryLanguage: resolverInputs.languageCode,
-    };
-    const resolvedName = resolveAttribute({
-      attributeKey: 'name',
-      baseline: product.name,
-      overrides: overrideRows,
-      scope: SYSTEM_ATTRIBUTE_SCOPES.name!,
-      ctx,
-    });
-    const resolvedDesc = resolveAttribute({
-      attributeKey: 'description',
-      baseline: product.description,
-      overrides: overrideRows,
-      scope: SYSTEM_ATTRIBUTE_SCOPES.description!,
-      ctx,
-    });
-    if (typeof resolvedName.value === 'string' && resolvedName.value.length > 0) {
-      name = resolvedName.value;
-    }
-    if (typeof resolvedDesc.value === 'string' && resolvedDesc.value.length > 0) {
-      description = resolvedDesc.value;
-    }
-  }
-  const attrs: IndexedDocument['attributes'] = {};
-  // Feature 012 — collect resolved per-locale option labels for every
-  // searchable select-style attribute the product carries a value for.
-  const searchableOptions: string[] = [];
-  for (const [key, value] of Object.entries(product.attributeValues)) {
-    if (value === null || value === undefined) {
-      attrs[key] = null;
-      continue;
-    }
-    const optionLabels = searchableOptionLookup.get(key);
-    if (Array.isArray(value)) {
-      // multiselect — array of option values.
-      if (optionLabels) {
-        for (const item of value) {
-          const rendered = optionLabels.get(String(item));
-          if (rendered) searchableOptions.push(rendered);
-        }
-      }
-      // Persist the raw shape too so non-search filtering still works
-      // (Meilisearch tolerates JSON-string fallback per the comment
-      // in the original implementation).
-      attrs[key] = JSON.stringify(value);
-      continue;
-    }
-    if (
-      typeof value === 'string' ||
-      typeof value === 'number' ||
-      typeof value === 'boolean'
-    ) {
-      attrs[key] = value;
-      if (optionLabels && typeof value === 'string') {
-        const rendered = optionLabels.get(value);
-        if (rendered) searchableOptions.push(rendered);
-      }
-      continue;
-    }
-    // Fall through for unexpected shapes — coerce to JSON string so the
-    // document still upserts. The query layer can ignore these.
-    attrs[key] = JSON.stringify(value);
-  }
   // We also surface `categorySlugs` so the typed contract layer can filter
   // by `categorySlug` without a join.
   return {
     id: product.id,
     sku: product.sku,
-    name,
-    description,
     type: product.type,
     status: product.status,
-    visibility: product.visibility,
     slug: product.slug,
     primaryAssetUrl: null,
     categoryIds: categories.map((c) => c.id),
     categorySlugs: categories.map((c) => c.slug),
-    attributes: attrs,
-    searchableOptions,
+    attributes: documentAttributes(product.attributeValues, texts.textKeys),
+    // Feature 174 (`contracts/search-index.md` §1) — every channel language's effective texts.
+    texts: documentTexts(product, { ...texts, overrides: texts.overridesByProduct.get(product.id) ?? [] }),
     createdAt: product.createdAt.getTime(),
     updatedAt: product.updatedAt.getTime(),
+    // Feature 163 — `visibility` and the allow-list are the channel-effective rule.
+    ...documentAvailabilityFields(availability),
   };
-}
-
-function pickLocale(value: Record<string, string>, locale: string): string {
-  return (
-    value[locale] ?? value[FALLBACK_LOCALE] ?? Object.values(value)[0] ?? ''
-  );
 }

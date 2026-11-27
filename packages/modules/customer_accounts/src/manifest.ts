@@ -1,4 +1,22 @@
-import { defineModuleManifest } from '@endora-commerce/contracts';
+import { defineModuleManifest, type ModuleDemoManifest } from '@endora-commerce/contracts';
+import type { ModuleContext } from '@endora-commerce/platform/kernel';
+
+/**
+ * The demo data this module owns (feature 160, FR-044): the *VIP* customer
+ * group of the E3 pricing scenario. A typed `const` so `context.ctx` is a
+ * `ModuleContext`; both bodies are reached by a relative `await import()`, so
+ * a process that loads this manifest does not load them (feature 113 §1.4).
+ *
+ * The demo **buyer** is still not here: `customer_accounts.organization_id` is
+ * `NOT NULL` (Principle XI), so the account and its organisation are created
+ * together by a composition step of `@endora-commerce/demo-composition`, as is
+ * the organisation's membership of this group.
+ */
+const demo: ModuleDemoManifest<ModuleContext> = {
+  summary: 'The VIP customer group of the demo pricing scenarios.',
+  seed: async (context) => (await import('./backend/demo/seed.js')).seedDemo(context),
+  reset: async (context) => (await import('./backend/demo/reset.js')).resetDemo(context),
+};
 
 /**
  * Customer Accounts module — manifest backfill (Module Lifecycle, feature 018).
@@ -10,7 +28,7 @@ import { defineModuleManifest } from '@endora-commerce/contracts';
  */
 export const manifest = defineModuleManifest({
   id: 'customer_accounts',
-  name: 'Customer Accounts',
+  name: 'Customer accounts',
   description:
     'Customer (B2B) account records, including organization membership and role.',
   version: '1.0.0',
@@ -92,21 +110,7 @@ export const manifest = defineModuleManifest({
   // off and no customer-side path exists at all — no registration, no login,
   // no cart belonging to anyone, no order placed by anyone — which is the
   // reachability test rather than a reduction in capability.
-  /**
-   * Nothing to demonstrate of its own (feature 113, T211/T222 — contract §1.2).
-   *
-   * The demo shop does have a buyer, and it is not this module's demo data:
-   * `customer_accounts.organization_id` is `NOT NULL` (Principle XI), so there
-   * is no account to create before an `organizations` row exists to hold it, and
-   * "create the account, then join it" cannot be written at all. The account and
-   * its organisation are created in one statement, which makes them two modules'
-   * rows and a composition step (§5.1) — step 5 of
-   * `@endora-commerce/demo-composition`, which says so in its own words.
-   *
-   * `false` rather than absent, because the two are different states: this is a
-   * decision that the module owes nothing, not a module nobody has looked at.
-   */
-  demo: false,
+  demo,
   activation: {
     nonDeactivatable: true,
     reason:
@@ -128,7 +132,8 @@ export const manifest = defineModuleManifest({
    * lifecycle logic and the admin and storefront surfaces on top of it — and the
    * ruling splits the family by noun: the customer **record** is this module's,
    * `CustomerAddress` is `customers`', which is why `CUSTOMER_ADDRESS_NOT_FOUND`
-   * went there in MR 3 and these four come here.
+   * went there in MR 3 and these four come here. (That code has since gone with
+   * the personal address book, `specs/173-b2c-address-book-merge/` release 1.)
    *
    * **Two of the four are codes `customers` raises and this module owns**, and
    * that is the shape a reviewer will stop on. `CUSTOMER_NOT_FOUND` is raised
@@ -144,9 +149,14 @@ export const manifest = defineModuleManifest({
    * consequence in terms.
    *
    * `CUSTOMER_NOT_DELETED` and `CUSTOMER_RESTORE_WINDOW_ELAPSED` are the same
-   * noun read the other way round, and both are raised only here, from
-   * `customer-account-lifecycle-ports.ts` — the soft-delete window is a property
-   * of the account row and of nothing on top of it.
+   * noun read the other way round — the soft-delete window is a property of the
+   * account row and of nothing on top of it. `CUSTOMER_NOT_DELETED` is raised
+   * only here, from `customer-account-lifecycle-ports.ts`.
+   * `CUSTOMER_RESTORE_WINDOW_ELAPSED` is raised there for an anonymised row and,
+   * since issue #800, also by `customers`' `customer-deletion-service.ts`, which
+   * refuses a restore once `customers.deletion_retention_days` has elapsed even
+   * before the sweep has anonymised the row. That is the same caller shape as
+   * the two codes above, and D-95.2 / D-186 §1 cover it in the same terms.
    *
    * **`ACCOUNT_BLOCKED`** names the account itself: `customer-auth-service.ts`
    * refuses a sign-in for a `CustomerAccount` whose status is blocked, which is
@@ -154,8 +164,10 @@ export const manifest = defineModuleManifest({
    *
    * **`CANNOT_DEMOTE_LAST_ADMIN` and `CANNOT_REMOVE_LAST_ADMIN`** read like
    * `organizations` and are not. The invariant they protect is counted over
-   * `CustomerAccount.role` inside one organization, in this module's
-   * `role-service.ts`, which is the only thing in the tree that raises either;
+   * the accounts holding the organization's *Administrator* role, in this
+   * module's `customer_account.change_role` / `customer_account.remove_member`
+   * Commands (`commands/`, `specs/170-organization-roles/` WP-02b; they replaced
+   * `role-service.ts`), which are the only things in the tree that raise either;
    * `organizations` owns the organization, this module owns its membership.
    *
    * **The two of them arrive with a sentence, and it is a new one.** Both
@@ -217,7 +229,8 @@ export const manifest = defineModuleManifest({
       icon: 'Users',
       targetRoute: '/customer-groups',
       requiredPermission: 'customer_groups:read',
-      keywords: ['customer', 'group', 'segment', 'klient', 'grupa', 'segment'],
+      keywords: ['customer', 'group', 'segment'],
+      keywordsKey: 'actions.openCustomerGroups.keywords',
       weight: 140,
     },
   ],

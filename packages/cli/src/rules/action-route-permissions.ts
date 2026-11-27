@@ -59,6 +59,20 @@
  * instead and the method class flips from GET to the write verbs: the gate that
  * decides whether that form can be submitted is the POST's, not the list's.
  *
+ * **Reconstruction is a fallback for a link nobody wrote down, and an action may
+ * write it down** (issue #1088). A screen served by a different API than its
+ * SPA placement suggests — the command outbox, a tab of
+ * `/platform/command-hooks` whose entry request is
+ * `GET /api/v1/admin/command-outbox` — lands at the module level on the other
+ * tab's route, behind another code, and was ledgered as a disagreement it was
+ * not. The manifest action's optional `entryApiRoute` names the route, and the
+ * walk then resolves that path alone, at a fourth level, `declared`, which
+ * replaces the three rather than preceding them: a declaration no registration
+ * answers is `unresolvable`, because falling back would compare against the
+ * guess the declaration replaced and could agree by accident. Declare one only
+ * where the reconstruction picks the wrong route; where it picks the right one,
+ * a declaration is a second statement of the same fact that can drift.
+ *
  * Where the shallowest candidates disagree on their gate, or where a selected
  * gate is a `preHandler` the scanner cannot read, the action is reported
  * `unresolvable` rather than compared against a guess. An entry route that gates
@@ -68,8 +82,8 @@
  *
  * What the check cannot settle is where the label promises a write and the
  * screen opens on a read: one field cannot say both codes, and
- * `ACTION_PERMISSION_DISAGREEMENTS` holds those three with the question that
- * would retire each.
+ * `ACTION_PERMISSION_DISAGREEMENTS` holds those with the question that would
+ * retire each.
  *
  * ## The artefact this reads, and when it refuses to judge it
  *
@@ -153,6 +167,12 @@ export interface ActionRecord {
   readonly targetRoute: string;
   /** Absent when the manifest declares none — the `missing` finding's input. */
   readonly requiredPermission?: string;
+  /**
+   * The admin API route the screen opens on, when the manifest declares one
+   * (issue #1088) — the comparison then takes it instead of reconstructing an
+   * entry route from `targetRoute`. See {@link resolveTarget}.
+   */
+  readonly entryApiRoute?: string;
 }
 
 /**
@@ -175,6 +195,14 @@ export interface AdminRoute {
   readonly clauses: GateClauses;
   /** The `preHandler` as written, for a failure message that can be acted on. */
   readonly gateText: string;
+  /**
+   * The identifier the registration validates its body with — `schema: { body:
+   * X }` read as `X` — or `null` where there is none or it is not a bare name
+   * (`X.optional()`, a computed options object). Read for
+   * `check:custom-field-writes` (feature 175), which compares it against the
+   * body a host declares for the route.
+   */
+  readonly body?: string | null;
 }
 
 /** Resolves a constant argument to its literal; injected so fixtures can drive it. */
@@ -210,6 +238,13 @@ export interface RouteScanInput {
    * where a registrar is mounted and be held to it.
    */
   readonly pathBindings?: ReadonlyMap<string, ReadonlyMap<string, readonly string[]>>;
+  /**
+   * Which registrations are read: those whose path starts with this. Defaults
+   * to `/api/v1/admin`, this rule's own subject; `check:custom-field-writes`
+   * (feature 175) reads the buyer-facing `/api/v1` routes through the same
+   * reader rather than a second one.
+   */
+  readonly pathPrefix?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -418,10 +453,27 @@ function external(name: string, context: PathContext): PathReading {
  * Whether the literal start of a path settles that it is **not** an admin path:
  * it has diverged from `/api/v1/admin` before the unresolved part began.
  */
-function provablyNotAdmin(head: string): boolean {
+function provablyNotAdmin(head: string, prefix: string = ADMIN_API_PREFIX): boolean {
   if (head === '') return false;
-  const compared = Math.min(head.length, ADMIN_API_PREFIX.length);
-  return head.slice(0, compared) !== ADMIN_API_PREFIX.slice(0, compared);
+  const compared = Math.min(head.length, prefix.length);
+  return head.slice(0, compared) !== prefix.slice(0, compared);
+}
+
+/** `schema: { body: X }` in a registration's options object, as `X`, or `null`. */
+function bodyOf(options: ts.Node | undefined): string | null {
+  if (options === undefined || !ts.isObjectLiteralExpression(options)) return null;
+  const valueOf = (object: ts.ObjectLiteralExpression, name: string): ts.Expression | null => {
+    for (const property of object.properties) {
+      if (ts.isPropertyAssignment(property) && property.name.getText() === name) return property.initializer;
+      if (ts.isShorthandPropertyAssignment(property) && property.name.text === name) return property.name;
+    }
+    return null;
+  };
+  const schema = valueOf(options, 'schema');
+  if (schema === null || !ts.isObjectLiteralExpression(schema)) return null;
+  const body = valueOf(schema, 'body');
+  if (body === null) return null;
+  return ts.isIdentifier(body) || ts.isPropertyAccessExpression(body) ? tailName(body) : null;
 }
 
 /** The permission codes a guard call requires, as one clause, or `null`. */
@@ -635,17 +687,18 @@ function fullDeclarationOf(
   return { methods, url, options };
 }
 
-/** Every `/api/v1/admin/**` route registration under `sources`, with its gate. */
+/** Every route registration under `sources` whose path starts with the prefix (`/api/v1/admin` by default), with its gate and body schema. */
 export function findAdminRoutes(input: RouteScanInput): RouteScanResult {
   const routes: AdminRoute[] = [];
   const unreadable: UnreadableRegistration[] = [];
+  const prefix = input.pathPrefix ?? ADMIN_API_PREFIX;
 
   for (const [file, text] of input.sources) {
     // A file that neither names the admin prefix nor registers Fastify routes
     // holds nothing to read. The second half is what keeps a registrar mounted
     // under a prefix it is *handed* in the population: it never spells the
     // prefix, and skipping it is how its routes went unread.
-    if (!text.includes(ADMIN_API_PREFIX) && !/from 'fastify'/.test(text)) continue;
+    if (!text.includes(prefix) && !/from 'fastify'/.test(text)) continue;
     const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
     const bindings = localBindings(sf);
     const moduleId = moduleIdOf(file, input.hostResidentModules);
@@ -689,24 +742,25 @@ export function findAdminRoutes(input: RouteScanInput): RouteScanResult {
       const pathText = pathArgument.getText().replace(/\s+/g, ' ').slice(0, 120);
       if (reading.values === null) {
         // What was read already shows the path has left the admin prefix.
-        if (provablyNotAdmin(reading.head)) return;
+        if (provablyNotAdmin(reading.head, prefix)) return;
         // A call that is not shaped like a registration is only a registration
         // if its path says so in as many words; `rows.get(`${id}:order`, …)`
         // is a template and is not a route.
-        if (!shaped && !pathText.includes(ADMIN_API_PREFIX)) return;
+        if (!shaped && !pathText.includes(prefix)) return;
         unreadable.push({ file, line, pathText });
         return;
       }
-      const admin = reading.values.filter((path) => path.startsWith(ADMIN_API_PREFIX));
+      const admin = reading.values.filter((path) => path.startsWith(prefix));
       if (admin.length === 0) return;
       if (methods === null) {
         unreadable.push({ file, line, pathText });
         return;
       }
+      const body = bodyOf(optionsArgument);
       for (const path of admin) {
         const gate = gateOf(optionsArgument, file, input, bindings);
         for (const method of methods) {
-          routes.push({ file, line, method, path, moduleId, clauses: gate.clauses, gateText: gate.text });
+          routes.push({ file, line, method, path, moduleId, clauses: gate.clauses, gateText: gate.text, body });
         }
       }
     };
@@ -766,7 +820,7 @@ export function moduleIdOf(
 // ---------------------------------------------------------------------------
 
 /** How the entry route was found, for the failure message and `--list`. */
-export type ResolutionLevel = 'exact' | 'subtree' | 'module';
+export type ResolutionLevel = 'declared' | 'exact' | 'subtree' | 'module';
 
 export interface ResolvedTarget {
   readonly level: ResolutionLevel;
@@ -786,6 +840,14 @@ function shallowest(routes: readonly AdminRoute[]): readonly AdminRoute[] {
  * The entry route for an action's target, or `null` when no registration
  * corresponds to it at all — which is a defect of its own: a palette entry must
  * point at a real surface.
+ *
+ * An action that **declares** its entry route (`entryApiRoute`, issue #1088) is
+ * resolved against that path alone, at the `declared` level, and the three
+ * reconstruction levels are not consulted: a declaration no registration
+ * answers is `null`, never a fall back to the guess the declaration exists to
+ * replace — a fall back could agree by accident and hide a typo or a moved
+ * route. The method class still follows the target (GET, or the write verbs for
+ * a `/new` form).
  */
 export function resolveTarget(
   action: ActionRecord,
@@ -795,6 +857,12 @@ export function resolveTarget(
   const path = creating ? action.targetRoute.slice(0, -'/new'.length) : action.targetRoute;
   const wanted = (route: AdminRoute): boolean =>
     creating ? WRITE_METHODS.has(route.method) : route.method === 'get';
+
+  if (action.entryApiRoute !== undefined) {
+    const declared = routes.filter((route) => route.path === action.entryApiRoute && wanted(route));
+    return declared.length > 0 ? { level: 'declared', routes: declared } : null;
+  }
+
   const base = ADMIN_API_PREFIX + path;
 
   const exact = routes.filter((route) => route.path === base && wanted(route));
@@ -897,7 +965,12 @@ export function findDisagreements(input: ComparisonInput): Finding[] {
         ...base,
         kind: 'unresolvable',
         enforced: '(no registration)',
-        where: `no /api/v1/admin route corresponds to ${action.targetRoute}, and ${action.moduleId} registers none`,
+        where:
+          action.entryApiRoute === undefined
+            ? `no /api/v1/admin route corresponds to ${action.targetRoute}, and ${action.moduleId} registers none`
+            : `the declared entry route ${action.entryApiRoute} is registered under no ` +
+              `${action.targetRoute.endsWith('/new') ? 'write verb' : 'GET'} — fix the declaration ` +
+              'or the registration; the walk does not fall back to reconstructing one',
       });
       continue;
     }

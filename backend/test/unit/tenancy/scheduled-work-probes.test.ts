@@ -2,11 +2,19 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
+import { anyRowExists as assetsLibraryAnyRowExists } from '../../../../packages/modules/assets_library/src/backend/services/scheduled-work-probe.js';
+import { anyRowExists as cartsAnyRowExists } from '../../../../packages/modules/carts/src/backend/services/scheduled-work-probe.js';
+import { anyRowExists as catalogAnyRowExists } from '../../../../packages/modules/catalog/src/backend/services/scheduled-work-probe.js';
+import { anyRowExists as customerAccountsAnyRowExists } from '../../../../packages/modules/customer_accounts/src/backend/services/scheduled-work-probe.js';
+import { anyRowExists as customerNotificationsAnyRowExists } from '../../../../packages/modules/customer_notifications/src/backend/services/scheduled-work-probe.js';
 import { anyRowExists as crmAnyRowExists } from '../../../../packages/modules/crm/src/backend/services/scheduled-work-probe.js';
+import { anyRowExists as organizationsAnyRowExists } from '../../../../packages/modules/organizations/src/backend/services/scheduled-work-probe.js';
 import { anyRowExists as ordersAnyRowExists } from '../../../../packages/modules/orders/src/backend/services/scheduled-work-probe.js';
 import { anyRowExists as priceListsAnyRowExists } from '../../../../packages/modules/price_lists/src/backend/services/scheduled-work-probe.js';
 import { anyRowExists as productFeedsAnyRowExists } from '../../../../packages/modules/product_feeds/src/backend/services/scheduled-work-probe.js';
+import { anyRowExists as projectsAnyRowExists } from '../../../../packages/modules/projects/src/backend/services/scheduled-work-probe.js';
 import { anyRowExists as quoteRequestsAnyRowExists } from '../../../../packages/modules/quote_requests/src/backend/services/scheduled-work-probe.js';
+import { anyRowExists as tasksAnyRowExists } from '../../../../packages/modules/tasks/src/backend/services/scheduled-work-probe.js';
 
 /**
  * Issue #120 — the question a scheduled tick asks **outside any tenant scope**
@@ -44,6 +52,35 @@ const PROBES = [
   { module: 'product_feeds', file: 'services/feed-run-reaper.service.ts', method: 'hasClaimedRuns' },
   { module: 'price_lists', file: 'services/price-list-status-worker.ts', method: 'hasDueTransitions' },
   { module: 'quote_requests', file: 'services/rfq-expiry-worker.ts', method: 'hasExpirable' },
+  // `specs/179-rfq-and-customer-notifications/` R-8 — the notification delivery worker's tick.
+  { module: 'quote_requests', file: 'services/notifications/delivery-service.ts', method: 'hasDeliverable' },
+  { module: 'projects', file: 'services/stage-alert-service.ts', method: 'hasSweepWork' },
+  // One worker, four passes (`specs/165-task-management/` R-17 – R-19, issue #505): each pass has its own probe.
+  { module: 'tasks', file: 'services/reminder-service.ts', method: 'hasWork' },
+  { module: 'tasks', file: 'services/digest-service.ts', method: 'hasWork' },
+  { module: 'tasks', file: 'services/maintenance-service.ts', method: 'hasWork' },
+  { module: 'tasks', file: 'services/time-zone-rederive-service.ts', method: 'hasWork' },
+  // Issue #909 — the retention sweep's four passes, one question.
+  { module: 'assets_library', file: 'jobs/retention-due-probe.ts', method: 'hasDue' },
+  // Issue #894 — the publication-window sweep.
+  { module: 'catalog', file: 'services/publication-window-sweep.ts', method: 'hasDueTransitions' },
+  // Issue #857 — the owner of the table answers for `customers`' anonymisation sweep tick;
+  // on its read port since `specs/186-aggregate-ports/` (#1822).
+  {
+    module: 'customer_accounts',
+    file: 'services/customer-account-ports.ts',
+    method: 'hasDueForAnonymization',
+  },
+  // Issue #923 — and `organizations` for the personal organisations an earlier rule left incompletely scrubbed.
+  {
+    module: 'organizations',
+    file: 'services/personal-organization-service.ts',
+    method: 'hasIncompletelyScrubbed',
+  },
+  // `specs/179-rfq-and-customer-notifications/` R-16 — the centre's daily retention sweep.
+  { module: 'customer_notifications', file: 'services/retention-store.ts', method: 'hasWork' },
+  // Issue #1119 — the cart abandonment sweep, scheduled since that change.
+  { module: 'carts', file: 'services/cart-abandonment-worker.ts', method: 'hasSweepWork' },
 ] as const;
 
 const HELPER = 'services/scheduled-work-probe.ts';
@@ -103,7 +140,7 @@ describe('scheduled work probes answer one bit (issue #120)', () => {
       .filter((entry) => existsSync(join(MODULES, entry.name, 'src', 'backend', HELPER)))
       .map((entry) => entry.name);
 
-    expect(copies.sort()).toEqual(PROBES.map((probe) => probe.module).sort());
+    expect(copies.sort()).toEqual([...new Set(PROBES.map((probe) => probe.module))].sort());
   });
 
   it('the per-module copies of the helper are identical', () => {
@@ -119,6 +156,14 @@ describe('scheduled work probes answer one bit (issue #120)', () => {
     ['product_feeds', productFeedsAnyRowExists],
     ['price_lists', priceListsAnyRowExists],
     ['quote_requests', quoteRequestsAnyRowExists],
+    ['projects', projectsAnyRowExists],
+    ['tasks', tasksAnyRowExists],
+    ['assets_library', assetsLibraryAnyRowExists],
+    ['catalog', catalogAnyRowExists],
+    ['customer_accounts', customerAccountsAnyRowExists],
+    ['organizations', organizationsAnyRowExists],
+    ['customer_notifications', customerNotificationsAnyRowExists],
+    ['carts', cartsAnyRowExists],
   ] as const)('anyRowExists (%s)', (_module, anyRowExists) => {
     const emAnswering = (rows: unknown) => ({ execute: vi.fn(async () => rows) });
 

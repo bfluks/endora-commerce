@@ -66,6 +66,9 @@ const allowlist = [
   'packages/modules/catalog/src/backend/routes.admin.ts',
   // Contracts package — deprecated request field
   'packages/contracts/src/catalog.ts',
+  // Feature 163 (B-6) — the response-schema fixture spells the legacy field the
+  // route still projects (`enumValues: null`); it reads no column.
+  'packages/contracts/src/catalog-admin-attribute-response.test.ts',
   // Admin UI — backward-compatible projection. Feature 091's Phase 4 moved this
   // screen out of `admin/src/modules/catalog/` and into the module package that
   // owns it; the permission is unmoved, only its address.

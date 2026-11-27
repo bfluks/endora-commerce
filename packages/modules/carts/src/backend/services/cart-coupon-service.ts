@@ -10,6 +10,7 @@ import type {
 } from '@endora-commerce/contracts';
 import type { CartApprovalService } from './cart-approval-service.js';
 import { resolveCartCustomerGroupId } from './customer-group-resolver.js';
+import { cartGoodsGross, cartShortfall } from './cart-money.js';
 
 /**
  * Cart-level coupon application (feature 027 US2).
@@ -54,9 +55,9 @@ export interface CouponReevaluateResult {
 export class CartCouponService {
   /**
    * `approvalService` is optional — when wired, applying or clearing a
-   * coupon on an `approved` cart re-arms approval to `pending`. Legacy
-   * compositions without the approval surface omit it (re-arm is a
-   * no-op when absent).
+   * coupon re-arms approval: an `approved` cart goes back to `pending`, a
+   * `pending` one to `not_required` (issue #649). Legacy compositions
+   * without the approval surface omit it (re-arm is a no-op when absent).
    */
   constructor(
     private readonly emFactory: () => EntityManager,
@@ -80,6 +81,31 @@ export class CartCouponService {
     private readonly approvalService?: CartApprovalService,
   ) {}
 
+  /**
+   * The approval re-arm of a coupon change, staged on `em` so the flush that
+   * writes the code writes the transition and its audit row with it (issue
+   * #649). A guest's basket has no approval to re-arm.
+   */
+  #reArmWithin(em: EntityManager, managedCart: Cart): void {
+    if (!this.approvalService || !managedCart.customerAccountId) return;
+    this.approvalService.reArmWithin(em, managedCart, {
+      customerAccountId: managedCart.customerAccountId,
+    });
+  }
+
+  /**
+   * `specs/182-related-payers/` FR-112 — who the promotions are evaluated for: on a payer's
+   * commercial terms the payer and its customer group, with no customer account (A-18);
+   * otherwise the buyer and its effective group.
+   */
+  private async promotionBuyerOf(cart: Cart): Promise<{ organizationId: string | null; customerGroupId: string | null }> {
+    if (cart.buyingForTerms === 'payer' && cart.buyingForOrganizationId) {
+      const payer = await this.organizations.findById(cart.buyingForOrganizationId);
+      return { organizationId: cart.buyingForOrganizationId, customerGroupId: payer?.customerGroupId ?? null };
+    }
+    return { organizationId: cart.organizationId ?? null, customerGroupId: await this.customerGroupIdFor(cart) };
+  }
+
   /** The buyer's effective group: their own, else their Organization's. */
   private customerGroupIdFor(cart: Cart): Promise<string | null> {
     return resolveCartCustomerGroupId(
@@ -102,8 +128,17 @@ export class CartCouponService {
    * EntityManager fork. We re-load it on our own fork so the
    * `appliedPromotionCode` mutation flushes to the DB and the
    * caller's in-memory cart is also updated.
+   *
+   * `taxRates` is each line's VAT rate as a fraction, by cart item id, as the
+   * read resolves them: the minimum spend compares the gross the buyer pays,
+   * and its shortfall is a gross amount (issue #1396). Without them the lines
+   * carry no VAT, as the engine reads them.
    */
-  async apply(cart: Cart, code: string | null): Promise<CouponApplyResult> {
+  async apply(
+    cart: Cart,
+    code: string | null,
+    taxRates?: ReadonlyMap<string, number> | null,
+  ): Promise<CouponApplyResult> {
     // command-coverage-ignore: transient cart coupon state — the durable applied
     // promotion is captured on the order at checkout (audited there); the cart is
     // ephemeral pre-order working state.
@@ -134,24 +169,22 @@ export class CartCouponService {
     if (promotion.validUntil && now > promotion.validUntil) {
       return { outcome: 'dropped', reason: 'expired' };
     }
-    if (promotion.organizationId && promotion.organizationId !== managedCart.organizationId) {
+    const buyer = await this.promotionBuyerOf(managedCart);
+    if (promotion.organizationId && promotion.organizationId !== buyer.organizationId) {
       return { outcome: 'dropped', reason: 'wrong_organization' };
     }
 
     const items = await em.find(CartItem, { cartId: managedCart.id });
-    const subtotal = items.reduce(
-      (acc, it) => acc + Number(it.unitPrice) * it.quantity,
-      0,
-    );
+    const gross = cartGoodsGross(items, taxRates);
     const currency = items[0]?.currency ?? 'PLN';
 
     if (promotion.minCartSubtotal != null) {
-      const min = Number(promotion.minCartSubtotal);
-      if (min > subtotal) {
+      const shortfall = cartShortfall(gross, promotion.minCartSubtotal);
+      if (shortfall !== null) {
         return {
           outcome: 'dropped',
           reason: 'below_min_spend',
-          shortfall: { amount: round2(min - subtotal), currency },
+          shortfall: { amount: shortfall, currency },
         };
       }
     }
@@ -160,18 +193,23 @@ export class CartCouponService {
     // we don't replicate here (e.g. attribute/category rules from
     // feature 012).
     const snapshot: CartSnapshot = {
-      organizationId: cart.organizationId ?? null,
-      customerGroupId: await this.customerGroupIdFor(managedCart),
+      organizationId: buyer.organizationId,
+      customerGroupId: buyer.customerGroupId,
       currency,
-      lines: items.map((it) => ({
-        productId: it.productId,
-        variantId: it.variantId ?? null,
-        // Feature 012 / US8 category criteria — hydrated by the engine
-        // when needed. Empty seed keeps the contract satisfied.
-        categoryIds: [],
-        quantity: it.quantity,
-        unitPrice: { amount: Number(it.unitPrice), currency: it.currency },
-      })),
+      lines: items.map((it) => {
+        const taxRate = taxRates?.get(it.id);
+        return {
+          productId: it.productId,
+          variantId: it.variantId ?? null,
+          // Feature 012 / US8 category criteria — hydrated by the engine
+          // when needed. Empty seed keeps the contract satisfied.
+          categoryIds: [],
+          quantity: it.quantity,
+          unitPrice: { amount: Number(it.unitPrice), currency: it.currency },
+          // Issue #1396 — the engine's minimum spend compares the gross too.
+          ...(taxRate !== undefined ? { taxRate } : {}),
+        };
+      }),
       deliveryTotal: 0,
       promotionCode: code,
     };
@@ -189,17 +227,13 @@ export class CartCouponService {
 
     managedCart.appliedPromotionCode = code;
     managedCart.lastActivityAt = new Date();
+    this.#reArmWithin(em, managedCart);
     await em.flush();
     // Mirror the persisted mutation onto the caller's in-memory cart so
     // serializeCart in the route handler reflects it without re-reading.
     cart.appliedPromotionCode = code;
     cart.lastActivityAt = managedCart.lastActivityAt;
-    if (this.approvalService && managedCart.customerAccountId) {
-      await this.approvalService.maybeReArm(managedCart, {
-        customerAccountId: managedCart.customerAccountId,
-      });
-      cart.approvalStatus = managedCart.approvalStatus;
-    }
+    mirrorApproval(cart, managedCart);
     return { outcome: 'applied', cart, appliedCode: code };
   }
 
@@ -208,20 +242,34 @@ export class CartCouponService {
    * the serialized cart can show the real discount amount + per-promotion
    * breakdown (automatic action-based promotions plus any applied coupon).
    * Pure read — never mutates the cart.
+   *
+   * `taxRates` is each line's VAT rate as a fraction, by cart item id — the
+   * rates the read resolved as placement does. A percent-off or free-unit
+   * promotion computes on the gross the buyer pays (issue #1350), so without
+   * them the figure is the net one and disagrees with the order's.
    */
-  async computeApplication(cart: Cart, items: CartItem[]): Promise<PromotionApplication> {
+  async computeApplication(
+    cart: Cart,
+    items: CartItem[],
+    taxRates?: ReadonlyMap<string, number> | null,
+  ): Promise<PromotionApplication> {
     const currency = items[0]?.currency ?? 'PLN';
+    const buyer = await this.promotionBuyerOf(cart);
     const snapshot: CartSnapshot = {
-      organizationId: cart.organizationId ?? null,
-      customerGroupId: await this.customerGroupIdFor(cart),
+      organizationId: buyer.organizationId,
+      customerGroupId: buyer.customerGroupId,
       currency,
-      lines: items.map((it) => ({
-        productId: it.productId,
-        variantId: it.variantId ?? null,
-        categoryIds: [],
-        quantity: it.quantity,
-        unitPrice: { amount: Number(it.unitPrice), currency: it.currency },
-      })),
+      lines: items.map((it) => {
+        const taxRate = taxRates?.get(it.id);
+        return {
+          productId: it.productId,
+          variantId: it.variantId ?? null,
+          categoryIds: [],
+          quantity: it.quantity,
+          unitPrice: { amount: Number(it.unitPrice), currency: it.currency },
+          ...(taxRate !== undefined ? { taxRate } : {}),
+        };
+      }),
       deliveryTotal: 0,
       promotionCode: cart.appliedPromotionCode ?? null,
       salesChannelId: cart.salesChannelId ?? null,
@@ -237,15 +285,11 @@ export class CartCouponService {
     if (!managedCart) return;
     managedCart.appliedPromotionCode = null;
     managedCart.lastActivityAt = new Date();
+    this.#reArmWithin(em, managedCart);
     await em.flush();
     cart.appliedPromotionCode = null;
     cart.lastActivityAt = managedCart.lastActivityAt;
-    if (this.approvalService && managedCart.customerAccountId) {
-      await this.approvalService.maybeReArm(managedCart, {
-        customerAccountId: managedCart.customerAccountId,
-      });
-      cart.approvalStatus = managedCart.approvalStatus;
-    }
+    mirrorApproval(cart, managedCart);
   }
 
   /**
@@ -253,10 +297,14 @@ export class CartCouponService {
    * no longer eligible (e.g. the cart fell below `min_cart_subtotal`),
    * silently drops it on the cart record and returns a typed result the
    * caller can surface as `couponDroppedThisRead` in the response.
+   *
+   * `taxRates` as in {@link apply}: the minimum spend compares the gross
+   * (issue #1396).
    */
   async reevaluateOnRead(
     cart: Cart,
     items: CartItem[],
+    taxRates?: ReadonlyMap<string, number> | null,
   ): Promise<CouponReevaluateResult> {
     if (!cart.appliedPromotionCode) return { dropped: null };
     const code = cart.appliedPromotionCode;
@@ -277,14 +325,8 @@ export class CartCouponService {
       return { dropped: { code, reason: 'expired' } };
     }
 
-    const subtotal = items.reduce(
-      (acc, it) => acc + Number(it.unitPrice) * it.quantity,
-      0,
-    );
-
     if (promotion.minCartSubtotal != null) {
-      const min = Number(promotion.minCartSubtotal);
-      if (min > subtotal) {
+      if (cartShortfall(cartGoodsGross(items, taxRates), promotion.minCartSubtotal) !== null) {
         await this.persistDrop(em, cart);
         return { dropped: { code, reason: 'below_min_spend' } };
       }
@@ -309,6 +351,8 @@ export class CartCouponService {
   }
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
+/** Keep the caller's in-memory cart in step with the re-armed approval. */
+function mirrorApproval(cart: Cart, managedCart: Cart): void {
+  cart.approvalStatus = managedCart.approvalStatus;
+  cart.submittedForApprovalAt = managedCart.submittedForApprovalAt ?? null;
 }

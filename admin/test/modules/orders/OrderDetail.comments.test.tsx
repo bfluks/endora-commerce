@@ -3,6 +3,7 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
+import { shippedModuleBundle } from '../../helpers/core-bundle';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
 
 const getSpy = vi.fn();
@@ -70,7 +71,10 @@ const BUNDLE = passthroughBundle('core', [
   'orderDetail.comments.internal',
   'orderDetail.reorder.action',
   'orderDetail.cloneToQuote.action',
+  'common.action.more',
 ]);
+// The comment box's label is the orders module's own copy (#1475).
+const ORDERS_BUNDLE = shippedModuleBundle('orders', 'en');
 
 beforeEach(() => {
   getSpy.mockReset();
@@ -102,7 +106,7 @@ function renderDetail(): void {
       </MemoryRouter>,
       { session: adminSession({ permissions: ['*'] }), presence: modulePresence({ present: ['orders', 'payments'] }) },
     ),
-    BUNDLE,
+    { ...BUNDLE, ...ORDERS_BUNDLE },
   );
 }
 
@@ -114,11 +118,20 @@ describe('OrderDetail — comments', () => {
     expect(screen.getByText('orderDetail.comments.internal')).toBeInTheDocument();
   });
 
+  it('lists the comments as rows divided by a rule, not as a bordered box each (#1498, SALES-13)', async () => {
+    renderDetail();
+    await userEvent.click(await screen.findByText('orderDetail.tabs.comments'));
+    const item = await screen.findByTestId('order-comment');
+    expect(item.className.split(/\s+/)).not.toContain('border');
+    expect(item.className.split(/\s+/)).not.toContain('rounded-md');
+    expect(item.parentElement!.className.split(/\s+/)).toContain('divide-y');
+  });
+
   it('posts a comment with the chosen visibility/notify flags', async () => {
     renderDetail();
     await userEvent.click(await screen.findByText('orderDetail.tabs.comments'));
     await waitFor(() => expect(screen.getByText('internal note')).toBeInTheDocument());
-    await userEvent.type(screen.getByLabelText('comment-body'), 'please pay your invoice');
+    await userEvent.type(screen.getByRole('textbox', { name: 'Add a comment' }), 'please pay your invoice');
     // Toggle notify on (customer-visible defaults to checked).
     await userEvent.click(screen.getByLabelText('orderDetail.comments.notify'));
     await userEvent.click(screen.getByText('orderDetail.comments.add'));
@@ -134,10 +147,14 @@ describe('OrderDetail — comments', () => {
   it('reorder and clone-to-quote actions hit their endpoints', async () => {
     postSpy.mockResolvedValue({ data: { unavailableItems: [], quoteRequestId: 'q1' } });
     renderDetail();
-    await waitFor(() => expect(screen.getByText('orderDetail.reorder.action')).toBeInTheDocument());
-    await userEvent.click(screen.getByText('orderDetail.reorder.action'));
+    // Both live in the header's "More" menu since #1497 (SALES-12).
+    const more = await screen.findByRole('button', { name: 'common.action.more' });
+    await userEvent.click(more);
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'orderDetail.reorder.action' }));
     await waitFor(() => expect(postSpy).toHaveBeenCalledWith('/api/v1/admin/orders/o1/reorder', {}));
-    await userEvent.click(screen.getByText('orderDetail.cloneToQuote.action'));
+    await waitFor(() => expect(more).toBeEnabled());
+    await userEvent.click(more);
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'orderDetail.cloneToQuote.action' }));
     await waitFor(() => expect(postSpy).toHaveBeenCalledWith('/api/v1/admin/orders/o1/clone-to-quote', {}));
   });
 });

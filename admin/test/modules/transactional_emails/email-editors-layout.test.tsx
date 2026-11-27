@@ -38,7 +38,15 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
 vi.mock(
   '../../../../packages/modules/transactional_emails/src/admin/components/EmailEditorPane',
   () => ({
-    EmailEditorPane: (): ReactElement => <div data-testid="canvas-stub">canvas</div>,
+    // Issue #1461 — the stub can emit a canvas edit.
+    EmailEditorPane: ({ onChange }: { onChange?: (data: unknown) => void }): ReactElement => (
+      <div data-testid="canvas-stub">
+        canvas
+        <button type="button" onClick={() => onChange?.({ root: { props: {} }, content: [{ type: 'Text', props: { id: 't1' } }] })}>
+          edit-canvas
+        </button>
+      </div>
+    ),
   }),
 );
 
@@ -58,6 +66,13 @@ function bundleOf(pkg: string, language: 'en' | 'pl'): Record<string, string> {
 const en = bundleOf('transactional_emails', 'en');
 const pl = bundleOf('transactional_emails', 'pl');
 const core = bundleOf('_i18n', 'en');
+
+/** The shipped `core` copy of the unsaved-changes guard (issue #1461). */
+function ux(key: string): string {
+  const value = core[`form.unsavedChanges.${key}`];
+  if (!value) throw new Error(`_i18n/i18n/en.json carries no "form.unsavedChanges.${key}"`);
+  return value;
+}
 
 function copy(key: string): string {
   const value = en[key];
@@ -125,7 +140,7 @@ beforeEach(() => {
   vi.spyOn(apiClient, 'get').mockImplementation((path: string) => {
     if (path.startsWith('/api/v1/admin/sales-channels')) {
       return Promise.resolve({
-        items: [{ id: 'channel-1', code: 'web' }],
+        items: [{ id: 'channel-1', code: 'web', name: { 'en-US': 'Web shop', 'pl-PL': 'Sklep internetowy' } }],
         page: 1,
         pageSize: 100,
         total: 1,
@@ -197,7 +212,25 @@ describe('EmailEditor in the shared editor shell', () => {
     const scope = screen.getByLabelText(copy('editor.scope')) as HTMLSelectElement;
     await waitFor(() => expect(scope.options.length).toBe(2));
     expect(scope.options[0]?.textContent).toBe(copy('scope.global'));
-    expect(scope.options[1]?.textContent).toBe('web');
+    // By the channel's name, not its code (#1536, CONTENT-19).
+    expect(scope.options[1]?.textContent).toBe('Web shop');
+  });
+
+  it('says where the content comes from in words, not as the API code (#1536)', async () => {
+    await open();
+    expect(screen.getByText(copy('source.default'))).toBeInTheDocument();
+    expect(screen.queryByText('default')).toBeNull();
+  });
+
+  it('says the save is running while it runs (#1536)', async () => {
+    let finish: (value: unknown) => void = () => undefined;
+    put.mockReturnValue(new Promise((resolve) => { finish = resolve; }) as never);
+    await open();
+
+    fireEvent.click(screen.getByRole('button', { name: copy('editor.save') }));
+    expect(await screen.findByRole('button', { name: copy('editor.saving') })).toBeInTheDocument();
+    finish({ data: { ...detail.effective } });
+    await waitFor(() => expect(screen.getByRole('button', { name: copy('editor.save') })).toBeInTheDocument());
   });
 
   it('saves the subject and the canvas in the request it always sent', async () => {
@@ -294,7 +327,10 @@ describe('the e-mail editor copy ships in both languages', () => {
     'editor.reset',
     'editor.resetConfirm',
     'editor.resetDone',
-    'editor.source',
+    'editor.saving',
+    'source.default',
+    'source.global',
+    'source.channel',
     'editor.noPermission',
     'editor.blockContent',
     'editor.templateContent',
@@ -308,5 +344,62 @@ describe('the e-mail editor copy ships in both languages', () => {
     for (const key of ['editor.scope', 'editor.language', 'editor.saved', 'editor.resetConfirm']) {
       expect(pl[key]).not.toBe(en[key]);
     }
+  });
+});
+
+/**
+ * Issue #1461 (UX audit CONTENT-02) — an e-mail editor compares its subject and
+ * canvas with what was loaded. A switch of channel or language reloads the
+ * canvas, so it asks Save / Discard / Stay first, as a link out of the editor does.
+ */
+describe('EmailEditor — unsaved changes', () => {
+  async function open(): Promise<void> {
+    renderAt('/transactional-emails/order_confirmation', '/transactional-emails/:code', <EmailEditor />);
+    await screen.findByRole('heading', { level: 1, name: 'Order confirmation' });
+    await waitFor(() => {
+      expect((screen.getByLabelText(copy('editor.subject')) as HTMLInputElement).value).toBe(
+        'Your order {{var order.businessId}}',
+      );
+    });
+  }
+
+  it('is clean as loaded and says so once the subject is edited', async () => {
+    await open();
+    expect(screen.getByTestId('unsaved-changes-hint').textContent).toBe('');
+    fireEvent.change(screen.getByLabelText(copy('editor.subject')), { target: { value: 'Thanks' } });
+    expect(screen.getByTestId('unsaved-changes-hint').textContent).toBe(ux('hint'));
+  });
+
+  it('asks before a language switch would reload over the edit; Stay keeps both', async () => {
+    await open();
+    fireEvent.change(screen.getByLabelText(copy('editor.subject')), { target: { value: 'Thanks' } });
+    fireEvent.change(screen.getByLabelText(copy('editor.language')), { target: { value: 'pl-PL' } });
+    const dialog = screen.getByRole('dialog', { name: ux('title') });
+    fireEvent.click(within(dialog).getByRole('button', { name: ux('stay') }));
+    expect((screen.getByLabelText(copy('editor.subject')) as HTMLInputElement).value).toBe('Thanks');
+    expect((screen.getByLabelText(copy('editor.language')) as HTMLSelectElement).value).toBe('en-US');
+  });
+
+  it('Save and continue saves, then switches', async () => {
+    await open();
+    fireEvent.change(screen.getByLabelText(copy('editor.subject')), { target: { value: 'Thanks' } });
+    fireEvent.change(screen.getByLabelText(copy('editor.language')), { target: { value: 'pl-PL' } });
+    fireEvent.click(screen.getByRole('button', { name: ux('save') }));
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+    expect((put.mock.calls[0] as [string, Record<string, unknown>])[1]).toMatchObject({ subject: 'Thanks' });
+  });
+});
+
+describe('EmailFragmentEditor — unsaved changes', () => {
+  it('a canvas edit is unsaved; a language switch asks and Discard switches', async () => {
+    renderAt('/transactional-emails/blocks/fragment-1', '/transactional-emails/blocks/:id', <EmailFragmentEditor kind="block" />);
+    await screen.findByRole('heading', { level: 1, name: 'Shop footer' });
+    expect(screen.getByTestId('unsaved-changes-hint').textContent).toBe('');
+    fireEvent.click(screen.getByRole('button', { name: 'edit-canvas' }));
+    expect(screen.getByTestId('unsaved-changes-hint').textContent).toBe(ux('hint'));
+    fireEvent.change(screen.getByLabelText(copy('editor.language')), { target: { value: 'pl-PL' } });
+    fireEvent.click(screen.getByRole('button', { name: ux('discard') }));
+    expect((screen.getByLabelText(copy('editor.language')) as HTMLSelectElement).value).toBe('pl-PL');
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

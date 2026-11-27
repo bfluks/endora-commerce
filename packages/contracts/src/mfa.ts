@@ -5,6 +5,7 @@
 // Provider client secrets are NOT modelled here — they are backend config/env.
 
 import { z } from 'zod';
+import { cartMergeOutcomePublicSchema } from './organizations.js';
 
 // ---------------------------------------------------------------------------
 // Shared enums
@@ -48,6 +49,127 @@ export type FederatedSignInOptionsResponse = z.infer<
   typeof federatedSignInOptionsResponseSchema
 >;
 
+/**
+ * The `error` a refused federated sign-in carries back to the storefront or the Admin UI:
+ * `/login?error=<code>` (issues #789, #813). A code, never a sentence — each frontend words
+ * it in its own copy and reads any other value as its generic sign-in failure
+ * (`specs/conventions/module-i18n.md`, URL-borne errors). These are redirect codes, not API
+ * `error.code` values, which is why they are lower-case and fall outside `errorCodeRe`.
+ *
+ * - `unknown_provider` — the provider in the path is not one the platform supports.
+ * - `provider_unavailable` — the provider is not configured or not enabled for the channel.
+ * - `sign_in_cancelled` — the provider answered with an error, or the callback is incomplete.
+ * - `sign_in_expired` — the transaction is gone or belongs to another browser.
+ * - `sign_in_failed` — the code exchange with the provider failed.
+ * - `email_unverified` — the provider's e-mail address is not verified.
+ * - `no_matching_account` — no account matches the provider identity.
+ * - `account_blocked` — the matched account is blocked.
+ * - `registration_disabled_in_channel` — no account exists and personal (org-less)
+ *   registration is off on the channel the sign-in started on
+ *   (`customers.allow_registration_without_organization`), so none was created. Business
+ *   registration is not affected.
+ * - `mfa_setup_required` — a second factor is enforced and not set up yet.
+ * - `sales_channel_sign_in_required` — no account exists and the store is closed to
+ *   anonymous visitors, so none was created.
+ * - `sales_channel_not_permitted` — the account's Organization may not use this store.
+ */
+export const federatedSignInErrorCodeSchema = z.enum([
+  'unknown_provider',
+  'provider_unavailable',
+  'sign_in_cancelled',
+  'sign_in_expired',
+  'sign_in_failed',
+  'email_unverified',
+  'no_matching_account',
+  'account_blocked',
+  'registration_disabled_in_channel',
+  'mfa_setup_required',
+  'sales_channel_sign_in_required',
+  'sales_channel_not_permitted',
+]);
+export type FederatedSignInErrorCode = z.infer<typeof federatedSignInErrorCodeSchema>;
+
+// ---------------------------------------------------------------------------
+// Federated customer sign-in hand-off (issue #1279)
+// ---------------------------------------------------------------------------
+
+/**
+ * The storefront route the customer callback sends the browser to, on the sales
+ * channel's own storefront origin (`sales_channels.storefront_url`, else
+ * `STOREFRONT_BASE_URL`): `<origin>/auth/federated/complete?code=<code>`. Not
+ * language-prefixed. The storefront redeems the code server-to-server through
+ * `POST /api/v1/auth/customer/oauth/exchange` and sets its own cookies, so the
+ * sign-in works when the API is served from another host than the storefront.
+ */
+export const FEDERATED_SIGN_IN_COMPLETE_PATH = '/auth/federated/complete';
+
+/** Seconds a hand-off code can be redeemed for; it is single-use either way. */
+export const FEDERATED_SIGN_IN_HANDOFF_TTL_SECONDS = 60;
+
+/**
+ * `GET /api/v1/auth/customer/oauth/:provider/start` query. `binding` is the
+ * SHA-256 (lower-case hex) of the secret the storefront put in its own
+ * `b2b_federated_binding` cookie before redirecting here; the exchange is
+ * answered only for a caller presenting that secret, so a hand-off code cannot be
+ * redeemed from another browser (login CSRF, history replay). Required on the
+ * customer surface: a start without it is sent back to `/login?error=sign_in_failed`.
+ */
+export const customerFederatedSignInStartQuerySchema = z.object({
+  next: z.string().max(2048).optional(),
+  salesChannel: z.string().optional(),
+  binding: z.string().regex(/^[0-9a-f]{64}$/),
+});
+export type CustomerFederatedSignInStartQuery = z.infer<typeof customerFederatedSignInStartQuerySchema>;
+
+/** 32 random bytes, base64url without padding. */
+const handoffTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+
+/**
+ * `POST /api/v1/auth/customer/oauth/exchange` body: the hand-off `code` from the
+ * landing URL and the raw `binding` secret from the storefront's cookie.
+ */
+export const federatedSignInExchangeRequestSchema = z
+  .object({
+    code: handoffTokenSchema,
+    binding: handoffTokenSchema,
+  })
+  .strict();
+export type FederatedSignInExchangeRequest = z.infer<typeof federatedSignInExchangeRequestSchema>;
+
+/** A path on the storefront: starts with `/`, never `//`. Carries the language prefix. */
+const storefrontRedirectPathSchema = z
+  .string()
+  .min(1)
+  .refine((path) => path.startsWith('/') && !path.startsWith('//'), {
+    message: 'Must be a root-relative path',
+  });
+
+/**
+ * `POST /api/v1/auth/customer/oauth/exchange` answer — the same kinds of answer
+ * the password sign-in gives. `authenticated`: the session arrives as
+ * `Set-Cookie: b2b_session` (as from `POST /api/v1/auth/customer/login`) and
+ * `cartMerge` is the signed-out basket's merge. `mfaRequired`: the storefront
+ * keeps `challengeId` in its second-step cookie and sends the buyer to
+ * `redirectPath`, the code screen. A second factor still to be set up, and every
+ * refusal, never reaches the exchange: the callback sends those to
+ * `/login?error=<code>`. Every failure is `400 MFA_FEDERATED_HANDOFF_INVALID`.
+ */
+export const federatedSignInExchangeResponseSchema = z.object({
+  data: z.discriminatedUnion('status', [
+    z.object({
+      status: z.literal('authenticated'),
+      redirectPath: storefrontRedirectPathSchema,
+      cartMerge: cartMergeOutcomePublicSchema.nullable(),
+    }),
+    z.object({
+      status: z.literal('mfaRequired'),
+      challengeId: z.string().min(1),
+      redirectPath: storefrontRedirectPathSchema,
+    }),
+  ]),
+});
+export type FederatedSignInExchangeResponse = z.infer<typeof federatedSignInExchangeResponseSchema>;
+
 // ---------------------------------------------------------------------------
 // Two-step login result (replaces the inline `twoFactorCode` shape)
 // ---------------------------------------------------------------------------
@@ -74,6 +196,22 @@ export const mfaVerifyRequestSchema = z.object({
 });
 export type MfaVerifyRequest = z.infer<typeof mfaVerifyRequestSchema>;
 
+/**
+ * `POST /api/v1/auth/{customer|admin}/mfa/verify` — the second step completed
+ * (issue #1352). The session arrives as `Set-Cookie`, beside the known-device
+ * cookie. `cartMerge` is present only on the customer surface, when the request
+ * carried a guest basket the merge acted on — as in
+ * `customerSignInResponseSchema`'s `authenticated` arm. An administrator has no
+ * basket, so the admin surface never answers it.
+ */
+export const mfaVerifyResponseSchema = z.object({
+  data: z.object({
+    status: z.literal('authenticated'),
+    cartMerge: cartMergeOutcomePublicSchema.optional(),
+  }),
+});
+export type MfaVerifyResponse = z.infer<typeof mfaVerifyResponseSchema>;
+
 // ---------------------------------------------------------------------------
 // Self-service enrolment
 // ---------------------------------------------------------------------------
@@ -86,8 +224,14 @@ export const mfaSetupTicketBodySchema = z.object({
 export const mfaSetupResponseSchema = z.object({
   /** base32 secret for manual entry. */
   secret: z.string().min(1),
-  /** otpauth:// URI for QR rendering on the client. */
+  /** otpauth:// URI — what an authenticator app enrols from. */
   otpauthUri: z.string().min(1),
+  /**
+   * The QR code of `otpauthUri`, as an SVG document drawn by the server
+   * (`specs/166-mfa-totp-hardening/`). Static markup with no script; render it
+   * as an image (e.g. a `data:image/svg+xml` URI), not as HTML.
+   */
+  qrSvg: z.string().min(1),
 });
 export type MfaSetupResponse = z.infer<typeof mfaSetupResponseSchema>;
 
@@ -118,6 +262,19 @@ export const mfaSetupTicketCompleteSchema = z.object({
 });
 export type MfaSetupTicketComplete = z.infer<typeof mfaSetupTicketCompleteSchema>;
 
+/**
+ * `POST /api/v1/auth/{customer|admin}/mfa/setup-ticket/complete` — the
+ * enforced enrolment completed and the session issued (issue #1352). The
+ * second step's answer plus the recovery codes the activation minted, shown
+ * once (`mfaActivateResponseSchema`). `cartMerge` follows
+ * {@link mfaVerifyResponseSchema}: customer surface only, present when a guest
+ * basket was merged.
+ */
+export const mfaSetupTicketCompleteResponseSchema = z.object({
+  data: mfaVerifyResponseSchema.shape.data.extend(mfaActivateResponseSchema.shape),
+});
+export type MfaSetupTicketCompleteResponse = z.infer<typeof mfaSetupTicketCompleteResponseSchema>;
+
 /** Re-auth for self-disable: current password, or a current TOTP/recovery code. */
 export const mfaDisableRequestSchema = z
   .object({
@@ -125,7 +282,7 @@ export const mfaDisableRequestSchema = z
     code: z.string().min(6).max(20).optional(),
   })
   .refine((v) => Boolean(v.password) || Boolean(v.code), {
-    message: 'Either password or code is required to disable 2FA.',
+    message: 'Either password or code is required to disable two-step verification.',
   });
 export type MfaDisableRequest = z.infer<typeof mfaDisableRequestSchema>;
 
@@ -168,11 +325,25 @@ export const mfaSocialUnlinkResponseSchema = z.object({
 });
 export type MfaSocialUnlinkResponse = z.infer<typeof mfaSocialUnlinkResponseSchema>;
 
+/**
+ * Why the account may not switch its second factor off (issue #935).
+ *
+ * `factor_required` — it is the account's last second factor, and a
+ * requirement is in force for it: a setting, an administrator's role or a
+ * customer's organization. The same verdict refuses `POST …/mfa/disable` with
+ * `409 MFA_LAST_FACTOR_REQUIRED`.
+ */
+export const mfaDisableBlockedReasonSchema = z.enum(['factor_required']);
+export type MfaDisableBlockedReason = z.infer<typeof mfaDisableBlockedReasonSchema>;
+
 export const mfaStatusResponseSchema = z.object({
   totpActive: z.boolean(),
   recoveryCodesRemaining: z.number().int().nonnegative(),
   totpEnabledForScope: z.boolean(),
   totpEnforcedForScope: z.boolean(),
+  /** The surface renders the disable control from this, never from its own guess (issue #935). */
+  canDisable: z.boolean(),
+  disableBlockedReason: mfaDisableBlockedReasonSchema.nullable(),
   socialLinks: z.array(mfaSocialLinkSummarySchema),
 });
 export type MfaStatusResponse = z.infer<typeof mfaStatusResponseSchema>;
@@ -214,6 +385,23 @@ export type MfaResetBulkResult = z.infer<typeof mfaResetBulkResultSchema>;
 // ---------------------------------------------------------------------------
 // Setting codes (single source for both manifest and resolver)
 // ---------------------------------------------------------------------------
+
+/**
+ * Why a second-factor requirement cannot be met on this instance: `mfa` has no
+ * `MFA_SECRET_ENCRYPTION_KEY`, so it serves no enrolment route (issue #930).
+ * One spelling for every refusal and notice that says so — the
+ * `mfa.admin.totp_enforced` write, its Settings notice, and a role's
+ * two-factor flag — as `details.reason` and as the sentence token.
+ */
+export const ENCRYPTION_KEY_MISSING = 'encryption_key_missing' as const;
+
+/**
+ * Issue #947 — sentence token for customer-side refusals; `details.reason`
+ * stays `ENCRYPTION_KEY_MISSING`. Carried as `details.code` by the refusal of
+ * `mfa.storefront.totp_enforced` and of an organization's policy, whose
+ * sentence names customers rather than administrators.
+ */
+export const CUSTOMER_ENCRYPTION_KEY_MISSING = 'customer_encryption_key_missing' as const;
 
 export const MFA_SETTING_CODES = {
   /**
@@ -275,9 +463,13 @@ export interface MfaEnrolmentCountPort {
  * platform currently **requires** of administrators. `/platform/modules` asks
  * it before an operator switches `mfa` off and refuses the switch-off while the
  * answer is `true` (`MFA_DEACTIVATION_BLOCKED`): the requirement is turned off
- * first, as its own deliberate settings change, and only then the
- * module. Off still means no second factor (D-96); what this adds is that the
- * one switch no longer silently takes the administrator requirement with it.
+ * first, as its own deliberate change, and only then the module. Off still
+ * means no second factor (D-96); what this adds is that the one switch no
+ * longer silently takes the administrator requirement with it.
+ *
+ * The requirement has **two sources** since issue #349: the platform-wide
+ * setting `mfa.admin.totp_enforced`, and any admin role whose
+ * `requiresTwoFactor` is set. Either one blocks the switch-off.
  *
  * Read while the module is still on, through an open gate, for the reason
  * {@link MfaEnrolmentCountPort} gives. Unlike that count, a read that fails is
@@ -285,8 +477,87 @@ export interface MfaEnrolmentCountPort {
  * switch-off rather than letting it through.
  */
 export interface MfaDeactivationGuardPort {
-  /** Whether `mfa.admin.totp_enforced` is in force for the admin surface. */
+  /**
+   * Whether a second factor is required of any administrator: the setting
+   * `mfa.admin.totp_enforced`, or a role with `requiresTwoFactor`.
+   */
   isAdminSecondFactorRequired(): Promise<boolean>;
+  /**
+   * The same answer, by source, so the refusal can name what to turn off:
+   * whether the setting is on, and the codes of the roles that set the flag.
+   */
+  requirement(): Promise<MfaAdminSecondFactorRequirement>;
+}
+
+/** What requires administrators to use a second factor — see {@link MfaDeactivationGuardPort}. */
+export interface MfaAdminSecondFactorRequirement {
+  /** `mfa.admin.totp_enforced` is on. */
+  readonly setting: boolean;
+  /** Codes of the roles whose `requiresTwoFactor` is set, in role-list order. */
+  readonly roleCodes: readonly string[];
+}
+
+/**
+ * Why a second-factor requirement started binding these administrators: a
+ * role's flag was turned on, a role with the flag was given to them, or
+ * (issue #349, E-349-1) `mfa.admin.totp_enforced` was switched on.
+ */
+export type MfaAdminEnforcementTrigger = 'role_requirement_enabled' | 'role_assigned' | 'setting_enabled';
+
+/** What {@link MfaAdminEnforcementPort.endUnprotectedAdminSessions} is told. */
+export type MfaEndUnprotectedAdminSessionsOptions = {
+  /** The acting administrator's own current session, which is kept. */
+  readonly exceptSessionId?: string;
+} & (
+  | {
+      readonly trigger: 'role_requirement_enabled' | 'role_assigned';
+      /** The role whose requirement now binds them, for the audit row. */
+      readonly roleCode: string;
+    }
+  | {
+      readonly trigger: 'setting_enabled';
+      /** The setting that now binds them, for the audit row. */
+      readonly settingCode: string;
+    }
+);
+
+/**
+ * Container name: `mfaAdminEnforcementPort`. Owner: `mfa`.
+ *
+ * Issue #349 — what `admin_users` needs from `mfa` when a role's
+ * `requiresTwoFactor` starts binding administrators, either because the flag
+ * was turned on or because an administrator was given the role.
+ *
+ * An administrator session lasts thirty days, so a requirement applied only at
+ * the next sign-in could stay unenforced for a month. An administrator with an
+ * **active** enrolment keeps their sessions: `beginLogin` challenged them for
+ * it, or they proved it by confirming the enrolment. The others were opened
+ * without a second factor, and those end.
+ *
+ * Non-binding for `admin_users`: it resolves this only while `mfa` is present,
+ * and with `mfa` absent the flag cannot be turned on at all
+ * (`MFA_REQUIRED_FOR_ROLE_TWO_FACTOR`). `mfa` calls it itself when
+ * `mfa.admin.totp_enforced` is switched on (issue #349, E-349-1).
+ *
+ * Without the encryption key no requirement is in force (issue #948, owner
+ * ruling Q6), so none binds anybody: nothing is ended and nobody is counted.
+ */
+export interface MfaAdminEnforcementPort {
+  /**
+   * End every session and pending login of these administrators that is not
+   * protected by an active second factor, sparing `exceptSessionId`. Records
+   * one audit row when anybody was affected. Answers how many administrators
+   * had no active enrolment, which is how many were signed out — `0`, and
+   * nothing ended, where no second factor can be enrolled.
+   */
+  endUnprotectedAdminSessions(
+    adminUserIds: readonly string[],
+    options: MfaEndUnprotectedAdminSessionsOptions,
+  ): Promise<number>;
+  /** How many of these administrators have no active enrolment — the preview of the call above. */
+  countUnprotected(adminUserIds: readonly string[]): Promise<number>;
+  /** Whether a requirement set now can be met: `mfa` composed with its encryption key. */
+  canEnforceAdminSecondFactor(): Promise<boolean>;
 }
 
 /**

@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { renderWithI18n } from '../../helpers/render-with-i18n';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { findEditor, renderCustomFieldsRoutes } from './routes-harness';
 import en from '../../../../packages/modules/custom_fields/i18n/en.json';
 import pl from '../../../../packages/modules/custom_fields/i18n/pl.json';
+import coreEn from '../../../../packages/modules/_i18n/i18n/en.json';
+import { askAudienceChange, audienceButton } from './row-actions';
 
 /**
  * A custom-field definition declares who its values are answered to, and the
@@ -48,10 +50,32 @@ vi.mock('../../../../packages/modules/custom_fields/src/admin/api/custom-fields-
 const { CustomFieldsPage } = await import(
   '../../../../packages/modules/custom_fields/src/admin/pages/CustomFieldsPage'
 );
+const { CustomFieldEditorPage } = await import(
+  '../../../../packages/modules/custom_fields/src/admin/pages/CustomFieldEditorPage'
+);
 
 // The shipped English copy, so the assertions below read what an operator reads.
-const BUNDLE = { custom_fields: en };
+const EN = en as Record<string, string>;
+const CORE = coreEn as Record<string, string>;
+const BUNDLE = { custom_fields: EN, core: CORE };
 const NEW_FIELD_AUDIENCE = 'Who can see the value';
+
+/** The list and the editor page, in a router (issue #1804); this operator may write. */
+const renderPage = (): void => {
+  renderCustomFieldsRoutes({ CustomFieldsPage, CustomFieldEditorPage }, { bundle: BUNDLE });
+};
+
+/** Opens the definition form in its create view and fills what every new field needs (issue #447). */
+async function openCreate(key: string): Promise<HTMLElement> {
+  renderPage();
+  fireEvent.click(await screen.findByRole('link', { name: 'New field' }));
+  const dialog = await findEditor('New field');
+  fireEvent.change(within(dialog).getByPlaceholderText('po_number'), { target: { value: key } });
+  fireEvent.change(within(within(dialog).getByRole('group', { name: 'Labels' })).getByLabelText('Default label'), {
+    target: { value: key },
+  });
+  return dialog;
+}
 
 describe('CustomFieldsPage — the audience of a definition', () => {
   beforeEach(() => {
@@ -60,43 +84,40 @@ describe('CustomFieldsPage — the audience of a definition', () => {
   });
 
   it('offers the choice with a plain explanation, internal by default', async () => {
-    renderWithI18n(<CustomFieldsPage />, BUNDLE);
-    const select = (await screen.findByLabelText(NEW_FIELD_AUDIENCE)) as HTMLSelectElement;
+    const dialog = await openCreate('internal_note');
+    const select = within(dialog).getByLabelText(NEW_FIELD_AUDIENCE) as HTMLSelectElement;
     expect(select.value).toBe('internal');
+    expect(select).toHaveAccessibleDescription(/Internal: administrators only\./);
     expect(
-      screen.getByText(/Internal values are shown to administrators only\./),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/also returned to the customer in the storefront and to integrations/),
+      within(dialog).getByText(/Customer-visible: also the storefront and the external API/),
     ).toBeInTheDocument();
   });
 
   it('creates an internal field when the choice is left alone', async () => {
-    renderWithI18n(<CustomFieldsPage />, BUNDLE);
-    fireEvent.change(screen.getByPlaceholderText('po_number'), { target: { value: 'internal_note' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add field' }));
+    const dialog = await openCreate('internal_note');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add field' }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(create.mock.calls[0]![0]).toMatchObject({ key: 'internal_note', audience: 'internal' });
   });
 
   it('creates a customer-visible field when the administrator says so', async () => {
-    renderWithI18n(<CustomFieldsPage />, BUNDLE);
-    fireEvent.change(screen.getByPlaceholderText('po_number'), { target: { value: 'gift_note' } });
-    fireEvent.change(await screen.findByLabelText(NEW_FIELD_AUDIENCE), {
+    const dialog = await openCreate('gift_note');
+    fireEvent.change(within(dialog).getByLabelText(NEW_FIELD_AUDIENCE), {
       target: { value: 'customer' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Add field' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add field' }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(create.mock.calls[0]![0]).toMatchObject({ key: 'gift_note', audience: 'customer' });
   });
 
   it('shows the audience of an existing field and lets it be changed', async () => {
-    renderWithI18n(<CustomFieldsPage />, BUNDLE);
-    const rowSelect = (await screen.findByLabelText(
-      'Who can see the value of po_number',
-    )) as HTMLSelectElement;
-    expect(rowSelect.value).toBe('customer');
-    fireEvent.change(rowSelect, { target: { value: 'internal' } });
+    renderPage();
+    await screen.findByText('po_number');
+    // A value edited from the row is the kit StatusChangeControl (issue #1749): shown, then changed in a dialog.
+    expect(audienceButton('po_number', EN, CORE).closest('div')).toHaveTextContent('Customer — shown to the customer');
+    const confirm = await askAudienceChange('po_number', EN, CORE);
+    expect(update).not.toHaveBeenCalled();
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Change to Internal — administrators only' }));
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
     expect(update).toHaveBeenCalledWith(EXISTING.id, { audience: 'internal' });
   });

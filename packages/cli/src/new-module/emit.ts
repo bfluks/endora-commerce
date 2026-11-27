@@ -12,6 +12,7 @@
  * already — the platform's manifest generator — and a second one is D-100's
  * subject. See `manifest-render.ts`.
  */
+import { classNameFromFile, migrationFileName } from '../lib/migration-naming.js';
 import {
   adminApiPathFor,
   adminRoutesOf,
@@ -47,23 +48,28 @@ export interface EmittedFile {
 export function emitModuleFiles(spec: ModuleScaffoldSpec, depth: number): readonly EmittedFile[] {
   const files: EmittedFile[] = [
     { path: 'tsconfig.json', content: typecheckConfig(spec, depth) },
-    { path: 'tsconfig.build.json', content: buildConfig() },
+    { path: 'tsconfig.build.json', content: buildConfig(spec) },
   ];
   if (spec.layers.admin !== null) {
     files.push({ path: 'tsconfig.ui.json', content: uiConfig() });
+    files.push({ path: 'tsconfig.ui.build.json', content: uiBuildConfig() });
+    files.push({ path: 'tsconfig.ui.test.json', content: uiTestConfig() });
   }
   files.push(
     { path: 'vitest.config.ts', content: vitestConfig(spec, depth) },
     { path: 'src/manifest.ts', content: moduleManifest(spec) },
     { path: 'src/backend/index.ts', content: backendIndex(spec) },
+    // Not \`src/manifest.test.ts\`: the manifest generator refuses any sibling
+    // of the root manifest, which is reachable through no subpath.
+    { path: 'src/backend/manifest.test.ts', content: manifestTest(spec) },
     { path: `src/backend/services/${slugOf(spec.id)}.service.ts`, content: service(spec) },
   );
   if (spec.permissions.length > 0) {
     files.push({ path: 'src/backend/routes.admin.ts', content: adminRoutes(spec) });
   }
   if (spec.layers.entities) {
-    files.push({ path: `src/backend/entities/${entityFileOf(spec)}`, content: entity(spec) });
-    files.push({ path: `src/migrations/${migrationFileOf(spec)}`, content: migration(spec) });
+    files.push({ path: `src/backend/entities/${entityFileOf(spec)}`, content: entitySource(spec) });
+    files.push({ path: `src/migrations/${migrationFileOf(spec)}`, content: initMigrationSource(spec) });
     files.push({ path: 'src/migrations/index.ts', content: migrationsIndex(spec) });
   }
   if (spec.layers.worker) {
@@ -74,14 +80,11 @@ export function emitModuleFiles(spec: ModuleScaffoldSpec, depth: number): readon
   }
   if (spec.layers.admin !== null) {
     files.push({ path: 'src/admin/index.ts', content: adminIndex(spec) });
+    files.push({ path: 'src/admin/index.test.ts', content: adminTest(spec) });
     files.push({ path: `src/admin/pages/${pageComponentOf(spec)}.tsx`, content: adminPage(spec) });
   }
   files.push({ path: 'i18n/en.json', content: bundle(spec) });
   files.push({ path: 'i18n/pl.json', content: bundle(spec) });
-  files.push({ path: 'test/unit/manifest.test.ts', content: manifestTest(spec) });
-  if (spec.layers.admin !== null) {
-    files.push({ path: 'test/unit/admin-contributions.test.ts', content: adminTest(spec) });
-  }
   return files;
 }
 
@@ -103,20 +106,16 @@ export function entityFileOf(spec: ModuleScaffoldSpec): string {
  * `<stamp>_<segment>_init.ts` — the filename
  * `specs/065-manifest-aware-migrations/contracts/naming-convention.md` §1
  * recognises, with the tail beginning at the owning module's segment so the
- * class name derived from it is scoped (feature 081, `unscoped-name`).
+ * class name derived from it is scoped (feature 081, `unscoped-name`). Named by
+ * `../lib/migration-naming.ts`, as every scaffolded migration is.
  */
 export function migrationFileOf(spec: ModuleScaffoldSpec): string {
-  return `${spec.migrationStamp}_${segmentOf(spec.id)}_init.ts`;
+  return migrationFileName(spec.migrationStamp, spec.id, 'init');
 }
 
 /** `Migration<STAMP><PascalCaseTail>` — §2's mechanical derivation from the filename. */
 export function migrationClassOf(spec: ModuleScaffoldSpec): string {
-  const tail = `${segmentOf(spec.id)}_init`
-    .split('_')
-    .filter((part) => part.length > 0)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join('');
-  return `Migration${spec.migrationStamp}${tail}`;
+  return classNameFromFile(migrationFileOf(spec));
 }
 
 /** `<Pascal>ReadPort` — the interface `./ports` publishes when the module owns one. */
@@ -129,13 +128,24 @@ export function portNameOf(spec: ModuleScaffoldSpec): string {
   return `${camelOf(spec.id)}ReadPort`;
 }
 
-// --- the two build configurations, a constant of the layout ----------------
+// --- the build configurations, a constant of the layout --------------------
+
+/** Co-located test files: in every type-check program, in no emit (issue #81). */
+const TEST_PATTERNS = ['src/**/*.test.ts', 'src/**/*.spec.ts'] as const;
+const UI_TEST_PATTERNS = [
+  'src/**/*.test.ts',
+  'src/**/*.test.tsx',
+  'src/**/*.spec.ts',
+  'src/**/*.spec.tsx',
+] as const;
+
+function patternList(patterns: readonly string[]): string {
+  return `[${patterns.map((pattern) => `"${pattern}"`).join(', ')}]`;
+}
 
 function typecheckConfig(spec: ModuleScaffoldSpec, depth: number): string {
   const hasAdmin = spec.layers.admin !== null;
-  const excluded = hasAdmin
-    ? ['src/admin/**/*', 'src/**/*.test.ts', 'src/**/*.spec.ts']
-    : ['src/**/*.test.ts', 'src/**/*.spec.ts'];
+  const excluded = hasAdmin ? ['src/admin/**/*'] : [];
   const adminExclusionComment = hasAdmin
     ? `
   //
@@ -169,18 +179,25 @@ function typecheckConfig(spec: ModuleScaffoldSpec, depth: number): string {
     "types": ["node"]
   },
   "include": ["src/**/*"],
-  // A co-located test must not be compiled into \`dist\`: it imports \`vitest\`, a
-  // devDependency, which is an unresolvable specifier in every consumer's
-  // install. That is this exclusion's whole job, and it is an *emit* concern —
-  // \`tsconfig.build.json\` extends this file, which is how it gets there. It
-  // does not stop those tests running: \`vitest\` reads its own \`include\` and
-  // transpiles what it collects.${adminExclusionComment}
-  "exclude": [${excluded.map((pattern) => `"${pattern}"`).join(', ')}]
+  // Co-located tests (\`src/**/*.test.ts\`) are **in** this program on purpose:
+  // this is the type-check half, and a test excluded here is a test no \`tsc\`
+  // invocation reads — \`vitest\` strips types, so nothing else would report a
+  // type error in one. Keeping them out of \`dist\`, where a compiled test would
+  // import \`vitest\`, an unresolvable specifier in every consumer's install, is
+  // an *emit* concern and lives in \`tsconfig.build.json\`.${adminExclusionComment}
+  "exclude": ${patternList(excluded)}
 }
 `;
 }
 
-function buildConfig(): string {
+function buildConfig(spec: ModuleScaffoldSpec): string {
+  const hasAdmin = spec.layers.admin !== null;
+  const excluded = [...(hasAdmin ? ['src/admin/**/*'] : []), ...TEST_PATTERNS];
+  const restated = hasAdmin
+    ? `
+  // \`exclude\` replaces the inherited list rather than extending it, so the
+  // admin layer \`tsconfig.json\` keeps out of this program is restated.`
+    : '';
   return `{
   // Emit configuration — the only configuration in this package allowed to
   // write files, and the declaration the platform's composer reads to learn
@@ -205,7 +222,13 @@ function buildConfig(): string {
     // A compile that failed must ship nothing. Without this a diagnostic is not
     // a stop — the artefacts are written before the exit code is.
     "noEmitOnError": true
-  }
+  },
+  // Test files are excluded from the emit and from nothing else. A compiled
+  // \`*.test.js\` under \`dist\` imports \`vitest\`, a devDependency, so it would be
+  // an unresolvable specifier in every consumer's install. The exclusion lives
+  // here rather than in \`tsconfig.json\` because that file is the type-check
+  // half, and a test excluded there is a test no \`tsc\` invocation reads.${restated}
+  "exclude": ${patternList(excluded)}
 }
 `;
 }
@@ -245,12 +268,55 @@ function uiConfig(): string {
   },
   "include": ["src/admin/**/*"],
   // The inherited \`exclude\` names \`src/admin/**/*\` — that is what keeps the
-  // backend program off this layer — so it has to be **replaced** here rather
-  // than inherited, or \`tsc\` reports TS18003 over the one directory this
-  // program exists to compile. The test patterns are kept for the sibling
-  // config's reason: a co-located test compiled into \`dist\` imports \`vitest\`,
-  // an unresolvable specifier in every consumer's install.
-  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/**/*.spec.ts", "src/**/*.spec.tsx"]
+  // backend program off this layer — so it is **replaced** here rather than
+  // inherited, or \`tsc\` reports TS18003 over the one directory this program
+  // exists to compile. It is replaced with the **tests**: they run in Node and
+  // are type-checked by \`tsconfig.ui.test.json\`, with the Node types this
+  // program must not carry. They are still read by a \`tsc\` invocation — that one.
+  "exclude": ${patternList(UI_TEST_PATTERNS)}
+}
+`;
+}
+
+function uiBuildConfig(): string {
+  return `{
+  // Emit configuration for this package's admin layer, and nothing but the one
+  // thing that separates an emit from the type-check: test files are excluded.
+  // A compiled \`*.test.js\` under \`dist\` imports \`vitest\`, a devDependency, so
+  // it would be an unresolvable specifier in every consumer's install.
+  //
+  // Every compiler option — \`jsx\`, the \`DOM\` lib, \`rootDir\`, \`paths\` — is
+  // \`tsconfig.ui.json\`'s and is inherited, never restated: two declarations of
+  // that pair would be two answers waiting to disagree.
+  "extends": "./tsconfig.ui.json",
+  "exclude": ${patternList(UI_TEST_PATTERNS)}
+}
+`;
+}
+
+function uiTestConfig(): string {
+  return `{
+  // Type-check configuration for this package's **UI-layer tests**, and the
+  // reason it is a third program rather than a line in \`tsconfig.ui.json\`.
+  //
+  // The tests run in Node under \`vitest\`, and the scaffold's own reads the
+  // bundles with \`node:fs\`. The screens they test run in a browser, and
+  // \`tsconfig.ui.json\` declares \`types: []\` so a screen that reaches for
+  // \`process\` does not compile. A \`/// <reference types="node" />\` written in
+  // one test would apply to that **whole** program and switch the refusal off
+  // for every screen. So the tests are type-checked here, with the Node types,
+  // and \`tsconfig.ui.json\` reads none of them.
+  //
+  // Every other compiler option — \`jsx\`, the \`DOM\` lib, \`paths\` — is
+  // \`tsconfig.ui.json\`'s and is inherited, never restated. The generated
+  // \`typecheck\` script builds this program because the file exists.
+  "extends": "./tsconfig.ui.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ${patternList(UI_TEST_PATTERNS.map((pattern) => pattern.replace('src/', 'src/admin/')))},
+  "exclude": []
 }
 `;
 }
@@ -278,9 +344,9 @@ export default mergeConfig(
     test: {
       name: ${quote(`mod-${slugOf(spec.id)}`)},
       environment: 'node',
-      // Both roots the layout contract allows: co-located beside the source,
-      // and the package-owned \`test/unit/\` tree.
-      include: ['src/**/*.test.ts', 'test/**/*.test.ts'],
+      // Tests sit beside their subjects; a module package has no \`test/\`
+      // directory, and a test outside \`src/\` is in no type-check program.
+      include: ['src/**/*.test.ts'],
     },
   }),
 );
@@ -708,14 +774,25 @@ function tenantColumn(spec: ModuleScaffoldSpec): { property: string; column: str
   return null;
 }
 
-function entity(spec: ModuleScaffoldSpec): string {
+/**
+ * The module's own entity. `scope` is the npm scope the platform is installed
+ * under — this repository's for a package, an instance's own for an overlay
+ * module (`overlay.ts`), which writes the same entity.
+ */
+export function entitySource(spec: ModuleScaffoldSpec, scope = '@endora-commerce/'): string {
   const decorator = TENANT_SCOPE_DECORATORS[spec.tenantScope];
   const tenant = tenantColumn(spec);
   const lines: string[] = [];
+  lines.push(`import { OptionalProps } from '@mikro-orm/core';`);
+  // MikroORM 7 (#1866): the entity decorators are `@mikro-orm/decorators`'s,
+  // in their legacy (`experimentalDecorators`) form — and only from there,
+  // which `check:entity-decorators` holds.
+  // `Index` only where there is a tenant column to index: a `global` entity has
+  // none, and an unused import is TS6133 under the instance's `noUnusedLocals`.
   lines.push(
-    `import { Entity, Index, OptionalProps, PrimaryKey, Property } from '@mikro-orm/core';`,
+    `import { Entity, ${tenant === null ? '' : 'Index, '}PrimaryKey, Property } from '@mikro-orm/decorators/legacy';`,
   );
-  lines.push(`import { ${decorator} } from '@endora-commerce/platform/tenancy';`);
+  lines.push(`import { ${decorator} } from '${scope}platform/tenancy';`);
   lines.push(`import { randomUUID } from 'node:crypto';`);
   lines.push('');
   lines.push('/**');
@@ -759,7 +836,8 @@ function entity(spec: ModuleScaffoldSpec): string {
 
 // --- src/migrations/ -------------------------------------------------------
 
-function migration(spec: ModuleScaffoldSpec): string {
+/** The first migration: creates {@link entitySource}'s table. Shared with `overlay.ts`. */
+export function initMigrationSource(spec: ModuleScaffoldSpec): string {
   const table = tableNameOf(spec);
   const tenant = tenantColumn(spec);
   const columns = [
@@ -878,6 +956,8 @@ export interface ${pascal}JobResult {
 
 export const ${segmentOf(spec.id).toUpperCase()}_QUEUE_NAME = ${quote(queue)};
 
+const DAY_SECONDS = 24 * 60 * 60;
+
 export function create${pascal}Queue(
   redis: Redis,
   overrides?: Partial<QueueOptions>,
@@ -887,8 +967,15 @@ export function create${pascal}Queue(
     defaultJobOptions: {
       attempts: 5,
       backoff: { type: 'exponential', delay: 1_000 },
-      removeOnComplete: { count: 100 },
-      removeOnFail: { count: 1_000 },
+      // BullMQ keeps a copy of every finished job, with its data, in Redis. A
+      // finished job is bounded by age as well as by count, so a job's data
+      // does not outlive its use: a day once completed, a week once failed,
+      // long enough to diagnose it. BullMQ applies \`age\` only when another job
+      // finishes, so a quiet queue keeps its last jobs; where they carry
+      // personal data, a scheduled \`queue.clean(grace, 0, 'completed' | 'failed')\`
+      // removes them on a clock of its own.
+      removeOnComplete: { age: DAY_SECONDS, count: 100 },
+      removeOnFail: { age: 7 * DAY_SECONDS, count: 1_000 },
     },
     ...overrides,
   };
@@ -1062,7 +1149,7 @@ function adminIndex(spec: ModuleScaffoldSpec): string {
  * differently when it is wrong, and none of which is asserted by the module
  * type-checking.
  */
-function adminPage(spec: ModuleScaffoldSpec): string {
+export function adminPage(spec: ModuleScaffoldSpec): string {
   const pascal = pascalOf(spec.id);
   const route = adminScreenRouteOf(spec);
   if (route === null) throw new Error('adminPage emitted without a route to read');
@@ -1070,7 +1157,11 @@ function adminPage(spec: ModuleScaffoldSpec): string {
   const lines: string[] = [];
 
   lines.push(`import { useCallback, useEffect, useState, type ReactNode } from 'react';`);
-  lines.push(`import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';`);
+  lines.push(
+    spec.layers.entities
+      ? `import { ApiError, apiClient, formatDateTime } from '@endora-commerce/admin-kit/lib';`
+      : `import { ApiError, apiClient } from '@endora-commerce/admin-kit/lib';`,
+  );
   lines.push('import {');
   lines.push('  Alert,');
   lines.push('  AlertDescription,');
@@ -1086,7 +1177,11 @@ function adminPage(spec: ModuleScaffoldSpec): string {
     lines.push('  TableRow,');
   }
   lines.push(`} from '@endora-commerce/admin-kit/ui';`);
-  lines.push(`import { useTranslation } from '@endora-commerce/admin-kit/i18n';`);
+  lines.push(
+    spec.layers.entities
+      ? `import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';`
+      : `import { useTranslation } from '@endora-commerce/admin-kit/i18n';`,
+  );
   lines.push('');
   lines.push('/**');
   lines.push(` * ${spec.name} — the module's own admin screen.`);
@@ -1127,6 +1222,8 @@ function adminPage(spec: ModuleScaffoldSpec): string {
   lines.push(`export default function ${component}(): ReactNode {`);
   lines.push(`  const t = useTranslation(${quote(spec.id)});`);
   if (spec.layers.entities) {
+    // Dates in the admin language, never the browser's locale (#1776).
+    lines.push('  const { language } = useTranslationContext();');
     lines.push(`  const [rows, setRows] = useState<readonly ${pascal}Row[]>([]);`);
   } else {
     lines.push(`  const [status, setStatus] = useState<${pascal}Status | null>(null);`);
@@ -1186,7 +1283,7 @@ function adminPage(spec: ModuleScaffoldSpec): string {
     lines.push('            rows.map((row) => (');
     lines.push('              <TableRow key={row.id}>');
     lines.push('                <TableCell>{row.label}</TableCell>');
-    lines.push('                <TableCell>{new Date(row.createdAt).toLocaleString()}</TableCell>');
+    lines.push('                <TableCell>{formatDateTime(row.createdAt, language)}</TableCell>');
     lines.push('              </TableRow>');
     lines.push('            ))');
     lines.push('          )}');
@@ -1216,7 +1313,7 @@ function adminPage(spec: ModuleScaffoldSpec): string {
   lines.push('        </Alert>');
   lines.push('      )}');
   lines.push('      <Card>');
-  lines.push('        <CardContent className="pt-6">{body}</CardContent>');
+  lines.push('        <CardContent>{body}</CardContent>');
   lines.push('      </Card>');
   lines.push('    </div>');
   lines.push('  );');
@@ -1225,7 +1322,7 @@ function adminPage(spec: ModuleScaffoldSpec): string {
   return lines.join('\n');
 }
 
-// --- test/unit/admin-contributions.test.ts ---------------------------------
+// --- src/admin/index.test.ts ----------------------------------------------
 
 /**
  * What an admin contribution can be wrong about without anything else noticing.
@@ -1238,7 +1335,9 @@ function adminPage(spec: ModuleScaffoldSpec): string {
  * of them.
  */
 function adminTest(spec: ModuleScaffoldSpec): string {
-  return `import { describe, expect, it } from 'vitest';
+  return `// The test runs in Node, so \`tsconfig.ui.test.json\` type-checks it with the
+// Node types; the admin layer it tests is compiled without them.
+import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1246,8 +1345,8 @@ import {
   AdminNavDeclarationSchema,
   AdminRouteDeclarationSchema,
 } from '@endora-commerce/contracts';
-import * as adminLayer from '../../src/admin/index.js';
-import { manifest } from '../../src/manifest.js';
+import * as adminLayer from './index.js';
+import { manifest } from '../manifest.js';
 
 const packageDir = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
@@ -1340,7 +1439,11 @@ function titleOfActionId(actionId: string): string {
  * invent one — it names `i18n/pl.json` in its next steps instead.
  */
 export function bundleEntries(spec: ModuleScaffoldSpec): readonly (readonly [string, string])[] {
-  const entries: Array<readonly [string, string]> = [['module.name', spec.name]];
+  // Issue #1809 — Platform → Modules names and describes a module from its own bundle.
+  const entries: Array<readonly [string, string]> = [
+    ['module.name', spec.name],
+    ['module.description', spec.description],
+  ];
   for (const permission of spec.permissions) {
     entries.push([`adminRoles.permission.${permission.code}`, permission.label]);
   }
@@ -1371,14 +1474,14 @@ function bundle(spec: ModuleScaffoldSpec): string {
   return flatJson(bundleEntries(spec));
 }
 
-// --- test/unit/manifest.test.ts --------------------------------------------
+// --- src/backend/manifest.test.ts -----------------------------------------
 
 function manifestTest(spec: ModuleScaffoldSpec): string {
   return `import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { manifest } from '../../src/manifest.js';
+import { manifest } from '../manifest.js';
 
 /**
  * What a module manifest can be wrong about without anything else noticing.

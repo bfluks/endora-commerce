@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -12,6 +14,7 @@ import {
   detail,
   en,
   renderCrm,
+  returningHere,
 } from './crm-fixtures';
 
 /**
@@ -116,9 +119,10 @@ beforeEach(() => {
 });
 
 async function openOpportunity(
-  options: { permissions?: readonly string[]; quotes?: boolean } = {},
+  options: { permissions?: readonly string[]; quotes?: boolean; language?: 'en' | 'pl' } = {},
 ): Promise<void> {
   renderCrm(<OpportunityDetail />, {
+    ...(options.language ? { language: options.language } : {}),
     // The value is in the sidebar of every tab; the linked documents these
     // cases also read have a tab of their own (User Story 20).
     path: `/crm/opportunities/${OPPORTUNITY_ID}?tab=links`,
@@ -180,12 +184,31 @@ describe('the value of an Opportunity', () => {
     // The linked Order is named by its number and links to its own screen.
     expect(within(items[0] as HTMLElement).getByRole('link', { name: 'ORD-1001' })).toHaveAttribute(
       'href',
-      `/orders/${ORDER_ID}`,
+      returningHere(`/orders/${ORDER_ID}`),
     );
     expect(items[0]).toHaveTextContent(en('value.excluded.reason.currency_mismatch', { currency: 'PLN' }));
     // A reason this screen has no sentence for is still said, never shown as a code.
     expect(items[1]).toHaveTextContent(en('value.excluded.reason.other'));
     expect(items[1]).not.toHaveTextContent('something_new');
+  });
+
+  it('says in one line where a computed value comes from, and links to the statuses that count (issue #1561)', async () => {
+    current = detail({ valueMode: 'computed', computedValue: '990.00' });
+    await openOpportunity();
+    const value = await section(en('value.title'));
+    expect(within(value).getByText(en('value.hint.computed'))).toBeInTheDocument();
+    expect(within(value).getByRole('link', { name: en('value.hint.configure') })).toHaveAttribute(
+      'href',
+      '/crm/workflow#value-counting',
+    );
+  });
+
+  it('offers the link to the counting statuses only to somebody who may change them', async () => {
+    current = detail({ valueMode: 'computed', computedValue: '990.00' });
+    await openOpportunity({ permissions: ['crm:read', 'crm:write', 'orders:read'] });
+    const value = await section(en('value.title'));
+    expect(within(value).getByText(en('value.hint.computed'))).toBeInTheDocument();
+    expect(within(value).queryByRole('link', { name: en('value.hint.configure') })).toBeNull();
   });
 
   it('offers no switch to a reader', async () => {
@@ -204,6 +227,47 @@ describe('the value of an Opportunity', () => {
     expect(await within(value).findByText(en('value.error.conflict'))).toBeInTheDocument();
     // Read again: once on arrival, once after the refusal.
     expect(getSpy.mock.calls.filter(([path]) => path === DETAIL_PATH).length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+/**
+ * The sidebar is a 20rem column (UX audit #1567): the figure was a flex item
+ * beside the mode switch, and the display's `overflow-wrap: anywhere` let it
+ * shrink until `42 000,00 zł` stood one character per line and the mode badge
+ * was a narrow vertical box. The figure is one unbroken line; the badge and the
+ * switch wrap below it rather than squeeze it.
+ */
+describe('the value in a narrow column', () => {
+  it('keeps the amount on one line and stacks the switch below the figure instead of beside it', async () => {
+    await openOpportunity();
+    const value = await section(en('value.title'));
+    const amount = within(value).getByText(/^12\s500,00\s*zł$/);
+    expect(amount).toHaveClass('whitespace-nowrap', 'tabular-nums');
+
+    // The nearest box holding both the figure and the switch stacks them: it
+    // is not a flex row in which the switch could squeeze the figure.
+    const switchButton = within(value).getByRole('button', { name: en('value.switch.toComputed') });
+    let common: HTMLElement | null = switchButton.parentElement;
+    while (common && !common.contains(amount)) common = common.parentElement;
+    expect(common).not.toBeNull();
+    expect(common!.classList.contains('flex') && !common!.classList.contains('flex-col')).toBe(false);
+  });
+});
+
+describe('the dates of the sidebar', () => {
+  it('writes the deadline and the Record dates in the admin UI language, as the rest of the admin does', async () => {
+    current = detail({
+      createdAt: '2026-11-17T09:00:27.000Z',
+      updatedAt: '2026-11-17T09:00:27.000Z',
+      expectedCloseDate: '2026-11-25',
+    });
+    await openOpportunity({ language: 'en' });
+    // A calendar date is the medium date of the language — not `11/25/2026`.
+    expect(await screen.findByText('Nov 25, 2026')).toBeInTheDocument();
+    const expected = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(
+      new Date('2026-11-17T09:00:27.000Z'),
+    );
+    expect(await screen.findAllByText(expected)).toHaveLength(2);
   });
 });
 
@@ -283,7 +347,7 @@ describe('Quote Requests on an Opportunity', () => {
 
 describe('the statuses that count towards a computed value', () => {
   async function openWorkflow(quotes = true): Promise<void> {
-    renderCrm(<WorkflowConfigPage />, quotes ? { alsoPresent: ['quote_requests'] } : {});
+    renderCrm(<WorkflowConfigPage />, { path: '/crm/workflow/value', ...(quotes ? { alsoPresent: ['quote_requests'] } : {}) });
     await screen.findByText(en('value.counting.title'));
   }
 
@@ -361,5 +425,82 @@ describe('the statuses that count towards a computed value', () => {
     await openWorkflow();
     const orphan = screen.getByText(en('value.counting.order.gone')).closest('li') as HTMLElement;
     expect(within(orphan).getByRole('checkbox')).toBeChecked();
+  });
+});
+
+/**
+ * Issue #456 (owner ruling of 2026-11-07, PO ruling of 2026-11-08) — a linked
+ * Quote Request is shown at the amount `quote_requests` publishes, with how
+ * far it is agreed: no marker, *Partially agreed*, *Not yet agreed*, and `—`
+ * with no marker when it has no price at all. In both languages, in the linked
+ * table and beside a Quote Request the value panel names.
+ */
+describe.each(['en', 'pl'] as const)('the agreement marker of a linked Quote Request (%s)', (language) => {
+  const bundle = JSON.parse(
+    readFileSync(resolve(process.cwd(), `../packages/modules/crm/i18n/${language}.json`), 'utf8'),
+  ) as Record<string, string>;
+  const partial = bundle['links.quote.partiallyAgreed']!;
+  const notYet = bundle['links.quote.notYetAgreed']!;
+  const ids = [1, 2, 3, 4].map((n) => `00000000-0000-4000-8000-0000000000e${n}`);
+  const quotes = [
+    { total: '33.50', agreement: 'agreed' as const },
+    { total: '35.00', agreement: 'partial' as const },
+    { total: '39.00', agreement: 'none' as const },
+    { agreement: 'none' as const },
+  ].map((shown, index) => {
+    const { total: _price, ...withoutTotal } = quoteLink({
+      id: `00000000-0000-4000-8000-0000000000f${index + 1}`,
+      documentId: ids[index]!,
+      number: `RFQ-000${index + 1}`,
+    });
+    // A Quote Request without any price has no `total` at all.
+    return { ...withoutTotal, ...shown };
+  });
+
+  beforeEach(() => {
+    current = detail({
+      valueMode: 'computed',
+      computedValue: '0.00',
+      links: [...detail().links, ...quotes],
+      // As the server would name them; the panel shows what it is told.
+      excludedDocuments: ids.map((id) => ({ kind: 'quote_request' as const, id, reason: 'currency_mismatch' })),
+    });
+  });
+
+  it('ships both markers', () => {
+    expect({ partial, notYet }).toEqual(
+      language === 'en'
+        ? { partial: 'Partially agreed', notYet: 'Not yet agreed' }
+        : { partial: 'Częściowo uzgodnione', notYet: 'Jeszcze nieuzgodnione' },
+    );
+  });
+
+  it('the linked table shows the four states', async () => {
+    await openOpportunity({ language });
+    const table = await section(bundle['links.quote.title']!);
+    const total = (n: number) =>
+      within(within(table).getByRole('link', { name: `RFQ-000${n}` }).closest('tr')!).getAllByRole('cell')[2]!;
+    await waitFor(() => expect(total(1)).toHaveTextContent(/33[.,]50/));
+    expect(total(1)).not.toHaveTextContent(partial);
+    expect(total(1)).not.toHaveTextContent(notYet);
+    expect(total(2)).toHaveTextContent(/35[.,]00/);
+    expect(total(2)).toHaveTextContent(partial);
+    expect(total(3)).toHaveTextContent(/39[.,]00/);
+    expect(total(3)).toHaveTextContent(notYet);
+    expect(total(4)).toHaveTextContent(/^—$/);
+  });
+
+  it('the value panel marks the Quote Requests it names', async () => {
+    await openOpportunity({ language });
+    const value = await section(bundle['value.title']!);
+    const item = (n: number) =>
+      within(value).getByRole('link', { name: `RFQ-000${n}` }).closest('li')!;
+    await waitFor(() => expect(item(1)).toHaveTextContent(/33[.,]50/));
+    expect(item(1)).not.toHaveTextContent(partial);
+    expect(item(1)).not.toHaveTextContent(notYet);
+    expect(item(2)).toHaveTextContent(partial);
+    expect(item(3)).toHaveTextContent(notYet);
+    expect(item(4)).not.toHaveTextContent(partial);
+    expect(item(4)).not.toHaveTextContent(notYet);
   });
 });

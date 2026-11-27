@@ -12,6 +12,7 @@ import {
   ComparisonNotFoundError,
   type ComparisonService,
 } from './comparison-service.js';
+import { isUuidShape } from '@endora-commerce/contracts';
 
 /**
  * Read-only admin service for the comparisons module — feature 007 /
@@ -150,6 +151,7 @@ export class ComparisonAdminService {
 
   async detail(id: string): Promise<ComparisonAdminDetail> {
     const em = this.emFactory();
+    if (!isUuidShape(id)) throw new ComparisonNotFoundError();
     const comparison = await em.findOne(Comparison, { id });
     if (!comparison) throw new ComparisonNotFoundError();
     // The detail view renders prices in the comparison's recorded
@@ -171,6 +173,9 @@ export class ComparisonAdminService {
       comparison,
       comparison.salesChannelId,
       { kind: 'administrator' },
+      // Owner decision CMP-1 = A — the operator's audit screen reads the owner's
+      // comparison as the owner keeps it, unavailable columns included.
+      'owner',
     );
 
     const channel = await em.findOne(SalesChannel, { id: comparison.salesChannelId });

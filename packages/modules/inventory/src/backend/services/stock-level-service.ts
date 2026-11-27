@@ -9,6 +9,9 @@ import { randomUUID } from 'crypto';
 import type { EventBus } from '@endora-commerce/platform/events';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
 import type { InventoryAuditContext } from '../plugin.js';
+import { isUuidShape } from '@endora-commerce/contracts';
+import type { VisibilityPredicate } from '@endora-commerce/contracts';
+import { NO_PRODUCT_PREDICATE, clauseSql, productClause } from './admin-product-visibility.js';
 
 export interface InventoryAdjustedEvent {
   eventId: string;
@@ -106,31 +109,39 @@ export class StockLevelService {
     private readonly auditLog?: AuditPort,
   ) {}
 
-  async listLandingKpis(): Promise<InventoryLandingKpis> {
+  /**
+   * Spec 193 (T052, FR-083) — `visible` is the caller's product predicate over
+   * `"sl"."product_id"`: every count and total is of the products it lets through.
+   */
+  async listLandingKpis(visible: VisibilityPredicate = NO_PRODUCT_PREDICATE): Promise<InventoryLandingKpis> {
     const em = this.emFactory();
+    const only = clauseSql(visible, 'where');
+    const joined = clauseSql(visible, 'and');
 
     // `em.execute`, not `em.getKnex()`: a knex handle takes its own pooled
     // connection, so every KPI here would answer from outside a transaction the
     // caller holds open while the port reads below answer from inside it —
     // one screen, two views of the same rows (issue #207).
     const [productsTracked, totalOnHandRow, perWarehouse] = await Promise.all([
-      em.execute(`select count(distinct product_id) as count from stock_levels`) as Promise<
+      em.execute(`select count(distinct sl.product_id) as count from stock_levels sl${only.sql}`, [...only.params]) as Promise<
         Array<{ count: string }>
       >,
-      em.execute(`select sum(on_hand) as sum from stock_levels`) as Promise<
+      em.execute(`select sum(sl.on_hand) as sum from stock_levels sl${only.sql}`, [...only.params]) as Promise<
         Array<{ sum: string | null }>
       >,
       em.execute(
         `select w.id, w.code, coalesce(sum(sl.on_hand), 0) as on_hand
            from warehouses w
-           left join stock_levels sl on sl.warehouse_id = w.id
+           left join stock_levels sl on sl.warehouse_id = w.id${joined.sql}
           group by w.id, w.code
           order by w.code`,
+        [...joined.params],
       ) as Promise<Array<{ id: string; code: string; on_hand: string | null }>>,
     ]);
 
     const productsByOnHand = (await em.execute(
-      `select product_id, sum(on_hand) as on_hand from stock_levels group by product_id`,
+      `select sl.product_id, sum(sl.on_hand) as on_hand from stock_levels sl${only.sql} group by sl.product_id`,
+      [...only.params],
     )) as Array<{ product_id: string; on_hand: string | null }>;
 
     const products = await this.catalogProducts.findByIds(
@@ -177,6 +188,11 @@ export class StockLevelService {
      *  (and `manageStock = true` — backorderable / unmanaged products
      *  aren't considered out). */
     outOnly?: boolean;
+    /**
+     * Spec 193 (T052, FR-083) — the caller's product predicate over `"p"."id"`: the roster,
+     * its total and its pages are of the products it lets through.
+     */
+    visible?: VisibilityPredicate;
   } = {}): Promise<{ items: StockLevelRow[]; page: number; pageSize: number; total: number }> {
     const em = this.emFactory();
     const page = Math.max(0, filter.page ?? 0);
@@ -188,58 +204,55 @@ export class StockLevelService {
     //  1. A consistent `total` that matches the displayed item count.
     //  2. A place to push down the SKU/name search and low/out filters
     //     instead of post-filtering on the JS side.
-    const knex = em.getKnex();
     const trimmedQ = filter.q?.trim().toLowerCase();
 
-    const baseQuery = knex({ p: 'products' })
-      .innerJoin({ sl: 'stock_levels' }, 'sl.product_id', 'p.id')
-      .modify((qb) => {
-        if (filter.productId) qb.where('p.id', filter.productId);
-        if (filter.warehouseId) qb.where('sl.warehouse_id', filter.warehouseId);
-        if (trimmedQ) {
-          const needle = `%${trimmedQ}%`;
-          qb.andWhere((inner) => {
-            inner
-              .whereRaw('LOWER("p"."sku") LIKE ?', [needle])
-              .orWhereRaw('LOWER("p"."name"::text) LIKE ?', [needle])
-              .orWhereRaw('LOWER("p"."id"::text) LIKE ?', [needle]);
-          });
-        }
-      })
-      .groupBy('p.id', 'p.sku', 'p.manage_stock', 'p.low_stock_threshold')
-      .modify((qb) => {
-        if (filter.outOnly) {
-          qb.havingRaw('"p"."manage_stock" IS NOT FALSE AND COALESCE(SUM("sl"."on_hand"), 0) <= 0');
-        } else if (filter.lowOnly) {
-          qb.havingRaw(
-            '"p"."manage_stock" IS NOT FALSE AND "p"."low_stock_threshold" IS NOT NULL AND COALESCE(SUM("sl"."on_hand"), 0) > 0 AND COALESCE(SUM("sl"."on_hand"), 0) <= "p"."low_stock_threshold"',
-          );
-        }
-      });
+    // Every value is a `?` placeholder; the clauses are this file's own text.
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (filter.productId) {
+      where.push('"p"."id" = ?');
+      params.push(filter.productId);
+    }
+    if (filter.warehouseId) {
+      where.push('"sl"."warehouse_id" = ?');
+      params.push(filter.warehouseId);
+    }
+    const visible = productClause(filter.visible ?? NO_PRODUCT_PREDICATE);
+    if (visible === false) return { items: [], page, pageSize, total: 0 };
+    if (visible) {
+      where.push(visible.sql);
+      params.push(...visible.params);
+    }
+    if (trimmedQ) {
+      const needle = `%${trimmedQ}%`;
+      where.push('(LOWER("p"."sku") LIKE ? or LOWER("p"."name"::text) LIKE ? or LOWER("p"."id"::text) LIKE ?)');
+      params.push(needle, needle, needle);
+    }
+    const having = filter.outOnly
+      ? 'having "p"."manage_stock" IS NOT FALSE AND COALESCE(SUM("sl"."on_hand"), 0) <= 0'
+      : filter.lowOnly
+        ? 'having "p"."manage_stock" IS NOT FALSE AND "p"."low_stock_threshold" IS NOT NULL AND COALESCE(SUM("sl"."on_hand"), 0) > 0 AND COALESCE(SUM("sl"."on_hand"), 0) <= "p"."low_stock_threshold"'
+        : '';
+    const grouped = `select "p"."id" from "products" as "p"
+        inner join "stock_levels" as "sl" on "sl"."product_id" = "p"."id"
+        ${where.length > 0 ? `where ${where.join(' and ')}` : ''}
+        group by "p"."id", "p"."sku", "p"."manage_stock", "p"."low_stock_threshold"
+        ${having}`;
 
     // Total count of matching products. We wrap the grouped query in a
-    // subselect so `count(*)` counts groups, not rows.
-    // Both pages run through `em.execute(builder)`, not by awaiting the builder:
-    // a knex handle takes its own pooled connection, so the roster a caller
-    // inside a transaction is shown would be computed from rows that
-    // transaction has not written yet (issue #207). The builder is kept rather
-    // than rewritten as a statement because the filters above are assembled at
-    // runtime; `execute` compiles it and runs it with the EntityManager's
-    // transaction context, so the SQL is byte-for-byte the one this method
-    // already sent.
-    const totalRows = (await em.execute(
-      knex.from(baseQuery.clone().select('p.id')).as('grouped').count('* as count'),
-    )) as Array<{ count: string | number }>;
+    // subselect so `count(*)` counts groups, not rows. Both pages run through
+    // `em.execute`, so a caller inside a transaction is shown the roster that
+    // transaction has written (issue #207).
+    const totalRows = await em.execute<Array<{ count: string | number }>>(
+      `select count(*) as "count" from (${grouped}) as "grouped"`,
+      [...params],
+    );
     const total = Number(totalRows[0]?.count ?? 0);
 
-    const idRows = (await em.execute(
-      baseQuery
-        .clone()
-        .select('p.id')
-        .orderByRaw('MAX("sl"."updated_at") DESC')
-        .offset(page * pageSize)
-        .limit(pageSize),
-    )) as Array<{ id: string }>;
+    const idRows = await em.execute<Array<{ id: string }>>(
+      `${grouped} order by MAX("sl"."updated_at") DESC limit ? offset ?`,
+      [...params, pageSize, page * pageSize],
+    );
     const productIds = idRows.map((r) => r.id);
     if (productIds.length === 0) {
       return { items: [], page, pageSize, total };
@@ -333,10 +346,10 @@ export class StockLevelService {
         thresholds,
       });
 
-      const productName =
-        (typeof product.name === 'object' && product.name !== null
-          ? Object.values(product.name)[0]
-          : product.sku) ?? product.sku;
+      // The Global name, one string since feature 174 (FR-031); the SKU only
+      // when it is empty. Reading it as a per-locale map showed the SKU on
+      // every row (issue #1808).
+      const productName = product.name || product.sku;
 
       const mode = product.lowStockThresholdMode;
 
@@ -404,7 +417,7 @@ export class StockLevelService {
       items.push({
         productId,
         productSku: product.sku,
-        productName: String(productName),
+        productName,
         manageStock: product.manageStock,
         backorderEnabled: product.backorderEnabled,
         lowStockThreshold: topLevelThreshold,
@@ -491,6 +504,7 @@ export class StockLevelService {
     const product = await this.catalogProducts.findById(input.productId);
     if (!product) throw new HttpError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
 
+    if (!isUuidShape(input.warehouseId)) throw new HttpError(404, 'WAREHOUSE_NOT_FOUND', 'Warehouse not found');
     const warehouse = await em.findOne(Warehouse, { id: input.warehouseId });
     if (!warehouse) throw new HttpError(404, 'WAREHOUSE_NOT_FOUND', 'Warehouse not found');
 
@@ -511,7 +525,7 @@ export class StockLevelService {
         onHand: input.onHand,
       });
     }
-    await em.persistAndFlush(row);
+    await em.persist(row).flush();
 
     if (this.eventBus && before !== input.onHand) {
       this.eventBus.emit('inventory.adjusted.v1', {

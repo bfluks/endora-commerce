@@ -6,6 +6,7 @@ import type { CmsPageSummary } from '@endora-commerce/contracts';
 // spelling `vi.mock` can name from outside the package.
 import { ApiError, apiClient } from '../../lib/index.js';
 import { Combobox, type ComboboxOption } from '../../ui/combobox.js';
+import { useTranslation } from '../../i18n/useTranslation.js';
 
 /**
  * Searchable single-select CMS-page picker.
@@ -50,16 +51,35 @@ export interface CmsPagePickerProps {
   ariaLabel?: string;
   id?: string;
   className?: string;
+  /**
+   * Pages never offered, whatever the search returns — a page editor's own
+   * page and its descendants, for a parent picker (feature 163). A filter on
+   * the client only: the server behind the write stays the authority.
+   */
+  excludeIds?: readonly string[];
+  /**
+   * The label shown for `value` until a search has returned that page — the
+   * host usually already knows it, and the cache below starts empty.
+   */
+  selectedLabel?: string;
 }
 
 const SEARCH_DEBOUNCE_MS = 250;
 const DEFAULT_LIMIT = 20;
 
+/**
+ * A failed read: the server's own message when it sent one, or `null` for the
+ * picker's translated fallback — resolved at render, so the request does not
+ * re-run when the bundle arrives (issue #1433).
+ */
+type ReadFailure = { message: string | null };
+
 export function CmsPagePicker(props: CmsPagePickerProps): ReactNode {
   const [cache, setCache] = useState<Map<string, CmsPageSummary>>(() => new Map());
   const [options, setOptions] = useState<ComboboxOption<string>[]>([]);
   const [searching, setSearching] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const t = useTranslation('core');
+  const [error, setError] = useState<ReadFailure | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seqRef = useRef(0);
@@ -84,8 +104,9 @@ export function CmsPagePicker(props: CmsPagePickerProps): ReactNode {
           for (const p of res.data) next.set(p.id, p);
           return next;
         });
+        const excluded = new Set(props.excludeIds ?? []);
         setOptions(
-          res.data.map((p) => ({
+          res.data.filter((p) => !excluded.has(p.id)).map((p) => ({
             value: p.id,
             label: p.name,
             description: `/${p.slug}${p.status === 'published' ? '' : ` · ${p.status}`}`,
@@ -93,13 +114,13 @@ export function CmsPagePicker(props: CmsPagePickerProps): ReactNode {
         );
       } catch (err) {
         if (seq !== seqRef.current) return;
-        setError(err instanceof ApiError ? err.envelope.error.message : 'Search failed.');
+        setError({ message: err instanceof ApiError ? err.envelope.error.message : null });
         setOptions([]);
       } finally {
         if (seq === seqRef.current) setSearching(false);
       }
     },
-    [props.salesChannelId],
+    [props.salesChannelId, props.excludeIds],
   );
 
   const handleSearchChange = useCallback(
@@ -113,11 +134,16 @@ export function CmsPagePicker(props: CmsPagePickerProps): ReactNode {
 
   const selectedLabel = useMemo(() => {
     if (!props.value) return '';
-    return cache.get(props.value)?.name ?? '';
-  }, [props.value, cache]);
+    return cache.get(props.value)?.name ?? props.selectedLabel ?? '';
+  }, [props.value, cache, props.selectedLabel]);
 
   const emptyMessage =
-    props.emptyMessage ?? error ?? (searching ? 'Searching…' : 'No matching pages.');
+    props.emptyMessage ??
+    (error
+      ? (error.message ?? t('cmsPicker.pages.searchFailed'))
+      : searching
+        ? t('cmsPicker.pages.searching')
+        : t('cmsPicker.pages.empty'));
 
   return (
     <Combobox<string>
@@ -129,9 +155,9 @@ export function CmsPagePicker(props: CmsPagePickerProps): ReactNode {
       loading={searching}
       clearable={props.clearable ?? true}
       disabled={props.disabled ?? false}
-      placeholder={props.placeholder ?? 'Search CMS pages…'}
+      placeholder={props.placeholder ?? t('cmsPicker.pages.placeholder')}
       emptyMessage={emptyMessage}
-      ariaLabel={props.ariaLabel ?? 'Select CMS page'}
+      ariaLabel={props.ariaLabel ?? t('cmsPicker.pages.label')}
       id={props.id ?? ''}
       className={props.className ?? ''}
       selectedLabel={selectedLabel}

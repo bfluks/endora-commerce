@@ -1,10 +1,13 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
+import { tForLocale } from '../../../lib/i18n/messages';
 
 interface PaginationProps {
   basePath: string;
   page: number;
   totalPages: number;
+  /** The page language. */
+  locale: string;
 }
 
 /**
@@ -12,23 +15,24 @@ interface PaginationProps {
  * engines + LLM crawlers can follow them; rel="prev" + rel="next"
  * surface the surrounding pages for SEO (Principle VII).
  */
-export function Pagination({ basePath, page, totalPages }: PaginationProps): ReactNode {
+export function Pagination({ basePath, page, totalPages, locale }: PaginationProps): ReactNode {
   if (totalPages <= 1) return null;
+  const t = tForLocale(locale);
   const pages = pageWindow(page, totalPages);
 
   return (
     <nav
-      aria-label="Pagination"
+      aria-label={t('content.blog.pagination.label')}
       className="mt-8 flex items-center justify-center gap-2 text-sm"
     >
       {page > 1 ? (
-        <Link
+        <LocalizedLink
           href={`${basePath}?page=${page - 1}`}
           rel="prev"
           className="rounded border border-[--line] px-3 py-1 hover:bg-[--surface-alt]"
         >
-          ← Previous
-        </Link>
+          ← {t('content.blog.pagination.previous')}
+        </LocalizedLink>
       ) : null}
       {pages.map((p, i) =>
         p === '…' ? (
@@ -36,7 +40,7 @@ export function Pagination({ basePath, page, totalPages }: PaginationProps): Rea
             …
           </span>
         ) : (
-          <Link
+          <LocalizedLink
             key={p}
             href={`${basePath}?page=${p}`}
             className={`min-w-[2.5rem] rounded border px-2 py-1 text-center font-mono ${
@@ -46,17 +50,17 @@ export function Pagination({ basePath, page, totalPages }: PaginationProps): Rea
             }`}
           >
             {p}
-          </Link>
+          </LocalizedLink>
         ),
       )}
       {page < totalPages ? (
-        <Link
+        <LocalizedLink
           href={`${basePath}?page=${page + 1}`}
           rel="next"
           className="rounded border border-[--line] px-3 py-1 hover:bg-[--surface-alt]"
         >
-          Next →
-        </Link>
+          {t('content.blog.pagination.next')} →
+        </LocalizedLink>
       ) : null}
     </nav>
   );

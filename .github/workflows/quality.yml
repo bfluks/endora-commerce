@@ -84,7 +84,32 @@ jobs:
       # nobody bracketed. The remedy differs when it is reached: on GitLab the
       # answer was "raise the runner's container memory first", and here there
       # is no container to raise, so the answer is this line.
-      NODE_OPTIONS: --max-old-space-size=2560
+      #
+      # Raised to 3072 on 2026-10-24 (D-287 release, PR #419): under Node 22.20
+      # the single backend program died at 2560 (`heap out of memory`) and
+      # passed at 2816 and 3072, with tsc's `Memory used` at 2.74 GB.
+      #
+      # Lowered to 2560 the same day (issue #421): `backend` now type-checks
+      # two programs, `backend/tsconfig.json` and `backend/test/tsconfig.json`,
+      # and the larger dies at 1920 and passes at 2048, so 2560 keeps ~512 MB
+      # over it. Wall time goes from 64-65 s to 89-92 s. The brackets for both
+      # programs and the rejected three-way split are in `.gitlab-ci.yml`'s
+      # `quality` job, which carries the measurement; the two values move
+      # together.
+      #
+      # Raised to 3072 on 2026-11-09 (issue #986): `pnpm -r run typecheck` died
+      # `heap out of memory` (exit 134) on PRs #965, #976, #979, #980 and #984
+      # and on the master push of 919ee91a9, and a rerun usually passed.
+      # Re-bracketed under Node 22.20, `backend/test/tsconfig.json` now dies
+      # at 2304 and 2432 and passes at 2560 (6162 files, 3.96M instantiations,
+      # tsc `Memory used` 2.63 GB), so 2560 has become the cliff;
+      # `backend/tsconfig.json` dies at 1920 and passes at 2048 (5692 files).
+      # 3072 restores ~512 MB over the larger one. The brackets are in
+      # `.gitlab-ci.yml`'s `quality` job; the two values move together.
+      # MikroORM 7 (#1866): `backend/test/tsconfig.json` measured at 3.58 GB tsc
+      # `Memory used` (6836 files, 6.95M instantiations; 2.63 GB / 3.96M on 6),
+      # so 3072 dies `heap out of memory` (exit 134). 4608 restores ~1 GB over it.
+      NODE_OPTIONS: --max-old-space-size=4608
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -104,9 +129,18 @@ jobs:
       # `packages/platform`. An unbuilt workspace is not a stale import, it is a
       # repository in which almost nothing resolves.
       - run: pnpm run build:packages
+      - run: pnpm -r run typecheck
+      # Typed lint (issue #1027) holds a TypeScript program per process, and
+      # `backend`'s `test/{contract,integration,perf}` program is the largest:
+      # under Node 22.20 it dies at 2816 and passes at 3072, and it died at
+      # 3072 on this runner (PR #1424). 3584 keeps ~512 MB over it. The job's
+      # 3072 above stays the type-check's measured value, so lint is a step of
+      # its own with its own heap.
+      - env:
+          # Raised with the type-check above for MikroORM 7's heavier types (#1866).
+          NODE_OPTIONS: --max-old-space-size=5120
+        run: pnpm -r run lint
       - run: |
-          pnpm -r run typecheck
-          pnpm -r run lint
           pnpm --filter backend exec tsx scripts/check-entity-tenant-classification.ts
           pnpm --filter backend exec tsx scripts/check-channel-resolution.ts --enforce
           pnpm --filter backend run check:command-coverage -- --strict
@@ -116,16 +150,19 @@ jobs:
           pnpm --filter backend run check:admin-zones
           pnpm --filter backend run check:entry-scope
           pnpm --filter backend run check:container-imports
+          pnpm --filter backend run check:entity-decorators
           pnpm --filter backend run check:port-dependencies
           pnpm --filter backend run check:port-catches
           pnpm --filter backend run check:port-shape
           pnpm --filter backend run check:subscribe-seam
           pnpm --filter backend run check:queue-names
+          pnpm --filter backend run check:extensible-tables
           pnpm --filter backend run check:transaction-context
           pnpm --filter backend run check:singleton-identity
           pnpm --filter backend run check:entry-presence
           pnpm --filter backend run check:lock-claims
           pnpm --filter backend run check:action-route-permissions
+          pnpm --filter backend run check:custom-field-writes
           pnpm --filter backend run check:harness-teardown
           pnpm --filter backend run check:fixture-substitution
           pnpm --filter backend run check:shared-table-wipes
@@ -136,6 +173,7 @@ jobs:
           pnpm --filter backend run check:docs-translations
           pnpm --filter backend run check:error-translations
           pnpm --filter backend run check:bundle-pairing
+          pnpm --filter backend run check:text-budget
           pnpm --filter backend run check:env-inputs
           pnpm --filter backend run check:block-names
           pnpm --filter backend run check:block-renderers

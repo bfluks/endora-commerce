@@ -1,14 +1,23 @@
 import { randomUUID } from 'crypto';
 import type { EntityManager } from '@mikro-orm/postgresql';
-import { ERROR_CODES, ORDER_STATUS_ON_HOLD, type ReceivePayment } from '@endora-commerce/contracts';
+import {
+  ERROR_CODES,
+  ORDER_STATUS_ON_HOLD,
+  decimalText,
+  hasAtMostTwoDecimals,
+  roundHalfUp,
+  type ReceivePayment,
+} from '@endora-commerce/contracts';
 import type {
+  OrderCommandPort,
   OrderTransitionOutcome,
-  OrderTransitionPort,
   PaymentMethodReadPort,
 } from '@endora-commerce/contracts';
 import type { EventBase, EventBus } from '@endora-commerce/platform/events';
 import { HttpError } from '@endora-commerce/platform/http';
+import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import { Payment } from '../entities/payment.entity.js';
+import { paymentsErrorCodes } from '../../manifest.js';
 /**
  * The one cross-module type this handler names, and the seam feature 075 kept
  * here **permanently** (D-78 point 2) — now expressed as the owner's own
@@ -39,7 +48,7 @@ import { Payment } from '../entities/payment.entity.js';
  * the ruling is unaffected by its going. `order.status` was written here too,
  * on the same `tx` — a *transition*, with a graph, guards, an audit entry and
  * side-effects, none of which a column assignment performs. It moved to
- * `orderTransitionPort`, called after this transaction has committed. What is
+ * `orderCommandPort`, called after this transaction has committed. What is
  * left in the transaction is the money axis, `order.paymentStatus`, which is
  * the column `payments_order_fk` genuinely holds together with the payment row.
  *
@@ -49,13 +58,13 @@ import { Payment } from '../entities/payment.entity.js';
  * themselves, so its constructor could not take a port none of them can build.
  * All four resolve `receivePaymentPort` today and the one construction left is
  * in `payments/backend.ts`, where `ctx` is in hand — so the payment-method read
- * is `paymentMethodReadPort` and the lifecycle write is `orderTransitionPort`.
+ * is `paymentMethodReadPort` and the lifecycle write is `orderCommandPort`.
  * Neither shares the constraint above: the method read is a read of a row this
  * transaction never writes (no FK obliges it to be co-transactional, and the
  * identical read is a port in `shipments`' twin handler), and the transition
  * runs **after** the commit, for the reason the port's own contract gives.
  */
-import type { OrderPaymentStatusApplyPort } from '@endora-commerce/mod-orders/ports';
+import type { OrderPaymentStatusApplyPort, OrderPaymentSettlementEffectsPort } from '@endora-commerce/mod-orders/ports';
 /**
  * Re-exported so `backend.ts` names its own module for the same type. One seam,
  * one ledger entry: a second import specifier in the composition file would be
@@ -63,7 +72,7 @@ import type { OrderPaymentStatusApplyPort } from '@endora-commerce/mod-orders/po
  * and the reason is stated above. `orders` does the same for the two
  * `EntityManager`-taking interfaces it reads.
  */
-export type { OrderPaymentStatusApplyPort };
+export type { OrderPaymentStatusApplyPort, OrderPaymentSettlementEffectsPort };
 
 export interface PaymentEvents extends Record<string, EventBase> {
   'payment.received.v1': EventBase & {
@@ -172,12 +181,16 @@ export class ReceivePaymentHandler {
      * templated `order.status.*.after` events itself — so this handler no
      * longer resolves `orderStatusAnnouncePort`. Doing both would emit every
      * payment-driven status change twice.
+     *
+     * `orderCommandPort` since 0.113.0 (`specs/186-aggregate-ports/` US4):
+     * the Order aggregate's port, called with `source: 'payment'`, which the
+     * audit entry records beside the system actor.
      */
-    private readonly orderTransition: OrderTransitionPort,
+    private readonly orderCommands: Pick<OrderCommandPort, 'applyStatus'>,
     /**
      * The money axis of the order this payment settles (feature 080, T048).
      *
-     * **Called inside this handler's transaction**, unlike `orderTransition`
+     * **Called inside this handler's transaction**, unlike `orderCommands`
      * above, and the asymmetry is the whole reason there are two ports rather
      * than one: `payments_order_fk` (`on delete restrict`) holds the payment row
      * and `orders.payment_status` together, so that write may not commit
@@ -187,6 +200,17 @@ export class ReceivePaymentHandler {
      * (D-169), and the header above states the constraint in full.
      */
     private readonly orderPaymentStatus: OrderPaymentStatusApplyPort,
+    /**
+     * The post-commit drain for a payment-status settlement (issue #1576).
+     * `orders` records any obligation inside `applyPaymentStatus` on this
+     * handler's transaction; this port attempts the release after it commits.
+     * `orders` owns both the transition-effect ledger and `CreditLimitPort`
+     * access, so `payments` must never reach them directly.
+     *
+     * **Called after the commit for `drainForOrder`**, never inside the
+     * settlement transaction (issue #200).
+     */
+    private readonly orderPaymentSettlementEffects: OrderPaymentSettlementEffectsPort,
     /** Where a refused transition is recorded; see {@link SettlementLogger}. */
     private readonly log: SettlementLogger,
     private readonly events?: PaymentEventBus,
@@ -195,7 +219,7 @@ export class ReceivePaymentHandler {
   async receive(input: ReceivePayment): Promise<ReceivePaymentResult> {
     // command-coverage-ignore: provider payment-event ingestion — stamps the
     // attempt result on the Payment row and the order's payment status, then
-    // asks `orderTransitionPort` for the lifecycle move, which records the
+    // asks `orderCommandPort` for the lifecycle move, which records the
     // `order.status_transition` audit entry co-transactionally with the status
     // write it performs. The reason on this marker used to claim that audit
     // while the handler assigned `order.status` itself and reached the orders
@@ -211,10 +235,12 @@ export class ReceivePaymentHandler {
       // Idempotency / terminal-state guards (FR-025).
       if (payment.status === 'paid') {
         if (input.outcome === 'failure') {
+          // The retry's code for the same state, from the other caller (issue #630).
           throw new HttpError(
             409,
-            ERROR_CODES.VALIDATION_FAILED,
+            paymentsErrorCodes.PAYMENT_ALREADY_PAID,
             'Payment is already settled; it cannot be marked failed.',
+            { code: 'mark_failed', orderId: payment.orderId, paymentId: payment.id, status: payment.status },
           );
         }
         return {
@@ -223,6 +249,8 @@ export class ReceivePaymentHandler {
           idempotent: true,
           emit: false,
           transition: null as { to: string; setting: TransitionTrigger } | null,
+          refused: null as { from: string; to: string } | null,
+          owesEffects: false,
         };
       }
 
@@ -267,6 +295,18 @@ export class ReceivePaymentHandler {
         }
       }
 
+      // Issue #1574 — the order's money axis refused the move (a late decline
+      // on an order already paid, a late success on a refunded one). The
+      // payment row keeps the provider's fact, and the method's
+      // `status_on_success` / `status_on_failure` — the consequence of the
+      // money moving — is not asked for: it must not hold a paid order or
+      // advance a refunded one.
+      const refused: { from: string; to: string } | null =
+        applied?.outcome === 'refused'
+          ? { from: applied.paymentStatus, to: input.outcome === 'success' ? 'paid' : 'failed' }
+          : null;
+      if (refused) transition = null;
+
       await tx.flush();
       return {
         payment,
@@ -275,8 +315,23 @@ export class ReceivePaymentHandler {
         emit: true,
         adapter: method?.adapter ?? payment.paymentMethodId,
         transition,
+        refused,
+        owesEffects: applied?.owesEffects ?? false,
       };
     });
+
+    if (result.refused) {
+      this.log.warn(
+        {
+          paymentId: result.payment.id,
+          orderId: result.payment.orderId,
+          from: result.refused.from,
+          to: result.refused.to,
+        },
+        'payments: the order payment status was not changed, because its current status does not allow the move; ' +
+          'the payment is recorded and no order status change was requested',
+      );
+    }
 
     /**
      * After the commit, never inside the transaction above (feature 085 R4).
@@ -328,6 +383,23 @@ export class ReceivePaymentHandler {
       // reaction to a payment-driven status change.
     }
 
+    // Issue #1576 — move the order and emit the payment event before attempting
+    // the durable credit-release obligation: an already-paid replay skips those
+    // steps, while the sweep can recover the release. The drain uses its own
+    // `EntityManager` after commit (issue #200). Ordinary failures stay queued;
+    // a module switched off still propagates after the payment follow-ups.
+    if (result.owesEffects) {
+      try {
+        await this.orderPaymentSettlementEffects.drainForOrder(result.payment.orderId);
+      } catch (error) {
+        rethrowIfModuleDisabled(error);
+        this.log.warn(
+          { orderId: result.payment.orderId, error },
+          'payments: the immediate attempt at a payment-status follow-up failed; the sweep retries it',
+        );
+      }
+    }
+
     return {
       paymentId: result.payment.id,
       status: result.payment.status,
@@ -357,12 +429,11 @@ export class ReceivePaymentHandler {
     statusBefore: string | null,
     reason: string | null,
   ): Promise<string | null> {
-    const outcome: OrderTransitionOutcome = await this.orderTransition.applyStatus({
+    const outcome: OrderTransitionOutcome = await this.orderCommands.applyStatus(
       orderId,
-      to,
-      actor: { kind: 'system', source: 'payment' },
-      reason,
-    });
+      { to, reason },
+      { source: 'payment' },
+    );
 
     if (outcome.applied) return outcome.to;
     // A second declined attempt on an order already at the failure status: the
@@ -410,7 +481,31 @@ export class ReceivePaymentHandler {
       const payment = await this.resolvePaymentForRefund(tx, input);
       if (!payment) return null;
 
-      const newRefunded = input.refundedAmount.toFixed(2);
+      // An amount with more than two decimal places is refused, never rounded
+      // (issue #428; nothing is rounded silently). Nothing about the payment's
+      // money or status moves and the order is not asked; the payment carries
+      // the refusal for an operator to settle by hand, and the call answers
+      // normally — a throw would answer the gateway's webhook with an error,
+      // which the gateway redelivers, and every delivery would be refused again.
+      if (!hasAtMostTwoDecimals(input.refundedAmount)) {
+        const reported = decimalText(input.refundedAmount);
+        payment.providerDetails = {
+          ...(payment.providerDetails ?? {}),
+          refundAnomaly: {
+            reason: 'amount_precision_exceeded',
+            reportedRefundedAmount: reported,
+            currency: input.currency,
+            fullyRefunded: input.fullyRefunded,
+            externalRefundId: input.externalRefundId ?? null,
+            reportedAt: new Date().toISOString(),
+          },
+        };
+        await tx.flush();
+        return { payment, changed: false, holdsTheOrder: false, refused: reported as string | null };
+      }
+
+      // Exact on its decimal digits (issue #417); `toFixed(2)` rounded the double.
+      const newRefunded = roundHalfUp(input.refundedAmount);
       const nextStatus: Payment['status'] = input.fullyRefunded
         ? 'refunded'
         : input.refundedAmount > 0 && payment.status !== 'refunded'
@@ -441,13 +536,42 @@ export class ReceivePaymentHandler {
             paymentStatus: 'refunded',
           })
         : null;
+      // Issue #1574 — a full refund reported for an order that is not `paid`
+      // is refused on the money axis and the column stays. The order is still
+      // held: the hold is the operator-review flag, and this is exactly the
+      // anomaly it is for.
       const holdsTheOrder = refunded !== null;
+      if (refunded?.outcome === 'refused') {
+        this.log.warn(
+          { paymentId: payment.id, orderId: payment.orderId, from: refunded.paymentStatus, to: 'refunded' },
+          'payments: a full refund was reported for an order that is not paid; its payment status was not ' +
+            'changed and the order is held for review',
+        );
+      }
 
       await tx.flush();
-      return { payment, changed, holdsTheOrder };
+      return { payment, changed, holdsTheOrder, refused: null as string | null };
     });
 
     if (!result) return null;
+
+    if (result.refused !== null) {
+      this.log.warn(
+        {
+          paymentId: result.payment.id,
+          orderId: result.payment.orderId,
+          externalReference: result.payment.externalReference ?? null,
+          reportedRefundedAmount: result.refused,
+          recordedRefundedAmount: result.payment.refundedAmount,
+          currency: input.currency,
+          fullyRefunded: input.fullyRefunded,
+          externalRefundId: input.externalRefundId ?? null,
+        },
+        'payments: the gateway reported a refund amount with more than two decimal places; it was not ' +
+          'recorded, and the payment is marked for manual attention (providerDetails.refundAnomaly)',
+      );
+      return { paymentId: result.payment.id, changed: false };
+    }
 
     /**
      * The hold goes through the lifecycle too, after the commit, for the same

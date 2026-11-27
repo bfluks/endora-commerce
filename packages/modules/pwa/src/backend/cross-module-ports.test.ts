@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import type { Queue } from 'bullmq';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
+import type { ModuleContext } from '@endora-commerce/platform/kernel';
 import type {
   CustomerAccountReadPort,
   CustomerAccountRecord,
@@ -15,6 +16,8 @@ import {
   type PwaAdminRoutesDeps,
 } from './routes.admin.js';
 import { PushMessageService } from './services/push-message-service.js';
+import { registerModule } from './index.js';
+import { manifest } from '../manifest.js';
 
 /**
  * Feature 075, Phase C — `pwa` asks `customer_accounts`, `organizations` and
@@ -49,7 +52,7 @@ function fakeEm(handlers: Record<string, unknown>): () => EntityManager {
     findOne: async (entity: { name?: string }) => dispatch(entity, null),
     find: async (entity: { name?: string }) => dispatch(entity, []),
     create: (_entity: unknown, data: Record<string, unknown>) => ({ id: 'msg-1', ...data }),
-    persistAndFlush: async () => undefined,
+    persist: () => ({ flush: async () => undefined }),
   };
   return () => em as unknown as EntityManager;
 }
@@ -64,7 +67,7 @@ function accountRecord(
     email: `${id}@example.test`,
     firstName: 'Ada',
     lastName: 'Lovelace',
-    role: 'regular_user',
+    organizationRoleId: '00000000-0000-4000-8000-0000000170b2',
     emailVerifiedAt: null,
     twoFactorEnabled: false,
     lastLoginAt: null,
@@ -81,6 +84,7 @@ function accountRecord(
     blockedByCustomerAccountId: null,
     deletionRequestedByAdminUserId: null,
     anonymizedAt: null,
+    preferredLanguage: null,
     ...overrides,
   };
 }
@@ -109,7 +113,6 @@ function organizationRecord(
     rejectedAt: null,
     approvedAt: null,
     approvedByAdminUserId: null,
-    requiresCartApproval: false,
     fulfilmentStrategy: null,
     fulfilmentStrategyWarehouseOrder: null,
     parentId: null,
@@ -120,6 +123,7 @@ function organizationRecord(
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     updatedAt: new Date('2026-01-01T00:00:00.000Z'),
     deletedAt: null,
+    convertedToCompanyAt: null,
     ...overrides,
   };
 }
@@ -208,9 +212,15 @@ describe('pwa — the Rule Builder pickers read published ports', () => {
         countByIds: async () => 0,
         searchByName: async (query, limit) => {
           asked.push([query, limit]);
-          return [organizationRecord('org-1')];
+          return [
+            organizationRecord('org-1'),
+            // A personal Organization has no tax ID (`specs/177-tax-id-scope/` X6).
+            organizationRecord('org-2', { isPersonal: true, taxId: null }),
+          ];
         },
         searchIdsByName: async () => [],
+        findByTaxId: async () => [],
+        resolveByTaxId: async () => ({ kind: 'none' }),
       },
       customerGroups: unusedPort as CustomerGroupReadPort,
     });
@@ -224,6 +234,7 @@ describe('pwa — the Rule Builder pickers read published ports', () => {
     expect(asked).toEqual([['lodz', 25]]);
     expect(response.json().data.items).toEqual([
       { id: 'org-1', name: 'Org org-1', taxId: 'PLorg-1' },
+      { id: 'org-2', name: 'Org org-2', taxId: null },
     ]);
     await app.close();
   });
@@ -334,9 +345,11 @@ describe('pwa — rule-audience targeting resolves customer context over ports',
       find: async (entity: { name?: string }) =>
         entity.name === 'PushSubscription' ? [{ id: 'sub-1', customerAccountId: 'cust-1' }] : [],
       create: (_entity: unknown, data: Record<string, unknown>) => ({ id: 'msg-1', ...data }),
-      persistAndFlush: async (value: unknown) => {
-        persisted.push(value);
-      },
+      persist: (value: unknown) => ({
+        flush: async () => {
+          persisted.push(value);
+        },
+      }),
     } as unknown as EntityManager;
 
     const service = new PushMessageService(
@@ -357,5 +370,63 @@ describe('pwa — rule-audience targeting resolves customer context over ports',
     ).rejects.toThrow('MODULE_DISABLED');
 
     expect(persisted).toEqual([]);
+  });
+});
+
+/**
+ * `specs/179-rfq-and-customer-notifications/` T091 (FR-061) — quote request
+ * pushes follow `quote_requests`' delivery records through `customerPushPort`,
+ * so this module no longer listens to quote events of its own: a change pushed
+ * by both paths would reach a device twice. What is left of the coupling runs
+ * the other way — `quote_requests` declares `degrades-without pwa` — so the
+ * `quoteRequestReadPort` edge goes with the subscriptions.
+ */
+describe('pwa — quote pushes arrive through customerPushPort, not through quote events', () => {
+  /** `registerModule` against a recording context; nothing is built. */
+  function compose(): { subscribed: string[]; ports: string[] } {
+    const subscribed: string[] = [];
+    const ports: string[] = [];
+    const registration = (): Record<string, unknown> => {
+      const self: Record<string, unknown> = {};
+      for (const option of ['singleton', 'scoped', 'transient', 'disposer']) self[option] = () => self;
+      return self;
+    };
+    const ctx = {
+      di: {
+        register: () => undefined,
+        providePort: (name: string) => {
+          ports.push(name);
+        },
+      },
+      asFunction: registration,
+      asValue: registration,
+      subscribe: (name: string) => {
+        subscribed.push(name);
+      },
+      routes: () => undefined,
+      worker: () => undefined,
+      // Issue #544 — the icon write validator is pushed from a boot hook.
+      onBoot: () => undefined,
+      log: { info: () => undefined, warn: () => undefined, error: () => undefined },
+    } as unknown as ModuleContext;
+    registerModule(ctx);
+    return { subscribed, ports };
+  }
+
+  it('subscribes to no rfq.* event — the order status event is its only subscription', () => {
+    const { subscribed } = compose();
+    expect(subscribed.filter((name) => name.startsWith('rfq.'))).toEqual([]);
+    expect(subscribed).toEqual(['order.status_changed.v1']);
+  });
+
+  it('publishes customerPushPort', () => {
+    expect(compose().ports).toContain('customerPushPort');
+  });
+
+  it('declares no edge on quote_requests any more', () => {
+    const edges = manifest.nonBindingDependencies ?? [];
+    expect(edges.filter((edge) => edge.moduleId === 'quote_requests')).toEqual([]);
+    expect(edges.filter((edge) => edge.name === 'quoteRequestReadPort')).toEqual([]);
+    expect(manifest.dependencies).not.toContain('quote_requests');
   });
 });

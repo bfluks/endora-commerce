@@ -1,16 +1,17 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
   checkSharedTableWipes,
   compareToBaseline,
   countByFile,
-  filesDeletingRows,
   findUnscopedWipes,
+  scanSharedTableWipes,
   truncatedTables,
   unfilteredDeleteTable,
+  unfilteredUpdateTable,
   UNSCOPED_WIPES_BASELINE,
 } from '../../../scripts/check-shared-table-wipes.js';
 
@@ -27,6 +28,12 @@ const BACKEND_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
  *
  *   - it sees the three spellings: `nativeDelete(Entity, {})`, a `truncate`, and
  *     a `delete from` with no `where`;
+ *   - it sees the fourth, which issue #115 found it missing: `em.find(Entity,
+ *     {})` and every row of the result handed to `remove` — a loop, a
+ *     `forEach`, the array itself;
+ *   - it sees a statement that rewrites every row without removing one — an
+ *     `update` with no `where`, `nativeUpdate(Entity, {}, …)` — because the
+ *     next file reads the table it left behind just the same (issue #115);
  *   - it sees them wherever they sit — a hook, a test body, a module-level
  *     helper — and says which;
  *   - it does not see a delete that carries a filter, in either spelling;
@@ -112,6 +119,84 @@ describe('check-shared-table-wipes sees a whole-table wipe', () => {
   });
 });
 
+/**
+ * The cleanup `sales_channels/boot-time-default-reconciliation.test.ts` carried
+ * (issue #115), verbatim: an unqualified update, then find-all and remove-each.
+ */
+const RECONCILER_CLEANUP = [
+  'async function clearChannels(): Promise<void> {',
+  '  const em = db.em();',
+  `  await em.execute('update "quote_requests" set "sales_channel_id" = null');`,
+  '  const all = await em.find(SalesChannel, {});',
+  '  for (const c of all) em.remove(c);',
+  '  await em.flush();',
+  '}',
+].join('\n');
+
+describe('check-shared-table-wipes sees a find-all followed by remove-each (issue #115)', () => {
+  it('reports the cleanup the reconciler test carried, both halves of it', () => {
+    const found = findUnscopedWipes(
+      sourcesOf('integration/sales_channels/x.test.ts', RECONCILER_CLEANUP),
+    );
+    expect(found.map((w) => [w.kind, w.table, w.line])).toEqual([
+      ['sql-update', 'quote_requests', 3],
+      ['orm-remove-each', 'SalesChannel', 4],
+    ]);
+    expect(found.every((w) => w.site === 'helper' && w.enclosing === 'clearChannels')).toBe(true);
+  });
+
+  it('reports the array handed to `remove` whole, and `removeAndFlush`', () => {
+    const source = [
+      'beforeEach(async () => {',
+      '  const rows = await em.find(Coupon, {});',
+      '  em.remove(rows);',
+      '  const more = await h.em().findAll(Promotion);',
+      '  await em.removeAndFlush(more);',
+      '});',
+    ].join('\n');
+    const found = findUnscopedWipes(sourcesOf('integration/promotions/x.test.ts', source));
+    expect(found.map((w) => [w.kind, w.table, w.site])).toEqual([
+      ['orm-remove-each', 'Coupon', 'hook'],
+      ['orm-remove-each', 'Promotion', 'hook'],
+    ]);
+  });
+
+  it('reports a `forEach` over the result and a find inlined into `remove`', () => {
+    const source = [
+      "it('x', async () => {",
+      '  (await em.find(Tag, {})).forEach((t) => em.remove(t));',
+      '  const all = await em.find(Post, {}, { populate: ["tags"] });',
+      '  all.forEach((p) => {',
+      '    em.remove(p);',
+      '  });',
+      '  em.remove(await em.find(Author, {}));',
+      '  await em.flush();',
+      '});',
+    ].join('\n');
+    const found = findUnscopedWipes(sourcesOf('integration/blog/x.test.ts', source));
+    expect(found.map((w) => w.table)).toEqual(['Tag', 'Post', 'Author']);
+    expect(found.every((w) => w.kind === 'orm-remove-each')).toBe(true);
+  });
+});
+
+describe('check-shared-table-wipes sees a statement that rewrites every row (issue #115)', () => {
+  it('reports an `update` with no `where`', () => {
+    const source = [
+      'afterAll(async () => {',
+      '  await em.execute(`update "settings" set "global_value" = null`);',
+      '});',
+    ].join('\n');
+    const found = findUnscopedWipes(sourcesOf('integration/settings/x.test.ts', source));
+    expect(found.map((w) => [w.kind, w.table])).toEqual([['sql-update', 'settings']]);
+  });
+
+  it('reports `nativeUpdate` with an empty filter', () => {
+    const source = "await em.nativeUpdate(SalesChannel, {}, { active: false });";
+    const found = findUnscopedWipes(sourcesOf('integration/sales_channels/x.test.ts', source));
+    expect(found.map((w) => [w.kind, w.table])).toEqual([['orm-update', 'SalesChannel']]);
+  });
+});
+
 describe('check-shared-table-wipes leaves the scoped shapes alone', () => {
   it('does not report a `nativeDelete` that carries a filter', () => {
     const source = 'await em.nativeDelete(ModuleAction, { moduleId: TEST_MODULE_ID });';
@@ -125,6 +210,40 @@ describe('check-shared-table-wipes leaves the scoped shapes alone', () => {
       '});',
     ].join('\n');
     expect(findUnscopedWipes(sourcesOf('contract/blog/x.test.ts', source))).toEqual([]);
+  });
+
+  it('does not report a find-all that is only read', () => {
+    const source = [
+      'const all = await em.find(SalesChannel, {});',
+      'expect(all).toHaveLength(1);',
+    ].join('\n');
+    expect(findUnscopedWipes(sourcesOf('integration/x.test.ts', source))).toEqual([]);
+  });
+
+  it('does not report removing rows a filtered find returned', () => {
+    const source = [
+      'const mine = await em.find(SalesChannel, { code: { $in: created } });',
+      'for (const c of mine) em.remove(c);',
+      'await em.flush();',
+    ].join('\n');
+    expect(findUnscopedWipes(sourcesOf('integration/x.test.ts', source))).toEqual([]);
+  });
+
+  it('does not report an `Array#find` whose result is removed', () => {
+    const source = [
+      'const row = rows.find((r) => r.code === "x");',
+      'em.remove(row);',
+    ].join('\n');
+    expect(findUnscopedWipes(sourcesOf('integration/x.test.ts', source))).toEqual([]);
+  });
+
+  it('does not report an `update` or a `nativeUpdate` that carries a filter', () => {
+    const source = [
+      'await em.execute(`update "quote_requests" set "sales_channel_id" = ${id} where "id" = ${rfq}`);',
+      "await em.execute('update quote_requests set sales_channel_id = null where id in (?)', [ids]);",
+      'await em.nativeUpdate(SalesChannel, { id }, { active: false });',
+    ].join('\n');
+    expect(findUnscopedWipes(sourcesOf('integration/x.test.ts', source))).toEqual([]);
   });
 
   it('does not report a select that merely mentions a table', () => {
@@ -156,6 +275,15 @@ describe('the SQL readers', () => {
     expect(unfilteredDeleteTable('delete from "countries"')).toBe('countries');
     expect(unfilteredDeleteTable('delete from countries where code = ?')).toBeNull();
     expect(unfilteredDeleteTable('insert into countries values (1)')).toBeNull();
+  });
+
+  it('separates an unfiltered update from a filtered one', () => {
+    expect(unfilteredUpdateTable('update "quote_requests" set "sales_channel_id" = null')).toBe(
+      'quote_requests',
+    );
+    expect(unfilteredUpdateTable('update only public.settings set a = 1')).toBe('settings');
+    expect(unfilteredUpdateTable('update settings set a = ? where key = ?')).toBeNull();
+    expect(unfilteredUpdateTable('select * from x for update')).toBeNull();
   });
 });
 
@@ -212,6 +340,26 @@ describe('check-shared-table-wipes ratchets in both directions', () => {
 
 describe('over the real tree', () => {
   const sources = readTree(join(BACKEND_ROOT, 'test'));
+  // One scan, the one the CLI runs: inside a shared-parse scope it reads each
+  // test file once for every assertion below, where calling each walk on its
+  // own parsed the whole of `test/` per assertion and timed out under load in
+  // `test:unit:fast` (issue #910).
+  // **A budget sized for the scan, not for a unit case** (issue #250). #918
+  // did not add cost here, it moved it: before it, four whole-tree cases each
+  // parsed `test/` for themselves (8.2-9.0 s each, idle) under their own 30 s;
+  // now one scan does all four in this hook (6.5 s idle) under the hook's 30 s.
+  // That scan, measured on 2026-11-08 on a 16-thread machine: 6.5 s idle,
+  // 34.5 s at load ~35-40 (16 CPU burners beside two other agents' runs), and
+  // 20.2 s and 20.8 s on CI's 4-vCPU runner, where `test:unit:fast` runs four
+  // forks at once (run 42427743082, both attempts). Nothing in it repeats any
+  // more. 120 s is the budget `check-module-boundary.test.ts` gives its one
+  // whole-tree case (#908): over three times the loaded measurement, and still
+  // a bound, so a walk that stopped terminating still fails.
+  const TREE_SCAN_BUDGET_MS = 120_000;
+  let scan: ReturnType<typeof scanSharedTableWipes>;
+  beforeAll(() => {
+    scan = scanSharedTableWipes({ sources });
+  }, TREE_SCAN_BUDGET_MS);
 
   it('reads a tree big enough for a green to mean something', () => {
     expect(sources.size, 'no sources found under test/ — a vacuous pass').toBeGreaterThan(500);
@@ -219,13 +367,14 @@ describe('over the real tree', () => {
     // whose delete statements the detector no longer recognises is the quiet
     // way to report nothing (issue #113).
     expect(
-      filesDeletingRows({ sources }),
+      scan.deleting,
       'no test file deletes rows — the detection has gone blind',
     ).toBeGreaterThan(50);
   });
 
   it('finds no file over its baseline and none drained below it', () => {
-    const result = checkSharedTableWipes({ sources }, UNSCOPED_WIPES_BASELINE);
+    // The scan judges against the shipped baseline, `UNSCOPED_WIPES_BASELINE`.
+    const result = scan.result;
     expect(result.regressions.map((d) => `${d.file}: ${d.actual} > ${d.baseline}`)).toEqual([]);
     expect(result.drained.map((d) => `${d.file}: ${d.actual} < ${d.baseline}`)).toEqual([]);
   });
@@ -241,9 +390,17 @@ describe('over the real tree', () => {
     // in the baseline — `comparison-price-source` rebuilds the platform's single
     // default price list — so the invariant is about the tables, not the folder.
     expect(
-      findUnscopedWipes({ sources })
+      scan.wipes
         .filter((w) => w.table.toLowerCase().startsWith('comparison'))
         .map((w) => `${w.file}:${w.line} ${w.table}`),
+    ).toEqual([]);
+  });
+
+  it('holds the fix: the reconciler test no longer empties `sales_channels` (issue #115)', () => {
+    expect(
+      scan.wipes
+        .filter((w) => w.file === 'integration/sales_channels/boot-time-default-reconciliation.test.ts')
+        .map((w) => `${w.line} [${w.kind}] ${w.table}`),
     ).toEqual([]);
   });
 

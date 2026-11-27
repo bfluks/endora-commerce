@@ -51,6 +51,8 @@ import { pathToFileURL } from 'node:url';
 import type { MigrationObject } from '@mikro-orm/core';
 import type { ModuleManifest, ModuleManifestExports } from '@endora-commerce/contracts';
 import type { ModuleEntry } from '../kernel/compose.js';
+import { moduleOriginOf } from '../lifecycle/services/module-origin.js';
+import { FIRST_PARTY_MODULE_PACKAGES } from './first-party-modules.generated.js';
 import {
   nodeModulesRootsFor,
   scanNodeModulesRoots,
@@ -61,6 +63,16 @@ import {
   assertNoModuleIdCollisions,
   type ModuleIdClaim,
 } from '../lifecycle/services/module-id-claims.js';
+import { SchemaExtensionInvalidError } from '../kernel/schema-extensions/errors.js';
+import {
+  EXTENSIBLE_HOSTS,
+  type ExtensibleHostSet,
+} from '../kernel/schema-extensions/extensible-hosts.js';
+import {
+  dependencyClosureOf,
+  validateDeclarationContext,
+} from '../kernel/schema-extensions/validate.js';
+import type { ColumnExtension } from '../kernel/schema-extensions/types.js';
 
 /**
  * One entry of a migration registry, as this reader produces them.
@@ -85,8 +97,13 @@ export interface MigrationRegistryEntry {
   moduleId: string;
   /** The migration class. `cls.name` IS the migration name persisted in the DB. */
   cls: MigrationObject['class'];
-  /** Absent means `'core'`; a producer outside the committed registry sets `'external'`. */
-  origin?: 'core' | 'external';
+  /**
+   * Absent means `'core'`; a producer outside the committed registry sets
+   * `'external'`, the platform's generated schema-extension step
+   * `'generated'` (`specs/178-extensible-columns/` FR-020), and a deployment's
+   * overlay module `'overlay'` (`specs/190-overlay-full-modules/` R-7).
+   */
+  origin?: 'core' | 'external' | 'generated' | 'overlay';
 }
 
 /** An installed package's manifest plus where on disk it came from. */
@@ -330,7 +347,12 @@ export async function discoverPackageModuleManifests(
  */
 export async function packageModuleEntriesUnder(
   roots: readonly string[],
+  firstParty: readonly { readonly moduleId: string; readonly packageName: string }[] = FIRST_PARTY_MODULE_PACKAGES,
 ): Promise<ModuleEntry[]> {
+  // `specs/189-command-middleware/contracts/module-origin.md` §2 — a package is
+  // first-party when its own name **and** its id are one pair of the list, so
+  // an npm alias (whose own `name` is the aliased package's) cannot borrow it.
+  const firstPartyPairs = new Set(firstParty.map((pkg) => `${pkg.packageName}\0${pkg.moduleId}`));
   const found = scan(roots);
   assertNoModuleIdCollisions(claimsFor(found.packages));
 
@@ -372,6 +394,14 @@ export async function packageModuleEntriesUnder(
       // yet — and the drain would otherwise have granted a capability the owner
       // declined.
       installedPackage: true,
+      // The trust tier, from the same discovery and the release's first-party
+      // list — never from the package (`contracts/module-origin.md` §2, §6). A
+      // first-party package keeps `installedPackage: true`: the tier does not
+      // touch decoration (§3).
+      origin: moduleOriginOf('package', firstPartyPairs.has(`${installed.name}\0${installed.id}`)),
+      // The installed package's own `package.json` name, which is what a
+      // per-point grant is matched against (§5 item 3).
+      installedPackageName: installed.name,
     });
   }
   return entries;
@@ -440,6 +470,26 @@ export interface PackageSchemaContribution {
    * order `orderMigrations` breaks ties in.
    */
   readonly dependencies: readonly string[];
+  /**
+   * Whether its manifest declares `activation.nonDeactivatable` — the required
+   * set D-291 R-A7's clause (c) reads. Absent on a hand-built contribution,
+   * which is "not locked" (fail closed).
+   */
+  readonly nonDeactivatable?: boolean;
+  /**
+   * The extension-column declarations its `./backend` export names as
+   * `schemaExtensions` (`specs/178-extensible-columns/` FR-008, research R-7),
+   * already held to the package-context rules V9 – V11. Empty when it declares
+   * none — every package that predates the feature.
+   */
+  readonly schemaExtensions: readonly ColumnExtension[];
+  /**
+   * Its manifest's `extends` — the side tables it declares on extensible hosts
+   * (`specs/187-side-table-extensions/` FR-001), unvalidated: the migration merge
+   * judges them over the composed graph (E1 – E5). Absent on a hand-built
+   * contribution, which declares none.
+   */
+  readonly entityExtensions?: readonly unknown[];
 }
 
 function isConstructor(value: unknown): value is EntityClassLike {
@@ -532,6 +582,41 @@ function entityClassesFrom(
 }
 
 /**
+ * Read a package's `./backend` export for the extension columns it declares.
+ *
+ * Refused rather than skipped, on `entities`' terms: a declaration the host
+ * silently dropped is a column that is never created and an accessor that fails
+ * on its first query.
+ */
+function schemaExtensionsFrom(
+  installed: InstalledPackage,
+  exported: Record<string, unknown>,
+): readonly unknown[] {
+  const declared = exported['schemaExtensions'];
+  if (declared === undefined) return [];
+  if (!Array.isArray(declared)) {
+    throw new SchemaExtensionInvalidError(
+      'not-a-declaration',
+      installed.id,
+      null,
+      `the "./backend" export of ${installed.name} exports 'schemaExtensions' that is not an ` +
+        `array of defineColumnExtension declarations. Resolved from ${installed.manifestPath}.`,
+    );
+  }
+  return declared;
+}
+
+/** What {@link packageSchemaContributionsUnder} may be told beyond the roots. */
+export interface PackageSchemaOptions {
+  /**
+   * The host set a declaration's owner is looked up in for V10. Defaults to the
+   * full derived list; which hosts are *rolled out* (V2) is asked by the ORM
+   * configuration and the migration merge, which take the same option.
+   */
+  readonly extensibleHosts?: ExtensibleHostSet;
+}
+
+/**
  * Every installed package's schema contribution, against explicit roots.
  *
  * Exported so a test can drive it over a `node_modules` tree on disk — the same
@@ -541,11 +626,13 @@ function entityClassesFrom(
  */
 export async function packageSchemaContributionsUnder(
   roots: readonly string[],
+  options: PackageSchemaOptions = {},
 ): Promise<PackageSchemaContribution[]> {
   const found = scan(roots);
   assertNoModuleIdCollisions(claimsFor(found.packages));
 
   const out: PackageSchemaContribution[] = [];
+  const declaredBy: { installed: InstalledPackage; declarations: readonly unknown[] }[] = [];
   for (const installed of found.packages) {
     const migrationsEntry = resolveSubpath(installed, 'migrations');
     const migrations =
@@ -559,6 +646,8 @@ export async function packageSchemaContributionsUnder(
     // The root export again — the same dynamic import the composer path makes,
     // so the ESM cache answers it and this costs no second read.
     const manifestEntry = await manifestEntryFor(installed);
+    const declarations = backend === null ? [] : schemaExtensionsFrom(installed, backend);
+    declaredBy.push({ installed, declarations });
     out.push({
       id: installed.id,
       packageName: installed.name,
@@ -567,9 +656,31 @@ export async function packageSchemaContributionsUnder(
       migrations,
       entities: backend === null ? [] : entityClassesFrom(installed, backend),
       dependencies: manifestEntry?.manifest.dependencies ?? [],
+      nonDeactivatable:
+        (manifestEntry?.manifest.activation as { nonDeactivatable?: unknown } | undefined)?.nonDeactivatable === true,
+      schemaExtensions: [],
+      entityExtensions: Array.isArray(manifestEntry?.manifest.extends) ? manifestEntry.manifest.extends : [],
     });
   }
-  return out;
+
+  // The package-context rules, once every manifest of the scan is known: the
+  // dependency closure V10 walks crosses packages, and in an instance every
+  // module is one. A dependency outside the scan (a module this repository
+  // composes from its workspace) is still a direct edge, which is the edge a
+  // host owner normally is.
+  const graph = new Map(out.map((contribution) => [contribution.id, contribution.dependencies] as const));
+  const hosts = options.extensibleHosts ?? EXTENSIBLE_HOSTS;
+  return out.map((contribution, index) => {
+    const { installed, declarations } = declaredBy[index]!;
+    if (declarations.length === 0) return contribution;
+    const schemaExtensions = validateDeclarationContext(declarations, {
+      hosts,
+      packageModuleId: installed.id,
+      dependencyClosure: dependencyClosureOf(installed.id, graph),
+      source: `${installed.name} (${installed.manifestPath})`,
+    });
+    return { ...contribution, schemaExtensions };
+  });
 }
 
 /**
@@ -581,6 +692,7 @@ export async function packageSchemaContributionsUnder(
  */
 export async function discoverPackageSchema(
   env: NodeJS.ProcessEnv = process.env,
+  options: PackageSchemaOptions = {},
 ): Promise<PackageSchemaContribution[]> {
-  return packageSchemaContributionsUnder(nodeModulesRootsFor(env));
+  return packageSchemaContributionsUnder(nodeModulesRootsFor(env), options);
 }

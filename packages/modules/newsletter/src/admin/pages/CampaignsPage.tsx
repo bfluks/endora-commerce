@@ -1,84 +1,89 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { Mail, Plus } from 'lucide-react';
 import type { CampaignSummary } from '@endora-commerce/contracts';
 import { useAuth } from '@endora-commerce/admin-kit/lib';
-import { Alert, AlertDescription, Button, Card, CardContent, PageHeader } from '@endora-commerce/admin-kit/ui';
+import { useTranslation } from '@endora-commerce/admin-kit/i18n';
+import { Alert, AlertDescription, Button, EmptyState } from '@endora-commerce/admin-kit/ui';
+import { ListPage, ResponsiveTable, type ListPageLoad } from '@endora-commerce/admin-kit/components';
 import { newsletterClient } from '../api/newsletter-client.js';
+import { campaignStatusLabels, campaignTargetLabels } from '../lib/labels.js';
 
+/**
+ * The newsletter campaigns. The kit's `ListPage` since issue #1749: the
+ * loading, error and empty states are the kit's, and while there is no
+ * campaign the empty state carries the one *New campaign*. The endpoint
+ * answers every campaign, unpaged.
+ */
 export function CampaignsPage(): React.ReactElement {
   const { hasPermission } = useAuth();
+  const t = useTranslation('newsletter');
+  const canWrite = hasPermission('newsletter:write');
   const [items, setItems] = useState<CampaignSummary[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [load, setLoad] = useState<ListPageLoad>({ kind: 'loading' });
 
-  useEffect(() => {
+  const refresh = useCallback((): void => {
+    setLoad({ kind: 'loading' });
     newsletterClient
       .listCampaigns()
-      .then((res) => setItems(res.items))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+      .then((res) => {
+        setItems(res.items);
+        setLoad({ kind: 'ready' });
+      })
+      .catch((err: unknown) => setLoad({ kind: 'error', message: err instanceof Error ? err.message : String(err) }));
   }, []);
+
+  useEffect(() => refresh(), [refresh]);
 
   if (!hasPermission('newsletter:read')) {
     return (
       <Alert>
-        <AlertDescription>You do not have permission to view the newsletter.</AlertDescription>
+        <AlertDescription>{t('common.noPermission')}</AlertDescription>
       </Alert>
     );
   }
 
+  const newCampaign = (
+    <Button asChild>
+      <Link to="/newsletter/campaigns/new">
+        <Plus aria-hidden="true" />
+        {t('campaigns.new')}
+      </Link>
+    </Button>
+  );
+  // While there is none, the empty state's New campaign is the view's one primary (Von Restorff).
+  const nothingYet = load.kind === 'ready' && items.length === 0;
+
   return (
-    <div className="space-y-4">
-      <PageHeader
-        title="Newsletter — Campaigns"
-        description="One-off mailings to a target audience."
-        actions={
-          hasPermission('newsletter:write') ? (
-            <Link to="/newsletter/campaigns/new">
-              <Button>New campaign</Button>
-            </Link>
-          ) : null
-        }
+    <ListPage
+      title={t('campaigns.title')}
+      actions={canWrite && !nothingYet ? newCampaign : null}
+      count={t('campaigns.count', { count: items.length })}
+      load={load}
+      onRetry={refresh}
+    >
+      <ResponsiveTable
+        data={items}
+        keyExtractor={(c) => c.id}
+        emptyState={<EmptyState icon={<Mail size={20} />} title={t('campaigns.empty')} action={canWrite ? newCampaign : null} />}
+        columns={[
+          {
+            id: 'name',
+            header: t('common.column.name'),
+            primary: true,
+            render: (c) => (
+              <Link className="font-medium text-primary hover:underline" to={`/newsletter/campaigns/${c.id}`}>
+                {c.name}
+              </Link>
+            ),
+            meta: (c) => c.subject,
+          },
+          { id: 'subject', header: t('campaigns.column.subject'), hideOnMobile: true, render: (c) => c.subject },
+          { id: 'audience', header: t('campaigns.column.audience'), render: (c) => campaignTargetLabels.label(t, c.targetType) },
+          { id: 'status', header: t('common.column.status'), render: (c) => campaignStatusLabels.label(t, c.status) },
+        ]}
       />
-      {error ? (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      ) : null}
-      <Card>
-        <CardContent className="p-0">
-          <table className="w-full text-sm">
-            <thead className="border-b text-left text-muted-foreground">
-              <tr>
-                <th className="p-3 font-medium">Name</th>
-                <th className="p-3 font-medium">Subject</th>
-                <th className="p-3 font-medium">Target</th>
-                <th className="p-3 font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((c) => (
-                <tr key={c.id} className="border-b last:border-0 hover:bg-muted/40">
-                  <td className="p-3">
-                    <Link className="font-medium text-primary hover:underline" to={`/newsletter/campaigns/${c.id}`}>
-                      {c.name}
-                    </Link>
-                  </td>
-                  <td className="p-3">{c.subject}</td>
-                  <td className="p-3 text-xs">{c.targetType}</td>
-                  <td className="p-3">{c.status}</td>
-                </tr>
-              ))}
-              {items.length === 0 ? (
-                <tr>
-                  <td className="p-3 text-muted-foreground" colSpan={4}>
-                    No campaigns yet.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </CardContent>
-      </Card>
-    </div>
+    </ListPage>
   );
 }
 

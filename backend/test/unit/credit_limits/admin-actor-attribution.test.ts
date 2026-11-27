@@ -1,7 +1,11 @@
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { serializerCompiler, validatorCompiler } from '@fastify/type-provider-zod';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { OrganizationDetailsPort } from '@endora-commerce/contracts';
+import type {
+  OrderReadPort,
+  OrganizationDetailsPort,
+  OrganizationPermissionPort,
+} from '@endora-commerce/contracts';
 import {
   registerCreditLimitsRoutes,
   type CreditLimitsDeps,
@@ -54,6 +58,8 @@ describe('POST /api/v1/admin/organizations/:id/credit-limit — the acting admin
       countByIds: async () => 1,
       searchByName: async () => [],
       searchIdsByName: async () => [],
+      findByTaxId: async () => [],
+      resolveByTaxId: async () => ({ kind: 'none' }),
     };
 
     app = Fastify();
@@ -70,6 +76,9 @@ describe('POST /api/v1/admin/organizations/:id/credit-limit — the acting admin
     const deps: CreditLimitsDeps = {
       creditLimitService,
       organizationDetailsPort,
+      // Unused by the admin routes; only the customer view narrows its list.
+      organizationPermissionPort: {} as OrganizationPermissionPort,
+      orderReadPort: {} as OrderReadPort,
       requireCustomer: async () => {},
       requireAdmin: () => async () => {},
       resolveCustomerContext: () => ({ customerAccountId: '', organizationId: ORG_ID }),

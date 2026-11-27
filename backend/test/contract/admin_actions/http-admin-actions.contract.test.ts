@@ -19,6 +19,9 @@ import { registryCache } from '../../../src/kernel/lifecycle/registry-cache.js';
  */
 
 const TEST_MODULE_ID = 'fixture_http_actions';
+/** A fixture action under a real module, so its bundle key resolves against shipped bundles. */
+const KEYWORDS_MODULE_ID = 'credentials';
+const KEYWORDS_ACTION_ID = 'fixture-keywords-560';
 const adminCookie = { b2b_session: 'stub-admin-session' };
 
 /**
@@ -112,6 +115,44 @@ describe('GET /api/v1/admin/admin-actions (contract)', () => {
     }
   });
 
+  /**
+   * Issue #560 — the palette's per-language keywords, end to end: the column,
+   * the `_i18n` resolver over the bundles the harness installs from disk, and
+   * the wire. The row borrows `credentials`' real `keywordsKey` under a fixture
+   * action id, so the words asserted are the ones that module ships.
+   */
+  it('serves the Polish keywords of a keywordsKey to a Polish admin and the English ones to an English admin', async () => {
+    await h.em().execute(
+      `insert into "module_actions"
+         ("module_id", "action_id", "label_key", "keywords_key", "icon", "target_route", "required_permission",
+          "keywords", "weight")
+       values (?, ?, 'actions.newCredential.label', 'actions.newCredential.keywords', 'Plus', '/credentials/new',
+               null, ?, 100)`,
+      [KEYWORDS_MODULE_ID, KEYWORDS_ACTION_ID, JSON.stringify(['credential', 'configuration'])],
+    );
+
+    const keywordsIn = async (language: 'en' | 'pl'): Promise<string[]> => {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/admin/admin-actions?language=${language}`,
+        cookies: adminCookie,
+      });
+      expect(res.statusCode).toBe(200);
+      const parsed = GetAdminActionsResponseSchema.parse((res.json() as { data: unknown }).data);
+      const row = parsed.data.find(
+        (a) => a.moduleId === KEYWORDS_MODULE_ID && a.actionId === KEYWORDS_ACTION_ID,
+      );
+      expect(row).toBeDefined();
+      return row!.keywords;
+    };
+
+    const pl = await keywordsIn('pl');
+    expect(pl).toEqual(expect.arrayContaining(['credential', 'configuration', 'nowe poświadczenie']));
+    const en = await keywordsIn('en');
+    expect(en).toEqual(expect.arrayContaining(['credential', 'configuration', 'new credential']));
+    expect(en).not.toContain('nowe poświadczenie');
+  });
+
   it('sets a private no-cache Cache-Control header', async () => {
     const res = await h.app.inject({
       method: 'GET',
@@ -126,37 +167,19 @@ describe('GET /api/v1/admin/admin-actions (contract)', () => {
 async function seed(h: BackendServerHandle): Promise<void> {
   seededEnabledIds = registryCache.enabledIds();
   registryCache.__setEnabledForTesting([...seededEnabledIds, TEST_MODULE_ID]);
-  const knex = h.em().getKnex();
   const now = new Date();
-  await knex('module_registrations').insert({
-    module_id: TEST_MODULE_ID,
-    state: 'installed',
-    version: '1.0.0',
-    installed_at: now,
-    last_state_change_at: now,
-  });
-  await knex('module_actions').insert([
-    {
-      module_id: TEST_MODULE_ID,
-      action_id: 'fixture-a',
-      label_key: 'fixture_http_actions.actions.a.label',
-      icon: 'Plus',
-      target_route: '/fixture/a',
-      required_permission: null,
-      keywords: JSON.stringify(['alpha']),
-      weight: 100,
-    },
-    {
-      module_id: TEST_MODULE_ID,
-      action_id: 'fixture-b',
-      label_key: 'fixture_http_actions.actions.b.label',
-      icon: 'Settings',
-      target_route: '/fixture/b',
-      required_permission: null,
-      keywords: JSON.stringify(['beta']),
-      weight: 200,
-    },
-  ]);
+  await h.em().execute(
+    `insert into "module_registrations" ("module_id", "state", "version", "installed_at", "last_state_change_at")
+     values (?, 'installed', '1.0.0', ?, ?)`,
+    [TEST_MODULE_ID, now, now],
+  );
+  await h.em().execute(
+    `insert into "module_actions"
+       ("module_id", "action_id", "label_key", "icon", "target_route", "required_permission", "keywords", "weight")
+     values (?, 'fixture-a', 'fixture_http_actions.actions.a.label', 'Plus', '/fixture/a', null, ?, 100),
+            (?, 'fixture-b', 'fixture_http_actions.actions.b.label', 'Settings', '/fixture/b', null, ?, 200)`,
+    [TEST_MODULE_ID, JSON.stringify(['alpha']), TEST_MODULE_ID, JSON.stringify(['beta'])],
+  );
 }
 
 async function cleanup(h: BackendServerHandle): Promise<void> {
@@ -165,5 +188,6 @@ async function cleanup(h: BackendServerHandle): Promise<void> {
     seededEnabledIds = null;
   }
   await h.em().nativeDelete(ModuleAction, { moduleId: TEST_MODULE_ID });
+  await h.em().nativeDelete(ModuleAction, { moduleId: KEYWORDS_MODULE_ID, actionId: KEYWORDS_ACTION_ID });
   await h.em().nativeDelete(ModuleRegistration, { moduleId: TEST_MODULE_ID });
 }

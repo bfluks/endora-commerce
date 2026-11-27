@@ -8,29 +8,36 @@ import {
   type AssetReadPort,
   type SearchQueryPort,
   type AdminUserReadPort,
+  type CatalogProductAvailabilityPort,
   type EmailMailerPort,
   type LanguageReadPort,
   type ListingPriceOrderPort,
   type ListingPricePort,
+  type ListingPriceDetailPort,
   type OrgLinePricePort,
+  type LinePricesPort,
   type CustomFieldDefinitionReadPort,
   type CustomFieldValuePort,
   type OrganizationDetailsPort,
+  type ProductTaxRateResolver,
+  type SeoProductMetaWritePort,
 } from '@endora-commerce/contracts';
 import type { EventBus } from '@endora-commerce/platform/events';
 import type { StorefrontRevalidator } from '@endora-commerce/platform/http';
-import type { PlatformLogger } from '@endora-commerce/platform/kernel';
+import type { AdminPermissionChecker, PlatformLogger } from '@endora-commerce/platform/kernel';
 import {
   createBulkOperationQueue,
   createBulkOperationWorker,
   BULK_OPERATION_JOB_NAME,
 } from './services/bulk-operation-queue.js';
 import type { AuditPort } from '@endora-commerce/platform/kernel';
-import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
-import { CatalogQueryService } from './services/catalog-query.service.js';
+import type { SalesChannelMembershipPort, SettingsReadPort } from '@endora-commerce/platform/kernel';
+import { CatalogQueryService, type CatalogCursorSeal } from './services/catalog-query.service.js';
 import {
   CatalogAdminService,
   type CatalogWarehouseThresholdCopy,
+  type CatalogSeoProductMetaCopy,
+  type CatalogStockFilterSource,
   type CatalogEventBus,
 } from './services/catalog-admin.service.js';
 import { CatalogAttributeReadService } from './services/catalog-attribute-read.service.js';
@@ -49,6 +56,7 @@ import {
   type CategoryEventBus,
 } from './services/category-admin.service.js';
 import { AttributeSetService } from './services/attribute-set.service.js';
+import { ProductContentService } from './services/product-content.service.js';
 import { GalleryService } from './services/gallery.service.js';
 import { AttachmentService } from './services/attachment.service.js';
 import { PackagingUnitService } from './services/packaging-unit.service.js';
@@ -57,11 +65,21 @@ import { GroupedService } from './services/grouped.service.js';
 import { BundleService } from './services/bundle.service.js';
 import { ProductEditorPreferencesService } from './services/product-editor-preferences.service.js';
 import { ProductListViewService } from './services/product-list-view-service.js';
-import { ProductOverridesService } from './services/product-overrides.service.js';
-import { ProductScopeContextService } from './services/product-scope-context.service.js';
+import { ProductScopesService } from './services/product-scopes.service.js';
+import { UrlKeyService } from './services/url-key.service.js';
+import { ScopeOverviewService, type ListSeoProductScopes } from './services/scope-overview.service.js';
+import { composeCompletenessGate } from './services/scope-completeness.js';
+import { AttributeScopePreviewService } from './services/attribute-scope-preview.js';
+import { ScopedValuesService } from './services/scoped-values.service.js';
 import { ProductValueResolverService } from './services/product-value-resolver.service.js';
-import { registerCatalogPublicRoutes } from './routes.public.js';
+import { pricedContext as readCatalogContext, registerCatalogPublicRoutes } from './routes.public.js';
+import { registerCatalogUrlKeyPublicRoutes } from './routes.public.url-keys.js';
+import { UrlKeyResolutionService } from './services/url-key-resolution.service.js';
+import type { ResolveSeoProductMeta } from './services/catalog-query.service.js';
+import type { ReadSeoProductScoped } from './services/scoped-values-read.service.js';
 import { registerCatalogAdminRoutes } from './routes.admin.js';
+import type { CatalogAdminProductVisibility } from './services/admin-product-visibility.js';
+import { createCatalogRequestVisibility, installHiddenProductGuard } from './hidden-product-guard.js';
 import { registerCatalogApiKeyRoutes } from './routes.api-key.js';
 import { registerCatalogExternalRoutes } from './routes.external.js';
 import {
@@ -69,6 +87,7 @@ import {
   type ResolveAvailabilityPort,
 } from './services/catalog-org-price-decorator.js';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import type { GovernedChannelsSource } from './services/governed-pending.js';
 
 /**
  * Composition root for the catalog module. Wires the ORM's per-request EM into
@@ -84,6 +103,12 @@ export interface CatalogModuleOptions {
   emFactory: () => EntityManager;
   eventBus: EventBus;
   /**
+   * Issue #497 — what the storefront listing seals a price walk's cursors
+   * with. Optional for fixtures that never sort or filter by price; a price
+   * walk without it fails loudly.
+   */
+  cursorSeal?: CatalogCursorSeal;
+  /**
    * Feature 068 — flushes the storefront's `catalog:categories` fetch-cache tag.
    * Owned by `backend.ts`, which also owns the `category.updated.v1`
    * subscription that drives it; passed here only so it can pick up `app.log`
@@ -93,6 +118,11 @@ export interface CatalogModuleOptions {
   requireAdmin?: RequireAdminFactory;
   /** Audit-log writer; if provided, mutations land an AuditLogEntry. */
   auditLogService?: AuditPort;
+  /**
+   * Spec 193 — the acting administrator's id, for the visibility scope; refuses (401) a caller
+   * that is not an administrator. Optional with {@link CatalogModuleOptions.adminProductVisibility}.
+   */
+  resolveAdminUserId?: (req: FastifyRequest) => string;
   /** Resolver for who's acting — used for audit attribution. */
   resolveAdminAuditContext?: (req: FastifyRequest) => {
     actorAdminUserId: string;
@@ -117,12 +147,44 @@ export interface CatalogModuleOptions {
    * pricing uses). Consumed only by the external catalog namespace's
    * decoration layer — SC-001 parity by construction.
    */
-  pricingService?: OrgLinePricePort & ListingPricePort & ListingPriceOrderPort;
+  pricingService?: OrgLinePricePort &
+    LinePricesPort &
+    ListingPricePort &
+    ListingPriceDetailPort &
+    ListingPriceOrderPort;
   /**
    * Feature 062 — inventory availability port for the external namespace's
    * `availability` indication. Optional: when omitted the field is omitted.
    */
   resolveExternalAvailability?: ResolveAvailabilityPort;
+  /**
+   * Feature 163 (R13) — `seo`'s product metadata per sales channel × language for
+   * the product page; answers `null` while `seo` is not effectively present.
+   * Optional: without it the page serves its derived metadata.
+   */
+  resolveSeoProductMeta?: ResolveSeoProductMeta;
+  /**
+   * Feature 172 (FR-051, research R-13) — whether the Page Builder's owner is
+   * effectively present; gates the product page's `contentAttributes`. Optional:
+   * without it the page carries no content.
+   */
+  isPageBuilderPresent?: () => boolean;
+  /**
+   * Feature 163 (T118c) — `seo`'s scopes of a product for the scope overview; answers
+   * `[]` while `seo` is not effectively present. Optional: without it the overview lists
+   * no SEO field.
+   */
+  listSeoProductScopes?: ListSeoProductScopes;
+  /**
+   * Feature 174 (T123) — `seo`'s view of a product's metadata at one scope for the editor's
+   * scoped read; answers `null` while `seo` is not effectively present.
+   */
+  readSeoProductScoped?: ReadSeoProductScoped;
+  /**
+   * Feature 174 (T123, FR-091) — `seo`'s write port for the save's SEO cells, resolved only when a
+   * save changes SEO (a lazy port: with `seo` off resolving it answers `503 MODULE_DISABLED`).
+   */
+  seoProductMetaWrite?: () => Pick<SeoProductMetaWritePort<EntityManager>, 'readWithin' | 'applyWithin'>;
   /**
    * Feature 075 — `organizations`' read port. The external namespace's price
    * decoration resolves the calling organisation through it, where it used to
@@ -132,13 +194,28 @@ export interface CatalogModuleOptions {
    * the caller's own price is the caller's organisation's, and the one field
    * the pricing engine needs beyond the id — the customer group a
    * group-targeted list is selected by — lives on that row.
+   *
+   * Feature 163 (owner decision U1) — the product scopes answer names the
+   * organizations its audience rules name, best effort.
    */
   organizations?: OrganizationDetailsPort;
+  /**
+   * Issue #852 — the buyer's VAT rate per product tax class, by the rule the
+   * cart and the order use (`createProductTaxRateResolver`). The public
+   * listing and product page answer it as `vatRate`; without it they answer
+   * none, and the storefront shows the net.
+   */
+  productTaxRates?: ProductTaxRateResolver;
   /**
    * Feature 075 — `admin_users`' read port, for the one row the bulk-operation
    * completion notice reads: the requester's e-mail address.
    */
   adminUsers?: AdminUserReadPort;
+  /**
+   * Feature 163, checkpoint F (S-3) — `admin_roles`' `permissionService`: a queued
+   * bulk operation re-checks, at worker start, that its requester may still write.
+   */
+  permissionChecker?: AdminPermissionChecker;
   /**
    * Feature 005 / T027 — when provided, every newly-created Product is
    * automatically bound to the system-default Sales Channel unless it
@@ -148,6 +225,12 @@ export interface CatalogModuleOptions {
    */
   salesChannelMembership?: SalesChannelMembershipPort;
   /**
+   * Feature 163 — this module's own `catalogProductAvailabilityPort` (the
+   * registered instance), for the external bulk-price probe (W5 = A). The
+   * external namespace is not mounted without it.
+   */
+  productAvailability?: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>;
+  /**
    * Issue #185 — `inventory`'s per-warehouse threshold copy, used by product
    * duplication. Contributed as a presence-decided closure rather than resolved
    * here, for the reason `resolveExternalAvailability` is: this module declares
@@ -156,12 +239,41 @@ export interface CatalogModuleOptions {
    */
   copyWarehouseThresholds?: CatalogWarehouseThresholdCopy;
   /**
-   * Feature 022 — language admin service used by the product scope
-   * editor's scope-context endpoint (for the primary admin language)
-   * and the resolver service (for the same). Optional: when omitted,
-   * the new admin endpoints are NOT registered.
+   * Feature 174 (FR-119) — `seo`'s product metadata copied by a duplicate, on the duplicate
+   * Command's em. Presence-decided by the wiring, like the threshold copy above.
+   */
+  copySeoProductMeta?: CatalogSeoProductMetaCopy;
+  /**
+   * Issue #1624 — the admin products list's stock filter over `inventory`'s
+   * on-hand totals. `refuses-without`: a stock filter while `inventory` is off
+   * answers 503 rather than being ignored.
+   */
+  stockFilter?: CatalogStockFilterSource;
+  /**
+   * Spec 193 (R-7, TM-3, TM-5) — `product_visibility_rules`' admin scope, the owner's absence
+   * decided in front of its port. Optional so fixtures keep composing the module: without it
+   * every admin read is the system scope, and a narrowed scope reaching a service refuses.
+   */
+  adminProductVisibility?: CatalogAdminProductVisibility;
+  /**
+   * Spec 193 T070 (FR-093) — the governed channels a scoped write may name for a product not on
+   * them yet (values stored pending admission). Presence-probed by the wiring; absent = none.
+   */
+  governedChannels?: GovernedChannelsSource;
+  /**
+   * Feature 022 / 163 / 174 — the platform's languages: read by the value
+   * resolver, the scope overview (the active languages of a product in no
+   * channel) and the scoped-values read (each channel language's name).
+   * Optional: when omitted the resolver and the scope overview are not
+   * registered, and the scoped-values read names a language by its code.
    */
   languageService?: LanguageReadPort;
+  /**
+   * Feature 163 (FR-060) — the platform's settings read, for the completeness
+   * gate's mode (`catalog.scope_completeness_gate`). Optional: when omitted no
+   * operator write is gated.
+   */
+  settingsReadPort?: Pick<SettingsReadPort, 'get'>;
   /**
    * In-app (bell) notifications — used by the queued bulk-edit path to
    * tell the requester their background operation finished. Optional;
@@ -219,6 +331,15 @@ export interface CatalogModuleOptions {
    * composition root so catalog stays decoupled from the search module.
    */
   reindexSearchIndexes?: SearchReindexRunner;
+  /**
+   * `specs/186-aggregate-ports/` (#1825, FR-013) — hands the enqueuer of a searchable flip's
+   * reindex to the container's `catalogAdminService`, the instance
+   * `catalogAttributeCommandPort` runs, so a port call queues the reindex the admin route
+   * queues. Absent, only the routes' own instance queues it.
+   */
+  shareSearchReindexEnqueuer?: (
+    enqueue: (ctx: { actorAdminUserId: string | null; attributeKey: string }) => Promise<void>,
+  ) => void;
   /**
    * Resolves the `general.product_image_placeholder_url` setting (global or
    * per sales channel) for a channel code. Wired from composition so catalog
@@ -307,6 +428,24 @@ export function catalogModule(options: CatalogModuleOptions) {
       options.organizations,
       // Feature 086 — the ordering slice of the same `pricingService`.
       options.pricingService,
+      // No scan-budget log on this instance, as before.
+      undefined,
+      options.cursorSeal,
+      // Feature 163 — the page's metadata through `seo`, presence-probed by the caller.
+      options.resolveSeoProductMeta,
+      // Feature 172 — the product page's content, presence-probed by the caller.
+      options.isPageBuilderPresent,
+    );
+    // Feature 163 (FR-060, FR-061) — the completeness gate, composed into the
+    // operator's admin services only (this file); the integration ports registered in
+    // `index.ts` are built without it, so imports and connectors are never gated (A-6).
+    const completenessGate = composeCompletenessGate(
+      {
+        membership: options.salesChannelMembership,
+        attributeRead: attributeReadService,
+        settings: options.settingsReadPort,
+      },
+      options.log ?? app.log,
     );
     const adminService = new CatalogAdminService(
       options.emFactory,
@@ -317,12 +456,32 @@ export function catalogModule(options: CatalogModuleOptions) {
       attributeReadService,
       options.customFieldsPort,
       options.copyWarehouseThresholds,
+      completenessGate,
+      options.assets,
+      options.copySeoProductMeta,
+      options.stockFilter,
+      options.adminProductVisibility,
     );
+    // Feature 163 — scoped values per channel and channel × language. Needs the
+    // membership accessor for FR-014 and the C4 warning, like the overrides.
+    // Owner decision U1 — `organizations` names the audience's organizations in the answer.
+    const scopesService = options.salesChannelMembership
+      ? new ProductScopesService(
+          options.emFactory,
+          options.salesChannelMembership,
+          options.commandBus,
+          options.organizations,
+          completenessGate,
+          options.governedChannels,
+        )
+      : undefined;
     const bulkUpdateService = new CatalogBulkUpdateService(
       options.emFactory,
       adminService,
       options.salesChannelMembership,
       options.auditLogService,
+      // Feature 163 (FR-050) — bulk scoped status runs the operator's scope write.
+      scopesService,
     );
 
     // Queued bulk-edit (Principle X): large selections persist as `pending`
@@ -334,11 +493,15 @@ export function catalogModule(options: CatalogModuleOptions) {
       ? createBulkOperationQueue(options.redis)
       : undefined;
     const bulkOperationService = new BulkOperationService(options.emFactory, bulkUpdateService, {
+      // Feature 163 (R30.3) — an undo announces what it reverted.
+      events: options.eventBus as CatalogEventBus,
       ...(options.adminNotificationService
         ? { notificationService: options.adminNotificationService }
         : {}),
       ...(options.mailer ? { mailer: options.mailer } : {}),
       ...(options.adminUsers ? { adminUsers: options.adminUsers } : {}),
+      ...(options.permissionChecker ? { permissionChecker: options.permissionChecker } : {}),
+      ...(options.adminProductVisibility ? { visibility: options.adminProductVisibility } : {}),
       ...(options.reindexSearchIndexes
         ? { reindexRunner: options.reindexSearchIndexes }
         : {}),
@@ -358,14 +521,18 @@ export function catalogModule(options: CatalogModuleOptions) {
     // "Akcje masowe" page, with the same bell + email notifications).
     if (options.reindexSearchIndexes) {
       const queue = bulkOperationService;
-      adminService.setSearchReindexEnqueuer(async ({ actorAdminUserId }) => {
+      const enqueue = async ({ actorAdminUserId }: { actorAdminUserId: string | null; attributeKey: string }) => {
+        // Exempt from the known-requester rule by design (S-L3): a reindex writes no
+        // product, and the flip that enqueues it may have no admin behind it.
         await queue.create({
           type: BULK_OPERATION_TYPES.SEARCH_REINDEX,
           requestedByAdminUserId:
             actorAdminUserId ?? '00000000-0000-0000-0000-000000000000',
           payload: { productIds: [], fields: {} },
         });
-      });
+      };
+      adminService.setSearchReindexEnqueuer(enqueue);
+      options.shareSearchReindexEnqueuer?.(enqueue);
     }
 
     const bundleServicePublic = new BundleService(options.emFactory, options.commandBus);
@@ -380,6 +547,14 @@ export function catalogModule(options: CatalogModuleOptions) {
       // Feature 086 / FR-016 — the route's own refusal reads the page's display
       // mode off the same container the ordering comes from.
       ...(options.pricingService ? { listingPriceOrder: options.pricingService } : {}),
+      ...(options.productTaxRates ? { productTaxRates: options.productTaxRates } : {}),
+    });
+    // Feature 163 (R12) — which product a storefront key names at (C, L). It asks
+    // the product page's own reachability decision, so a key never resolves to a
+    // product the page would refuse.
+    await registerCatalogUrlKeyPublicRoutes(app, {
+      resolutionService: new UrlKeyResolutionService(options.emFactory, queryService),
+      readContext: readCatalogContext,
     });
     const categoryAdminService = new CategoryAdminService(
       options.emFactory,
@@ -387,6 +562,7 @@ export function catalogModule(options: CatalogModuleOptions) {
       options.commandBus,
       options.customFieldValues,
       options.eventBus as CategoryEventBus,
+      options.assets,
     );
 
     // Feature 068 — the storefront serves the category tree from a fetch cache
@@ -404,11 +580,13 @@ export function catalogModule(options: CatalogModuleOptions) {
       options.emFactory,
       options.commandBus,
       options.assets,
+      options.salesChannelMembership,
     );
     const attachmentService = new AttachmentService(
       options.emFactory,
       options.commandBus,
       options.assets,
+      options.salesChannelMembership,
     );
     const packagingUnitService = new PackagingUnitService(options.emFactory, options.commandBus);
     const productLinkService = new ProductLinkService(
@@ -439,13 +617,15 @@ export function catalogModule(options: CatalogModuleOptions) {
       // Issue #185 — the assortment check goes through the channel-membership
       // accessor, so the namespace is not mounted without it rather than
       // falling back to a hand-written bridge read.
-      options.salesChannelMembership
+      options.salesChannelMembership &&
+      // Feature 163 (W5 = A) — the bulk-price probe asks availability.
+      options.productAvailability
     ) {
       const decorator = new CatalogOrgPriceDecorator({
         emFactory: options.emFactory,
         pricingService: options.pricingService,
         organizations: options.organizations,
-        channelMembership: options.salesChannelMembership,
+        availability: options.productAvailability,
         ...(options.resolveExternalAvailability
           ? { resolveAvailability: options.resolveExternalAvailability }
           : {}),
@@ -473,27 +653,86 @@ export function catalogModule(options: CatalogModuleOptions) {
           attributeReadService,
         )
       : undefined;
-    const scopeContextService =
-      options.salesChannelMembership && options.languageService
-        ? new ProductScopeContextService(
+
+    // Feature 163 — the scope overview (US4) reads membership through the kernel
+    // accessor and, for a product in no channel, the active platform languages.
+    const scopeOverviewService =
+      options.salesChannelMembership && options.languageService && attributeReadService
+        ? new ScopeOverviewService(
             options.emFactory,
             options.salesChannelMembership,
             options.languageService,
-            editorPreferencesService,
+            attributeReadService,
+            options.listSeoProductScopes,
           )
         : undefined;
-    const overridesService = options.salesChannelMembership
-      ? new ProductOverridesService(
-          options.emFactory,
-          options.salesChannelMembership,
-          options.commandBus,
-          attributeReadService,
-        )
+    // Feature 163 — the FR-090 preview of an attribute's scope-flag change.
+    const attributeScopePreviewService = attributeReadService
+      ? new AttributeScopePreviewService(options.emFactory, attributeReadService)
       : undefined;
+    // Feature 163 / 174 (T039) — URL keys at G, C and C×L, and their redirects: the one key writer.
+    const urlKeyService = options.salesChannelMembership
+      ? new UrlKeyService(options.emFactory, options.salesChannelMembership, options.commandBus, undefined, options.governedChannels)
+      : undefined;
+    // Feature 174 — the editor's scoped-values read and save (one Command per save).
+    const scopedValuesService =
+      options.salesChannelMembership && attributeReadService
+        ? new ScopedValuesService(
+            options.emFactory,
+            {
+              membership: options.salesChannelMembership,
+              listAttributes: () => attributeReadService.listAll(),
+              ...(options.governedChannels ? { governedChannels: options.governedChannels } : {}),
+              ...(options.languageService ? { languages: options.languageService } : {}),
+              ...(options.assets ? { assets: options.assets } : {}),
+              ...(options.organizations ? { organizations: options.organizations } : {}),
+              ...(options.readSeoProductScoped ? { readSeo: options.readSeoProductScoped } : {}),
+              ...(options.seoProductMetaWrite ? { seoWrite: options.seoProductMetaWrite } : {}),
+              gate: completenessGate,
+              ...(urlKeyService
+                ? {
+                    writeUrlKey: (em, input) =>
+                      urlKeyService
+                        .lockAndCheck(
+                          em,
+                          input.productId,
+                          [{ scope: input.scope, op: input.cell.op.op === 'set' ? { op: 'set', key: String(input.cell.op.value) } : { op: 'inherit' } }],
+                          { mode: 'interactive', confirmTakeover: input.confirmTakeover, hidden: input.hidden },
+                        )
+                        .then((effects) => ({ before: effects.before, after: effects.after })),
+                  }
+                : {}),
+            },
+            options.commandBus,
+          )
+        : undefined;
+
+    // Feature 172 — a product's Page Builder content attributes. Needs the
+    // Command Bus (every save is the audited `product.content.update`) and the
+    // attribute read model (which set members are content attributes).
+    const productContentService =
+      options.commandBus && attributeReadService
+        ? new ProductContentService(options.emFactory, options.commandBus, attributeReadService, options.assets)
+        : undefined;
+
+    // Spec 193 (R-7, TM-5) — the hidden-product guard, on this plugin's own scope: after schema
+    // validation, before any route-level preHandler and the API interceptor dispatcher.
+    const requestVisibility = createCatalogRequestVisibility({
+      visibility: options.adminProductVisibility,
+      resolveAdminUserId: options.resolveAdminUserId,
+      emFactory: options.emFactory,
+    });
+    installHiddenProductGuard(app, {
+      visibility: options.adminProductVisibility,
+      requestVisibility,
+      emFactory: options.emFactory,
+    });
 
     await registerCatalogAdminRoutes(app, {
       adminService,
+      requestVisibility,
       categoryAdminService,
+      ...(productContentService ? { productContentService } : {}),
       attributeSetService,
       galleryService,
       attachmentService,
@@ -512,11 +751,14 @@ export function catalogModule(options: CatalogModuleOptions) {
         ? { resolveAdminAuditContext: options.resolveAdminAuditContext }
         : {}),
       ...(options.auditLogService ? { auditLogService: options.auditLogService } : {}),
-      ...(scopeContextService ? { productScopeContextService: scopeContextService } : {}),
       productEditorPreferencesService: editorPreferencesService,
       productListViewService: listViewService,
       ...(valueResolverService ? { productValueResolverService: valueResolverService } : {}),
-      ...(overridesService ? { productOverridesService: overridesService } : {}),
+      ...(scopesService ? { productScopesService: scopesService } : {}),
+      ...(scopedValuesService ? { scopedValuesService } : {}),
+      ...(scopeOverviewService ? { scopeOverviewService } : {}),
+      ...(attributeScopePreviewService ? { attributeScopePreviewService } : {}),
+      ...(urlKeyService ? { urlKeyService } : {}),
     });
 
     // Consumer side (Principle X). The BullMQ worker claims each queued

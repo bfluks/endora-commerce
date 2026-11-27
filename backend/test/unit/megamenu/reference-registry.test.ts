@@ -46,8 +46,9 @@ describe('MegamenuReferenceRegistry (T013)', () => {
     ): Promise<void> => {
       await conn.execute(
         `insert into megamenu_items
-          (id, megamenu_id, parent_id, position, kind, labels, descriptions, target, created_at, updated_at)
-         values (?, ?, null, 0, ?, '{}'::jsonb, null, ?::jsonb, ?, ?)`,
+          (id, megamenu_id, parent_id, position, kind, labels, descriptions, target,
+           presentation, alignment, created_at, updated_at)
+         values (?, ?, null, 0, ?, '{}'::jsonb, null, ?::jsonb, 'mega', 'start', ?, ?)`,
         [id, menuId, kind, JSON.stringify(target), now, now],
       );
     };

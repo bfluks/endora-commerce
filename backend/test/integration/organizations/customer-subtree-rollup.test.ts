@@ -16,6 +16,8 @@ import { QuoteRequest } from '../../helpers/package-entities.js';
 import { OrganizationTreeService } from '../../../../packages/modules/organizations/src/backend/services/organization-tree-service.js';
 import { CUSTOMER_COOKIES } from '../../helpers/test-actors.js';
 import { Order } from '../../helpers/package-entities.js';
+import { bindOrganizationsToFixtureChannelsSql } from '../../helpers/sales-channel-access.js';
+import { predefinedRoleIdOf } from '../../helpers/seed-organization-roles.js';
 
 /**
  * Feature 056 (T032) — customer-side roll-up.
@@ -37,7 +39,9 @@ async function makeRootOrg(em: EntityManager, name: string): Promise<Organizatio
     vatStatus: 'vat_payer',
     registeredAddress: { street: '-', city: '-', postalCode: '-', country: 'PL' },
   });
-  await em.persistAndFlush(org);
+  await em.persist(org).flush();
+  // Feature 154 — the tenant shops on the stores the harness seeds.
+  await bindOrganizationsToFixtureChannelsSql(em, [org.id]);
   org.path = `/${org.id}/`;
   await em.flush();
   return org;
@@ -79,7 +83,7 @@ async function seedOrder(em: EntityManager, orgId: string, customerId: string): 
     currency: 'PLN',
     placedAt: new Date(),
   });
-  await em.persistAndFlush(order);
+  await em.persist(order).flush();
   return order.id;
 }
 
@@ -94,10 +98,10 @@ async function makeOrgAdmin(
     passwordHash: 'x',
     firstName: 'Head',
     lastName: 'Office',
-    role: 'organization_admin',
+    organizationRoleId: await predefinedRoleIdOf(em, orgId, 'administrator'),
     subtreeRollupEnabled: rollup,
   });
-  await em.persistAndFlush(acc);
+  await em.persist(acc).flush();
   return acc.id;
 }
 

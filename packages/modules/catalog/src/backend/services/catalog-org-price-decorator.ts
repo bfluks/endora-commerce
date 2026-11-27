@@ -1,15 +1,19 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
+import { displayModeWithholdsAmounts } from '@endora-commerce/contracts';
 import type {
   CatalogBulkPriceLine,
+  CatalogProductAvailabilityPort,
+  LinePriceResult,
+  LinePricesPort,
   OrgLinePricePort,
   OrganizationDetailsPort,
   OrganizationRecord,
+  ProductAudience,
   ProductAvailability,
   ProductDetail,
   ProductPriceTier,
   ProductSummary,
 } from '@endora-commerce/contracts';
-import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
 import { Product } from '../entities/product.entity.js';
 
 
@@ -30,7 +34,18 @@ import { Product } from '../entities/product.entity.js';
  *    the injected inventory port;
  *  - answers the bound-only bulk `(sku, quantity)` pricing request with
  *    per-line results (misses are data, not errors).
+ *
+ * Issue #491 — a line answer keeps its amount under display mode `none` (it is
+ * the charging path), so this decorator, which **publishes** line amounts, asks
+ * `displayModeWithholdsAmounts` first: a product whose display mode is `none`
+ * for the bound Organization gets no price, no tier ladder and no bulk price —
+ * `priceUnavailable` / `price_unavailable`, as a product nothing prices.
  */
+
+/** A resolved line the caller may be shown, or `null` (nothing prices it, or its display mode withholds it). */
+function shown(resolved: LinePriceResult | null | undefined): LinePriceResult | null {
+  return resolved && !displayModeWithholdsAmounts(resolved.displayMode) ? resolved : null;
+}
 
 /** The request's resolved sales channel — only `id` + `defaultCurrency` are read. */
 export interface ExternalPricingChannel {
@@ -51,9 +66,13 @@ export interface CatalogOrgPriceDecoratorDeps {
    * two of its methods. `OrgLinePricePort` — `LinePricePort` plus the bracket
    * ladder — was published in this cut, because `PricingServiceContract` is
    * deliberately not in `@endora-commerce/contracts` (it is the overlay decoration's
-   * contract gate) and was `listBracketMinQuantities`' only declaration.
+   * contract gate) and was `listBracketMinQuantities`' (now `listTierStarts`) only declaration.
+   *
+   * D-287 P0 — and `LinePricesPort`, named beside it rather than folded into
+   * it: summaries, bulk lines and the tier ladder are each priced in one
+   * `resolveLinePrices` call.
    */
-  pricingService: OrgLinePricePort;
+  pricingService: OrgLinePricePort & LinePricesPort;
   /**
    * Feature 075 — the buying organisation, read through `organizations`' port
    * instead of `em.findOne(Organization, …)` against its table. The engine
@@ -64,12 +83,13 @@ export interface CatalogOrgPriceDecoratorDeps {
   /** Optional inventory port — when absent, `availability` is omitted. */
   resolveAvailability?: ResolveAvailabilityPort;
   /**
-   * Issue #185 — the kernel's channel-membership accessor. The published
-   * assortment check below asked `sales_channel_products` directly, which is
-   * the bridge Constitution XII reserves to this service and a cross-module
-   * read no import specifier could reveal.
+   * Feature 163 (owner decision W5 = A) — `catalogProductAvailabilityPort`:
+   * the bulk-price probe prices only a product available to the bound
+   * organisation at the key's channel (its default language) now. Membership
+   * of the channel goes through the kernel's accessor inside it (issue #185,
+   * Constitution XII), so it replaces the membership-only check.
    */
-  channelMembership: SalesChannelMembershipPort;
+  availability: Pick<CatalogProductAvailabilityPort, 'filterAvailable'>;
 }
 
 export class CatalogOrgPriceDecorator {
@@ -98,22 +118,25 @@ export class CatalogOrgPriceDecorator {
     const products = await em.find(Product, { id: { $in: summaries.map((s) => s.id) } });
     const productById = new Map(products.map((p) => [p.id, p]));
 
+    // D-287 P0 — one batched resolution for the page; it was one sequential
+    // `resolveLinePrice` per summary.
+    const priced = await this.deps.pricingService.resolveLinePrices({
+      lines: summaries.flatMap((summary, index) => {
+        const product = productById.get(summary.id);
+        return product ? [{ key: String(index), product, quantity: 1 }] : [];
+      }),
+      context: { organization, salesChannel: context.salesChannel },
+    });
+
     const out: ProductSummary[] = [];
-    for (const summary of summaries) {
+    for (const [index, summary] of summaries.entries()) {
       const decorated = this.#withAvailability(summary, availabilityByProduct);
       const product = productById.get(summary.id);
       if (!product) {
         out.push({ ...decorated, price: null, priceUnavailable: true });
         continue;
       }
-      const resolved = await this.deps.pricingService.resolveLinePrice({
-        product,
-        context: {
-          quantity: 1,
-          organization,
-          salesChannel: context.salesChannel,
-        },
-      });
+      const resolved = shown(priced.get(String(index)));
       out.push(
         resolved
           ? {
@@ -154,25 +177,47 @@ export class CatalogOrgPriceDecorator {
    */
   async resolveBulkPrices(
     lines: Array<{ sku: string; quantity: number }>,
-    context: { organizationId: string; salesChannel: ExternalPricingChannel },
+    context: {
+      organizationId: string;
+      salesChannel: ExternalPricingChannel;
+      /**
+       * Feature 163 (W5) — who is asking, from the request's resolved actor
+       * (`productAudienceOf`): the availability question is asked for it.
+       */
+      audience: ProductAudience;
+    },
   ): Promise<CatalogBulkPriceLine[]> {
     const em = this.deps.emFactory();
     const organization = await this.deps.organizations.findById(context.organizationId);
 
     const skus = Array.from(new Set(lines.map((l) => l.sku)));
+    // Feature 163 (W5 = A) — the status is the effective one at the channel,
+    // so it is the availability rule's to decide, not a global filter here.
     const products = await em.find(Product, {
       sku: { $in: skus },
       deletedAt: null,
-      status: 'active',
     });
     const productBySku = new Map(products.map((p) => [p.sku, p]));
-    const assortment = await this.#filterByChannel(
+    const assortment = await this.#availableTo(
       products.map((p) => p.id),
       context.salesChannel.id,
+      context.audience,
     );
 
+    // D-287 P0 — every in-assortment line in one batched resolution, each at
+    // its own quantity; it was one sequential `resolveLinePrice` per line.
+    const priced = await this.deps.pricingService.resolveLinePrices({
+      lines: lines.flatMap((line, index) => {
+        const product = productBySku.get(line.sku);
+        return product && assortment.has(product.id)
+          ? [{ key: String(index), product, quantity: line.quantity }]
+          : [];
+      }),
+      context: { organization, salesChannel: context.salesChannel },
+    });
+
     const out: CatalogBulkPriceLine[] = [];
-    for (const line of lines) {
+    for (const [index, line] of lines.entries()) {
       const product = productBySku.get(line.sku);
       if (!product || !assortment.has(product.id)) {
         out.push({
@@ -183,14 +228,7 @@ export class CatalogOrgPriceDecorator {
         });
         continue;
       }
-      const resolved = await this.deps.pricingService.resolveLinePrice({
-        product,
-        context: {
-          quantity: line.quantity,
-          organization,
-          salesChannel: context.salesChannel,
-        },
-      });
+      const resolved = shown(priced.get(String(index)));
       if (!resolved) {
         out.push({
           sku: line.sku,
@@ -227,18 +265,22 @@ export class CatalogOrgPriceDecorator {
     salesChannel: ExternalPricingChannel,
   ): Promise<ProductPriceTier[]> {
     const currencyCode = salesChannel.defaultCurrency.toUpperCase();
-    const minQuantities = await this.deps.pricingService.listBracketMinQuantities(
+    const minQuantities = await this.deps.pricingService.listTierStarts(
       product.id,
       currencyCode,
     );
     const probeQuantities = Array.from(new Set([1, ...minQuantities])).sort((a, b) => a - b);
 
+    // D-287 P0 — every rung in one batched resolution; it was one sequential
+    // `resolveLinePrice` per probe quantity.
+    const priced = await this.deps.pricingService.resolveLinePrices({
+      lines: probeQuantities.map((quantity) => ({ key: String(quantity), product, quantity })),
+      context: { organization, salesChannel },
+    });
+
     const tiers: ProductPriceTier[] = [];
     for (const quantity of probeQuantities) {
-      const resolved = await this.deps.pricingService.resolveLinePrice({
-        product,
-        context: { quantity, organization, salesChannel },
-      });
+      const resolved = shown(priced.get(String(quantity)));
       if (!resolved) continue;
       const tier: ProductPriceTier = {
         minQuantity: quantity,
@@ -277,24 +319,24 @@ export class CatalogOrgPriceDecorator {
   }
 
   /**
-   * Published-assortment check — the same question
-   * `CatalogQueryService.filterByChannel` asks, through the same accessor since
-   * issue #185. This was a hand-written `select product_id from
-   * sales_channel_products`, which is precisely the read Principle XII reserves
-   * to the channel-membership service; it fails closed to the empty set either
-   * way.
+   * Feature 163 (W5 = A) — the products available to the caller at the
+   * channel now: published there, effectively on in the channel's default
+   * language (an API call carries no storefront language), inside the window,
+   * admitted by the channel's audience rule. An id left out is answered as an
+   * SKU outside the assortment — one answer for every reason. It replaces the
+   * membership-only check (issue #185), which the port asks through the same
+   * accessor.
    */
-  async #filterByChannel(
+  async #availableTo(
     productIds: string[],
     salesChannelId: string,
-  ): Promise<Set<string>> {
+    audience: ProductAudience,
+  ): Promise<ReadonlySet<string>> {
     if (productIds.length === 0) return new Set();
-    return new Set(
-      await this.deps.channelMembership.filterEntityIdsInChannel(
-        salesChannelId,
-        'product',
-        productIds,
-      ),
-    );
+    return this.deps.availability.filterAvailable(productIds, {
+      channelId: salesChannelId,
+      languageCode: null,
+      audience,
+    });
   }
 }

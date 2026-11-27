@@ -90,6 +90,7 @@ describe('admin Megamenu CRUD contract (T021)', () => {
         items: [
           {
             parentId: null,
+            presentation: 'mega',
             position: 0,
             kind: 'external-link',
             labels: { 'en-US': 'Phone' },

@@ -41,7 +41,18 @@ The Docker stack binds the three apps to `127.0.0.1` only, so they are reachable
 
 Apps run built output: `node dist/index.js` (backend, feature 080 D-165) / Next standalone
 (storefront) / nginx (admin).
+The storefront's standalone server runs under a supervising parent
+(`storefront/scripts/supervise.mjs`, issue #152) that kills a server which stops answering
+HTTP and exits non-zero, so `restart: unless-stopped` brings it back — Docker itself never
+restarts a container that is only `unhealthy`. Its `STOREFRONT_SUPERVISOR_*` variables are in
+`docs/docs/deployment/storefront-supervisor.md`; the defaults need none.
 The backend runs API **and** BullMQ workers in one process (`BACKEND_ROLE=all`).
+The backend's compiled API runs under the same supervisor (`backend/scripts/supervise.mjs`,
+issue #596), probing `/api/v1/_health` — any HTTP status counts as an answer — with `init: true`
+and `stop_grace_period: 30s` on the service so `SIGTERM` leaves the workers 25 s to drain. Its
+`BACKEND_SUPERVISOR_*` variables are in `docs/docs/deployment/backend-supervisor.md`. The
+`backend-migrate` / `backend-install` one-shots and a separate `node dist/worker.js` tier are not
+supervised.
 
 ---
 
@@ -334,8 +345,10 @@ docker compose --env-file .env -f compose.prod.yml run --rm backend \
 
 ### Notes & caveats
 
-- **RAM**: building happens in CI, but the running stack (2 Node processes +
-  Postgres + Redis + Meilisearch) wants **≥ 4 GB** (8 GB comfortable).
+- **RAM**: building happens in CI, so the VPS sizes for the running stack (2 Node
+  processes + Postgres + Redis + Meilisearch) only — the tiers and the measured footprint are in
+  the root `README.md`, *Hardware & system requirements* (4 GB minimum, 8 GB for the target
+  workload).
 - **Backups**: Postgres data lives in the `postgres-data` volume. Add a cron job
   running the `pg_dump` above off-box (e.g. to object storage) — a stray
   `docker compose down -v` wipes the volume.

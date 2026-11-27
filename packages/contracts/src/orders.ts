@@ -7,8 +7,19 @@ import {
   paymentStatusSchema,
   uuidSchema,
   type OriginReference,
+  type PaymentStatus,
 } from './common.js';
-import { customFieldValuesSchema } from './custom-fields.js';
+import {
+  lineGroupKeySchema,
+  lineGroupSchema,
+  newLineGroupInputSchema,
+  refineLineGrouping,
+} from './line-groups.js';
+import {
+  customFieldCarrySkipSchema,
+  customFieldFiltersQueryParamSchema,
+  customFieldValuesSchema,
+} from './custom-fields.js';
 import { vatStatusSchema } from './organizations.js';
 import {
   savedListViewColumnsSchema,
@@ -17,6 +28,11 @@ import {
   savedListViewSchema,
   savedListViewSortSchema,
 } from './saved-list-views.js';
+import { twoDecimalAmount } from './money-input.js';
+import { lineQuantitySchema, REQUEST_LINE_ITEMS_MAX } from './line-bounds.js';
+import { vatSummaryRowSchema } from './invoices.js';
+import { payerCommercialTermsSchema } from './related-payers.js';
+import type { AggregateCommandOptions, CustomFieldMerge } from './aggregate-ports.js';
 
 /**
  * Orders module contracts — Source of truth per Principle V.
@@ -55,6 +71,10 @@ export const orderItemSchema = z.object({
   unitPrice: z.number().finite().nonnegative(),
   taxRate: z.number().finite().nonnegative(),
   lineTotal: z.number().finite().nonnegative(),
+  /** Feature 159 — the line's group (`itemGroups[].id`), `null` = ungrouped. */
+  groupId: uuidSchema.nullable().default(null),
+  /** Feature 159 — 0-based order within the line's section. */
+  position: z.number().int().nonnegative().default(0),
 });
 export type OrderItem = z.infer<typeof orderItemSchema>;
 
@@ -107,6 +127,136 @@ export const orderPendingEffectSchema = z.object({
   lastAttemptAt: isoDateTimeSchema.nullable(),
 });
 export type OrderPendingEffect = z.infer<typeof orderPendingEffectSchema>;
+
+// --- External references (issue #1030) ----------------------------------------
+
+/**
+ * Where an external system — an ERP, a WMS, a fulfilment connector — stands
+ * with an order, as that system's integration last reported it: handed over
+ * and not answered yet, accepted, or refused.
+ */
+export const ORDER_EXTERNAL_REFERENCE_STATES = ['pending', 'synced', 'error'] as const;
+export type OrderExternalReferenceState = (typeof ORDER_EXTERNAL_REFERENCE_STATES)[number];
+
+/** The longest message an integration may record, in characters. */
+export const ORDER_EXTERNAL_REFERENCE_MESSAGE_MAX = 1000;
+
+/** The longest external reference (the other system's number), in characters. */
+export const ORDER_EXTERNAL_REFERENCE_MAX = 255;
+
+/**
+ * The stable key a writer records its references under — normally its own
+ * module id. Lower-case, starting with a letter, then letters, digits, `_`,
+ * `-` or `.`, at most 64 characters: it is shown to the operator as written
+ * and it is half of the row's identity, so it is a key and not a label.
+ */
+export const orderExternalReferenceSystemSchema = z
+  .string()
+  .max(64)
+  .regex(/^[a-z][a-z0-9_.-]*$/, 'A system key is lower-case letters, digits, "_", "-" or "." and starts with a letter.');
+
+/**
+ * Plain text: any character but a control character other than tab, line feed
+ * and carriage return. The admin renders it as text, never as markup.
+ */
+const CONTROL_CHARACTER = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+
+/**
+ * What a writer records through {@link OrderExternalReferencePort.set}.
+ *
+ * - `reference` — the other system's number for the order. **Omitted keeps
+ *   the stored one** (a writer that only reports a new state need not repeat
+ *   it); `null` clears it.
+ * - `message` — the other system's own words, normally on `error`. **Omitted
+ *   means none**: the message describes the state being recorded, so a writer
+ *   reporting `synced` after an `error` does not leave the refusal standing.
+ */
+export const orderExternalReferenceWriteSchema = z.object({
+  reference: z
+    .string()
+    .max(ORDER_EXTERNAL_REFERENCE_MAX)
+    .refine((value) => value.trim().length > 0, 'An external reference is not empty.')
+    .refine((value) => !CONTROL_CHARACTER.test(value), 'An external reference is plain text.')
+    .nullable()
+    .optional(),
+  state: z.enum(ORDER_EXTERNAL_REFERENCE_STATES),
+  message: z
+    .string()
+    .max(ORDER_EXTERNAL_REFERENCE_MESSAGE_MAX)
+    .refine((value) => !CONTROL_CHARACTER.test(value), 'A message is plain text.')
+    .nullable()
+    .optional(),
+});
+export type OrderExternalReferenceWrite = z.infer<typeof orderExternalReferenceWriteSchema>;
+
+/**
+ * One external system's reference on an order, as the admin order detail
+ * carries it (`GET /api/v1/admin/orders/:id`, `externalReferences`).
+ */
+export const adminOrderExternalReferenceSchema = z.object({
+  system: z.string(),
+  reference: z.string().nullable(),
+  state: z.enum(ORDER_EXTERNAL_REFERENCE_STATES),
+  message: z.string().nullable(),
+  updatedAt: isoDateTimeSchema,
+});
+export type AdminOrderExternalReference = z.infer<typeof adminOrderExternalReferenceSchema>;
+
+/**
+ * Issue #904 — the VAT method an order was placed under, as `orders.vat_method`
+ * stores it (`null`: placed before 0.108.0). `per_rate`: VAT per rate on the
+ * sum of the goods nets, with delivery and the payment surcharge at 0 %.
+ * `per_rate_charges`: the same method, with delivery and the surcharge taxed
+ * at the goods' rates as {@link orderChargeLineSchema} parts. Nothing places an
+ * order `per_rate_charges` yet (Phase A); the value is published so the
+ * readers can learn it before the placement switch.
+ */
+export const orderVatMethodSchema = z.enum(['per_rate', 'per_rate_charges']);
+export type OrderVatMethod = z.infer<typeof orderVatMethodSchema>;
+
+/**
+ * Issue #904 — one part of an order-level charge at one VAT rate, as
+ * `chargesByRate` answered it at placement and `orders.charge_lines` stores
+ * it: two-place decimal strings, the rate a fraction. A charge spread over
+ * two rates is two parts. Read, never recomputed, by every document the order
+ * produces.
+ */
+export const orderChargeLineSchema = z.object({
+  kind: z.enum(['delivery', 'payment_surcharge']),
+  rate: z.string(),
+  gross: z.string(),
+  net: z.string(),
+});
+export type OrderChargeLine = z.infer<typeof orderChargeLineSchema>;
+
+/**
+ * Issue #904 — the net side of an order's charges, for a net-display summary.
+ * Optional and additive: absent wherever the charges carry no VAT, which is
+ * every order until the placement switch.
+ */
+const orderChargeNetFields = {
+  /** The delivery's net: the sum of its parts' nets. */
+  deliveryNet: z.number().finite().optional(),
+  /** The payment surcharge's net: the sum of its parts' nets. */
+  paymentSurchargeNet: z.number().finite().optional(),
+  /** The VAT per rate, goods and charges together. */
+  vatRows: z.array(vatSummaryRowSchema).optional(),
+};
+
+/**
+ * `specs/182-related-payers/` (FR-067, research R-2) — the Organization that pays
+ * for and is invoiced for an order, when it is not the buyer. The order's
+ * `organizationId` stays the buyer's; its `billingAddress` is the payer's.
+ * `terms` records whose commercial terms priced it (FR-117). Owned by `orders`
+ * as order data, so it reads the same with `related_payers` switched off.
+ */
+export const orderPayerSchema = z.object({
+  organizationId: uuidSchema,
+  name: z.string(),
+  taxId: z.string(),
+  terms: payerCommercialTermsSchema,
+});
+export type OrderPayer = z.infer<typeof orderPayerSchema>;
 
 export const orderSchema = z.object({
   id: uuidSchema,
@@ -175,6 +325,12 @@ export const orderSchema = z.object({
     kind: z.enum(['bank_transfer', 'pickup', 'credit_limit', 'gateway']),
   }),
   sourceQuoteRequestId: uuidSchema.nullable(),
+  /**
+   * Feature 159 — the order's line groups in display order (every one holds a
+   * line: an order never stores an empty group). Fixed at placement.
+   */
+  itemGroups: z.array(lineGroupSchema).default([]),
+  /** In display order: each group's lines, then the ungrouped lines. */
   items: z.array(orderItemSchema),
   subtotal: z.number().finite().nonnegative(),
   taxTotal: z.number().finite().nonnegative(),
@@ -191,6 +347,13 @@ export const orderSchema = z.object({
     )
     .default([]),
   deliveryTotal: z.number().finite().nonnegative(),
+  /**
+   * Issue #904 — the charges' parts per VAT rate, as the order stored them.
+   * Absent or `null` on an order whose charges carry no VAT.
+   */
+  chargeLines: z.array(orderChargeLineSchema).nullable().optional(),
+  deliveryNet: orderChargeNetFields.deliveryNet,
+  paymentSurchargeNet: orderChargeNetFields.paymentSurchargeNet,
   total: z.number().finite().nonnegative(),
   currency: z.string().length(3),
   placedAt: isoDateTimeSchema,
@@ -224,6 +387,12 @@ export const orderSchema = z.object({
    * operator's concern and changes nothing a buyer can do.
    */
   pendingEffects: z.array(orderPendingEffectSchema).optional(),
+  /**
+   * `specs/182-related-payers/` — the payer, or `null` when the buyer pays. On the
+   * buyer-facing and admin order reads. Additive: a reply without the key parses
+   * as `null`.
+   */
+  payer: orderPayerSchema.nullable().default(null),
 });
 export type Order = z.infer<typeof orderSchema>;
 
@@ -243,7 +412,10 @@ export const adminOrderDetailSchema = orderSchema.extend({
       id: uuidSchema,
       name: z.string(),
       legalName: z.string().nullable(),
-      taxId: z.string(),
+      /** `null` for a personal (B2C) Organization, whose tax id is an internal placeholder (#767). */
+      taxId: z.string().nullable(),
+      /** A personal (B2C) Organization: the panel labels it an individual customer (#767). */
+      isPersonal: z.boolean(),
       vatStatus: vatStatusSchema,
     })
     .nullable(),
@@ -255,6 +427,12 @@ export const adminOrderDetailSchema = orderSchema.extend({
       email: z.string(),
     })
     .nullable(),
+  /**
+   * Issue #1030 — what each external system has reported about this order,
+   * one entry per system, ordered by system key. Empty when none has; a reply
+   * from a server older than the field parses as empty.
+   */
+  externalReferences: z.array(adminOrderExternalReferenceSchema).default([]),
 });
 export type AdminOrderDetail = z.infer<typeof adminOrderDetailSchema>;
 
@@ -293,6 +471,14 @@ export type OrderCommittedWritePartialResponse = z.infer<
 >;
 
 // --- Requests --------------------------------------------------------------
+
+/**
+ * `specs/182-related-payers/` FR-062 — a placement naming a payer together with a
+ * non-empty billing company name or tax-ID override: the issue's message and the
+ * `details.code` of the route's 422 `VALIDATION_FAILED`. With a payer the billing
+ * company and tax ID are the payer's, read-only (FR-061).
+ */
+export const PAYER_BILLING_OVERRIDE_CONFLICT = 'payer_billing_override_conflict';
 
 export const placeOrderRequestSchema = z.object({
   deliveryAddressId: uuidSchema,
@@ -345,6 +531,26 @@ export const placeOrderRequestSchema = z.object({
    * ShippingAdapter. InPost locker: `{ targetPoint: string }`.
    */
   shippingAdapterData: z.record(z.string(), z.unknown()).optional(),
+  /**
+   * `specs/182-related-payers/` — the Organization that pays for and is invoiced
+   * for this order (FR-060). Validated at placement against the buyer's usable
+   * payer links; `billingAddressId` must then be one of the payer's allowed
+   * billing addresses (FR-063). With a cart in a payer's-terms context it must
+   * equal the cart's `buyingFor`. Refused with a billing override (FR-062).
+   */
+  payerOrganizationId: uuidSchema.optional(),
+}).superRefine((val, ctx) => {
+  if (val.payerOrganizationId === undefined) return;
+  for (const field of ['billingCompanyName', 'billingTaxId'] as const) {
+    if (val[field] !== undefined && val[field].trim() !== '') {
+      ctx.addIssue({
+        code: 'custom',
+        path: [field],
+        message: PAYER_BILLING_OVERRIDE_CONFLICT,
+        params: { code: PAYER_BILLING_OVERRIDE_CONFLICT },
+      });
+    }
+  }
 });
 export type PlaceOrderRequest = z.infer<typeof placeOrderRequestSchema>;
 
@@ -359,8 +565,23 @@ export const orderPreviewTotalRequestSchema = z.object({
   deliveryMethodId: uuidSchema,
   paymentMethodId: uuidSchema,
   billingAddressId: uuidSchema.optional(),
+  /**
+   * `specs/182-related-payers/` FR-064 — preview as placement with this payer:
+   * tax from the payer's VAT status and the chosen payer billing address.
+   */
+  payerOrganizationId: uuidSchema.optional(),
 });
 export type OrderPreviewTotalRequest = z.infer<typeof orderPreviewTotalRequestSchema>;
+
+/**
+ * Issue #167 — why a basket priced at a quote's agreed prices cannot be ordered at them now.
+ * `lapsed`: the quote's validity date has passed; `withdrawn`: the quote is gone or no longer in
+ * a state whose prices bind (re-opened, cancelled, expired); `unavailable`: the quote desk is
+ * switched off, so nothing can confirm the prices. Placement refuses with
+ * `410 QUOTE_VALIDITY_ENDED` and this value in `details.code`.
+ */
+export const quoteCommitmentRefusalSchema = z.enum(['lapsed', 'withdrawn', 'unavailable']);
+export type QuoteCommitmentRefusal = z.infer<typeof quoteCommitmentRefusalSchema>;
 
 export const orderPreviewTotalResponseSchema = z.object({
   subtotal: z.number(),
@@ -370,6 +591,30 @@ export const orderPreviewTotalResponseSchema = z.object({
   discountTotal: z.number(),
   total: z.number(),
   currency: z.string(),
+  ...orderChargeNetFields,
+  /**
+   * Feature 155 — basket lines placement will refuse. Exemptions apply only when the basket's quote
+   * source is confirmed valid now (FR-036); `product_unavailable` is a line whose product record is
+   * gone (FR-037), with no name or minimum.
+   */
+  belowMinimumLines: z
+    .array(
+      z.object({
+        cartItemId: uuidSchema,
+        productId: uuidSchema,
+        productName: z.string().optional(),
+        kind: z.enum(['pieces', 'packaging_unit', 'product_unavailable']),
+        minimum: z.number().int().positive().optional(),
+        packagingUnitName: z.string().optional(),
+      }),
+    )
+    .default([]),
+  /**
+   * Issue #167 — set when the basket holds lines priced at a quote's agreed prices and placement
+   * will refuse them (`410 QUOTE_VALIDITY_ENDED`); `null` otherwise. Advisory, like
+   * `belowMinimumLines`: placement re-checks.
+   */
+  quoteCommitmentRefusal: quoteCommitmentRefusalSchema.nullable().default(null),
 });
 export type OrderPreviewTotalResponse = z.infer<typeof orderPreviewTotalResponseSchema>;
 
@@ -384,8 +629,70 @@ export const adminOrderPaymentStatusTransitionSchema = z.object({
   invoiceId: uuidSchema.optional(),
 });
 
+/**
+ * Who moves an order's payment status (issue #1574): an **operator** through
+ * `POST /api/v1/admin/orders/:id/payment-status`, or **settlement** — the
+ * `payments` module recording what a gateway or the `/payments/receive` ingress
+ * reported, through `orderPaymentStatusApplyPort`.
+ */
+export const paymentStatusTransitionActorSchema = z.enum(['operator', 'settlement']);
+export type PaymentStatusTransitionActor = z.infer<typeof paymentStatusTransitionActorSchema>;
+
+export interface PaymentStatusTransition {
+  readonly from: PaymentStatus;
+  readonly to: PaymentStatus;
+  readonly actors: readonly PaymentStatusTransitionActor[];
+}
+
+/**
+ * The money axis's transition graph (issue #1574). Not configurable: the
+ * vocabulary is a fixed enum and so is what may follow what.
+ *
+ * - `awaiting_payment` and `deferred` are **initial** — assigned at placement,
+ *   never reached by an edge.
+ * - `refunded` is **terminal** — nothing leaves it, so a refunded order is
+ *   never marked paid again.
+ * - `refunded` is reached only from `paid`: nothing else was paid.
+ * - `failed` is reached only by settlement: a payment fails at the gateway or
+ *   it does not (feature 085, FR-024).
+ *
+ * Moving to the status an order already has is no edge: it is a no-op for
+ * either actor. Every operator edge's `to` is one `adminOrderPaymentStatusTransitionSchema`
+ * parses, and the admin's "Change…" dialog offers exactly {@link paymentStatusTargets}.
+ */
+export const PAYMENT_STATUS_TRANSITIONS: readonly PaymentStatusTransition[] = [
+  { from: 'awaiting_payment', to: 'paid', actors: ['operator', 'settlement'] },
+  { from: 'failed', to: 'paid', actors: ['operator', 'settlement'] },
+  { from: 'deferred', to: 'paid', actors: ['operator', 'settlement'] },
+  { from: 'paid', to: 'refunded', actors: ['operator', 'settlement'] },
+  { from: 'awaiting_payment', to: 'failed', actors: ['settlement'] },
+];
+
+/** The statuses `actor` may move an order at `from` to — never `from` itself. */
+export function paymentStatusTargets(
+  from: PaymentStatus | string,
+  actor: PaymentStatusTransitionActor,
+): PaymentStatus[] {
+  return PAYMENT_STATUS_TRANSITIONS.filter(
+    (edge) => edge.from === from && edge.to !== from && edge.actors.includes(actor),
+  ).map((edge) => edge.to);
+}
+
+/**
+ * `details` of `409 ORDER_PAYMENT_STATUS_TRANSITION_NOT_ALLOWED` (issue #1574).
+ * `code` is the refusal token the error envelope picks the sentence by:
+ * `payment_refunded` — the order is refunded, so nothing may follow;
+ * `payment_not_paid` — `refunded` was asked for an order that was never paid.
+ */
+export const orderPaymentStatusRefusalDetailsSchema = z.object({
+  code: z.enum(['payment_refunded', 'payment_not_paid']),
+  from: paymentStatusSchema,
+  to: paymentStatusSchema,
+});
+export type OrderPaymentStatusRefusalDetails = z.infer<typeof orderPaymentStatusRefusalDetailsSchema>;
+
 export const adminOrderRefundRequestSchema = z.object({
-  amount: z.number().finite().positive().optional(),
+  amount: twoDecimalAmount(z.number().finite().positive()).optional(),
 });
 
 export const adminOrderShippedRequestSchema = z.object({
@@ -509,6 +816,8 @@ export const adminOrdersListQuerySchema = z.object({
   salesChannelId: multiQueryParam(uuidSchema),
   paymentMethodId: multiQueryParam(uuidSchema),
   deliveryMethodId: multiQueryParam(uuidSchema),
+  /** `specs/182-related-payers/` FR-073 — orders a related payer pays for. */
+  payerOrganizationId: uuidSchema.optional(),
   organizationId: uuidSchema.optional(),
   q: z.string().max(200).optional(),
   // Dedicated org / customer name filters (free-text, AND-combined with `q`).
@@ -519,6 +828,12 @@ export const adminOrdersListQuerySchema = z.object({
   // Order-total range (inclusive).
   totalMin: z.coerce.number().nonnegative().optional(),
   totalMax: z.coerce.number().nonnegative().optional(),
+  /**
+   * Filters on the Order custom fields marked as list filters, as JSON
+   * (`specs/157-custom-fields-list-filters/`). A key the list does not offer
+   * is refused with 400 `CUSTOM_FIELD_FILTER_UNAVAILABLE`.
+   */
+  customFieldFilters: customFieldFiltersQueryParamSchema,
   sort: z.string().optional(),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().positive().max(200).default(25),
@@ -628,7 +943,7 @@ export type UpdateOrderSavedViewRequest = z.infer<typeof updateOrderSavedViewReq
 export const adminCreateOrderItemSchema = z.object({
   productId: uuidSchema,
   variantId: uuidSchema.optional(),
-  quantity: z.number().int().positive(),
+  quantity: lineQuantitySchema,
 });
 
 /**
@@ -648,11 +963,32 @@ export const adminCreateOrderInlineAddressSchema = z.object({
 });
 export type AdminCreateOrderInlineAddress = z.infer<typeof adminCreateOrderInlineAddressSchema>;
 
+/**
+ * Feature 155 (FR-038, research R20) — the most items admin create-order and the admin
+ * preview accept. Enforced by the service / handler as its first step (`422
+ * VALIDATION_FAILED`, `details: { code: 'too_many_items', maximum }`), deliberately not by
+ * a schema `.max()`, which would answer 400.
+ */
+export const ADMIN_ORDER_MAX_ITEMS = REQUEST_LINE_ITEMS_MAX;
+
+/**
+ * Feature 159 — a line of the admin create request: the preview's item plus the
+ * `groups[].key` it belongs to (absent or `null` = ungrouped). The preview keeps
+ * `adminCreateOrderItemSchema`, so a `groupKey` sent there is stripped.
+ */
+export const adminCreateOrderLineSchema = adminCreateOrderItemSchema.extend({
+  groupKey: lineGroupKeySchema.nullable().optional(),
+});
+export type AdminCreateOrderLine = z.infer<typeof adminCreateOrderLineSchema>;
+
 export const adminCreateOrderRequestSchema = z
   .object({
     customerAccountId: uuidSchema,
     salesChannelId: uuidSchema,
-    items: z.array(adminCreateOrderItemSchema).min(1),
+    /** Feature 159 — the new order's groups in display order; a group no line names is not created. */
+    groups: z.array(newLineGroupInputSchema).optional(),
+    /** In display order: each group's lines, then the ungrouped lines. */
+    items: z.array(adminCreateOrderLineSchema).min(1),
     deliveryMethodId: uuidSchema,
     paymentMethodId: uuidSchema,
     /**
@@ -678,6 +1014,11 @@ export const adminCreateOrderRequestSchema = z
      * not returned. Only this admin request may carry it.
      */
     origin: OriginReferenceSchema.optional(),
+    /**
+     * Feature 175 (FR-017) — the order's custom-field values, validated with
+     * the administrator's rules inside the creating Command.
+     */
+    customFieldValues: customFieldValuesSchema.optional(),
   })
   .superRefine((val, ctx) => {
     if ((val.deliveryAddressId == null) === (val.deliveryAddress == null)) {
@@ -694,6 +1035,7 @@ export const adminCreateOrderRequestSchema = z
         message: 'Provide exactly one of billingAddressId or billingAddress.',
       });
     }
+    refineLineGrouping(ctx, val);
   });
 export type AdminCreateOrderRequest = z.infer<typeof adminCreateOrderRequestSchema>;
 
@@ -738,7 +1080,7 @@ export const apiPlaceOrderRequestSchema = z
       .array(
         z.object({
           sku: z.string().min(1),
-          quantity: z.number().int().min(1),
+          quantity: lineQuantitySchema,
         }),
       )
       .min(1),
@@ -787,6 +1129,12 @@ export const adminOrderPreviewLineSchema = z.object({
   unitPrice: z.string(),
   currency: z.string(),
   lineTotal: z.number(),
+  /**
+   * Feature 159 — the rate the line is taxed at (a fraction, `0.23`), from the
+   * same authority as `summary.taxTotal`; absent on an unavailable line. The
+   * create screen sums a group's VAT from it.
+   */
+  taxRate: z.number().optional(),
   unavailable: z.boolean().optional(),
 });
 
@@ -798,9 +1146,20 @@ export const adminOrderPreviewLineSchema = z.object({
  */
 export const ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE = [
   'PRODUCT_NOT_FOUND',
+  /**
+   * Issue #829 — the product is archived (feature 163, FR-019). It equals
+   * `ERROR_CODES.PRODUCT_ARCHIVED`, the `409` admin order create answers for the same line
+   * and the reason an operator's quote request gives (FR-115). Archiving is product-wide,
+   * so it outranks the customer's visibility and the channel's assortment.
+   */
+  'PRODUCT_ARCHIVED',
   'PRODUCT_NOT_VISIBLE_TO_CUSTOMER',
   'PRODUCT_NOT_IN_SALES_CHANNEL',
   'QUOTE_ONLY',
+  /** Feature 160 (FR-018) — no price book prices the line; the cart would refuse it as unpriced. */
+  'UNPRICED',
+  /** Feature 155 — the line is below its product's pieces or packaging-unit minimum. */
+  'BELOW_MINIMUM_QUANTITY',
 ] as const;
 export const adminOrderPreviewMessageCodeSchema = z.enum(ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE);
 export type AdminOrderPreviewMessageCode = z.infer<typeof adminOrderPreviewMessageCodeSchema>;
@@ -815,21 +1174,49 @@ export const adminOrderPreviewResponseSchema = z.object({
     discountTotal: z.number(),
     total: z.number(),
     currency: z.string(),
+    ...orderChargeNetFields,
   }),
   /**
    * One entry per unavailable line, never more: its `code` is the first of
    * {@link ADMIN_ORDER_PREVIEW_MESSAGE_PRECEDENCE} that applies —
-   * `PRODUCT_NOT_FOUND`, `PRODUCT_NOT_VISIBLE_TO_CUSTOMER`,
-   * `PRODUCT_NOT_IN_SALES_CHANNEL`, `QUOTE_ONLY`. `code` is deliberately a plain
+   * `PRODUCT_NOT_FOUND`, `PRODUCT_ARCHIVED` (issue #829),
+   * `PRODUCT_NOT_VISIBLE_TO_CUSTOMER`, `PRODUCT_NOT_IN_SALES_CHANNEL`, `QUOTE_ONLY`,
+   * `UNPRICED`, `BELOW_MINIMUM_QUANTITY` (feature 155, which alone carries `minimum`). `code` is deliberately a plain
    * string, not {@link adminOrderPreviewMessageCodeSchema}: a newer server may
    * add a code, and an older client must still parse the answer (treat an
    * unknown code as unavailable).
    */
-  messages: z.array(z.object({ productId: uuidSchema, code: z.string() })),
+  messages: z.array(
+    z.object({
+      productId: uuidSchema,
+      code: z.string(),
+      /** Feature 155 — the missed minimum, on a `BELOW_MINIMUM_QUANTITY` message only. */
+      minimum: z.number().int().positive().optional(),
+    }),
+  ),
 });
 export type AdminOrderPreviewResponse = z.infer<typeof adminOrderPreviewResponseSchema>;
 
 // --- Comments --------------------------------------------------------------
+
+/**
+ * Feature 162 — an author-less **system note** the platform writes into an
+ * Order's comments: custom-field values that could not be carried into the
+ * Order from the record it was created from. Internal, never notifying, and
+ * never listed to the buyer. The comment's `body` is an English fallback; a
+ * reader renders the note in its own language from this shape.
+ */
+export const orderCommentSystemNoteSchema = z.object({
+  kind: z.literal('custom_field_carry_skipped'),
+  source: z.object({
+    entityType: z.enum(['quote_request', 'opportunity']),
+    recordId: uuidSchema,
+    /** The source's business number. */
+    reference: z.string(),
+  }),
+  skipped: z.array(customFieldCarrySkipSchema).min(1),
+});
+export type OrderCommentSystemNote = z.infer<typeof orderCommentSystemNoteSchema>;
 
 export const orderCommentSchema = z.object({
   id: uuidSchema,
@@ -840,6 +1227,8 @@ export const orderCommentSchema = z.object({
   body: z.string(),
   isCustomerVisible: z.boolean(),
   notifyCustomer: z.boolean(),
+  /** Feature 162 — admin replies only; present ⇒ a system note (both authors `null`). */
+  systemNote: orderCommentSystemNoteSchema.nullable().optional(),
   createdAt: isoDateTimeSchema,
 });
 export type OrderComment = z.infer<typeof orderCommentSchema>;
@@ -976,6 +1365,12 @@ export interface OrderRecord {
   id: string;
   businessId: string;
   organizationId: string;
+  /**
+   * `specs/182-related-payers/` — the Organization billed when it is not the buyer, `null`
+   * otherwise. Optional on the type so a record built before it still compiles; read it as
+   * `payerOrganizationId ?? organizationId` for "who is invoiced".
+   */
+  payerOrganizationId?: string | null;
   placedByCustomerAccountId: string;
   placedOnBehalfByAdminUserId: string | null;
   salesChannelId: string;
@@ -1001,6 +1396,12 @@ export interface OrderRecord {
   taxTotal: string;
   discountTotal: string;
   deliveryTotal: string;
+  /**
+   * Issue #904 — the charges' parts per VAT rate, as the order stored them
+   * (`orders.charge_lines`). `null` or absent: the charges carry no VAT, as on
+   * every order placed before the placement switch.
+   */
+  chargeLines?: OrderChargeLine[] | null;
   total: string;
   currency: string;
   promotionCode: string | null;
@@ -1009,6 +1410,14 @@ export interface OrderRecord {
   createdAt: Date;
   updatedAt: Date;
   customFieldValues: Record<string, unknown>;
+  /**
+   * `specs/186-aggregate-ports/` (`data-model.md`, R-8) — the payer as the
+   * order stores it (`specs/182-related-payers/`, {@link orderPayerSchema}),
+   * `null` when the buyer pays. Always filled by `orders`; optional on the type
+   * only so a record built before it still compiles, as
+   * {@link OrderRecord.payerOrganizationId} is.
+   */
+  payer?: OrderPayer | null;
 }
 
 /** One line of an order, as `invoices` reads it. */
@@ -1043,6 +1452,25 @@ export interface OrderItemRecord {
  */
 export interface OrderReadPort {
   findById(id: string): Promise<OrderRecord | null>;
+  /**
+   * The order with this id **if this customer may read it**, else `null` — the
+   * rule `GET /api/v1/orders/:id` applies (`specs/170-organization-roles/`
+   * FR-049): a member whose organization role holds `orders.view_organization`
+   * (*Administrator* included) reaches every order of their Organization (or
+   * of its roll-up subtree, through the tenant filter); anyone else only the
+   * orders they placed.
+   *
+   * Published for `invoices`' buyer routes (issue #669), which used to accept
+   * any order of the caller's Organization; `returns` judges the order a
+   * return or complaint is started from with it too (FR-054). A consumer
+   * serving a customer an order-scoped resource asks this rather than
+   * restating the rule. `null` is the caller's 404, never a 403, so an order
+   * the customer may not see is indistinguishable from one that does not exist.
+   */
+  findByIdForCustomer(
+    id: string,
+    customer: Pick<OrderCustomerContext, 'customerAccountId' | 'organizationId'>,
+  ): Promise<OrderRecord | null>;
   findByIds(ids: readonly string[]): Promise<OrderRecord[]>;
   /** Every order, newest first — for the bulk export adapter. */
   listAll(): Promise<OrderRecord[]>;
@@ -1096,6 +1524,18 @@ export interface OrderReadPort {
    * subscriber runs the order may already have moved on.
    */
   findStatusDefinition(code: string): Promise<OrderStatusDefinitionRecord | null>;
+  /**
+   * Whether an order's current status is terminal, per the configured graph
+   * (`specs/186-aggregate-ports/`: moved here from `orderTransitionPort`, a
+   * read on a write port).
+   *
+   * A caller that has to refuse acting on a finished order asks this rather
+   * than comparing against the string `'cancelled'`: the status set is
+   * operator-configurable and a deployment may add terminal statuses of its
+   * own. `null` when there is no such order, so the caller answers 404 in its
+   * own words instead of guessing.
+   */
+  isTerminal(orderId: string): Promise<boolean | null>;
 }
 
 /** One configured order status, as a consumer labels it. */
@@ -1250,7 +1690,71 @@ export interface PlacedOrderRecord extends OrderRecord {
  * `nonDeactivatable` never enters one.
  */
 export interface OrderPlacementPort {
-  placeOrder(ctx: OrderCustomerContext, req: PlaceOrderRequest): Promise<PlacedOrderRecord>;
+  /**
+   * `options.language` (feature 155, D3/D4) — the language the caller's response
+   * is answered in, which a minimum refusal names the product in. Absent, the
+   * record's own fallback chain.
+   *
+   * `options.workingBasketId` (issue #169) — place from this **working**
+   * basket of the customer's (`CartWritePort.addItems` with `workingBasket`)
+   * instead of their active basket, which the placement then never touches. The
+   * working basket ends `completed` against the order, or is removed when the
+   * placement is refused.
+   *
+   * `options.languageTag` (issue #1308) — the buyer request's scope language:
+   * the channel language its `Accept-Language` asks for
+   * (`requestScopeLanguage`). The basket's lines are judged for availability,
+   * and the order's lines named, at (the order's channel, `languageTag`
+   * resolved against that channel's own languages) — the language the same
+   * request's `CartWritePort.addItems` judged them in, so a line it admitted
+   * is not refused here for being off in the channel's default language.
+   * Absent: the language `options.language` names on the channel, else the
+   * channel's default, as before — the answer for a caller with no storefront
+   * request (an API-key order, an operator naming a customer's channel). The
+   * field is additive: an implementation outside this repository may ignore it
+   * and keep that behaviour.
+   */
+  placeOrder(
+    ctx: OrderCustomerContext,
+    req: PlaceOrderRequest,
+    options?: { language?: string; languageTag?: string; workingBasketId?: string },
+  ): Promise<PlacedOrderRecord>;
+}
+
+/** One basket line, as the quote-source confirmation reads it. */
+export interface QuoteSourceBasketLine {
+  productId: string;
+  variantId: string | null;
+  /** The line's stored unit price — compared with the quote's agreed price. */
+  unitPrice: string;
+}
+
+/**
+ * Container name: `orderQuoteSourcePort`. Owner: `orders`.
+ *
+ * Feature 155 (FR-036, FR-039; `contracts/cart-and-checkout-api.md` §12) —
+ * whether a basket's quote-seeded lines keep their exemption from the
+ * catalogue's order minimums, answered by the **checkout preview's** check: the
+ * Quote Request belongs to `organizationId`, is `Approved`, its validity has not
+ * ended, no Order already carries it, and `basketLines` still hold a line agreed
+ * in it. Lock-free and advisory — placement confirms the source again under its
+ * own lock, so nothing a caller grants on this answer is relied on by placement.
+ *
+ * Published for `carts`' submit-for-approval, which must judge a basket as
+ * placement does rather than take the cart's quote mark at face value. The rule
+ * stays in one place: `orders` already owns it and is the only module that can
+ * answer "no Order carries it yet".
+ *
+ * Fail-closed: `false` whenever the source cannot be confirmed, including while
+ * `quote_requests` is off. **Owner off:** resolving the port throws
+ * `ModuleDisabledError` (503), as for every `orders` port.
+ */
+export interface OrderQuoteSourcePort {
+  quoteSourceHonoursExemptions(input: {
+    organizationId: string;
+    quoteRequestId: string;
+    basketLines: readonly QuoteSourceBasketLine[];
+  }): Promise<boolean>;
 }
 
 export interface OrderStatusActor {
@@ -1367,6 +1871,13 @@ export interface OrderTransitionPort {
    * validation, the before-guards, the audit entry and the status's
    * side-effects. The caller invokes none of those and needs to know about
    * none of them.
+   *
+   * Delegates to {@link OrderCommandPort.applyStatus}: the same Command, the
+   * same outcomes. `actor` is not taken from the input any more (an actor is
+   * never input, Principle XIII): the audit entry records the ambient actor,
+   * and `actor.source`, when given, is recorded as the caller's `source` code.
+   *
+   * @deprecated since 0.113.0; use {@link OrderCommandPort.applyStatus} instead.
    */
   applyStatus(input: {
     orderId: string;
@@ -1383,8 +1894,210 @@ export interface OrderTransitionPort {
    * operator-configurable and a deployment may add terminal statuses of its
    * own. `null` when there is no such order, so the caller answers 404 in its
    * own words instead of guessing.
+   *
+   * @deprecated since 0.113.0; use {@link OrderReadPort.isTerminal} instead.
    */
   isTerminal(orderId: string): Promise<boolean | null>;
+}
+
+/** The container name {@link OrderExternalReferencePort} is registered under. */
+export const ORDER_EXTERNAL_REFERENCE_PORT = 'orderExternalReferencePort' as const;
+
+/**
+ * One external system's reference on an order, as
+ * {@link OrderExternalReferencePort} answers it (issue #1030).
+ */
+export interface OrderExternalReference {
+  orderId: string;
+  /** The writer's stable key, e.g. its module id ({@link orderExternalReferenceSystemSchema}). */
+  system: string;
+  /** The external system's number for the order, once known. */
+  reference: string | null;
+  state: OrderExternalReferenceState;
+  /** The external system's own words, plain text, at most 1000 characters. */
+  message: string | null;
+  /** When this system's entry last changed. A write that changed nothing does not move it. */
+  updatedAt: Date;
+}
+
+/**
+ * Container name: `orderExternalReferencePort`. Owner: `orders`
+ * ({@link ORDER_EXTERNAL_REFERENCE_PORT}; issue #1030).
+ *
+ * What an integration that hands orders to another system — an ERP, a WMS, a
+ * fulfilment connector — records **on the order**: that system's number for
+ * it, where the hand-over stands, and the other system's words when it
+ * refused. One entry per order and system. The operator reads them on the
+ * admin order page, and the admin order list's search finds an order by its
+ * reference. Buyer-facing reads never carry them.
+ *
+ * **Writes are audited Commands** (`order.external_reference.set`), each
+ * recorded with the calling actor — so call it inside a tenant context, as a
+ * worker does under `enterSystemScope`. A write that changes nothing records
+ * nothing and does not move `updatedAt`, because a sync loop resends.
+ *
+ * **Refusals are thrown**, as the admin API's are: an order the caller cannot
+ * see is `404 ORDER_NOT_FOUND`, and a write that fails
+ * {@link orderExternalReferenceWriteSchema} or a system key that fails
+ * {@link orderExternalReferenceSystemSchema} is `400 VALIDATION_FAILED`.
+ * The reads answer an unknown order with `null` / `[]`.
+ *
+ * An entry outlives its writer: a system whose module is uninstalled leaves
+ * its entries in place, as history. Every read and write is confined to the
+ * orders the caller's tenant context can see.
+ *
+ * **Owner off:** the seam fails closed — resolving this port throws
+ * `ModuleDisabledError` and the call answers 503 `MODULE_DISABLED`, so nothing
+ * half-executes. Resolve it per use with `lazyPort`, and do not wrap the call
+ * in a bare `catch`. Whether `orders` has an off state at all is its
+ * manifest's `activation` to say, not this line's: a module declaring
+ * `nonDeactivatable` never enters one.
+ */
+export interface OrderExternalReferencePort {
+  /**
+   * Upsert this system's entry for the order: one Command, one audit row per actual change.
+   *
+   * @deprecated since 0.113.0; use {@link OrderCommandPort.setExternalReference} instead.
+   */
+  set(orderId: string, system: string, value: OrderExternalReferenceWrite): Promise<OrderExternalReference>;
+  /** This system's entry for the order, or `null`. */
+  get(orderId: string, system: string): Promise<OrderExternalReference | null>;
+  /** Every system's entry for the order, ordered by system key. */
+  listForOrder(orderId: string): Promise<OrderExternalReference[]>;
+  /** The orders whose reference in `system` equals `reference` exactly (normally 0 or 1). */
+  findOrderIds(system: string, reference: string): Promise<string[]>;
+}
+
+/** What {@link OrderCommandPort.applyStatus} moves an order to. */
+export interface OrderStatusTransitionInput {
+  /** A configured status code (the lifecycle is a table, not an enum). */
+  readonly to: string;
+  /**
+   * Why, in the caller's words. Carried on the `order.status.*` events, never
+   * into the audit entry (`specs/conventions/audit-state.md`).
+   */
+  readonly reason?: string | null;
+}
+
+/**
+ * What {@link OrderCommandPort.applyPaymentStatus} moves an order's money axis
+ * to: the operator's targets (`adminOrderPaymentStatusTransitionSchema`), judged
+ * against `PAYMENT_STATUS_TRANSITIONS`' operator edges.
+ */
+export interface OrderPaymentStatusTransitionInput {
+  readonly to: 'paid' | 'refunded';
+}
+
+/** A comment {@link OrderCommandPort.addComment} adds, as the admin route's body. */
+export interface OrderCommentInput {
+  /** Plain text, 1–8000 characters. Never recorded in the audit entry. */
+  readonly body: string;
+  /** Whether the buyer sees it. */
+  readonly isCustomerVisible: boolean;
+  /** Whether the buyer is e-mailed about it — only a customer-visible comment ever notifies. */
+  readonly notifyCustomer: boolean;
+}
+
+/**
+ * Container name: `orderCommandPort`. Owner: `orders` (`specs/186-aggregate-ports/`, D-293).
+ *
+ * The Order aggregate's write port: each method runs one audited Command, the
+ * one the admin route for the same operation runs, with the ambient actor —
+ * under `withSystemScope(reason)` the `system` actor, and the caller's
+ * `options.source` code names the integration in the entry (D-293.6).
+ * **No permission is checked** — the caller is the gate; never resolve it for
+ * a customer-facing route (a buyer's own cancellation and comment are not this
+ * port's). Call it after your own commit, never inside your transaction: each
+ * call opens its own (issue #200).
+ *
+ * `options.expectedVersion` is ignored by every method: an order has no
+ * `version` column. `options.extensions` reach the command hooks on the
+ * method's action; `orders` declares none hookable yet, so any key is refused
+ * `422 COMMAND_EXTENSION_UNCLAIMED` before anything is written.
+ *
+ * Not offered (`specs/186-aggregate-ports/contracts/order-command-port.md`):
+ * placement (additive later, issue #1887), reorder (a basket — carts'
+ * aggregate), clone to quote (`quoteRequestCommandPort`), bulk status (loop
+ * {@link OrderCommandPort.applyStatus}), the status and transition
+ * configuration, and the buyer's own cancellation.
+ *
+ * **Owner off:** `orders` declares `activation.nonDeactivatable`, so it never
+ * enters an absent state; the port is registered with `providePort` like
+ * every other name this module publishes, so the answer stays the manifest's.
+ * Do not wrap a call in a bare `catch`.
+ */
+export interface OrderCommandPort {
+  /**
+   * `order.status_transition` — move an order to a configured status,
+   * applying the lifecycle: graph validation, the before-guards, the audit
+   * entry, what the status owes (the stock and credit release of a
+   * cancellation) and the `order.status.*` announcements after the commit.
+   *
+   * **Refusals are outcomes, not exceptions** — `not_found`, `unknown_status`,
+   * `not_permitted`, `vetoed` — and `already_there` records nothing, because
+   * callers answer payment and shipment providers, which retry a non-2xx
+   * forever. A refusal writes and audits nothing. `to` is any non-empty code
+   * — a method's configured status may not match the admin route's pattern —
+   * and one no status has is `unknown_status`, never a thrown 422.
+   */
+  applyStatus(
+    id: string,
+    input: OrderStatusTransitionInput,
+    options?: AggregateCommandOptions,
+  ): Promise<OrderTransitionOutcome>;
+  /**
+   * `order.payment_status_transition` — the operator's change of the money
+   * axis, as `POST /api/v1/admin/orders/:id/payment-status`. A move that is
+   * not an operator edge is refused `409 ORDER_PAYMENT_STATUS_TRANSITION_NOT_ALLOWED`
+   * with nothing written; an unknown order `404 ORDER_NOT_FOUND`; an order
+   * already there answers the record unchanged and records nothing. The credit
+   * release a payment owes commits with it and is attempted after the commit.
+   *
+   * Not the settlement's write: a payment provider's callback moves the money
+   * axis on the settlement's own transaction through `orderPaymentStatusApplyPort`
+   * (`@endora-commerce/mod-orders/ports`), which stays.
+   */
+  applyPaymentStatus(
+    id: string,
+    input: OrderPaymentStatusTransitionInput,
+    options?: AggregateCommandOptions,
+  ): Promise<OrderRecord>;
+  /**
+   * `order.custom_fields.update` — the caller's read-modify-write of the
+   * order's custom-field values, made over the bag read under the order's row
+   * lock (issue #399). The caller validates inside `merge`
+   * (`CustomFieldValuePort.validateAndMerge`); a refusal it throws propagates
+   * and writes nothing. `404 NOT_FOUND` for an unknown order.
+   */
+  setCustomFieldValues(
+    id: string,
+    merge: CustomFieldMerge,
+    options?: AggregateCommandOptions,
+  ): Promise<OrderRecord>;
+  /**
+   * `order.comment.add` — an operator comment on an order, as
+   * `POST /api/v1/admin/orders/:id/comments`. Refused `409 ORDER_COMMENTS_CLOSED`
+   * on a terminal order, `404 ORDER_NOT_FOUND` on an unknown one, and
+   * `422 VALIDATION_FAILED` for a body outside 1–8000 characters. A
+   * customer-visible comment with `notifyCustomer` e-mails the buyer after the
+   * commit, best effort. The entry records the comment's id and its two flags,
+   * never its body. The comment has no author (the system actor wrote it)
+   * unless the ambient actor is an administrator.
+   */
+  addComment(id: string, input: OrderCommentInput, options?: AggregateCommandOptions): Promise<OrderComment>;
+  /**
+   * `order.external_reference.set` — upsert one external system's entry on the
+   * order, as {@link OrderExternalReferencePort.set} did: a write that changes
+   * nothing records nothing and does not move `updatedAt`; an unknown order is
+   * `404 ORDER_NOT_FOUND`, a value or system key outside the published schemas
+   * `400 VALIDATION_FAILED`.
+   */
+  setExternalReference(
+    id: string,
+    system: string,
+    value: OrderExternalReferenceWrite,
+    options?: AggregateCommandOptions,
+  ): Promise<OrderExternalReference>;
 }
 
 /**
@@ -1405,3 +2118,75 @@ export const purchaseConversionClaimResponseSchema = z.object({
 export type PurchaseConversionClaimResponse = z.infer<
   typeof purchaseConversionClaimResponseSchema
 >;
+
+// --- Orders a related payer pays for (`specs/182-related-payers/`, ports.md §3) ---
+
+/**
+ * `GET /api/v1/account/paid-orders` — the orders whose payer is the reader's
+ * Organization (FR-070). Cursor pagination, as every list.
+ */
+export const paidOrderListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(200).default(20),
+  cursor: z.string().optional(),
+});
+export type PaidOrderListQuery = z.infer<typeof paidOrderListQuerySchema>;
+
+/** One row of the payer's list: what identifies the order, who bought, what it costs. */
+export const paidOrderSummarySchema = z.object({
+  id: uuidSchema,
+  businessId: z.string(),
+  placedAt: isoDateTimeSchema,
+  status: orderStatusCodeSchema,
+  /** The status label in the request's language. */
+  statusLabel: z.string(),
+  paymentStatus: paymentStatusSchema,
+  buyerOrganizationId: uuidSchema,
+  buyerName: z.string(),
+  total: z.number().finite().nonnegative(),
+  currency: z.string().length(3),
+});
+export type PaidOrderSummary = z.infer<typeof paidOrderSummarySchema>;
+
+export const paidOrderListPageSchema = z.object({
+  items: z.array(paidOrderSummarySchema),
+  cursor: z.string().nullable(),
+  hasMore: z.boolean(),
+});
+export type PaidOrderListPage = z.infer<typeof paidOrderListPageSchema>;
+
+/**
+ * The payer's read-only projection of an order (FR-071). It carries what the payer
+ * pays and is invoiced for, and deliberately **not** the delivery address, the
+ * customer note, the comment thread or the custom-field values: those are the
+ * buyer's. A parse drops them if a serialiser hands them over.
+ */
+export const paidOrderDetailSchema = paidOrderSummarySchema.extend({
+  items: z.array(orderItemSchema),
+  subtotal: z.number().finite().nonnegative(),
+  taxTotal: z.number().finite().nonnegative(),
+  discountTotal: z.number().finite().nonnegative(),
+  deliveryTotal: z.number().finite().nonnegative(),
+  /** The order's billing snapshot — the payer's address, company name and tax ID. */
+  billingAddress: addressSnapshotSchema,
+  payer: orderPayerSchema,
+  deliveryMethodName: z.string(),
+  /** The order's invoice documents, downloadable through the paid-order route. */
+  invoices: z.array(z.object({ id: uuidSchema, number: z.string() })),
+});
+export type PaidOrderDetail = z.infer<typeof paidOrderDetailSchema>;
+
+/**
+ * Container name: `paidOrderReadPort`. Owner: `orders`. Consumer: `related_payers` only.
+ * Implemented under `withSystemScope('orders: orders billed to a related payer', …)` with the predicate `payer_organization_id = payerOrganizationId`. The
+ * caller has already checked the reader's `related_payers.view_paid_orders`; the
+ * port does not know about that permission.
+ *
+ * **Owner off:** resolving this port throws `ModuleDisabledError` and the call
+ * answers 503 `MODULE_DISABLED`. Whether `orders` has an off state at all is its
+ * manifest's `activation` to say.
+ */
+export interface PaidOrderReadPort {
+  list(payerOrganizationId: string, query: PaidOrderListQuery): Promise<PaidOrderListPage>;
+  /** `null` when the order does not name this payer — the caller answers 404. */
+  find(payerOrganizationId: string, orderId: string): Promise<PaidOrderDetail | null>;
+}

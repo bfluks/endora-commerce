@@ -13,6 +13,7 @@ import {
   type BackendServerHandle,
 } from '../../helpers/test-server.js';
 import { withModuleOff, type OffStateAxis } from '../../helpers/off-state.js';
+import { servedPaletteKeywords } from '../../helpers/palette-keywords.js';
 
 /**
  * The **server-side** half of feature 091 batch 15's off-state proof — the
@@ -127,13 +128,25 @@ interface Subject {
 const SUBJECTS: readonly Subject[] = [
   {
     module: 'catalog',
-    actions: ['new-product', 'open-attributes', 'open-categories', 'open-products'],
+    // `open-attachment-types`, `open-attribute-sets` and `open-bulk-operations`
+    // arrived with issue #516: the sidebar's remaining screens (Principle XVI).
+    actions: [
+      'new-product',
+      'open-archived-products',
+      'open-attachment-types',
+      'open-attribute-sets',
+      'open-attributes',
+      'open-bulk-operations',
+      'open-categories',
+      'open-products',
+    ],
     axis: 'platform-unavailable',
     admin: catalogAdmin,
   },
   {
     module: 'orders',
-    actions: ['open-orders', 'order-statuses'],
+    // `new-order` arrived with issue #516: the create form is a sidebar entry.
+    actions: ['new-order', 'open-orders', 'order-statuses'],
     axis: 'platform-unavailable',
     admin: ordersAdmin,
   },
@@ -287,9 +300,31 @@ describe('batch 15 contributes no palette action while off (Constitution XVII it
       const action = actionOf('catalog', id);
       expect(action?.targetRoute, id).toBe(route);
       expect(action?.requiredPermission, id).toBe('catalog:read');
+      // Issue #573 — what a Polish operator is served: the manifest's English
+      // words and the Polish ones under the action's `keywordsKey`.
+      const served = servedPaletteKeywords('catalog', id, 'pl');
       for (const keyword of keywords) {
-        expect(action?.keywords, `${id}: ${keyword}`).toContain(keyword);
+        expect(served, `${id}: ${keyword}`).toContain(keyword);
       }
+    }
+  });
+
+  it('the Archived products action opens its own read-gated route (feature 163, PAL-1 = B)', () => {
+    // Owner decision PAL-1 = B (2026-10-26): "Archived products" is a palette row
+    // of its own. A `targetRoute` carries no query string (`ModuleActionSchema`),
+    // so it targets a dedicated SPA route, `/catalog/products/archived`, which
+    // opens the product list on its Archived tab. That route is declared by the
+    // catalog admin layer **before** the editor's `/catalog/products/:id`; until
+    // it is, the pairing cases above match the editor's pattern (same code) and
+    // pass, so this case pins the action's own half.
+    const action = (
+      REGISTERED_MANIFESTS.find((entry) => entry.manifest.id === 'catalog')?.manifest.actions ?? []
+    ).find((entry) => entry.id === 'open-archived-products');
+    expect(action?.targetRoute).toBe('/catalog/products/archived');
+    expect(action?.requiredPermission).toBe('catalog:read');
+    const served = servedPaletteKeywords('catalog', 'open-archived-products', 'pl');
+    for (const keyword of ['archived', 'restore', 'archiwum', 'zarchiwizowane']) {
+      expect(served, keyword).toContain(keyword);
     }
   });
 
@@ -315,12 +350,18 @@ describe('batch 15 contributes no palette action while off (Constitution XVII it
     // makes it. `/orders/new` was `App.tsx`'s and therefore ungated while the
     // sidebar row that advertised it carried `orders:write` and the
     // `order.entry.tabs` contribution P4d declared carried the same code. No
-    // manifest action targets it — `orders` never declared one — so this is the
-    // route and the zone agreeing, which is the pair that can disagree.
+    // manifest action targeted it until issue #516 added `new-order`, so the
+    // route, the zone and that action now agree, which is the trio that can
+    // disagree.
     const route = (ordersAdmin.routes ?? []).find((entry) => entry.path === '/orders/new');
     expect(route?.requiredPermission).toBe('orders:write');
     const tab = (ordersAdmin.zones ?? []).find((entry) => entry.zone === 'order.entry.tabs');
     expect(tab?.requiredPermission).toBe('orders:write');
+    const action = (
+      REGISTERED_MANIFESTS.find((entry) => entry.manifest.id === 'orders')?.manifest.actions ?? []
+    ).find((entry) => entry.id === 'new-order');
+    expect(action?.targetRoute).toBe('/orders/new');
+    expect(action?.requiredPermission).toBe('orders:write');
   });
 
   it('neither module advertises a route it does not own', () => {

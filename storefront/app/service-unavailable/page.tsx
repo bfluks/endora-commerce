@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { headers } from 'next/headers';
 import { CATALOGUE_LOCALES, tForLocale } from '../../lib/i18n/messages';
 import { resolveLocaleWithoutConfig } from '../../lib/i18n/locale';
+import { LANGUAGE_REQUEST_HEADER } from '../../lib/i18n/locale-path';
 import { FALLBACK_LOCALE } from '../../lib/i18n/document-locale';
 import { UNAVAILABLE_RETRY_HEADER, safeRetryTarget } from '../../lib/service-unavailable';
 
@@ -69,8 +70,12 @@ export async function generateMetadata(): Promise<Metadata> {
  */
 export async function outageLocale(): Promise<string> {
   const requestHeaders = await headers();
+  // Feature 167 — the path language, when the middleware could parse it from the
+  // last-known channel identity, ahead of the browser's preference.
+  const pathLanguage = requestHeaders.get(LANGUAGE_REQUEST_HEADER);
+  const acceptLanguage = requestHeaders.get('accept-language');
   return resolveLocaleWithoutConfig({
-    acceptLanguage: requestHeaders.get('accept-language'),
+    acceptLanguage: [pathLanguage, acceptLanguage].filter((v): v is string => Boolean(v)).join(',') || null,
     available: CATALOGUE_LOCALES,
     fallback: FALLBACK_LOCALE,
   });

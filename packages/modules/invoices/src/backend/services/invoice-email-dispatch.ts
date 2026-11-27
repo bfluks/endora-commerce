@@ -1,3 +1,4 @@
+import { storefrontPagePathFor, type ChannelUrlFacts } from '@endora-commerce/contracts';
 import { z } from 'zod';
 import type {
   DocumentRenderPort,
@@ -60,6 +61,12 @@ export interface InvoiceEmailDispatchDeps {
   getSender: () => TransactionalEmailSender | undefined;
   resolveRecipientEmail: (order: OrderRecord) => Promise<string | null>;
   resolveLanguage: (salesChannelId: string | null) => Promise<string>;
+  /**
+   * Feature 167 (OR-14) — the channel's URL-language facts, so the e-mail links the
+   * storefront order page under the e-mail language's prefix. Absent, or no channel:
+   * the logical path.
+   */
+  channelUrlFactsFor?: (salesChannelId: string | null) => Promise<ChannelUrlFacts | null>;
   log?: InvoiceEmailLog;
 }
 
@@ -105,9 +112,15 @@ export class InvoiceEmailDispatcher {
       const language = await this.deps.resolveLanguage(channelId);
       const mode = opts.mode ?? (await this.resolveMode(channelId));
       const baseUrl = await this.resolveBaseUrl(channelId);
-      const downloadUrl = baseUrl
-        ? `${baseUrl.replace(/\/$/, '')}/orders/${detail.orderId}/invoices/${detail.id}/pdf`
-        : '';
+      // Owner ruling OR-14 (feature 167) — the storefront order page, which lists
+      // the order's invoices with their PDF download, in the e-mail's language. The
+      // former `/orders/:id/invoices/:id/pdf` storefront address was served by nothing.
+      const orderPagePath = storefrontPagePathFor({
+        path: `/orders/${encodeURIComponent(detail.orderId)}`,
+        channel: this.deps.channelUrlFactsFor ? await this.deps.channelUrlFactsFor(channelId) : null,
+        requestedLanguage: language,
+      });
+      const downloadUrl = baseUrl ? `${baseUrl.replace(/\/$/, '')}${orderPagePath}` : '';
 
       const variables: Record<string, unknown> = {
         invoice: {

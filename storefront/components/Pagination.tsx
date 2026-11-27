@@ -1,6 +1,6 @@
-import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { tForLocale } from '../lib/i18n/messages';
+import { LocalizedLink } from '../lib/i18n/localized-link';
 
 /**
  * Cursor-style pagination — emits a "Next" link as a styled outline
@@ -15,6 +15,8 @@ export function Pagination(props: {
   nextCursor: string | null;
   hasMore: boolean;
   locale: string;
+  /** The link's caption; "Next" when not given ("Show older" on a newest-first list). */
+  label?: string;
 }): ReactNode {
   const t = tForLocale(props.locale);
   if (!props.hasMore || !props.nextCursor) return null;
@@ -23,16 +25,16 @@ export function Pagination(props: {
     cursor: props.nextCursor,
   });
   return (
-    <nav className="mt-6 flex flex-wrap items-center justify-between gap-3" aria-label="Pagination">
+    <nav className="mt-6 flex flex-wrap items-center justify-between gap-3" aria-label={t('commerce.listing.pagination')}>
       <span className="text-[12px] text-muted" aria-hidden="true" />
       <div className="flex gap-1.5">
-        <Link
+        <LocalizedLink
           href={`${props.basePath}?${params.toString()}` as never}
           rel="next"
           className="btn btn--outline btn--sm"
         >
-          {t('pagination.next')} <ChevRightIcon />
-        </Link>
+          {props.label ?? t('pagination.next')} <ChevRightIcon />
+        </LocalizedLink>
       </div>
     </nav>
   );

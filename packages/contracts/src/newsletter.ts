@@ -245,6 +245,22 @@ export const setCampaignGroupRequestSchema = z.object({
 });
 export type SetCampaignGroupRequest = z.infer<typeof setCampaignGroupRequestSchema>;
 
+/**
+ * The subscribers in a campaign's manual group (`targetType = group`), by
+ * e-mail and ordered by it — what the editor's picker shows as chips, whether
+ * or not a member is still active (issue #1533).
+ */
+export const campaignGroupMemberSchema = z.object({
+  id: z.string().uuid(),
+  email: z.string(),
+});
+export type CampaignGroupMember = z.infer<typeof campaignGroupMemberSchema>;
+
+export const campaignGroupResponseSchema = z.object({
+  items: z.array(campaignGroupMemberSchema),
+});
+export type CampaignGroupResponse = z.infer<typeof campaignGroupResponseSchema>;
+
 export const sendCampaignRequestSchema = z.object({
   scheduledAt: z.string().datetime().optional(),
   expectedVersion: z.number().int(),
@@ -490,4 +506,8 @@ export const NEWSLETTER_SETTING_CODES = {
   SENDER_FROM_EMAIL: 'newsletter.sender.from_email',
   SENDER_FROM_NAME: 'newsletter.sender.from_name',
   RATE_LIMIT_PER_SECOND: 'newsletter.rate_limit_per_second',
+  // Campaign engagement tracking: the open pixel and the click redirect, each
+  // switched independently. Read per campaign send, for its sales channel.
+  TRACKING_OPENS_ENABLED: 'newsletter.tracking.opens_enabled',
+  TRACKING_CLICKS_ENABLED: 'newsletter.tracking.clicks_enabled',
 } as const;

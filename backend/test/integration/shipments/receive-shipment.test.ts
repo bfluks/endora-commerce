@@ -4,7 +4,7 @@ import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
   DeliveryMethodReadPort,
   OrderReadPort,
-  OrderTransitionPort,
+  OrderCommandPort,
 } from '@endora-commerce/contracts';
 import {
   setupBackendServer,
@@ -52,7 +52,7 @@ async function seedOrder(
     statusOnSuccess: opts.statusOnSuccess ?? 'shipment_sent',
     statusOnFailure: opts.statusOnFailure ?? 'processing',
   });
-  await em.persistAndFlush(method);
+  await em.persist(method).flush();
 
   const order = em.create(Order, {
     organizationId: randomUUID(),
@@ -72,7 +72,7 @@ async function seedOrder(
     currency: 'PLN',
     placedAt: new Date(),
   });
-  await em.persistAndFlush(order);
+  await em.persist(order).flush();
   return { method, order };
 }
 
@@ -90,12 +90,12 @@ describe('Shipment lifecycle: createShipment (generate and retry) + receive_ship
   const ports = (): {
     orderReadPort: OrderReadPort;
     deliveryMethodReadPort: DeliveryMethodReadPort;
-    orderTransitionPort: OrderTransitionPort;
+    orderCommandPort: OrderCommandPort;
   } =>
     h.container.cradle as unknown as {
       orderReadPort: OrderReadPort;
       deliveryMethodReadPort: DeliveryMethodReadPort;
-      orderTransitionPort: OrderTransitionPort;
+      orderCommandPort: OrderCommandPort;
     };
 
   /** Refusals, when a case wants to read them rather than ignore them. */
@@ -120,7 +120,7 @@ describe('Shipment lifecycle: createShipment (generate and retry) + receive_ship
     new ReceiveShipmentHandler(
       h.em,
       ports().deliveryMethodReadPort,
-      ports().orderTransitionPort,
+      ports().orderCommandPort,
       log,
       events,
     );
@@ -242,6 +242,27 @@ describe('Shipment lifecycle: createShipment (generate and retry) + receive_ship
     ).toHaveLength(0);
   });
 
+  /**
+   * Review of #1963 — a configured status in a spelling the admin status-code
+   * pattern refuses (`Shipped-Out`; the method's schema accepts any 1–64
+   * characters) is the `unknown_status` outcome, not a thrown 422 the carrier
+   * would retry forever.
+   */
+  it('keeps the order where it is when the configured target is no status at all', async () => {
+    const { order } = await seedOrder(h.em(), { status: 'shipment_ready', statusOnSuccess: 'Shipped-Out' });
+    const log = recordingLog();
+    const handler = receiveHandler(undefined, log);
+    const shipment = await shipmentService().createShipment(order.id);
+
+    const res = await handler.receive({ shipmentId: shipment.id, outcome: 'success' });
+
+    expect(res.status).toBe('success');
+    expect((await h.em().findOne(Order, { id: order.id }, { refresh: true }))!.status).toBe('shipment_ready');
+    expect(log.warnings).toEqual([
+      expect.objectContaining({ orderId: order.id, to: 'Shipped-Out', refusal: 'unknown_status' }),
+    ]);
+  });
+
   it('is idempotent on repeated success and rejects failure after success', async () => {
     const { order } = await seedOrder(h.em(), { status: 'shipment_ready' });
     const service = shipmentService();
@@ -254,7 +275,11 @@ describe('Shipment lifecycle: createShipment (generate and retry) + receive_ship
 
     await expect(
       handler.receive({ shipmentId: shipment.id, outcome: 'failure', failureReason: 'late' }),
-    ).rejects.toMatchObject({ statusCode: 409 });
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'SHIPMENT_ALREADY_GENERATED',
+      details: { code: 'mark_failed', shipmentId: shipment.id, orderId: order.id, status: 'success' },
+    });
   });
 
   /**

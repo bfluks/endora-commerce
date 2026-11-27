@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AdminZone } from '@endora-commerce/admin-kit/zones';
+import { INERT_SAVE_SESSION } from '@endora-commerce/admin-kit/lib';
 import { renderWithI18n, passthroughBundle } from '../../helpers/render-with-i18n';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
 
@@ -69,7 +70,7 @@ function renderZone(options: { readonly permissions?: readonly string[] }): HTML
   const { container } = renderWithI18n(
     withSession(
       <MemoryRouter initialEntries={['/catalog/products/x']}>
-        <AdminZone name="product.editor.channels" props={{ productId: PRODUCT_ID }} />
+        <AdminZone name="product.editor.channels" props={{ productId: PRODUCT_ID, saveSession: INERT_SAVE_SESSION }} />
       </MemoryRouter>,
       {
         session: adminSession({
@@ -100,10 +101,6 @@ describe('sales_channels contributes the product editor channels zone', () => {
     // One host, one mount: `match` narrows the mounts of one place (Z13) and
     // has nothing to narrow here. Asserted absent so a later author cannot add
     // one quietly.
-    //
-    // The **set** of members this module declares is asserted in
-    // `organization-channels-zone.test.tsx`, which is the file P7b changed it
-    // in; two copies of one list are two answers waiting to disagree.
     const zone = (salesChannels.contributions.zones ?? []).find(
       (candidate) => candidate.zone === 'product.editor.channels',
     );
@@ -113,11 +110,46 @@ describe('sales_channels contributes the product editor channels zone', () => {
     expect(typeof zone!.component).toBe('function');
   });
 
+  it('declares exactly this one member', () => {
+    // The set lives here since feature 154 withdrew the organization detail's
+    // contribution (P7b's): `organizations` edits an Organization's channels in
+    // a panel of its own, and two editors of one assignment on one page would
+    // disagree about who may change it. Asserted as an equality so that it
+    // cannot quietly come back.
+    expect((salesChannels.contributions.zones ?? []).map((zone) => zone.zone)).toEqual([
+      'product.editor.channels',
+    ]);
+  });
+
+  it('leaves no second copy of its components under admin/src', async () => {
+    // Held by `organization-channels-zone.test.tsx` until feature 154 deleted
+    // it with the contribution: "no second copy of this component exists under
+    // `admin/src`" is the claim the duplication P7a opened made worth checking,
+    // and it outlives both the duplication and that file.
+    const { existsSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    for (const component of ['EntityChannelMembership', 'DefaultChannelBadge']) {
+      expect(
+        existsSync(
+          resolve(
+            process.cwd(),
+            `../packages/admin-shell/src/modules/sales_channels/components/${component}.tsx`,
+          ),
+        ),
+        component,
+      ).toBe(false);
+    }
+  });
+
   it('renders the membership panel for the product it is mounted on', async () => {
     const container = renderZone({});
     await waitFor(() => expect(container.textContent).toContain('membership.title'));
-    expect(getSpy).toHaveBeenCalledWith(
-      `/api/v1/admin/sales-channels/by-entity/product/${PRODUCT_ID}`,
+    // The title is in the commit that mounts the panel, and the panel starts its
+    // read from that commit's effect: wait for it (issue #418).
+    await waitFor(() =>
+      expect(getSpy).toHaveBeenCalledWith(
+        `/api/v1/admin/sales-channels/by-entity/product/${PRODUCT_ID}`,
+      ),
     );
   });
 
@@ -130,6 +162,92 @@ describe('sales_channels contributes the product editor channels zone', () => {
   it('restores the zone when the permission comes back', async () => {
     const container = renderZone({ permissions: ['sales_channels:read'] });
     await waitFor(() => expect(container.textContent).toContain('membership.title'));
+  });
+
+  it('renders as a section of the editor card, its channels as divided rows (issue #1488, CAT-06)', async () => {
+    getSpy.mockImplementation(async (url: string) => {
+      if (url.includes('/by-entity/')) {
+        return {
+          entityType: 'product',
+          entityId: PRODUCT_ID,
+          channels: [
+            { id: 'c1', code: 'retail', name: { 'en-US': 'Retail' }, active: true, systemDefault: true },
+            { id: 'c2', code: 'b2b', name: { 'en-US': 'B2B' }, active: true, systemDefault: false },
+          ],
+        };
+      }
+      return { items: [], page: 1, pageSize: 20, total: 0 };
+    });
+    const container = renderZone({});
+    await waitFor(() => expect(container.textContent).toContain('retail'));
+    // The tab body sits inside the product editor's one card: a card there is a card in a card.
+    expect(container.querySelector('[data-slot="card"]')).toBeNull();
+    const section = container.querySelector('section[data-slot="editor-section"]')!;
+    expect(section.querySelector('h2')).toHaveTextContent('membership.title');
+    const rows = [...section.querySelectorAll('li')];
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(row.className.split(/\s+/)).not.toContain('border');
+    expect(rows[0]!.parentElement!.className.split(/\s+/)).toContain('divide-y');
+  });
+
+  /**
+   * Issue #1644 — the tab is read-only without `catalog:write`, as every other product-editor
+   * tab is: the rows, and none of the controls the server would refuse. The membership routes
+   * themselves are gated on `sales_channels:write`, so the controls need that code too.
+   */
+  describe('read-only without the write permissions (issue #1644)', () => {
+    const TWO_CHANNELS = async (url: string): Promise<unknown> => {
+      if (url.includes('/by-entity/')) {
+        return {
+          entityType: 'product',
+          entityId: PRODUCT_ID,
+          channels: [
+            { id: 'c1', code: 'retail', name: { 'en-US': 'Retail' }, active: true, systemDefault: true },
+            { id: 'c2', code: 'b2b', name: { 'en-US': 'B2B' }, active: true, systemDefault: false },
+          ],
+        };
+      }
+      return {
+        items: [{ id: 'c3', code: 'export', name: { 'en-US': 'Export' }, active: true, systemDefault: false }],
+        page: 1,
+        pageSize: 20,
+        total: 1,
+      };
+    };
+
+    function expectReadOnly(container: HTMLElement): void {
+      expect(container.querySelectorAll('li')).toHaveLength(2);
+      expect(container.querySelector('button')).toBeNull();
+      expect(container.querySelector('select')).toBeNull();
+      expect(container.textContent).not.toContain('saveSession.immediateBadge');
+    }
+
+    it.each([
+      ['without catalog:write', ['sales_channels:read', 'sales_channels:write']],
+      ['without sales_channels:write', ['sales_channels:read', 'catalog:write']],
+    ])('shows the channel rows and no write control %s', async (_label, permissions) => {
+      getSpy.mockImplementation(TWO_CHANNELS);
+      const container = renderZone({ permissions });
+      await waitFor(() => expect(container.textContent).toContain('b2b'));
+      expectReadOnly(container);
+    });
+
+    it('offers the picker, Add, Remove and the immediate badge with both', async () => {
+      getSpy.mockImplementation(TWO_CHANNELS);
+      const container = renderZone({ permissions: ['sales_channels:read', 'sales_channels:write', 'catalog:write'] });
+      await waitFor(() => expect(container.textContent).toContain('b2b'));
+      expect(container.querySelector('select')).not.toBeNull();
+      expect([...container.querySelectorAll('button')].map((button) => button.textContent)).toEqual([
+        'membership.action.remove',
+        'membership.action.remove',
+        'membership.action.add',
+      ]);
+      // Issue #1441 (DS-07): Add is an in-editor action, so it is outline, not a filled primary.
+      const add = [...container.querySelectorAll('button')].at(-1)!;
+      expect(add.className.split(/\s+/)).not.toContain('bg-primary');
+      expect(add.className.split(/\s+/)).toContain('border-input');
+      expect(container.textContent).toContain('saveSession.immediateBadge');
+    });
   });
 
   it('has no off state to drive, and says so from its own manifest', () => {

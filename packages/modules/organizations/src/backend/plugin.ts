@@ -1,15 +1,23 @@
+import type { OrganizationRoleCache } from './services/organization-role-cache.js';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
   AddressServicePort,
   CartMergeOutcome,
+  CustomFieldListFilterPort,
   CustomFieldValuePort,
+  CustomerAccountMemberCommandPort,
+  CustomerAccountCommandPort,
   CustomerAccountMemberWritePort,
   CustomerAccountReadPort,
   CustomerAuthPort,
   CustomerPasswordResetPort,
+  CustomerAccountRoleCommandPort,
   CustomerRolePort,
   EmailMailerPort,
+  OrganizationPermissionPort,
+  OrganizationRoleReadPort,
+  SupportedLanguage,
 } from '@endora-commerce/contracts';
 import type { EventBus } from '@endora-commerce/platform/events';
 import type { OrganizationModerationService } from './services/organization-moderation-service.js';
@@ -19,22 +27,32 @@ import type { OrganizationTaxIdValidationService } from './services/organization
 import {
   RegistrationService,
   type OrganizationEventBus,
+  type RegistrationRegistryLookup,
 } from './services/registration-service.js';
 import { EmailVerificationService } from './services/email-verification-service.js';
 import { InvitationService } from './services/invitation-service.js';
 import { noopOrgTemplateEmail, type OrgTemplateEmail } from './services/org-template-email.js';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
+import type {
+  AuditPort,
+  SalesChannelMembershipPort,
+  SchemaExtensionReads,
+} from '@endora-commerce/platform/kernel';
 import { registerOrganizationsPublicRoutes } from './routes.public.js';
+import { createStorefrontOriginResolver } from './services/storefront-origin.js';
 import { registerOrganizationsCustomerRoutes } from './routes.customer.js';
 import { registerOrganizationsStorefrontRoutes } from './routes.storefront.js';
 import { OrganizationContextService } from './services/organization-context-service.js';
 import { registerMembersRoutes } from './routes.members.js';
 import { registerOrganizationsAdminRoutes } from './routes.admin.js';
+import { registerOrganizationRoleRoutes } from './routes.roles.js';
+import { registerOrganizationAdminRoleRoutes } from './routes.admin-roles.js';
+import type { OrganizationRoleService } from './services/organization-role-service.js';
 import { OrganizationTreeService } from './services/organization-tree-service.js';
 import type { CommandBus } from '@endora-commerce/platform/commands';
 import type { RequireAdminAnyFactory } from '@endora-commerce/platform/kernel';
-import type { DictionaryValidator } from '@endora-commerce/contracts';
+import type { DictionaryValidator, SalesRepAssignmentPort } from '@endora-commerce/contracts';
 import type { RequireAdminFactory } from '@endora-commerce/platform/kernel';
+import type { OrganizationsTranslate } from './services/organizations-prose.js';
 
 /**
  * Composition root for the organizations + customer_accounts + addresses
@@ -58,6 +76,40 @@ export interface OrganizationsModuleOptions {
    */
   customerAccountRead: CustomerAccountReadPort;
   customerAccountWrite: CustomerAccountMemberWritePort;
+  /**
+   * `customer_accounts`' account creation as a Command factory
+   * (`specs/176-command-hooks-outbox/` FR-002): registration's first account
+   * is a child of its `organization.register` Command.
+   */
+  customerAccountCommands: CustomerAccountMemberCommandPort;
+  /**
+   * `specs/186-aggregate-ports/` US3 (issue #1822) — the CustomerAccount
+   * aggregate port the operator's member panel runs its writes through: create,
+   * role, roll-up, profile, removal and the break-glass recovery.
+   */
+  customerAccountCommandPort: CustomerAccountCommandPort;
+  /**
+   * Feature 170 (`specs/170-organization-roles/` WP-02a) — role management and
+   * this module's own permission port, behind the storefront and operator role
+   * routes. The port is a thunk, resolved per request.
+   */
+  roleService: OrganizationRoleService;
+  /** `specs/177-tax-id-scope/` — dropped and announced after a conversion commits. */
+  roleCache?: Pick<OrganizationRoleCache, 'dropAndAnnounce'>;
+  organizationPermissions: () => OrganizationPermissionPort;
+  /**
+   * WP-03 — the role as every member response names it (FR-008), and
+   * `customer_accounts`' `customer_account.change_role` factory the member
+   * routes run on the bus (research R-22).
+   */
+  organizationRoles: OrganizationRoleReadPort;
+  customerAccountRoles: CustomerAccountRoleCommandPort;
+  /**
+   * The language the template invitation e-mail is sent in — the
+   * system-default sales channel's, as `templateEmailPort` resolves it — for
+   * the role label it shows (#667, FR-008).
+   */
+  resolveEmailLanguage: () => Promise<SupportedLanguage>;
   emFactory: () => EntityManager;
   eventBus: EventBus;
   requireCustomer: (req: FastifyRequest, reply: unknown) => Promise<void>;
@@ -84,6 +136,11 @@ export interface OrganizationsModuleOptions {
     anonymousCartToken?: string;
     /** `compare_token` cookie value, if the caller was building an anonymous comparison. */
     anonymousCompareToken?: string;
+    /**
+     * Issue #1188 — the channel the sign-in belongs to when its request carries
+     * none (the federated callback). Absent: the request's resolved channel.
+     */
+    salesChannelId?: string;
   }) => Promise<{ cartMerge?: CartMergeOutcome }>;
   /** Admin gate for /admin/organizations routes. */
   requireAdmin?: RequireAdminFactory;
@@ -111,8 +168,19 @@ export interface OrganizationsModuleOptions {
   // now owns.
   /** Storefront base URL for the invitation accept link. */
   storefrontBaseUrl?: string;
+  /**
+   * Issue #1371 — a channel's `sales_channels.storefront_url`, the storefront
+   * the self-service password-reset link opens. Absent, or answering nothing
+   * usable: {@link storefrontBaseUrl}.
+   */
+  readChannelStorefrontUrl?: (salesChannelId: string) => Promise<string | null>;
   /** Required when `requireAdmin` is set — audit trail for admin org mutations. */
   auditLogService?: AuditPort;
+  /**
+   * Required when `requireAdmin` is set (issue #698) — who may reach an
+   * Organization's `/admin/organizations/:id` routes: `organizationSalesRepScopePort`.
+   */
+  salesRepScope?: Pick<SalesRepAssignmentPort, 'canSeeOrganization'>;
   dictionaryValidator?: DictionaryValidator;
   /** Resolved from the container since feature 072 (T090) — one instance, always armed. */
   addressService: AddressServicePort;
@@ -140,14 +208,50 @@ export interface OrganizationsModuleOptions {
    * when provided.
    */
   taxIdValidationService?: OrganizationTaxIdValidationService;
-  /** Feature 055 — validates + reads organization custom-field values on the admin edit path. */
+  /**
+   * Feature 055 — validates + reads organization custom-field values on the
+   * admin edit path; feature 175 — and the buyer's values at registration and
+   * the values of the admin Organization and member creates.
+   */
   customFieldValues?: CustomFieldValuePort;
   /**
-   * Feature 056 — Command Bus for the org-hierarchy tree mutations
-   * (`organization.set_parent` / `organization.move`). When present alongside
-   * `requireAdmin`, the hierarchy admin endpoints are mounted (Principle XIII).
+   * Issue #1903 — `custom_fields`' list-filter port, for the admin
+   * Organizations list's custom-field filters.
    */
-  commandBus?: CommandBus;
+  customFieldListFilter?: CustomFieldListFilterPort;
+  /**
+   * `specs/178-extensible-columns/` FR-051 — the platform's reader of declared
+   * extension columns, for `?extensions=` on the admin detail and list reads.
+   */
+  schemaExtensionReads?: SchemaExtensionReads;
+  /**
+   * The Command Bus (Principle XIII): the org-hierarchy tree mutations
+   * (`organization.set_parent` / `organization.move`, feature 056) and, since
+   * `specs/170-organization-roles/` WP-03, the invitation and member-role
+   * Commands. Required since WP-03 — the member routes cannot write without it.
+   */
+  commandBus: CommandBus;
+  /**
+   * Feature 154 — the kernel's channel-membership writer, which binds a
+   * registered Organization to the channel of the store it registered on (the
+   * system default without one), and backs the admin *Sales channels*
+   * endpoints and the admin create.
+   */
+  /**
+   * This module's bundle (`_i18n`'s `adminI18nService`), for the customer-safe
+   * moderation sentences the storefront endpoints answer in the request's
+   * language (issue #95). Absent, they are answered in English.
+   */
+  translate?: OrganizationsTranslate;
+  salesChannelMembership?: Pick<
+    SalesChannelMembershipPort,
+    'bindToDefaultIfEmpty' | 'replaceChannelsForEntity' | 'listChannelsForEntity'
+  >;
+  /**
+   * Feature 173 — the switch and the ticket store, so a registration carrying a
+   * lookup reference persists the registry snapshot (research R-13).
+   */
+  registryLookup?: RegistrationRegistryLookup;
 }
 
 export function organizationsModule(options: OrganizationsModuleOptions) {
@@ -164,13 +268,19 @@ export function organizationsModule(options: OrganizationsModuleOptions) {
       read: options.customerAccountRead,
       write: options.customerAccountWrite,
     };
-    const registrationService = new RegistrationService(
-      options.emFactory,
-      options.eventBus as OrganizationEventBus,
-      accountPorts,
-      options.dictionaryValidator,
-      options.auditLogService,
-    );
+    // `specs/176-command-hooks-outbox/` — registration is one
+    // `organization.register` Command; the first account is its child.
+    const registrationService = new RegistrationService({
+      emFactory: options.emFactory,
+      commandBus: options.commandBus,
+      events: options.eventBus as OrganizationEventBus,
+      accounts: { read: options.customerAccountRead, commands: options.customerAccountCommands },
+      ...(options.dictionaryValidator ? { dictionaryValidator: options.dictionaryValidator } : {}),
+      ...(options.salesChannelMembership ? { channelMembership: options.salesChannelMembership } : {}),
+      ...(options.registryLookup ? { registryLookup: options.registryLookup } : {}),
+      // Feature 175 — the buyer's custom-field values (research R-5).
+      ...(options.customFieldValues ? { customFieldValues: options.customFieldValues } : {}),
+    });
     const verificationService = new EmailVerificationService(
       options.emFactory,
       options.eventBus as OrganizationEventBus,
@@ -178,15 +288,18 @@ export function organizationsModule(options: OrganizationsModuleOptions) {
       options.auditLogService,
     );
     const customerAuthService = options.customerAuthService;
-    const invitationService = new InvitationService(
-      options.emFactory,
-      accountPorts,
+    const invitationService = new InvitationService({
+      emFactory: options.emFactory,
+      accounts: accountPorts,
+      commandBus: options.commandBus,
       mailer,
-      { acceptBaseUrl: storefrontBaseUrl },
-      options.eventBus as OrganizationEventBus,
-      orgTemplateEmail,
-      options.auditLogService,
-    );
+      acceptBaseUrl: storefrontBaseUrl,
+      events: options.eventBus as OrganizationEventBus,
+      templateEmail: orgTemplateEmail,
+      ...(options.auditLogService ? { auditLog: options.auditLogService } : {}),
+      ...(options.translate ? { translate: options.translate } : {}),
+      resolveEmailLanguage: options.resolveEmailLanguage,
+    });
     const roleService = options.customerRoleService;
     const passwordResetService = options.passwordResetService;
     const addressService = options.addressService;
@@ -202,6 +315,12 @@ export function organizationsModule(options: OrganizationsModuleOptions) {
       mailer,
       templateEmail: orgTemplateEmail,
       storefrontBaseUrl,
+      storefrontOriginFor: createStorefrontOriginResolver(
+        options.readChannelStorefrontUrl ?? (async () => null),
+        storefrontBaseUrl,
+      ),
+      organizationRoles: options.organizationRoles,
+      organizationPermissions: options.organizationPermissions,
       ...(options.onLogin ? { onLogin: options.onLogin } : {}),
     });
     await registerOrganizationsCustomerRoutes(app, {
@@ -212,6 +331,9 @@ export function organizationsModule(options: OrganizationsModuleOptions) {
       resolveCustomerContext: options.resolveCustomerContext,
       resolveCustomerActorOptionalOrg: resolveOptionalOrgContext,
       emFactory: options.emFactory,
+      organizationRoles: options.organizationRoles,
+      organizationPermissions: options.organizationPermissions,
+      ...(options.translate ? { translate: options.translate } : {}),
     });
     if (options.restrictionService) {
       await registerOrganizationsStorefrontRoutes(app, {
@@ -224,16 +346,27 @@ export function organizationsModule(options: OrganizationsModuleOptions) {
         // no-org callers — that behavior is correct for order placement and
         // RFQ submission but wrong here.
         resolveCustomerContext: resolveOptionalOrgContext,
+        ...(options.translate ? { translate: options.translate } : {}),
       });
     }
     await registerMembersRoutes(app, {
       invitationService,
       roleService,
       customerAccountRead: options.customerAccountRead,
+      organizationPermissions: options.organizationPermissions,
+      organizationRoles: options.organizationRoles,
+      customerAccountRoles: options.customerAccountRoles,
+      commandBus: options.commandBus,
       requireCustomer: options.requireCustomer,
       resolveCustomerContext: options.resolveCustomerContext,
       exposeTestProbe: options.exposeTestProbe ?? false,
       latestInvitationToken,
+    });
+    await registerOrganizationRoleRoutes(app, {
+      roleService: options.roleService,
+      organizationPermissions: options.organizationPermissions,
+      requireCustomer: options.requireCustomer,
+      resolveCustomerContext: options.resolveCustomerContext,
     });
     if (options.requireAdmin) {
       if (!options.auditLogService) {
@@ -242,15 +375,20 @@ export function organizationsModule(options: OrganizationsModuleOptions) {
       if (!options.requireAdminAny) {
         throw new Error('organizationsModule: requireAdminAny is required when requireAdmin is set');
       }
+      if (!options.salesRepScope) {
+        throw new Error('organizationsModule: salesRepScope is required when requireAdmin is set');
+      }
       await registerOrganizationsAdminRoutes(app, {
         emFactory: options.emFactory,
         requireAdmin: options.requireAdmin,
         requireAdminAny: options.requireAdminAny,
         invitationService,
-        roleService,
         customerAccountRead: options.customerAccountRead,
-        customerAccountWrite: options.customerAccountWrite,
+        customerAccountCommandPort: options.customerAccountCommandPort,
+        organizationRoles: options.organizationRoles,
+        commandBus: options.commandBus,
         auditLogService: options.auditLogService,
+        salesRepScope: options.salesRepScope,
         eventBus: options.eventBus as OrganizationEventBus,
         addressService,
         ...(options.moderationService ? { moderationService: options.moderationService } : {}),
@@ -262,12 +400,23 @@ export function organizationsModule(options: OrganizationsModuleOptions) {
           ? { taxIdValidationService: options.taxIdValidationService }
           : {}),
         ...(options.customFieldValues ? { customFieldValues: options.customFieldValues } : {}),
-        ...(options.commandBus
-          ? {
-              commandBus: options.commandBus,
-              treeService: new OrganizationTreeService(options.emFactory),
-            }
+        ...(options.customFieldListFilter ? { customFieldListFilter: options.customFieldListFilter } : {}),
+        ...(options.schemaExtensionReads ? { schemaExtensionReads: options.schemaExtensionReads } : {}),
+        // Feature 154 — the Organization's *Sales channels* endpoints and the
+        // admin create.
+        ...(options.salesChannelMembership
+          ? { salesChannelMembership: options.salesChannelMembership }
           : {}),
+        ...(options.dictionaryValidator ? { dictionaryValidator: options.dictionaryValidator } : {}),
+        treeService: new OrganizationTreeService(options.emFactory),
+        ...(options.roleCache ? { roleCache: options.roleCache } : {}),
+        // Issue #629 (#86) — the status labels of the moderation status refusal.
+        ...(options.translate ? { translate: options.translate } : {}),
+      });
+      await registerOrganizationAdminRoleRoutes(app, {
+        roleService: options.roleService,
+        requireAdmin: options.requireAdmin,
+        requireAdminAny: options.requireAdminAny,
       });
     }
   };

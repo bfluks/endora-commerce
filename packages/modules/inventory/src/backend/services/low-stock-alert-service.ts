@@ -3,22 +3,21 @@ import type {
   CatalogProductReadPort,
   CatalogProductRecord,
   EmailMailerPort,
+  TemplateEmailPort,
 } from '@endora-commerce/contracts';
 import type { SettingsReadPort } from '@endora-commerce/platform/kernel';
 import { z } from 'zod';
+import type { VisibilityPredicate } from '@endora-commerce/contracts';
+import { NO_PRODUCT_PREDICATE, clauseSql } from './admin-product-visibility.js';
 import { StockLevel } from '../entities/stock-level.entity.js';
 import { INVENTORY_SETTING_CODES } from '../../manifest.js';
 
-/** Feature 047 — structural port for sending via the admin-editable templates. */
-export interface InventoryTemplateEmailPort {
-  trySend(input: {
-    code: string;
-    to: string;
-    messageId: string;
-    variables: Record<string, unknown>;
-    meta?: Record<string, unknown> | undefined;
-  }): Promise<boolean>;
-}
+/**
+ * Feature 047 — sending via the admin-editable templates: `transactional_emails`'
+ * published `TemplateEmailPort`, which since issue #1256 also takes the
+ * recipient's channel and language.
+ */
+export type InventoryTemplateEmailPort = TemplateEmailPort;
 
 export interface LowStockSummaryRow {
   productId: string;
@@ -68,13 +67,19 @@ export class LowStockAlertService {
     private readonly templateEmail?: InventoryTemplateEmailPort,
   ) {}
 
-  async listLowStock(): Promise<LowStockSummaryRow[]> {
+  /**
+   * Spec 193 (T052, FR-083) — `visible` is the caller's product predicate over
+   * `"sl"."product_id"`: the report lists the products it lets through.
+   */
+  async listLowStock(visible: VisibilityPredicate = NO_PRODUCT_PREDICATE): Promise<LowStockSummaryRow[]> {
     const em = this.emFactory();
+    const only = clauseSql(visible, 'where');
     // `em.execute`, not `em.getKnex()`: a knex handle takes its own pooled
     // connection, so the report would answer from outside a transaction the
     // caller holds open (issue #207).
     const rows = (await em.execute(
-      `select product_id, sum(on_hand) as on_hand from stock_levels group by product_id`,
+      `select sl.product_id, sum(sl.on_hand) as on_hand from stock_levels sl${only.sql} group by sl.product_id`,
+      [...only.params],
     )) as Array<{ product_id: string; on_hand: string | null }>;
     if (rows.length === 0) return [];
 
@@ -90,7 +95,7 @@ export class LowStockAlertService {
       if (threshold === null) continue;
       const cumulative = Number(row.on_hand ?? 0);
       if (cumulative > threshold) continue;
-      const productName = p.name['en-US'] ?? Object.values(p.name)[0] ?? p.sku;
+      const productName = p.name || p.sku;
       result.push({
         productId: p.id,
         productSku: p.sku,
@@ -138,7 +143,7 @@ export class LowStockAlertService {
   ): Promise<void> {
     const recipient = await this.resolveRecipient();
     if (!recipient) return;
-    const productName = product.name['en-US'] ?? Object.values(product.name)[0] ?? product.sku;
+    const productName = product.name || product.sku;
     const messageId = `inventory.low-stock:${product.id}:${Date.now()}`;
     const meta = { productId: product.id, cumulativeOnHand: cumulative, threshold };
     if (this.templateEmail) {

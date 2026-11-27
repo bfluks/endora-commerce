@@ -27,20 +27,8 @@ aktywacji — do osoby prowadzącej biznes, i żadna z osi nie nadpisuje drugiej
 
 ## Polecenia CLI
 
-Wszystkie polecenia są zdefiniowane w `backend/package.json`:
-
-```bash
-pnpm --filter backend run module:install <id> [--dry-run] [--json]
-pnpm --filter backend run module:uninstall <id> [--hard] [--force] [--json]
-pnpm --filter backend run module:enable <id> [--json]
-pnpm --filter backend run module:disable <id> [--cascade] [--json]
-pnpm --filter backend run module:status [<id>] [--filter=<state>] [--json]
-```
-
-### W instancji
-
-Instancja — drzewo, które zapisuje `npx create-endora-commerce` — ma te same pięć poleceń w swoim
-katalogu głównym; przyjmują te same argumenty i zwracają te same kody wyjścia:
+Instancja — drzewo, które zapisuje `npx create-endora-commerce` — ma pięć poleceń w swoim
+katalogu głównym. Uruchamiaj je tam:
 
 ```bash
 pnpm run module:install <id> [--dry-run] [--json]     # or: pnpm run module:install --all
@@ -50,11 +38,34 @@ pnpm run module:disable <id> [--cascade] [--json]
 pnpm run module:status [<id>] [--filter=<state>] [--json]
 ```
 
+W klonie repozytorium Endora Commerce te same pięć poleceń jest zdefiniowanych w
+`backend/package.json`; przyjmują te same argumenty i zwracają te same kody wyjścia:
+
+```bash
+pnpm --filter backend run module:install <id> [--dry-run] [--json]
+pnpm --filter backend run module:uninstall <id> [--hard] [--force] [--json]
+pnpm --filter backend run module:enable <id> [--json]
+pnpm --filter backend run module:disable <id> [--cascade] [--json]
+pnpm --filter backend run module:status [<id>] [--filter=<state>] [--json]
+```
+
+W instancji postać z repozytorium nie robi nic: członek backendu nazywa się tam inaczej, więc pnpm
+wypisuje `No projects matched the filters` i kończy się kodem `0`, nie uruchamiając polecenia.
+
+`module:status <id>` wypisuje pod wierszem modułu jego migracje: każdą z nazwą klasy, pochodzeniem
+(`core`, `external` dla zainstalowanego pakietu, `overlay` dla modułu nakładkowego wdrożenia,
+`generated`) oraz informacją, czy ta baza danych już ją zastosowała, czy migracja wciąż czeka. Z
+`--json` każdy wiersz zawiera tę samą listę jako `migrations`.
+
+### W instancji
+
 Obejmują zarówno pakiety modułów zainstalowane w instancji, jak i jej własne moduły nakładkowe w
 `apps/<deployment>/modules/`. Działające API i worker dowiadują się o zmianie wprowadzonej
-którymkolwiek z tych poleceń bez restartu. Moduł nakładkowy zawierający katalog `migrations/` albo
-`entities/` zatrzymuje każde z nich, zanim zostanie otwarta baza danych — zobacz
-[Wzorzec nakładki](../architecture/overlay-pattern.md#zabezpieczenia-odmawiające-w-razie-wątpliwości).
+którymkolwiek z tych poleceń bez restartu. Moduł nakładkowy, który ma własne tabele, przechodzi ten
+sam cykl życia co moduł rdzenia: `migrate` i `module:install` stosują jego migracje,
+`module:status <id>` wypisuje je z pochodzeniem `overlay`, wyłączenie modułu ani miękkie
+odinstalowanie nie ruszają jego tabel ani wierszy, a `module:uninstall <id> --hard --force` cofa
+jego migracje od najnowszej.
 
 W wydaniach do `0.100.2` włącznie polecenia `module:enable`, `module:disable` i miękkie
 `module:uninstall` wypisywały w instancji komunikat o powodzeniu, niczego nie zmieniając, a twarde
@@ -99,7 +110,7 @@ import { defineModuleManifest, defineModuleSettingsManifest } from '@endora-comm
 export const manifest = defineModuleManifest({
   id: 'pricing',
   name: 'Pricing',
-  description: 'Customer-group pricing with brackets and display modes.',
+  description: 'Price books and price display modes.',
   version: '1.0.0',
   dependencies: ['settings', 'sales_channels'],
   settings: defineModuleSettingsManifest({
@@ -233,7 +244,7 @@ export const manifest = defineModuleManifest({
 
 export async function installHook({ em, log }) {
   log.info('coupons: seeding default policy presets');
-  // await em.persistAndFlush(...);
+  // await em.persist(...).flush();
 }
 
 export async function uninstallHook({ em, hard, log }) {
@@ -272,7 +283,10 @@ pnpm --filter backend run composer:generate
 
 Własny `package.json` pakietu modułu też jest generowany, innym poleceniem, a jego wynik zmienia
 deklaracje workspace — dlatego od razu uruchom instalację i zatwierdź razem z nim
-`pnpm-lock.yaml`:
+`pnpm-lock.yaml`. To samo polecenie dopisuje nowy pakiet do `backend/package.json` (a gdy
+pakiet zawiera `src/admin/`, także do `admin/package.json`) — nie dodawaj tych wpisów ręcznie.
+Zbuduj pakiet, zanim uruchomisz polecenie drugi raz: gdy pakiet ma już `package.json`,
+`manifests:generate` i `manifests:check` odrzucają go, dopóki nie istnieje jego `dist`.
 
 ```bash
 pnpm --filter backend run manifests:generate

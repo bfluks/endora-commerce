@@ -1,4 +1,4 @@
-import { ERROR_CODES } from '@endora-commerce/contracts';
+import { ERROR_CODES, unitPriceHalfUp } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 
 /**
@@ -20,6 +20,16 @@ export function hasUnpricedLine(
   items: ReadonlyArray<{ agreedUnitPrice?: string | null }>,
 ): boolean {
   return items.some((it) => it.agreedUnitPrice == null);
+}
+
+/**
+ * A unit price an operator or a buyer typed, as the `numeric(14,4)` column
+ * stores it: at its four places, unrounded (owner ruling of 2026-10-25) — the
+ * schema refuses a fifth (`fourDecimalUnitPrice`), so nothing is rounded here.
+ * Only the line value, `unit × quantity`, is rounded to two.
+ */
+export function unitPriceText(value: number): string {
+  return unitPriceHalfUp(value);
 }
 
 /** The refusal the three guards answer with — one code, one sentence. */

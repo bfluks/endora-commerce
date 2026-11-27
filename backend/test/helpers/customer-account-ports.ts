@@ -1,14 +1,20 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type {
+  AuthSessionPort,
   CustomerAccountAdminSearchPort,
+  CustomerAccountAnonymizedEventV1,
+  CustomerAccountCommandPort,
   CustomerAccountLifecycleWritePort,
   CustomerAccountMemberWritePort,
   CustomerAccountReadPort,
 } from '@endora-commerce/contracts';
 import type { AuditLogService } from '@endora-commerce/platform/composition';
-import type { CommandBus } from '../../src/commands/index.js';
+import { EventBus } from '@endora-commerce/platform/events';
+import { getTenantContext, withSystemScope, withSystemScopeActingFor } from '@endora-commerce/platform/tenancy';
+import type { Command, CommandBus } from '../../src/commands/index.js';
 import type { PersonalOrganizationProvisionApi } from '@endora-commerce/mod-organizations/ports';
 import { PersonalOrganizationService } from '../../../packages/modules/organizations/src/backend/services/personal-organization-service.js';
+import { predefinedRoleIdOn } from '../../../packages/modules/organizations/src/backend/services/organization-role-store.js';
 // **`dist`, not `src`** (feature 146): these value-import `customer_accounts`'
 // `CustomerAccount` entity, and `QuoteRequestAccountPolicy` is
 // `@TransitivelyScoped('CustomerAccount', …)`. A second, source-evaluated class
@@ -23,6 +29,10 @@ import {
   CustomerAccountAdminSearchService,
   CustomerAccountLifecycleWriteService,
 } from '../../../packages/modules/customer_accounts/dist/backend/services/customer-account-lifecycle-ports.js';
+import { CustomerAccountCommandService } from '../../../packages/modules/customer_accounts/dist/backend/services/customer-account-command-port.js';
+import { Organization } from './package-entities.js';
+import { predefinedRoleIdOf } from './seed-organization-roles.js';
+import { transactionBoundCommandBus } from './sales-channels-service.js';
 import { twoFactorEnrolmentsFor } from './two-factor-enrolments.js';
 
 /**
@@ -34,8 +44,15 @@ import { twoFactorEnrolmentsFor } from './two-factor-enrolments.js';
  * the same write path the composed one does. What the container adds on top is
  * the effective-state gate, and a test that wants the 503 flips the module
  * state against the shared harness instead of substituting a fake here.
+ *
+ * `write.create` runs the `customer_account.create` Command since
+ * `specs/176-command-hooks-outbox/` (FR-004), so a test that creates an account
+ * through it passes the bus; without one the creation refuses.
  */
-export function customerAccountPortsFor(emFactory: () => EntityManager): {
+export function customerAccountPortsFor(
+  emFactory: () => EntityManager,
+  commandBus?: CommandBus,
+): {
   read: CustomerAccountReadPort;
   write: CustomerAccountMemberWritePort;
 } {
@@ -44,15 +61,79 @@ export function customerAccountPortsFor(emFactory: () => EntityManager): {
     write: new CustomerAccountMemberWriteService(
       emFactory,
       twoFactorEnrolmentsFor(emFactory, 'customer'),
+      undefined,
+      commandBus ? { commandBus } : undefined,
     ),
   };
 }
 
+export interface CustomerAccountCommandsForOptions {
+  /**
+   * The bus to run on; by default the real bus over the test's own transaction
+   * ({@link transactionBoundCommandBus}). Pass `events` with it, so the work a
+   * Command defers to its commit is deferred on the bus that commits it.
+   */
+  readonly commandBus?: CommandBus;
+  readonly events?: EventBus;
+  /**
+   * Who the writes are attributed to when the call has no ambient scope: that
+   * administrator, or — absent — the `system` actor of a worker.
+   */
+  readonly actingFor?: string;
+  /** `auth`'s sessions, which a block and a deletion end; nothing is ended by default. */
+  readonly sessions?: Pick<AuthSessionPort, 'destroyAllForCustomer'>;
+  readonly personalOrganizations?: PersonalOrganizationProvisionApi;
+  readonly announceAnonymized?: (payload: CustomerAccountAnonymizedEventV1) => Promise<void>;
+}
+
+/**
+ * `customerAccountCommandPort` for a hand-built service
+ * (`specs/186-aggregate-ports/`, issue #1822) — the real implementation, on
+ * the real bus over the test's own transaction, so the entry each Command
+ * records lands in the rows a `setupTestDb` suite reads and rolls back.
+ *
+ * A hand-built service is called with no request around it, and the bus
+ * refuses to run without a TenantContext; a call outside one is opened in a
+ * system scope — acting for `actingFor` when it is given — which is what the
+ * admin route's request or the sweep's worker would have supplied.
+ */
+export function customerAccountCommandsFor(
+  emFactory: () => EntityManager,
+  auditLog: AuditLogService,
+  options: CustomerAccountCommandsForOptions = {},
+): CustomerAccountCommandPort {
+  const events = options.events ?? new EventBus();
+  const bus = options.commandBus ?? transactionBoundCommandBus(emFactory, auditLog, events);
+  const reason = 'test: a hand-built customer_accounts write';
+  const scoped: Pick<CommandBus, 'run'> = {
+    run: <T>(command: Command<T>): Promise<T> => {
+      const run = () => bus.run(command);
+      if (getTenantContext()) return run();
+      return options.actingFor ? withSystemScopeActingFor(options.actingFor, reason, run) : withSystemScope(reason, run);
+    },
+  };
+  const unwired = (): never => {
+    throw new Error('customerAccountCommandsFor: the role lookup is not wired for this helper');
+  };
+  return new CustomerAccountCommandService({
+    commandBus: scoped,
+    emFactory,
+    twoFactorEnrolments: twoFactorEnrolmentsFor(emFactory, 'customer'),
+    roles: { findRole: unwired, predefinedRoleId: (organizationId, kind) => predefinedRoleIdOf(emFactory(), organizationId, kind) },
+    isPersonal: async (organizationId) => (await emFactory().findOne(Organization, { id: organizationId }))?.isPersonal === true,
+    personalOrganizations: options.personalOrganizations ?? personalOrganizationProvisionFor(emFactory),
+    sessions: options.sessions ?? { destroyAllForCustomer: async () => undefined },
+    afterCommit: (fn) => events.afterScope(fn),
+    ...(options.announceAnonymized ? { announceAnonymized: options.announceAnonymized } : {}),
+  });
+}
+
 /**
  * The account lifecycle port `customers`' hand-built services need
- * (feature 075, Phase C) — again the real implementation, for the reason
- * above: it is where the audit row for a block, a delete or a scrub is
- * written, so a stub here would make every one of those assertions vacuous.
+ * (feature 075, Phase C) — again the real implementation. Deprecated since
+ * 0.113.0, it delegates to {@link customerAccountCommandsFor}'s port, which is
+ * where the entry for a block, a delete or a scrub is recorded, so a stub here
+ * would make every one of those assertions vacuous.
  */
 export function customerAccountLifecycleWriteFor(
   emFactory: () => EntityManager,
@@ -61,14 +142,17 @@ export function customerAccountLifecycleWriteFor(
   personalOrganizations: PersonalOrganizationProvisionApi = personalOrganizationProvisionFor(
     emFactory,
   ),
+  options: Omit<CustomerAccountCommandsForOptions, 'commandBus' | 'personalOrganizations'> = {},
 ): CustomerAccountLifecycleWritePort {
-  return new CustomerAccountLifecycleWriteService(
-    emFactory,
-    auditLog,
-    twoFactorEnrolmentsFor(emFactory, 'customer'),
-    personalOrganizations,
-    commandBus,
-  );
+  const twoFactor = twoFactorEnrolmentsFor(emFactory, 'customer');
+  return new CustomerAccountLifecycleWriteService(emFactory, auditLog, twoFactor, {
+    commands: customerAccountCommandsFor(emFactory, auditLog, {
+      ...options,
+      ...(commandBus ? { commandBus } : {}),
+      personalOrganizations,
+    }),
+    reads: new CustomerAccountReadService(emFactory, twoFactor),
+  });
 }
 
 /**
@@ -93,7 +177,12 @@ export function personalOrganizationProvisionFor(
     write: new Proxy({} as CustomerAccountMemberWritePort, { get: unreachable }),
   });
   return {
-    provisionFor: async (em, input) => ({ id: (await service.provisionFor(em, input)).id }),
+    // The answer carries the new Organization's Administrator role, read on
+    // the caller's `em` as the real seam does (`specs/170-organization-roles/` R-34).
+    provisionFor: async (em, input) => {
+      const org = await service.provisionFor(em, input);
+      return { id: org.id, administratorRoleId: await predefinedRoleIdOn(em, org.id, 'administrator') };
+    },
   };
 }
 

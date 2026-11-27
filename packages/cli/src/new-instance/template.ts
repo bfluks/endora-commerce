@@ -29,7 +29,10 @@
  * nothing, so there is no `rewrite.ts` beside this file and there must never be
  * one — its appearance would be evidence that something was copied that should
  * not have been. Every string below is rendered from the resolved packages, the
- * CLI's own manifest and the operator's own flags.
+ * CLI's own manifest and the operator's own flags. The one exception is not a
+ * copy of the reference tree but a file this CLI carries: the backend's
+ * supervising parent, `backend/scripts/supervise.mjs` (issue #596), whose
+ * single statement is the platform repository's file (`./backend-supervisor.ts`).
  *
  * ## No demo artefact, at any tier (D-216)
  *
@@ -57,7 +60,8 @@
  *
  * The ORM configuration below is the one place an instance restates its own
  * artefacts, and it has none, so the platform's `*From` factories answer over
- * the packages it installed: `configuredEntitiesFrom`,
+ * the packages it installed and, given the deployment root, its own overlay
+ * modules (`specs/190-overlay-full-modules/` FR-035): `configuredEntitiesFrom`,
  * `discoverConfiguredMigrations` and `mikroOrmConfigFrom` on `./db`, and
  * `resolveManifestEntries` on `./lifecycle` with its three suppliers.
  *
@@ -103,6 +107,7 @@ import {
   type DeployInput,
   type Topology,
 } from './deploy.js';
+import { BACKEND_SUPERVISOR_PATH, backendSupervisorSource } from './backend-supervisor.js';
 import { InstanceInputError } from './host.js';
 
 /** §1.1's three kinds, and there is no fourth. */
@@ -477,6 +482,10 @@ export const GENERATED_ARTEFACTS = [
  * write themselves visible with no exception list to maintain.
  */
 export const GENERATED_TREES = [
+  // One admin registry per deployment under `apps/`, and bare core's
+  // (`specs/190-overlay-full-modules/` FR-080): which ones exist follows the
+  // deployments on disk, so the pattern names the family, not each file.
+  'admin/src/deployments/*.generated.ts',
   'docs/docs/modules/**',
   'docs/docs/module-reference/**',
   'docs/.module-docs-copies.json',
@@ -554,8 +563,17 @@ export function backendScripts(input: PlanInput): Record<string, string> {
     // `tsc` and `node --watch` rather than `tsx`: no manifest this run can
     // read declares a range for `tsx`, and a range this command chose would
     // be a value nobody reviewed (R2.5a).
-    dev: `tsc -p tsconfig.json --watch & ${node} --watch dist/index.js`,
-    build: 'tsc -p tsconfig.json',
+    // The overlay code under `apps/` is compiled too (#1848): `endora build overlays`
+    // runs this instance's own `tsc -p tsconfig.apps.json` into `dist/apps` and mirrors
+    // the modules' `i18n/`, and the compiled entry points refuse a stale build.
+    dev: `tsc -p tsconfig.json --watch & endora build overlays --watch & ${node} --watch dist/index.js`,
+    build: 'tsc -p tsconfig.json && endora build overlays',
+    // Two programs (issue #1847): the backend's own `src`, and the overlay code
+    // under `apps/`, which `build` compiles into `dist/apps` (#1848).
+    // `tsconfig.apps.json` sets `erasableSyntaxOnly`, so an `enum`, a `namespace`
+    // or a constructor parameter property is a type-check failure here rather
+    // than `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` at boot.
+    typecheck: 'tsc -p tsconfig.json --noEmit && tsc -p tsconfig.apps.json --noEmit',
     start: `${node} dist/index.js`,
     worker: `${node} dist/worker.js`,
     migrate: `${node} dist/migrate.js`,
@@ -564,6 +582,8 @@ export function backendScripts(input: PlanInput): Record<string, string> {
     'module:enable': `${node} dist/module-commands/enable.js`,
     'module:disable': `${node} dist/module-commands/disable.js`,
     'module:status': `${node} dist/module-commands/status.js`,
+    // Issue #1036 — the sixth operator command, its own entry beside the five.
+    'module:schema-extensions': `${node} dist/module-commands/schema-extensions.js`,
     // The operator CLI (`specs/123-oss-install-experience/` G2, T2-D).
     // `cli` is the generic pass-through, so a module this instance installed
     // which declares a `cliCommands` entry is addressable with no file in this
@@ -951,12 +971,17 @@ export function planInstance(input: PlanInput): InstancePlan {
   const setupSteps: readonly string[] = [
     ...(generatesArtefacts ? ['generate'] : []),
     'build',
+    // After `generate`, whose `divergence.generated.ts` is in the overlay
+    // program, and before `migrate`, so a type error in `apps/` stops the
+    // sequence before anything touches the database (issue #1847).
+    'typecheck',
     'migrate',
     'module:install --all',
   ];
   const rootScripts: Record<string, string> = {
     migrate: 'pnpm -C backend run migrate',
     dev: 'pnpm -C backend run dev',
+    typecheck: 'pnpm -C backend run typecheck',
     ...Object.fromEntries(layerBuilds),
     // §2.5's `build` is the whole instance's, and §2.5's `generate` is the
     // three derived artefacts — two of which are the admin member's, so
@@ -982,6 +1007,11 @@ export function planInstance(input: PlanInput): InstancePlan {
     // survives beside it for the operator who wants them (§3's User Story 3).
     setup: setupSteps.map((step) => `pnpm run ${step}`).join(' && '),
     start: 'pnpm -C backend run start',
+    // The separate worker tier, beside the API it is split from (issue #133).
+    // The member has declared `worker` all along and the queue-consumer page
+    // sends an operator to it; without this entry the root, where every other
+    // command runs, had no way to start it.
+    worker: 'pnpm -C backend run worker',
     // FR-110 — the admin bundle, served. Baseline step D1: `admin/package.json`
     // has declared `preview` all along and no root script and no printed step
     // named it, so a client who ran `build:admin` had a bundle and no way to
@@ -1004,6 +1034,7 @@ export function planInstance(input: PlanInput): InstancePlan {
     'module:enable': 'pnpm -C backend run module:enable',
     'module:disable': 'pnpm -C backend run module:disable',
     'module:status': 'pnpm -C backend run module:status',
+    'module:schema-extensions': 'pnpm -C backend run module:schema-extensions',
     // The operator CLI (`specs/123-oss-install-experience/` G2, T2-D). `cli` is
     // the generic pass-through, so a module this instance installed which
     // declares a `cliCommands` entry is addressable with no file in this tree
@@ -1045,7 +1076,9 @@ export function planInstance(input: PlanInput): InstancePlan {
       scripts: rootScripts,
       dependencies: Object.fromEntries([...dependencies].sort(([a], [b]) => a.localeCompare(b))),
       devDependencies: Object.fromEntries(
-        devDependenciesFor(input, generatesArtefacts),
+        // The CLI is declared whatever there is to generate: the backend member's
+        // `build` runs `endora build overlays` (#1848).
+        devDependenciesFor(input, true),
       ),
     }),
   });
@@ -1124,7 +1157,8 @@ export function planInstance(input: PlanInput): InstancePlan {
       '# is the point: it is where an upgrade that changes behaviour you depended on shows up.',
       ...GENERATED_ARTEFACTS,
       '',
-      '# The documentation site\'s are a population rather than a file: one copied page per',
+      '# The admin\'s deployment registries are one file per deployment under apps/. The',
+      '# documentation site\'s are a population rather than a file: one copied page per',
       '# page a module ships, one reference page per module, and the stamp that lets a run',
       '# undo the previous one\'s copies. A **tracked** file is never ignored whatever the',
       '# pattern says, so a page you write yourself stays visible and no exception list is',
@@ -1203,14 +1237,49 @@ export function planInstance(input: PlanInput): InstancePlan {
         strict: true,
         skipLibCheck: true,
         experimentalDecorators: true,
-        emitDecoratorMetadata: true,
         esModuleInterop: true,
       },
       include: ['src'],
     }),
   });
 
+  // The overlay code's own program (issue #1847,
+  // `specs/190-overlay-full-modules/contracts/overlay-build.md` §1). `apps/` is
+  // outside the backend's `rootDir`, so without it nothing in this tree
+  // type-checks an overlay module. Bare specifiers resolve through the root's
+  // `node_modules` to the installed packages' `dist` declarations — the types
+  // the runtime loads. `noEmit` stays in the file: `typecheck` reads it as written,
+  // and `endora build overlays` (#1848) passes `--noEmit false` when it emits.
+  files.push({
+    path: 'backend/tsconfig.apps.json',
+    kind: 'client',
+    member: 'backend',
+    content: json({
+      extends: './tsconfig.json',
+      compilerOptions: {
+        rootDir: '../apps',
+        outDir: 'dist/apps',
+        erasableSyntaxOnly: true,
+        noEmit: true,
+      },
+      // `apps/<deployment>/*.ts` too: `divergence.ts` and its generated twin are
+      // read at composition.
+      include: ['../apps/*/modules/**/*.ts', '../apps/*/*.ts'],
+      exclude: ['../apps/*/modules/*/admin/**', '../apps/**/*.test.ts'],
+    }),
+  });
+
   for (const file of backendWiring(input)) files.push(file);
+
+  // The image example's command (issue #596): the platform's own supervisor,
+  // carried by this CLI rather than rendered — see `./backend-supervisor.ts`.
+  // The client's from here on, as the deployment examples that name it are.
+  files.push({
+    path: BACKEND_SUPERVISOR_PATH,
+    kind: 'client',
+    member: 'backend',
+    content: backendSupervisorSource(),
+  });
 
   // --- the admin member (§2.4) ---------------------------------------------
   for (const file of admin.files) files.push(file);
@@ -1312,9 +1381,16 @@ export const deployment = '${deployment}';
  * the **ranges** come from, which is the question R2.5a answers: a value with
  * no source is one the command would have to invent. So each is derived:
  *
- *   * the four peers, from `@endora-commerce/platform`'s own
+ *   * the platform's peers, from `@endora-commerce/platform`'s own
  *     `peerDependencies`. A platform that widens `zod` to `^5` widens this in
- *     the same run, with nothing here to edit.
+ *     the same run, with nothing here to edit. Since MikroORM 7 (#1866) they
+ *     include `@mikro-orm/decorators`: the entity decorators left
+ *     `@mikro-orm/core` for its `./legacy` subpath, and the platform's own
+ *     entities, every module package's and an overlay's import them from there.
+ *     `reflect-metadata` came with them: `@mikro-orm/decorators/legacy`
+ *     imports it at load time while its manifest calls that peer optional, so
+ *     pnpm installs it only where something declares it, and an instance that
+ *     did not could not import the platform's kernel.
  *   * `@mikro-orm/migrations`, from the range the platform declares for
  *     `@mikro-orm/core`. The MikroORM packages version in lockstep and a
  *     migrator from another major does not load the driver from this one.
@@ -1347,9 +1423,11 @@ export function devDependenciesFor(
 ): readonly (readonly [string, string])[] {
   const wanted: readonly (readonly [string, string])[] = [
     ['@mikro-orm/core', input.declaredRanges.get('@mikro-orm/core') ?? ''],
+    ['@mikro-orm/decorators', input.declaredRanges.get('@mikro-orm/decorators') ?? ''],
     ['@mikro-orm/postgresql', input.declaredRanges.get('@mikro-orm/postgresql') ?? ''],
     ['@mikro-orm/migrations', input.declaredRanges.get('@mikro-orm/core') ?? ''],
     ['fastify', input.declaredRanges.get('fastify') ?? ''],
+    ['reflect-metadata', input.declaredRanges.get('reflect-metadata') ?? ''],
     ['zod', input.declaredRanges.get('zod') ?? ''],
     ['ioredis', input.declaredRanges.get('ioredis') ?? ''],
     ['typescript', input.declaredRanges.get('typescript') ?? ''],
@@ -1397,13 +1475,14 @@ if (sessionCookieSecret === '') {
   process.exit(1);
 }
 
-// The directory that holds \`apps/\` — this workspace's root, one level up from
-// the backend member. It is the one thing the platform cannot derive for
-// itself, and it is deliberately a required argument rather than a default that
-// would silently name a directory holding no \`apps/\` at all.
-const deploymentRoot = fileURLToPath(new URL('../..', import.meta.url));
+// Where \`apps/\` is: compiled, beside this file (\`backend/dist\`, which
+// \`endora build overlays\` fills), and as written, at this workspace's root. The
+// platform cannot derive either; the second is what it judges the first against,
+// so a stale build is refused before any of it runs.
+const deploymentRoot = fileURLToPath(new URL('.', import.meta.url));
+const deploymentSourceRoot = fileURLToPath(new URL('../..', import.meta.url));
 
-const composition = await composeApp({ deploymentRoot }).catch(exitOnRefusal);
+const composition = await composeApp({ deploymentRoot, deploymentSourceRoot }).catch(exitOnRefusal);
 const app = await buildServer({
   sessionCookieSecret,
   openApi: { title: '${input.name}', version: '0.0.0', serverUrl: \`http://localhost:\${port}\` },
@@ -1441,9 +1520,10 @@ if (sessionCookieSecret === '') {
   process.exit(1);
 }
 
-const deploymentRoot = fileURLToPath(new URL('../..', import.meta.url));
+const deploymentRoot = fileURLToPath(new URL('.', import.meta.url));
+const deploymentSourceRoot = fileURLToPath(new URL('../..', import.meta.url));
 
-const composition = await composeApp({ deploymentRoot }).catch(exitOnRefusal);
+const composition = await composeApp({ deploymentRoot, deploymentSourceRoot }).catch(exitOnRefusal);
 const app = await buildServer({
   sessionCookieSecret,
   openApi: { title: '${input.name} worker', version: '0.0.0', serverUrl: 'http://localhost' },
@@ -1474,21 +1554,26 @@ app.log.info('worker started');
 // migration options an \`allOrNothing\` run takes. A hand-written
 // \`defineConfig\` here would compile and then create tables the installed
 // migrations do not name.
+import { fileURLToPath } from 'node:url';
 import {
   configuredEntitiesFrom,
   discoverConfiguredMigrations,
   mikroOrmConfigFrom,
 } from '${scope}platform/db';
 
+// Where \`apps/\` is, compiled — the value \`index.ts\` hands \`composeApp\`. Your
+// overlay modules' entities and migrations are read from there.
+const deploymentRoot = fileURLToPath(new URL('.', import.meta.url));
+
 export default async function config() {
   const url = process.env['DATABASE_URL'];
   if (url === undefined || url === '') throw new Error('DATABASE_URL must be set.');
   // The committed half is empty, which is what an instance is: it ships no
   // generated manifest index and no committed registry, so its entities and
-  // its migrations are the packages it installed and nothing else.
+  // its migrations are the packages it installed and its own overlay modules.
   const [entities, migrations] = await Promise.all([
-    configuredEntitiesFrom({ coreEntities: [] }),
-    discoverConfiguredMigrations({ coreEntries: [], manifests: [] }),
+    configuredEntitiesFrom({ coreEntities: [], deploymentRoot }),
+    discoverConfiguredMigrations({ coreEntries: [], manifests: [] }, process.env, deploymentRoot),
   ]);
   return mikroOrmConfigFrom({ entities, migrations });
 }
@@ -1499,22 +1584,22 @@ export default async function config() {
     path: 'backend/src/migrate.ts',
     kind: 'wiring',
     member: 'backend',
-    // `refuseOverlaySchema` is the one thing here that is not the migrator: the
-    // configuration is built from the installed packages and never looks at
-    // `apps/`, so without it a `migrations/` directory under an overlay module
-    // is applied by nothing and reported by nothing (`overlay-schema.ts`).
-    content: `// The schema, in the order the installed manifests compute. MikroORM's own
-// migrator over the configuration beside this file — no second ordering here.
-import { fileURLToPath } from 'node:url';
+    // The configuration carries the deployment root, so an overlay module's
+    // migrations are in the order it applies (`specs/190-overlay-full-modules/`
+    // FR-035) — and a refusal of one (a migration file of the wrong shape, an
+    // unexported entity) is printed as the sentence it is, as `index.ts` prints
+    // a refusal met while composing.
+    content: `// The schema, in the order the installed manifests compute — no second
+// ordering here. Verified: one transaction, the declared extension columns
+// checked before commit (specs/178-extensible-columns/ FR-025).
 import { MikroORM } from '@mikro-orm/postgresql';
-import { refuseOverlaySchema } from '${scope}platform/composition';
+import { exitOnRefusal } from '${scope}platform/composition';
+import { migrateUpVerified } from '${scope}platform/db';
 import config from './mikro-orm.config.js';
 
-// An overlay module ships no schema: said here, before anything is migrated.
-refuseOverlaySchema(fileURLToPath(new URL('../..', import.meta.url)));
-const orm = await MikroORM.init(await config());
+const orm = await MikroORM.init(await config().catch(exitOnRefusal));
 try {
-  await orm.getMigrator().up();
+  await migrateUpVerified(orm);
 } finally {
   await orm.close(true);
 }
@@ -1535,7 +1620,10 @@ try {
 import { fileURLToPath } from 'node:url';
 import { runCli } from '${scope}platform/cli';
 
-await runCli({ deploymentRoot: fileURLToPath(new URL('../..', import.meta.url)) });
+await runCli({
+  deploymentRoot: fileURLToPath(new URL('.', import.meta.url)),
+  deploymentSourceRoot: fileURLToPath(new URL('../..', import.meta.url)),
+});
 `,
   });
 
@@ -1560,15 +1648,16 @@ import { runInstanceOperatorCommand } from '${scope}platform/lifecycle';
 import type { OperatorRuntime } from '${scope}platform/lifecycle';
 import config from '../mikro-orm.config.js';
 
-// The directory that holds \`apps/\` — the same value \`index.ts\` hands
-// \`composeApp\`, two levels up from the compiled command rather than one.
-const deploymentRoot = fileURLToPath(new URL('../../..', import.meta.url));
+// Where \`apps/\` is, compiled and as written — the values \`index.ts\` hands
+// \`composeApp\`, one level further up from the compiled command.
+const deploymentRoot = fileURLToPath(new URL('..', import.meta.url));
+const deploymentSourceRoot = fileURLToPath(new URL('../../..', import.meta.url));
 
 /** Build the runtime, run one command inside a system scope, close, exit. */
 export function runOperatorCommand(
   run: (argv: readonly string[], rt: OperatorRuntime) => Promise<number>,
 ): Promise<never> {
-  return runInstanceOperatorCommand({ deploymentRoot, ormConfig: config, run });
+  return runInstanceOperatorCommand({ deploymentRoot, deploymentSourceRoot, ormConfig: config, run });
 }
 `,
   });
@@ -1586,6 +1675,24 @@ await runOperatorCommand(${runner});
 `,
     });
   }
+
+  // Issue #1036 — the sixth operator command: `list`, `drop` (the only
+  // sanctioned removal of the columns an uninstalled package left orphaned,
+  // `specs/178-extensible-columns/` OD-29) and `audit-packages`. Not over
+  // `runtime.ts`: the five share an `OperatorRuntime` that opens Redis and
+  // resolves the manifest set, and this command needs neither — what it needs
+  // from this tree is the ORM configuration, whose discovery is also what
+  // tells `drop` which extensions are still declared.
+  files.push({
+    path: 'backend/src/module-commands/schema-extensions.ts',
+    kind: 'wiring',
+    member: 'backend',
+    content: `import { runInstanceSchemaExtensionsCommand } from '${scope}platform/lifecycle';
+import config from '../mikro-orm.config.js';
+
+await runInstanceSchemaExtensionsCommand({ ormConfig: config });
+`,
+  });
 
   return files;
 }
@@ -1612,15 +1719,17 @@ const README_COMMANDS: readonly (readonly [script: string, argument: string, not
   // can look at was baseline step D1.
   ['dev:services', '', 'PostgreSQL, Redis, Meilisearch and a mail catcher, from\n`compose.dev.yml` beside this file. It waits for each one to\nreport healthy'],
   ['dev:services:down', '', 'stops them, keeping their data'],
-  ['setup', '', 'generate, build, migrate and install every module — the four\nsteps below, in one line. Each still exists on its own'],
-  ['generate', '', 'the files the admin and the docs site are built from,\nand your deployment\'s divergence report'],
+  ['setup', '', 'generate, build, type-check, migrate and install every module —\nthe five steps below, in one line. Each still exists on its own'],
+  ['generate', '', 'the files the admin and the docs site are built from,\nand your deployment\'s divergence report. A module of the\nrelease that an installed module needs is declared and\ninstalled first'],
   ['build', '', 'the entry points, compiled, and every member built'],
+  ['typecheck', '', 'the backend and your overlay code in `apps/`, type-checked against\nthe installed packages. An `enum` there is reported here, not at boot'],
   ['build:backend', '', 'one layer at a time. Each of the three is deployed on its own\nhost, on its own schedule, so each is built on its own too'],
   ['build:admin', '', ''],
   ['build:docs', '', ''],
   ['migrate', '', 'the schema, in the order the manifests compute'],
   ['module:install', ' --all', 'every module you declared, in dependency order'],
   ['start', '', 'the API'],
+  ['worker', '', 'the queue consumers on their own, for an API started with\n`BACKEND_ROLE=api`. Without that the API runs them itself'],
   ['preview:admin', '', 'the admin bundle you just built, served on its own port'],
   ['dev:all', '', 'the API, the admin preview and the storefront beside this\ndirectory, in one terminal. Ctrl-C stops all of them'],
   ['dev', '', 'the API, rebuilt and restarted as you edit your overlay'],
@@ -1629,6 +1738,9 @@ const README_COMMANDS: readonly (readonly [script: string, argument: string, not
   ['module:enable', ' <id>', 'whether this deployment offers a module. One that is off\nbehaves as though it were never installed'],
   ['module:disable', ' <id>', ''],
   ['module:uninstall', ' <id>', 'the reverse of `module:install`'],
+  // Issue #1036. The argument is the verb an operator reaches for first;
+  // `drop` and `audit-packages` are named in the note.
+  ['module:schema-extensions', ' list', 'the extension columns your modules declared, and the ones an\nuninstalled module left orphaned. `drop <id> [--confirm]` removes\norphaned ones, audited; `audit-packages` checks your packages\nbefore an upgrade'],
   // `specs/123-oss-install-experience/` G2. `admin:create` is conditional on
   // `admin_users` being installed, which the filter below already handles: this
   // table is annotations, and which of them survive is the manifest's answer.
@@ -1724,16 +1836,26 @@ shadow, because there is no file.
 \`pnpm exec endora new module <id> --name … --description …\` writes one there: a manifest, an
 entry point with a route, and both translation files. \`.env\` sets \`DEPLOYMENT=${input.deployment}\`,
 which is what makes this instance compose that directory — unset, it starts as the bare platform
-and none of your modules is there. An overlay module owns no database table: a \`migrations/\`
-or \`entities/\` directory in one is refused by \`generate\`, by \`migrate\`, by every
-\`module:*\` command and by the API when it starts, each naming the file. A module that needs
-a table is a package.
+and none of your modules is there. An overlay module may own a database table: export its
+entity classes as \`entities\` from \`backend.ts\` (each with a tenancy decorator, from
+\`@mikro-orm/decorators/legacy\`), and put its migrations in its \`migrations/\` directory, one
+class per file named after the file (\`20270101T000000_<module>_<slug>.ts\` exports
+\`Migration20270101T000000<Module><Slug>\`). \`pnpm run migrate\` applies them in the module's
+dependency order, under the foreign-schema guard every installed package's migrations take: a
+migration may write only the tables its own entities map. \`endora new module\` does not write
+either for you yet.
 
-An overlay module is TypeScript that **nothing in this tree compiles** — Node loads it and
-strips the types as it goes. So it is written in the subset stripping accepts: an \`enum\`, a
-\`namespace\` or a constructor parameter property raises
-\`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX\` at boot, and no type-check you can run here reports it,
-because all three type-check cleanly. A union of string literals is the \`enum\` you want.
+An overlay module is compiled like the rest of the backend. \`pnpm run build\` runs
+\`endora build overlays\`, which compiles \`apps/\` with this instance's own
+\`tsc -p backend/tsconfig.apps.json\` into \`backend/dist/apps\` and copies each module's
+\`i18n/\` beside the code; \`pnpm run dev\` does the same on every change. The API, the worker
+and every \`module:*\` command run the compiled code and compare it with \`apps/\` first: an edit
+that was not rebuilt, a module that was never built or a compiled file whose source is gone stops
+them, naming both files — run \`pnpm run build\`. A module is a direct child of \`modules/\` (a
+second \`manifest.ts\` deeper down is refused: make it a sibling module with a dependency) and
+has no \`package.json\` or build configuration of its own. \`pnpm run typecheck\` checks your
+overlay code against the installed packages' declarations with \`erasableSyntaxOnly\` set, and
+\`pnpm run setup\` runs it before \`migrate\`. A union of string literals is the \`enum\` you want.
 
 Whatever you reach for, \`pnpm run generate\` records it in
 \`apps/${input.deployment}/divergence.generated.md\`: every seam you used, which module owns
@@ -2230,9 +2352,24 @@ function adminFiles(
           // declares it, which is the derivation `check:admin-surface` and
           // `check:admin-zones` already share. Renaming it moves the artefacts;
           // deleting it leaves the generator with no project to write to.
-          paths: { '@/*': ['./src/*'] },
+          //
+          // The rest serve your overlay modules' admin layers, which `include`
+          // reaches under `../apps` (`specs/190-overlay-full-modules/` FR-083,
+          // FR-084). `@endora-commerce-deployment/admin` is the registry
+          // `src/main.tsx` imports; Vite resolves it to the deployment you build
+          // for, and the type-check reads bare core's. A file under `apps/` is
+          // outside this member, so its bare imports are pointed at this
+          // member's own packages: the kit's subpaths by their emitted layout, and
+          // anything else through this member's `node_modules`.
+          paths: {
+            '@/*': ['./src/*'],
+            '@endora-commerce-deployment/admin': ['./src/deployments/none.generated.ts'],
+            [`${input.scope}admin-kit/*`]: [`./node_modules/${input.scope}admin-kit/dist/*/index.d.ts`],
+            [`${input.scope}admin-shell`]: [`./node_modules/${input.scope}admin-shell/dist/index.d.ts`],
+            '*': ['./node_modules/*', './node_modules/@types/*'],
+          },
         },
-        include: ['src'],
+        include: ['src', '../apps/*/modules/*/admin/**/*'],
       }),
     },
     {
@@ -2245,7 +2382,7 @@ function adminFiles(
       path: 'admin/vite.config.ts',
       kind: 'client',
       member: 'admin',
-      content: adminViteConfig(),
+      content: adminViteConfig(input),
     },
     {
       path: 'admin/src/main.tsx',
@@ -2253,13 +2390,18 @@ function adminFiles(
       member: 'admin',
       content: `import { createRoot } from 'react-dom/client';
 import { AdminRoot } from '${input.scope}admin-shell';
+import { DEPLOYMENT_ADMIN_CONTRIBUTIONS } from '@endora-commerce-deployment/admin';
 import { MODULE_ADMIN_CONTRIBUTIONS } from './modules.generated.js';
 import './index.css';
 
 const root = document.getElementById('root');
 if (root === null) throw new Error('index.html has no #root to mount into.');
 
-createRoot(root).render(<AdminRoot contributions={MODULE_ADMIN_CONTRIBUTIONS} />);
+// The installed packages' screens, then the overlay modules' of the deployment
+// this bundle is built for (\`vite.config.ts\` selects it from \`DEPLOYMENT\`).
+createRoot(root).render(
+  <AdminRoot contributions={[...MODULE_ADMIN_CONTRIBUTIONS, ...DEPLOYMENT_ADMIN_CONTRIBUTIONS]} />,
+);
 `,
     },
     {
@@ -2303,10 +2445,16 @@ function adminIndexHtml(input: PlanInput): string {
  * without it every class in this admin is an unrecognised token — silently,
  * which is the failure `admin-stylesheet-composition.md` is about.
  */
-function adminViteConfig(): string {
-  return `import { defineConfig, loadEnv } from 'vite';
+function adminViteConfig(input: PlanInput): string {
+  return `import { fileURLToPath } from 'node:url';
+import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import {
+  adminSingletons,
+  DEPLOYMENT_ADMIN_ALIAS,
+  selectDeploymentAdminRegistry,
+} from '${input.scope}cli/lib/admin-deployment.js';
 
 export default defineConfig(({ mode }) => {
   // \`loadEnv(mode, cwd, '')\` — the empty prefix lets this file read an
@@ -2317,9 +2465,25 @@ export default defineConfig(({ mode }) => {
   // when it shares a host with the storefront, and the root otherwise. It moves
   // every asset URL, and the admin shell's router takes its basename from it.
   const base = env['ADMIN_BASE_PATH'] || '/';
+  // The overlay modules' screens of ONE deployment: \`DEPLOYMENT\` from the
+  // environment, then from the root \`.env\` the backend reads. Unset builds bare
+  // core; a deployment \`pnpm run generate\` rendered no registry for stops the
+  // build, rather than leaving its screens out.
+  const deployment = selectDeploymentAdminRegistry({
+    adminSourceRoot: fileURLToPath(new URL('./src', import.meta.url)),
+    env: process.env,
+    envFile: fileURLToPath(new URL('../.env', import.meta.url)),
+    regenerate: 'pnpm run generate',
+  });
   return {
     base,
     plugins: [react(), tailwindcss()],
+    resolve: {
+      alias: { [DEPLOYMENT_ADMIN_ALIAS]: deployment.path },
+      // An overlay admin layer lives under \`apps/\`, outside this member: its
+      // imports of these resolve to this member's one copy of each.
+      dedupe: [...adminSingletons('${input.scope}')],
+    },
     server: { port, strictPort: true },
     preview: { port, strictPort: true },
     // No source maps in a built admin: \`dist\` is served as static files, and a

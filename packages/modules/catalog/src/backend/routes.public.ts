@@ -5,23 +5,30 @@ import type { ProductLinkService } from './services/product-link.service.js';
 import type { BundleService } from './services/bundle.service.js';
 import {
   ERROR_CODES,
+  isAttributeKey,
   isPriceSort,
   listingCurrencyQuerySchema,
   listingPriceChannelContext,
   productLinkKindSchema,
+  productListIdsSchema,
+  productDetailQuerySchema,
   productListSortSchema,
+  requestScopeLanguage,
   resolveListingCurrency,
   validateBundleConfigurationRequestSchema,
+  type DisplayMode,
   type ListingPriceOrderPort,
   type ProductAudience,
   type ProductListCapabilities,
   type ProductListSort,
+  type ProductTaxRateResolver,
+  type ProductType,
   type SearchQueryPort,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
-import { effectiveState } from '@endora-commerce/platform/kernel';
+import { effectiveState, rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import { getResolvedChannel } from '@endora-commerce/platform/kernel';
-import { markPersonalisedPricing, productAudienceOf } from '@endora-commerce/platform/http';
+import { markPersonalisedPricing, pricedAudienceOf, productAudienceOf } from '@endora-commerce/platform/http';
 
 /**
  * Public catalog routes (US1 read surface).
@@ -105,13 +112,19 @@ export interface CatalogPublicDeps {
    * this route decides before the query runs: whether the page may show prices
    * at all (FR-016).
    *
-   * A non-public sales channel is this module's own fact and is read off the
-   * resolved channel; a page-level display mode of `none` is `price_lists`'
-   * fact and is asked of it. Optional in the signature only — a composition
-   * that wires no pricing at all cannot be asked for a price ordering either,
-   * and the query service refuses loudly when it is.
+   * A page-level display mode of `none` is `price_lists`' fact and is asked of
+   * it. Optional in the signature only — a composition that wires no pricing
+   * at all cannot be asked for a price ordering either, and the query service
+   * refuses loudly when it is.
    */
   listingPriceOrder?: ListingPriceOrderPort;
+  /**
+   * Issue #852 — the buyer's VAT rate per product tax class, by the rule the
+   * cart and the order use. Each product of a listing and the product page
+   * carry it as `vatRate`. Absent in a composition that wires none, and then
+   * no product carries one.
+   */
+  productTaxRates?: ProductTaxRateResolver;
 }
 
 export async function registerCatalogPublicRoutes(
@@ -140,21 +153,60 @@ export async function registerCatalogPublicRoutes(
   }
 
   /**
+   * Issue #852 — each product's VAT rate for this buyer, so the storefront
+   * derives a gross price at the product's own rate rather than a flat one.
+   *
+   * The rate is the buyer's: it depends on `audience.organizationId` and on
+   * nothing else about the caller, which is what keeps it out of every shared
+   * cache. A caller naming an Organization is answered `private, no-store`
+   * (`markPersonalisedPricing`, set before this runs); a caller naming none —
+   * the only answer a shared cache may hold — is answered the guest's rate,
+   * the same for every such caller.
+   *
+   * A failed resolution answers `vatRate: null` on every product, and the
+   * storefront shows the net: a listing is not refused because a rate could
+   * not be read, and no rate is invented for it. A switched-off owner is not a
+   * failure to tolerate (issue #84) and is re-thrown; both owners are
+   * non-deactivatable today.
+   */
+  async function withVatRates<T extends { type: ProductType }>(
+    products: T[],
+    ctx: ReturnType<typeof readContext>,
+    log: FastifyRequest['log'],
+  ): Promise<Array<T & { vatRate?: number | null }>> {
+    const resolve = deps.productTaxRates;
+    if (!resolve || products.length === 0) return products;
+    try {
+      const byType = await resolve({
+        // RP-14 — the VAT rate is the priced Organization's (the payer's on its terms).
+        organizationId: ctx.audience.pricingOrganizationId ?? ctx.audience.organizationId,
+        productTypes: products.map((p) => p.type),
+      });
+      return products.map((p) => ({ ...p, vatRate: byType.get(p.type) ?? 0 }));
+    } catch (err) {
+      // A failed read degrades to "no rate", never to a rate: see above.
+      rethrowIfModuleDisabled(err);
+      log.warn({ err }, 'catalog: VAT rate resolution failed; answering no rate');
+      return products.map((p) => ({ ...p, vatRate: null }));
+    }
+  }
+
+  /**
    * Feature 086 / FR-016 — may this page order or filter by price at all?
    *
-   * Two conditions, and both are refusals rather than degradations: an ordering
-   * by a number the page may not show discloses that number's rank, which is
-   * most of what a competitor wants, and it is cheap to get right and expensive
-   * to retrofit.
+   * A refusal rather than a degradation: an ordering by a number the page may
+   * not show discloses that number's rank, which is most of what a competitor
+   * wants, and it is cheap to get right and expensive to retrofit.
    *
-   *  - a **non-public sales channel** withholds prices wholesale — `CatalogQueryService`
-   *    resolves none at all on one — so there is nothing to order by;
-   *  - a **page-level display mode of `none`** is the supported "hide prices
-   *    until login" configuration. Page-level, deliberately: a single product
-   *    overridden to `none` keeps its position (spec clarification 2), because
-   *    a per-product override reads as "ask us for a quote" rather than "this
-   *    price is secret", and withdrawing the control for it would make the sort
-   *    appear and disappear as a buyer walks the catalogue.
+   * The one condition is a **page-level display mode of `none`**, the supported
+   * "hide prices until login" configuration — since issue #492 also the only
+   * one: the sales channel's own price-visibility flag, which withheld prices
+   * from every viewer, is retired into it. Page-level, deliberately:
+   * withdrawing the control because one product is overridden to `none` would
+   * make the sort appear and disappear as a buyer walks the catalogue (spec
+   * clarification 2). Such a product takes no part in the order or a range all
+   * the same (issue #491): `price_lists` withholds its amount and leaves it out
+   * of the price order, so the walk meets it in the unpriced tail.
    *
    * The mode is resolved for **this viewer**, so the same shop refuses an
    * anonymous visitor and serves a signed-in buyer where the two `pricing.*`
@@ -162,14 +214,7 @@ export async function registerCatalogPublicRoutes(
    */
   async function priceControlsAvailable(
     ctx: ReturnType<typeof readContext>,
-  ): Promise<{ available: boolean; reason?: string }> {
-    if (!ctx.resolvedChannel.isPublic) {
-      return {
-        available: false,
-        reason:
-          'This sales channel does not publish prices, so the catalogue cannot be ordered or filtered by price.',
-      };
-    }
+  ): Promise<{ available: boolean; reason?: string; mode?: DisplayMode }> {
     if (!deps.listingPriceOrder) return { available: true };
     const organization =
       ctx.audience.organizationId === null ? null : { id: ctx.audience.organizationId };
@@ -184,16 +229,17 @@ export async function registerCatalogPublicRoutes(
         available: false,
         reason:
           'Prices are not displayed on this page, so the catalogue cannot be ordered or filtered by price.',
+        mode,
       };
     }
-    return { available: true };
+    return { available: true, mode };
   }
 
   // GET /api/v1/catalog/products
   app.get('/api/v1/catalog/products', async (request, reply) => {
-    const { q, limit, cursor, sort, categorySlug, attributeFilters, changedSince, minPrice, maxPrice } =
+    const { q, ids, limit, cursor, sort, categorySlug, attributeFilters, changedSince, minPrice, maxPrice } =
       parseListQuery(request);
-    const ctx = readContext(request);
+    const ctx = await pricedContext(request);
     // The page's prices are resolved for this caller, so a page resolved for a
     // buying organisation must not enter a shared cache.
     markPersonalisedPricing(reply, ctx.audience);
@@ -264,14 +310,16 @@ export async function registerCatalogPublicRoutes(
     // every product it does not and only then consults B — a different relation
     // from "A's price if A prices it, else B's".
     //
-    // `IndexedDocument.price` is not the exception it looks like. It carries
-    // the legacy `defaultPrice` attribute, is read by nothing on the query
-    // path, and is not any price list's figure.
+    // A search document carries no price at all (issue #287), and since
+    // feature 160 a product has none of its own either: the price is the
+    // viewer's, resolved from the price books.
     const useMeili =
       indexAnswersListing(process.env['CATALOG_SEARCH_BACKEND'], q) &&
       searchQueryService !== undefined &&
       effectiveState.isPresent('search') &&
       changedSince === undefined &&
+      // Issue #590 — the index has no id filter; a read by id is Postgres's.
+      ids === undefined &&
       !wantsPrice;
     if (useMeili) {
       const outcome = await searchQueryService.listProducts(
@@ -287,10 +335,8 @@ export async function registerCatalogPublicRoutes(
       );
       if (outcome.status === 'ok') {
         reply.header('x-search-backend', 'meilisearch');
-        return {
-          ...(await withListPlaceholder(outcome.result, ctx.resolvedChannel.code)),
-          capabilities,
-        };
+        const page = await withListPlaceholder(outcome.result, ctx.resolvedChannel.code);
+        return { ...page, data: await withVatRates(page.data, ctx, request.log), capabilities };
       }
       request.log.warn(
         { err: outcome.reason },
@@ -298,21 +344,28 @@ export async function registerCatalogPublicRoutes(
       );
     }
 
+    // Issue #420 — the service refuses a price control on a page that hides
+    // prices by itself; handing it the mode resolved above spares it asking twice.
     const result = await queryService.listProducts(
-      { q, limit, cursor, sort, categorySlug, attributeFilters, changedSince, minPrice, maxPrice },
-      ctx,
+      { q, ids, limit, cursor, sort, categorySlug, attributeFilters, changedSince, minPrice, maxPrice },
+      priceControls.mode !== undefined ? { ...ctx, pageDisplayMode: priceControls.mode } : ctx,
     );
     reply.header('x-search-backend', 'postgres');
-    return { ...(await withListPlaceholder(result, ctx.resolvedChannel.code)), capabilities };
+    const page = await withListPlaceholder(result, ctx.resolvedChannel.code);
+    return { ...page, data: await withVatRates(page.data, ctx, request.log), capabilities };
   });
 
   // GET /api/v1/catalog/products/:idOrSlug
   app.get<{ Params: { idOrSlug: string } }>(
     '/api/v1/catalog/products/:idOrSlug',
     async (request, reply) => {
-      const ctx = readContext(request);
+      // Feature 172 (research R-11) — `?include=content` asks for the product
+      // page's Page Builder content; any other `include` is refused (400).
+      const query = productDetailQuerySchema.parse(request.query ?? {});
+      const ctx = await pricedContext(request);
       markPersonalisedPricing(reply, ctx.audience);
-      const product = await queryService.getProductByIdOrSlug(request.params.idOrSlug, ctx);
+      const found = await queryService.getProductByIdOrSlug(request.params.idOrSlug, ctx);
+      const product = (await withVatRates([found], ctx, request.log))[0] ?? found;
       // Imageless product → fall back to the configured placeholder so the PDP
       // hero/card renders something instead of an empty box.
       if (
@@ -322,6 +375,17 @@ export async function registerCatalogPublicRoutes(
       ) {
         const url = await resolvePlaceholder(ctx.resolvedChannel.code);
         if (url) product.primaryAssetUrl = url;
+      }
+      // Read only after the product was found visible to this request, and only
+      // when asked: every other read of the product — the external API, the
+      // listings, every port — stays byte-identical (FR-036, FR-042).
+      if (query.include === 'content') {
+        const contentAttributes = await queryService.getProductPageContent(
+          product.id,
+          product.attributeSet?.id,
+          ctx,
+        );
+        return { data: { ...product, contentAttributes } };
       }
       return { data: product };
     },
@@ -333,7 +397,7 @@ export async function registerCatalogPublicRoutes(
     app.get<{ Params: { idOrSlug: string }; Querystring: { kind?: string } }>(
       '/api/v1/catalog/products/:idOrSlug/links',
       async (request, reply) => {
-        const ctx = readContext(request);
+        const ctx = await pricedContext(request);
         markPersonalisedPricing(reply, ctx.audience);
         const product = await queryService.getProductByIdOrSlug(
           request.params.idOrSlug,
@@ -361,21 +425,27 @@ export async function registerCatalogPublicRoutes(
         schema: { body: validateBundleConfigurationRequestSchema },
       },
       async (request) => {
-        const ctx = readContext(request);
+        const ctx = await pricedContext(request);
         const product = await queryService.getProductByIdOrSlug(
           request.params.idOrSlug,
           ctx,
         );
         const body = validateBundleConfigurationRequestSchema.parse(request.body);
-        const result = await bundle.validateConfiguration(product.id, body.selections);
+        const result = await bundle.validateConfiguration(product.id, body.selections, (ids) =>
+          queryService.filterAvailableForRequest(ids, ctx),
+        );
         return { data: result };
       },
     );
   }
 
   // GET /api/v1/catalog/categories
-  app.get('/api/v1/catalog/categories', async (request) => {
-    const ctx = readContext(request);
+  app.get('/api/v1/catalog/categories', async (request, reply) => {
+    const ctx = await pricedContext(request);
+    // Feature 163 — the tree is cut by what this caller may reach (a category
+    // whose products are all restricted to an organisation is not shown to the
+    // public), so a caller's tree must not enter a shared cache.
+    markPersonalisedPricing(reply, ctx.audience);
     const tree = await queryService.getCategoryTree(ctx);
     return { data: tree };
   });
@@ -385,27 +455,71 @@ export async function registerCatalogPublicRoutes(
   app.get<{ Params: { id: string } }>(
     '/api/v1/catalog/categories/:id/content',
     async (request) => {
-      const ctx = readContext(request);
+      const ctx = await pricedContext(request);
       const content = await queryService.getCategoryPageContent(request.params.id, ctx);
       return { data: content };
     },
   );
 
   // GET /api/v1/catalog/filters
-  app.get('/api/v1/catalog/filters', async (request) => {
-    const ctx = readContext(request);
-    const filters = await queryService.getFilterDefinitions(ctx);
-    return { data: filters };
+  app.get('/api/v1/catalog/filters', async (request, reply) => {
+    const ctx = await pricedContext(request);
+    // Feature 163 — the facet counts are counted over what this caller may
+    // reach, so they are the caller's and must not enter a shared cache.
+    markPersonalisedPricing(reply, ctx.audience);
+    // Issue #1326 — with a text query the counts are the result set's, and
+    // the result set is the one `GET /catalog/products?q=` lists: the index's
+    // when it answers that listing, Postgres's text match when the listing
+    // degrades there. The counting stays Postgres's either way — the index
+    // contributes ids, never a count, because it does not carry who may see a
+    // product (issue #227).
+    const rawQ = (request.query as Record<string, unknown> | undefined)?.['q'];
+    const q = typeof rawQ === 'string' && rawQ.trim().length > 0 ? rawQ : undefined;
+    if (q === undefined) {
+      return { data: await queryService.getFilterDefinitions(ctx) };
+    }
+    if (
+      indexAnswersListing(process.env['CATALOG_SEARCH_BACKEND'], q) &&
+      searchQueryService !== undefined &&
+      effectiveState.isPresent('search')
+    ) {
+      const outcome = await searchQueryService.matchingProductIds({ q }, ctx);
+      if (outcome.status === 'ok') {
+        reply.header('x-search-backend', 'meilisearch');
+        return { data: await queryService.getFilterDefinitions(ctx, { ids: outcome.ids }) };
+      }
+      request.log.warn(
+        { err: outcome.reason },
+        'meilisearch unavailable; counting filters over the postgres match',
+      );
+    }
+    reply.header('x-search-backend', 'postgres');
+    return { data: await queryService.getFilterDefinitions(ctx, { q }) };
   });
 }
 
-function readContext(request: FastifyRequest): {
+/**
+ * The catalogue's request context: the resolved channel, the request language and
+ * the audience from the session. Exported for the URL-key resolve route (feature
+ * 163), which must read a request exactly as the product page does.
+ */
+/**
+ * {@link readContext} with the **priced** audience (`specs/182-related-payers/` FR-115,
+ * research R-4): a buyer on a payer's commercial terms sees that payer's prices and VAT rate,
+ * while visibility and the display mode stay its own. The one derivation of "who is priced".
+ */
+export async function pricedContext(request: FastifyRequest): Promise<ReturnType<typeof readContext>> {
+  return { ...readContext(request), audience: await pricedAudienceOf(request) };
+}
+
+export function readContext(request: FastifyRequest): {
   resolvedChannel: {
     id: string;
     code: string;
-    isPublic: boolean;
     defaultCurrency: string;
     defaultLanguage: string;
+    languages: readonly string[];
+    prefixDefaultLanguage: boolean;
   };
   audience: ProductAudience;
   preferredLanguage?: string | undefined;
@@ -424,15 +538,20 @@ function readContext(request: FastifyRequest): {
     requestedCurrency === undefined ? undefined : listingCurrencyQuerySchema.parse(requestedCurrency),
     ch,
   );
+  // Issue #397 — the request language is the channel's language the header asks
+  // for: q-weighted, matched exactly then by base language, else the default.
   const acceptLanguage = acceptLanguageHeaderSchema.parse(request.headers['accept-language']);
-  const preferredLanguage = acceptLanguage ? acceptLanguage.split(',')[0]?.trim() : undefined;
+  const preferredLanguage = acceptLanguage ? requestScopeLanguage(ch, acceptLanguage) : undefined;
   return {
     resolvedChannel: {
       id: ch.id,
       code: ch.code,
-      isPublic: ch.isPublic,
       defaultCurrency: ch.defaultCurrency,
       defaultLanguage: ch.defaultLanguage,
+      // Feature 163 — the channel's content languages, from the resolved record.
+      languages: ch.languages,
+      // Feature 167 — whether its default language carries a URL prefix.
+      prefixDefaultLanguage: ch.prefixDefaultLanguage,
     },
     audience: productAudienceOf(request),
     preferredLanguage,
@@ -447,6 +566,7 @@ function readContext(request: FastifyRequest): {
  */
 function parseListQuery(request: FastifyRequest): {
   q?: string | undefined;
+  ids?: readonly string[] | undefined;
   limit: number;
   cursor?: string | undefined;
   sort?: ProductListSort | undefined;
@@ -459,6 +579,7 @@ function parseListQuery(request: FastifyRequest): {
   const raw = (request.query ?? {}) as Record<string, unknown>;
 
   const q = typeof raw['q'] === 'string' ? raw['q'] : undefined;
+  const ids = parseIds(raw['ids']);
   const limitRaw = typeof raw['limit'] === 'string' ? Number(raw['limit']) : undefined;
   const limit = Number.isFinite(limitRaw) && limitRaw! > 0 ? Math.min(200, limitRaw!) : 50;
   const cursor = typeof raw['cursor'] === 'string' ? raw['cursor'] : undefined;
@@ -488,6 +609,18 @@ function parseListQuery(request: FastifyRequest): {
     const attrMatch = /^filter\[attr\.([^\]]+)\]$/.exec(key);
     if (attrMatch && attrMatch[1]) {
       const attrKey = attrMatch[1];
+      // Issue #687 — the key reaches the Meilisearch filter expression
+      // unquoted, so a key no attribute could have stops here. It is one more
+      // key that is not filterable: the same refusal both backends give an
+      // undeclared one.
+      if (!isAttributeKey(attrKey)) {
+        throw new HttpError(
+          400,
+          ERROR_CODES.FILTER_NOT_ALLOWED,
+          `Attribute "${attrKey}" is not filterable.`,
+          [{ path: `filter[attr.${attrKey}]`, issue: 'attribute is not filterable' }],
+        );
+      }
       const values = Array.isArray(value) ? value.map(String) : [String(value)];
       attributeFilters[attrKey] = values;
       continue;
@@ -499,6 +632,7 @@ function parseListQuery(request: FastifyRequest): {
 
   return {
     q,
+    ids,
     limit,
     cursor,
     sort,
@@ -508,4 +642,25 @@ function parseListQuery(request: FastifyRequest): {
     minPrice,
     maxPrice,
   };
+}
+
+/**
+ * Issue #590 — `?ids=`, the contract's `productListIdsSchema`. Refused rather
+ * than dropped, unlike the malformed parameters above: a caller naming products
+ * by id is a program, and answering fewer products than it named, silently,
+ * would hide its bug. A repeated parameter is refused too — the list is one
+ * comma-separated value.
+ */
+function parseIds(value: unknown): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  const parsed = productListIdsSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new HttpError(
+      400,
+      ERROR_CODES.VALIDATION_FAILED,
+      parsed.error.issues.map((i) => `ids: ${i.message}`).join(' '),
+      parsed.error.issues.map((i) => ({ path: ['ids', ...i.path].join('.'), issue: i.message })),
+    );
+  }
+  return parsed.data;
 }

@@ -2,7 +2,7 @@ import '@endora-commerce/cms-components/styles.css';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Puck, type Config, type ComponentConfig, type Data, type PuckAction } from '@puckeditor/core';
 import '@puckeditor/core/puck.css';
-import { Eye, Monitor, Smartphone, X } from 'lucide-react';
+import { Eye, Monitor, Smartphone } from 'lucide-react';
 import {
   applyEmailRowLayoutPreset,
   buildSampleVariableContext,
@@ -28,8 +28,9 @@ import {
 import {
   buildPaletteCategories,
   contextAdmits,
-  countBlockNames,
+  countComponentNames,
   filterConfigByContext,
+  PageBuilderContentLocaleProvider,
   type PageBuilderContext,
 } from '@endora-commerce/page-builder-core';
 import { withMissingBlockPlaceholders } from '@endora-commerce/cms-components';
@@ -56,18 +57,14 @@ import {
   createProductSlugsField,
 } from '../chrome/CatalogPickers.js';
 import { PageBuilderColorPaletteProvider } from '../chrome/ColorPaletteProvider.js';
-import {
-  PageBuilderHeaderActions,
-  PageBuilderHeaderShell,
-  PageBuilderTemplateActions,
-} from '../chrome/PageBuilderHeaderActions.js';
+import { PageBuilderHeaderActions } from '../chrome/PageBuilderHeaderActions.js';
 import { PageBuilderOverlayBridge } from '../chrome/PageBuilderOverlayBridge.js';
 import {
   getPageBuilderColorPalette,
   getPageBuilderDescriptor,
 } from '../chrome/cms-page-builder-api.js';
 import { getEmailBranding } from './email-templates-api.js';
-import { fetchAssetDetail } from '@endora-commerce/admin-kit/components';
+import { fetchAssetDetail, ModalDialog } from '@endora-commerce/admin-kit/components';
 import { toAbsoluteAssetUrl } from '@endora-commerce/admin-kit/lib';
 import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import { emailRichTextContentField, emailHtmlFromRichContent } from './EmailRichTextField.js';
@@ -145,6 +142,16 @@ export interface EmailEditorPaneProps {
 const PREVIEW_PLACEHOLDER_LOGO = 'https://placehold.co/160x48?text=Logo';
 const PREVIEW_UNSUBSCRIBE_URL = 'https://shop.example/newsletter/unsubscribe?token=preview';
 
+/**
+ * The sample `unsubscribeUrl` a preview is given (issue #862). Only a newsletter
+ * send carries one; a transactional e-mail has none, and since #861 its footer
+ * drops the Unsubscribe link when the URL is empty. The preview shows what a
+ * real send of this kind shows.
+ */
+function previewUnsubscribeUrl(builderContext: PageBuilderContext): Record<string, string> {
+  return builderContext === 'newsletter' ? { unsubscribeUrl: PREVIEW_UNSUBSCRIBE_URL } : {};
+}
+
 function pickLanguageTree(content: Record<string, unknown>): PuckDataTree | null {
   const raw = content['pl-PL'] ?? content['en-US'] ?? Object.values(content)[0] ?? null;
   if (!raw || typeof raw !== 'object') return null;
@@ -155,7 +162,13 @@ function pickLanguageTree(content: Record<string, unknown>): PuckDataTree | null
  * Canvas preview for an embedded block/template. Resolves branding (and other
  * sample) directives so `{{var branding.logoUrl}}` becomes a real `<img src>`.
  */
-function EmbedPreviewHtml({ content }: { content: Record<string, unknown> }): React.ReactElement {
+function EmbedPreviewHtml({
+  content,
+  builderContext,
+}: {
+  content: Record<string, unknown>;
+  builderContext: PageBuilderContext;
+}): React.ReactElement {
   const { logoUrl } = useEmailBrandingPreview();
   // The contributed renderers the pane loaded (feature 141): an embedded block
   // or template may hold a module's block, and it has to draw here as it does
@@ -170,7 +183,7 @@ function EmbedPreviewHtml({ content }: { content: Record<string, unknown> }): Re
         logoUrl: logoUrl || PREVIEW_PLACEHOLDER_LOGO,
         accentColor: '#1f2937',
       },
-      unsubscribeUrl: PREVIEW_UNSUBSCRIBE_URL,
+      ...previewUnsubscribeUrl(builderContext),
     },
     { escape: true },
   );
@@ -228,8 +241,12 @@ function SandboxedEmailHtml({ html }: { html: string }): React.ReactElement {
   );
 }
 
-function previewNode(content: Record<string, unknown>): ReactNode {
-  return <EmbedPreviewHtml content={content} />;
+/**
+ * Canvas preview of an embedded block or template. `builderContext` is the
+ * editor's: the sample Unsubscribe link is drawn for `'newsletter'` only.
+ */
+function previewNode(content: Record<string, unknown>, builderContext: PageBuilderContext = 'email'): ReactNode {
+  return <EmbedPreviewHtml content={content} builderContext={builderContext} />;
 }
 
 const STOREFRONT_BASE_URL = (
@@ -243,9 +260,18 @@ function toAbsoluteStorefrontUrl(pathOrUrl: string): string {
   return pathOrUrl;
 }
 
-function pickName(name: Record<string, string> | string, fallback: string): string {
+/**
+ * A category's name in the editor's language: categories keep their per-language map (feature 174,
+ * `contracts/readers.md` "Not readers"); a product's name is one Global string, read as it is.
+ */
+function pickCategoryName(name: Record<string, string> | string, fallback: string): string {
   if (typeof name === 'string') return name || fallback;
   return name['pl-PL'] ?? name['en-US'] ?? Object.values(name)[0] ?? fallback;
+}
+
+/** Feature 174 (FR-031) — the product's Global name, else the fallback. */
+function productTitle(name: string, fallback: string): string {
+  return name || fallback;
 }
 
 async function resolveProductForCard(slug: string): Promise<{
@@ -263,7 +289,7 @@ async function resolveProductForCard(slug: string): Promise<{
   params.set('q', slug);
   params.set('pageSize', '10');
   const res = await apiClient.get<{
-    data: Array<{ id: string; slug: string; name: Record<string, string> | string; sku: string }>;
+    data: Array<{ id: string; slug: string; name: string; sku: string }>;
   }>(`/api/v1/admin/catalog/products?${params.toString()}`);
   const product = res.data.find((p) => p.slug === slug) ?? res.data[0];
   if (!product) {
@@ -297,7 +323,7 @@ async function resolveProductForCard(slug: string): Promise<{
   return {
     productId: product.id,
     productSlug: product.slug,
-    title: pickName(product.name, product.slug),
+    title: productTitle(product.name, product.slug),
     sku: product.sku,
     imageSrc,
     href: toAbsoluteStorefrontUrl(`/p/${product.slug}`),
@@ -344,7 +370,7 @@ async function resolveCategoryForGrid(slug: string): Promise<{
   return {
     categoryId: category.id,
     categorySlug: category.slug,
-    title: pickName(category.name, category.slug),
+    title: pickCategoryName(category.name, category.slug),
     href: toAbsoluteStorefrontUrl(`/c/${category.slug}`),
     imageSrc,
   };
@@ -562,7 +588,11 @@ function mergeEmbedSelects(base: Config, blockOptions: EmailEmbedCodeOption[]): 
   return { ...base, components };
 }
 
-function EmailHtmlPreviewModal({
+/**
+ * The rendered e-mail at a desktop or a narrow width. Exported for its test;
+ * its copy is `core`'s, as every string of this shared builder is (issue #1463).
+ */
+export function EmailHtmlPreviewModal({
   open,
   html,
   onClose,
@@ -571,74 +601,64 @@ function EmailHtmlPreviewModal({
   html: string;
   onClose: () => void;
 }): React.ReactElement | null {
+  const t = useTranslation('core');
   const [width, setWidth] = useState<EmailPreviewWidth>(600);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
 
   if (!open) return null;
 
+  // Issue #1493 (CONTENT-03): the kit's dialog, above the fullscreen builder —
+  // focus trapped, Escape closes it, focus returns to *Preview email*.
   return (
-    <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Preview email"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+    <ModalDialog
+      layer="overlay"
+      title={t('pageBuilder.emailPreview.title')}
+      onClose={onClose}
+      widthClassName="max-w-4xl"
+      footer={
+        <Button type="button" variant="outline" onClick={onClose}>
+          {t('pageBuilder.emailPreview.close')}
+        </Button>
+      }
     >
-      <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border bg-background shadow-lg">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-semibold">Preview email</span>
-            <Button
-              type="button"
-              variant={width === 600 ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setWidth(600)}
-              aria-pressed={width === 600}
-            >
-              <Monitor className="mr-1 h-4 w-4" />
-              Desktop mail (600px)
-            </Button>
-            <Button
-              type="button"
-              variant={width === 320 ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setWidth(320)}
-              aria-pressed={width === 320}
-            >
-              <Smartphone className="mr-1 h-4 w-4" />
-              Narrow (320px)
-            </Button>
-          </div>
-          <Button type="button" variant="ghost" size="sm" onClick={onClose} aria-label="Close preview">
-            <X className="h-4 w-4" />
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant={width === 600 ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setWidth(600)}
+            aria-pressed={width === 600}
+          >
+            <Monitor className="mr-1 h-4 w-4" aria-hidden="true" />
+            {t('pageBuilder.emailPreview.desktop')}
+          </Button>
+          <Button
+            type="button"
+            variant={width === 320 ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setWidth(320)}
+            aria-pressed={width === 320}
+          >
+            <Smartphone className="mr-1 h-4 w-4" aria-hidden="true" />
+            {t('pageBuilder.emailPreview.narrow')}
           </Button>
         </div>
-        <div className="min-h-0 flex-1 overflow-auto bg-muted/30 p-4">
+        <div className="overflow-auto rounded-md bg-muted/30 p-4">
           <iframe
-            title="Email HTML preview"
+            title={t('pageBuilder.emailPreview.frameTitle')}
             sandbox=""
             srcDoc={html}
-            className="mx-auto block h-[min(70vh,640px)] border-0 bg-white shadow-sm"
+            className="mx-auto block h-[min(65vh,640px)] border-0 bg-white shadow-sm"
             style={{ width, maxWidth: '100%', overflow: 'hidden' }}
             scrolling="auto"
           />
         </div>
       </div>
-    </div>
+    </ModalDialog>
   );
 }
 
-function buildPreviewHtml(
+export function buildPreviewHtml(
   data: Data,
   variables: EmailVariableItem[],
   logoUrl: string,
@@ -646,6 +666,7 @@ function buildPreviewHtml(
   embedTrees?: EmailRenderEmbeds,
   previewLanguage?: string | null,
   blockRenderers: EmailBlockRenderers = {},
+  builderContext: PageBuilderContext = 'email',
 ): string {
   const language = previewLanguage || 'en-US';
   const raw = renderEmailHtml((data ?? emptyData) as never, {
@@ -674,7 +695,10 @@ function buildPreviewHtml(
     order['discountsText'] = sampleOrderDiscountsText(language);
   }
   fromDescriptors['order'] = order;
-  if (typeof fromDescriptors['unsubscribeUrl'] !== 'string' || !fromDescriptors['unsubscribeUrl']) {
+  if (
+    builderContext === 'newsletter' &&
+    (typeof fromDescriptors['unsubscribeUrl'] !== 'string' || !fromDescriptors['unsubscribeUrl'])
+  ) {
     fromDescriptors['unsubscribeUrl'] = PREVIEW_UNSUBSCRIBE_URL;
   }
   return renderDirectives(raw, fromDescriptors, { escape: true });
@@ -789,10 +813,6 @@ export function EmailEditorPane({
     [onChange],
   );
 
-  const hasTemplateActions = Boolean(
-    onSaveAsTemplate || (onListTemplatesForApply && onResolveTemplateLayout),
-  );
-
   useEffect(() => {
     if (embedsProp) setEmbeds(embedsProp);
   }, [embedsProp]);
@@ -892,7 +912,7 @@ export function EmailEditorPane({
    * almost never does (the CMS editor's reasoning, feature 096 T602).
    */
   const storedBlockNamesKey = useMemo(
-    () => [...countBlockNames(data ?? emptyData).keys()].sort().join('\n'),
+    () => [...countComponentNames(data ?? emptyData).keys()].sort().join('\n'),
     [data],
   );
 
@@ -988,8 +1008,9 @@ export function EmailEditorPane({
         embedTrees,
         previewLanguage,
         composed.blockRenderers,
+        builderContext,
       ),
-    [data, variables, logoUrl, previewExtras, embedTrees, previewLanguage, composed.blockRenderers],
+    [data, variables, logoUrl, previewExtras, embedTrees, previewLanguage, composed.blockRenderers, builderContext],
   );
 
   return (
@@ -1008,6 +1029,8 @@ export function EmailEditorPane({
             <EmailEmbedsProvider value={embeds}>
              <EmailBlockRenderersProvider value={composed.blockRenderers}>
               <div className="email-builder-pane" data-preview-width={CANVAS_WIDTH}>
+                {/* Issue #1684 — what the builder seeds into the e-mail is in its language. */}
+                <PageBuilderContentLocaleProvider locale={previewLanguage}>
                 <Puck
                   key={`${editorKey}:${canvasEpoch}`}
                   config={config}
@@ -1037,58 +1060,44 @@ export function EmailEditorPane({
                       componentId: string;
                       componentType: string;
                     }) => <PageBuilderOverlayBridge {...props} />,
-                    ...(hasTemplateActions
-                      ? {
-                          header: ({ children }: { children?: ReactNode }) => (
-                            <PageBuilderHeaderShell
-                              leading={
-                                <PageBuilderTemplateActions
-                                  currentData={data ?? emptyData}
-                                  {...(onSaveAsTemplate ? { onSaveAsTemplate } : {})}
-                                  {...(onListTemplatesForApply
-                                    ? { onListTemplatesForApply }
-                                    : {})}
-                                  {...(onResolveTemplateLayout
-                                    ? {
-                                        onApplyTemplate: async (templateId: string) => {
-                                          const next = await onResolveTemplateLayout(templateId);
-                                          applyCanvasData(structuredClone(next));
-                                        },
-                                      }
-                                    : {})}
-                                  t={tChrome}
-                                />
-                              }
-                            >
-                              {children}
-                            </PageBuilderHeaderShell>
-                          ),
-                        }
-                      : {}),
                     headerActions: () => (
-                      <div className="cms-pb-header-actions">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setPreviewOpen(true)}
-                          title="Preview email"
-                          aria-label="Preview email"
-                        >
-                          <Eye className="h-4 w-4" />
-                          <span className="cms-pb-header-actions__label">Preview email</span>
-                        </Button>
-                        <PageBuilderHeaderActions
-                          fullscreen={fullscreen}
-                          onToggleFullscreen={(): void => setFullscreen((f) => !f)}
-                          currentData={data ?? emptyData}
-                          onClearCanvas={(): void => applyCanvasData(emptyData)}
-                          t={tChrome}
-                        />
-                      </div>
+                      // Issue #1494 (CONTENT-11): one toolbar. Preview is this
+                      // builder's own visible action; templates and Clear canvas
+                      // sit in the shared "More" menu, Fullscreen last.
+                      <PageBuilderHeaderActions
+                        fullscreen={fullscreen}
+                        onToggleFullscreen={(): void => setFullscreen((f) => !f)}
+                        currentData={data ?? emptyData}
+                        onClearCanvas={(): void => applyCanvasData(emptyData)}
+                        {...(onSaveAsTemplate ? { onSaveAsTemplate } : {})}
+                        {...(onListTemplatesForApply ? { onListTemplatesForApply } : {})}
+                        {...(onResolveTemplateLayout
+                          ? {
+                              onApplyTemplate: async (templateId: string): Promise<void> => {
+                                const next = await onResolveTemplateLayout(templateId);
+                                applyCanvasData(structuredClone(next));
+                              },
+                            }
+                          : {})}
+                        extraActions={
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setPreviewOpen(true)}
+                            title={tChrome('pageBuilder.emailPreview.title')}
+                            aria-label={tChrome('pageBuilder.emailPreview.title')}
+                          >
+                            <Eye className="h-4 w-4" aria-hidden="true" />
+                            <span className="cms-pb-header-actions__label">{tChrome('pageBuilder.emailPreview.title')}</span>
+                          </Button>
+                        }
+                        t={tChrome}
+                      />
                     ),
                   }}
                 />
+                </PageBuilderContentLocaleProvider>
               </div>
              </EmailBlockRenderersProvider>
             </EmailEmbedsProvider>

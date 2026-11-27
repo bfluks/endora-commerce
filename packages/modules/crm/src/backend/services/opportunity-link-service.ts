@@ -1,9 +1,10 @@
-import { UniqueConstraintViolationException } from '@mikro-orm/core';
+import { LockMode, UniqueConstraintViolationException } from '@mikro-orm/core';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import {
   CRM_EVENTS,
   ERROR_CODES,
   type CreateOpportunityLinkRequest,
+  type CustomFieldCarryPort,
   type OpportunityDocumentKind,
   type OpportunityDocumentLinkedEvent,
   type OpportunityLink,
@@ -17,8 +18,11 @@ import { ModuleDisabledError } from '@endora-commerce/platform/kernel';
 import { randomUUID } from 'crypto';
 import { CrmOpportunity } from '../entities/crm-opportunity.entity.js';
 import { CrmOpportunityLink } from '../entities/crm-opportunity-link.entity.js';
+import { withCallerOptions, type CallerOptions } from '../commands/caller-options.js';
 import type { CrmQuoteRequestDocument, CrmQuoteRequests } from './crm-quote-requests.js';
 import { isUuid, loadOpportunity } from './opportunity-access.js';
+import { recordValueChange } from './opportunity-audit-state.js';
+import { carryIntoOpportunityBestEffort, type OpportunityCarrySource } from './opportunity-custom-field-carry.js';
 import { assertMayReadQuoteRequests, type OwnerReadChecks } from './owner-read-permissions.js';
 
 export interface OpportunityLinkServiceDeps {
@@ -39,6 +43,13 @@ export interface OpportunityLinkServiceDeps {
    * without `rfqs:handle` neither does a linked Quote Request.
    */
   mayRead: Pick<OwnerReadChecks, 'orders' | 'quoteRequests'>;
+  /**
+   * `custom_fields`' carry port (feature 162): a document's values the
+   * Opportunity it joins receives into its empty fields. Lazy, resolved per call.
+   */
+  customFieldCarry: CustomFieldCarryPort;
+  /** A carry that failed is said to the operator's log; the link stands (#405). */
+  warn: (fields: Record<string, unknown>, message: string) => void;
 }
 
 /** What a link is rendered from: the document as the reader may see it. */
@@ -52,6 +63,12 @@ export interface AutomaticLink {
   documentKind: OpportunityDocumentKind;
   documentId: string;
   linkSource: Exclude<OpportunityLinkSource, 'manual'>;
+  /**
+   * The joining document's custom-field values (feature 162) — given for an
+   * Order joining from its Quote Request, never for an origin link (that carry
+   * goes the other way) and never for a manual link.
+   */
+  carry?: OpportunityCarrySource;
 }
 
 function linkNotFound(): HttpError {
@@ -73,12 +90,14 @@ function documentFields(document: LinkedDocument | undefined): Partial<Opportuni
     const { order } = document;
     return { number: order.businessId, status: order.status, total: order.total, currency: order.currency };
   }
-  const { record, amount, currency } = document.quoteRequest;
+  const { record, amount, currency, agreement } = document.quoteRequest;
   return {
     number: record.businessId,
     status: record.status,
-    total: amount,
+    // No price on any line: no total, rather than 0.00 (issue #456).
+    ...(amount !== null ? { total: amount } : {}),
     ...(currency ? { currency } : {}),
+    agreement,
   };
 }
 
@@ -119,7 +138,16 @@ function toLink(link: CrmOpportunityLink, document: LinkedDocument | undefined):
 export class OpportunityLinkService {
   constructor(private readonly deps: OpportunityLinkServiceDeps) {}
 
-  async add(opportunityId: string, input: CreateOpportunityLinkRequest): Promise<OpportunityLink> {
+  /**
+   * `crm.opportunity.link_add` — `POST /opportunities/:id/links` and
+   * `opportunityCommandPort.link`; `caller` is the port's `source` and
+   * `extensions`, absent on the route.
+   */
+  async add(
+    opportunityId: string,
+    input: CreateOpportunityLinkRequest,
+    caller: CallerOptions = {},
+  ): Promise<OpportunityLink> {
     const em = this.deps.emFactory();
     const opportunity = await loadOpportunity(em, opportunityId);
     const { document, organizationId } = await this.#resolve(input.documentKind, input.documentId);
@@ -144,7 +172,7 @@ export class OpportunityLinkService {
 
     let link: CrmOpportunityLink;
     try {
-      link = await this.deps.commandBus.run({
+      link = await this.deps.commandBus.run(withCallerOptions({
         action: 'crm.opportunity.link_add',
         objectType: 'crm_opportunity',
         objectId: opportunity.id,
@@ -182,7 +210,7 @@ export class OpportunityLinkService {
           };
           return { eventName: CRM_EVENTS.DOCUMENT_LINKED, payload };
         },
-      });
+      }, caller));
     } catch (error) {
       // Two requests linking one document at once: the look-up above let both
       // through and the unique constraint refused the second at commit. The
@@ -217,7 +245,10 @@ export class OpportunityLinkService {
         objectType: 'crm_opportunity',
         objectId: link.opportunityId,
         run: async ({ em }) => {
-          const parent = await loadOpportunity(em, link.opportunityId);
+          // Locked, as an edit locks it (#404): a carry plans over the
+          // Opportunity's bag and writes the whole of it back, so an edit
+          // committing in between would otherwise be overwritten.
+          const parent = await loadOpportunity(em, link.opportunityId, { lockMode: LockMode.PESSIMISTIC_WRITE });
           const created = em.create(CrmOpportunityLink, {
             opportunityId: parent.id,
             documentKind: link.documentKind,
@@ -225,6 +256,41 @@ export class OpportunityLinkService {
             syncStatus: true,
             linkSource: link.linkSource,
             linkedByAdminUserId: null,
+          });
+          // Feature 162 (US2-2, US2-3) — the joining document's carried values
+          // fill the Opportunity's **empty** fields, in this Command, and what
+          // was carried or skipped is named in this entry. A carry that fails
+          // leaves the link to be made without it (#405).
+          const carry = link.carry
+            ? await carryIntoOpportunityBestEffort(
+                this.deps.customFieldCarry,
+                link.carry,
+                { ...(parent.customFieldValues ?? {}) },
+                (error) =>
+                  this.deps.warn(
+                    {
+                      opportunityId: parent.id,
+                      organizationId: parent.organizationId,
+                      documentKind: link.documentKind,
+                      documentId: link.documentId,
+                      error,
+                    },
+                    'crm: the custom-field carry into an opportunity a document joined failed; the document is linked without it',
+                  ),
+              )
+            : null;
+          const customFieldsBefore = { ...(parent.customFieldValues ?? {}) };
+          if (carry && carry.carried.length > 0) {
+            parent.customFieldValues = { ...carry.values };
+            // A write to the Opportunity, as an edit is: a client holding the
+            // previous version must learn that it is stale.
+            parent.version += 1;
+          }
+          // The carried values go to the Opportunity's own store; the entry
+          // names the fields (#470).
+          const values = recordValueChange(em, parent.id, {
+            before: { customFieldValues: customFieldsBefore },
+            after: { customFieldValues: { ...(parent.customFieldValues ?? {}) } },
           });
           return {
             result: { organizationId: parent.organizationId },
@@ -235,6 +301,8 @@ export class OpportunityLinkService {
               documentId: created.documentId,
               syncStatus: created.syncStatus,
               linkSource: created.linkSource,
+              ...(carry?.after ?? {}),
+              ...values,
             },
           };
         },
@@ -279,6 +347,7 @@ export class OpportunityLinkService {
       documentKind: 'order',
       documentId: order.id,
       linkSource: 'quote_conversion',
+      carry: { sourceType: 'order', recordId: order.id, sourceValues: order.customFieldValues ?? {} },
     });
     return opportunity.id;
   }
@@ -306,8 +375,9 @@ export class OpportunityLinkService {
     return rendered;
   }
 
-  async remove(opportunityId: string, linkId: string): Promise<void> {
-    await this.deps.commandBus.run({
+  /** `crm.opportunity.link_remove` — the route's `DELETE …/links/:linkId` and `opportunityCommandPort.unlink`. */
+  async remove(opportunityId: string, linkId: string, caller: CallerOptions = {}): Promise<void> {
+    await this.deps.commandBus.run(withCallerOptions({
       action: 'crm.opportunity.link_remove',
       objectType: 'crm_opportunity',
       objectId: opportunityId,
@@ -322,7 +392,7 @@ export class OpportunityLinkService {
         em.remove(found);
         return { result: undefined, before, after: null };
       },
-    });
+    }, caller));
     await this.deps.linksChanged(opportunityId);
   }
 

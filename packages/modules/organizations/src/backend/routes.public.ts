@@ -7,7 +7,7 @@
 // type-only, so it loads the declarations and emits nothing: registering the
 // plugin stays the host's job, exactly as before.
 import type {} from '@fastify/cookie';
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   SESSION_COOKIE_NAME,
   customerLoginRequestSchema,
@@ -20,15 +20,27 @@ import {
   type CartMergeOutcomePublic,
   type CustomerAccountRecord,
   type CustomerAuthPort,
+  type CustomerSignInCompletion,
+  type CustomerSignInCompletionInput,
   type CustomerPasswordResetPort,
   type EmailMailerPort,
+  type OrganizationPermissionPort,
+  type OrganizationRoleReadPort,
+  type CustomerAccount,
+  type CustomerSignInResponse,
+  type Organization as OrganizationView,
+  type RegisterOrganizationResponse,
 } from '@endora-commerce/contracts';
 import { currentSalesChannel } from '@endora-commerce/platform/kernel';
+import { requestScopeLanguage, storefrontPagePathFor } from '@endora-commerce/contracts';
 import type { RegistrationService } from './services/registration-service.js';
 import type { EmailVerificationService } from './services/email-verification-service.js';
 import { readCustomerKnownDevice, rememberCustomerKnownDevice } from './known-device-cookie.js';
 import { buildVerificationEmail } from './email-templates/verification.js';
 import type { OrgTemplateEmail } from './services/org-template-email.js';
+import { memberSessionRole } from './services/member-role-views.js';
+import { requestAccountLanguage } from './services/request-account-language.js';
+import { sendPasswordResetEmail } from './services/password-reset-email.js';
 
 /**
  * Anonymous endpoints: registration, email verification, customer login /
@@ -63,6 +75,8 @@ export interface OrganizationsPublicDeps {
     organizationId: string | null;
     anonymousCartToken?: string;
     anonymousCompareToken?: string;
+    /** Issue #1188 — the sign-in's channel when its request carries none; absent: the resolved one. */
+    salesChannelId?: string;
   }) => Promise<{ cartMerge?: CartMergeOutcome }>;
   /** Dispatches verification email after registration. */
   mailer: EmailMailerPort;
@@ -70,6 +84,19 @@ export interface OrganizationsPublicDeps {
   templateEmail?: OrgTemplateEmail;
   /** Storefront URL for verify link in the email body. */
   storefrontBaseUrl: string;
+  /**
+   * Issue #1371 — the storefront origin of a sales channel (its
+   * `sales_channels.storefront_url`, else {@link storefrontBaseUrl}), without a
+   * trailing slash. Absent: {@link storefrontBaseUrl} for every channel.
+   */
+  storefrontOriginFor?: (salesChannelId: string | null) => Promise<string>;
+  /**
+   * `specs/170-organization-roles/` WP-03 — the signed-in member's role and
+   * effective permissions on the login answer (FR-056, FR-073), in place of
+   * the legacy `role`.
+   */
+  organizationRoles: Pick<OrganizationRoleReadPort, 'roleRef'>;
+  organizationPermissions: () => Pick<OrganizationPermissionPort, 'effective'>;
 }
 
 export async function registerOrganizationsPublicRoutes(
@@ -78,13 +105,27 @@ export async function registerOrganizationsPublicRoutes(
 ): Promise<void> {
   const { registrationService, verificationService, customerAuthService, passwordResetService } =
     deps;
+  /** An account as a public answer shows it: its role, not the legacy enum (FR-056, FR-073). */
+  const accountView = async (account: CustomerAccountRecord, language: string): Promise<CustomerAccount> => ({
+    ...serializeCustomerAccount(account),
+    ...(await memberSessionRole(deps.organizationRoles, deps.organizationPermissions(), account, language)),
+  });
 
   app.post(
     '/api/v1/organizations/register',
-    { schema: { body: registerOrganizationRequestSchema } },
-    async (request, reply) => {
+    // Feature 154 — reachable whatever the sales-channel access rule decides: a
+    // business may apply on a store closed to anonymous visitors (feature 154, Q2).
+    { schema: { body: registerOrganizationRequestSchema }, config: { salesChannelAccess: 'open' } },
+    async (request, reply): Promise<{ data: RegisterOrganizationResponse }> => {
       const body = registerOrganizationRequestSchema.parse(request.body);
-      const result = await registrationService.registerOrganization(body);
+      // Feature 154 (D6) — the store registered on becomes the Organization's channel.
+      const result = await registrationService.registerOrganization(body, {
+        salesChannelId: currentSalesChannel()?.id ?? null,
+        // Feature 175 — a refused custom-field value is worded in the buyer's language.
+        language: await request.responseLanguage(),
+        // Issue #652 (D-292) — the language the first user's account records.
+        preferredLanguage: requestAccountLanguage(request.headers['accept-language']),
+      });
       // Stash the raw token for the test-only probe so integration tests can
       // complete the verify step without reading the mail.
       if (deps.latestTokenByEmail) {
@@ -99,6 +140,24 @@ export async function registerOrganizationsPublicRoutes(
           recipientEmail: result.customerAccount.email,
           organizationName: result.organization.name,
           storefrontBaseUrl: deps.storefrontBaseUrl,
+          // Feature 167 — under the language prefix of the language the visitor
+          // registered in (the request's), else the channel default. Issue #1011 —
+          // the channel language the whole `Accept-Language` asks for
+          // (`requestScopeLanguage`, as the catalogue resolves it since #397): the tags
+          // in descending `q`, each matched against the channel's languages (exactly,
+          // then by base language), else the default. It used to be the header's first
+          // tag alone. A content language — which storefront page the link opens — so
+          // not `request.responseLanguage()`, the language the e-mail is worded in.
+          pagePath: (path) => {
+            const channel = currentSalesChannel();
+            return storefrontPagePathFor({
+              path,
+              channel,
+              requestedLanguage: channel
+                ? requestScopeLanguage(channel, request.headers['accept-language'])
+                : undefined,
+            });
+          },
         });
         const verifyUrl = (message.meta as { verifyUrl?: string } | undefined)?.verifyUrl ?? '';
         const sentViaTemplate = deps.templateEmail
@@ -123,7 +182,7 @@ export async function registerOrganizationsPublicRoutes(
       return {
         data: {
           organization: serializeOrganization(result.organization),
-          customerAccount: serializeCustomerAccount(result.customerAccount),
+          customerAccount: await accountView(result.customerAccount, await request.responseLanguage()),
           emailVerificationSent,
         },
       };
@@ -132,7 +191,8 @@ export async function registerOrganizationsPublicRoutes(
 
   app.post(
     '/api/v1/auth/email-verification/verify',
-    { schema: { body: emailVerificationRequestSchema } },
+    // Feature 154 — reachable whatever the sales-channel access rule decides.
+    { schema: { body: emailVerificationRequestSchema }, config: { salesChannelAccess: 'open' } },
     async (request) => {
       const body = emailVerificationRequestSchema.parse(request.body);
       const result = await verificationService.verify(body.token);
@@ -148,8 +208,10 @@ export async function registerOrganizationsPublicRoutes(
 
   app.post(
     '/api/v1/auth/customer/login',
-    { schema: { body: customerLoginRequestSchema } },
-    async (request, reply) => {
+    // Feature 154 — reachable whatever the sales-channel access rule decides:
+    // signing in is how a visitor of a closed store gets in.
+    { schema: { body: customerLoginRequestSchema }, config: { salesChannelAccess: 'open' } },
+    async (request, reply): Promise<CustomerSignInResponse> => {
       const body = customerLoginRequestSchema.parse(request.body);
       const channelId = currentSalesChannel()?.id ?? null;
       // The storefront forwards the browser's known-device cookie with the
@@ -159,6 +221,8 @@ export async function registerOrganizationsPublicRoutes(
         email: body.email,
         password: body.password,
         salesChannelId: channelId,
+        // Issue #652 (D-292) — stored only on an account that has none yet.
+        language: requestAccountLanguage(request.headers['accept-language']),
         ...(knownDevice !== undefined ? { knownDevice } : {}),
         ...(request.ip ? { ip: request.ip } : {}),
         ...(typeof request.headers['user-agent'] === 'string'
@@ -175,54 +239,65 @@ export async function registerOrganizationsPublicRoutes(
       }
       setSessionCookie(reply, result.sessionCookieValue, result.sessionExpiresAt);
       rememberCustomerKnownDevice(reply, result.knownDevice ?? null);
-      // Merge any anonymous cart the caller was carrying into the authenticated
-      // cart (feature 027 R-09 / feature 037-cart-merge-on-login). The hook is
-      // best-effort: a thrown error MUST NOT break login (037 FR-007/FR-008).
-      let cartMerge: CartMergeOutcome | undefined;
-      if (deps.onLogin) {
-        const cookies = (request as { cookies?: Record<string, string | undefined> }).cookies;
-        const anon = cookies?.['b2b_cart_anon'];
-        const compareAnon = cookies?.['compare_token'];
-        try {
-          const hookResult = await deps.onLogin({
-            customerAccountId: result.customerAccount.id,
-            organizationId: result.customerAccount.organizationId ?? null,
-            ...(anon ? { anonymousCartToken: anon } : {}),
-            ...(compareAnon ? { anonymousCompareToken: compareAnon } : {}),
-          });
-          cartMerge = hookResult.cartMerge;
-        } catch (err) {
-          request.log.error(
-            {
-              err,
-              customerAccountId: result.customerAccount.id,
-              hadAnonToken: Boolean(anon),
-            },
-            'cart_merge_on_login_failed',
-          );
-        }
-      }
-      // Clear the stale anon-cart cookie when the source token has been
-      // consumed (adopted/merged) or pointed at an empty cart (noop_empty).
-      // Failure and noop_no_anon both leave the cookie alone — failure so the
-      // buyer can retry on the next login, noop_no_anon because there was
-      // nothing to clear in the first place. See spec R-06.
-      if (cartMerge && cartMerge.outcome !== 'noop_no_anon') {
+      // Issue #368 — the step every route that establishes a customer session
+      // runs; `mfa`'s second-step routes reach the same function through
+      // `customerSignInCompletionPort`.
+      const completion = await completeCustomerSignIn(deps.onLogin, {
+        customerAccountId: result.customerAccount.id,
+        organizationId: result.customerAccount.organizationId ?? null,
+        cookies: (request as { cookies?: Record<string, string | undefined> }).cookies ?? {},
+        log: request.log,
+      });
+      if (completion.clearAnonymousCartCookie) {
         reply.clearCookie('b2b_cart_anon', { path: '/' });
       }
       return {
         data: {
           status: 'authenticated',
-          customerAccount: serializeCustomerAccount(result.customerAccount),
-          ...(cartMerge ? { cartMerge: narrowCartMergeForHttp(cartMerge) } : {}),
+          customerAccount: await accountView(result.customerAccount, await request.responseLanguage()),
+          ...(completion.cartMerge ? { cartMerge: completion.cartMerge } : {}),
         },
       };
     },
   );
 
+  /**
+   * The `customer_password_reset` e-mail (issue #1371), on the request's sales
+   * channel: the link opens that channel's storefront under the prefix of the
+   * channel language the request resolved to (`requestScopeLanguage`, as the
+   * verification link above), and the message is written in that language — so
+   * the message and the page it opens agree. The account's preferred language
+   * is issue #652's PR B.
+   *
+   * Everything the request knows is read here, **before** the reply, and for
+   * every request whether or not an account matched: the send itself runs after
+   * the 202 (architect ruling on PR #1418) and must not touch `request`,
+   * `currentSalesChannel()` or the request's context once the reply is out.
+   * The sender needs none of them — `transactional_emails` forks its own
+   * EntityManager per send and reads no request-scoped state.
+   */
+  const passwordResetScope = async (
+    request: FastifyRequest,
+  ): Promise<{ channel: ReturnType<typeof currentSalesChannel>; language: string | null; origin: string }> => {
+    const channel = currentSalesChannel();
+    const language = channel ? requestScopeLanguage(channel, request.headers['accept-language']) : null;
+    const fallbackOrigin = deps.storefrontBaseUrl.replace(/\/+$/, '');
+    let origin = fallbackOrigin;
+    if (deps.storefrontOriginFor) {
+      try {
+        origin = await deps.storefrontOriginFor(channel?.id ?? null);
+      } catch (err) {
+        // A failed read must not change the answer, which would enumerate.
+        request.log.error({ err }, '[organizations] the storefront URL of the channel could not be read');
+      }
+    }
+    return { channel, language, origin };
+  };
+
   app.post(
     '/api/v1/auth/password-reset/request',
-    { schema: { body: passwordResetRequestSchema } },
+    // Feature 154 — reachable whatever the sales-channel access rule decides.
+    { schema: { body: passwordResetRequestSchema }, config: { salesChannelAccess: 'open' } },
     async (request, reply) => {
       const body = passwordResetRequestSchema.parse(request.body);
       // The address is handed over as typed — the port folds it, as every
@@ -241,14 +316,54 @@ export async function registerOrganizationsPublicRoutes(
         deps.latestTokenByEmail.set(`reset:${normalizeEmailAddress(body.email)}`, result.rawToken);
         deps.latestTokenByEmail.set('__latest_reset__', result.rawToken);
       }
+      const scope = await passwordResetScope(request);
+      const log = request.log;
+      // The folded address is the one the lookup matched, which is the
+      // account's own: never mail the link to the address as typed (a
+      // look-alike that folds onto an account must not receive its link).
+      const mail = result.rawToken
+        ? {
+            to: normalizeEmailAddress(body.email),
+            messageId: `customer-pwd-reset.${result.rawToken.slice(0, 8)}`,
+            resetUrl:
+              scope.origin +
+              storefrontPagePathFor({
+                path: `/password-reset/confirm?token=${encodeURIComponent(result.rawToken)}`,
+                channel: scope.channel,
+                requestedLanguage: scope.language,
+              }),
+            salesChannelId: scope.channel?.id ?? null,
+            language: scope.language,
+          }
+        : null;
       // Always 202 — defends against account enumeration.
-      return reply.status(202).send();
+      reply.status(202).send();
+      if (mail) {
+        // Issue #1371 — the port mints the token and leaves the mail to its
+        // caller, and this caller never sent it. Sent after the reply and not
+        // awaited (architect ruling on PR #1418), so how long the transport
+        // takes says nothing about whether the account exists; a failure is
+        // logged and goes nowhere else. Nothing below reads the request.
+        void sendPasswordResetEmail({ templateEmail: deps.templateEmail, mailer: deps.mailer }, mail)
+          .then((sent) => {
+            // `logged` (issue #186) is the console driver's own answer and
+            // already in the log; only the transport's refusal is named here.
+            if (sent.via === 'mailer' && sent.outcome.status === 'suppressed') {
+              log.warn({ reason: sent.outcome.reason }, '[organizations] the password-reset e-mail was not sent');
+            }
+          })
+          .catch((err: unknown) => {
+            log.error({ err }, '[organizations] the password-reset e-mail could not be sent');
+          });
+      }
+      return reply;
     },
   );
 
   app.post(
     '/api/v1/auth/password-reset/confirm',
-    { schema: { body: passwordResetConfirmSchema } },
+    // Feature 154 — reachable whatever the sales-channel access rule decides.
+    { schema: { body: passwordResetConfirmSchema }, config: { salesChannelAccess: 'open' } },
     async (request, reply) => {
       const body = passwordResetConfirmSchema.parse(request.body);
       await passwordResetService.confirmReset(body.token, body.newPassword);
@@ -256,21 +371,27 @@ export async function registerOrganizationsPublicRoutes(
     },
   );
 
-  app.post('/api/v1/auth/customer/logout', async (request, reply) => {
-    const cookies = (request as { cookies?: Record<string, string | undefined> }).cookies;
-    const raw = cookies?.[SESSION_COOKIE_NAME];
-    if (raw) {
-      const dot = raw.indexOf('.');
-      if (dot !== -1) {
-        const sessionId = raw.slice(0, dot);
-        if (sessionId) {
-          await customerAuthService.logout(sessionId);
+  // Feature 154 — reachable whatever the sales-channel access rule decides:
+  // a customer may always sign out, on any store (FR-011).
+  app.post(
+    '/api/v1/auth/customer/logout',
+    { config: { salesChannelAccess: 'open' } },
+    async (request, reply) => {
+      const cookies = (request as { cookies?: Record<string, string | undefined> }).cookies;
+      const raw = cookies?.[SESSION_COOKIE_NAME];
+      if (raw) {
+        const dot = raw.indexOf('.');
+        if (dot !== -1) {
+          const sessionId = raw.slice(0, dot);
+          if (sessionId) {
+            await customerAuthService.logout(sessionId);
+          }
         }
       }
-    }
-    reply.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
-    return reply.status(204).send();
-  });
+      reply.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
+      return reply.status(204).send();
+    },
+  );
 
   // Test-only probe for the register→verify integration test.
   if (deps.exposeTestProbe && deps.latestTokenByEmail) {
@@ -296,17 +417,18 @@ function setSessionCookie(reply: FastifyReply, value: string, expiresAt: Date): 
 function serializeOrganization(o: {
   id: string;
   name: string;
-  taxId: string;
-  status: string;
-  vatStatus: string;
+  /** `null` for a personal organization (`specs/177-tax-id-scope/`); registration creates companies. */
+  taxId?: string | null;
+  status: OrganizationView['status'];
+  vatStatus: OrganizationView['vatStatus'];
   registeredAddress: { street: string; city: string; postalCode: string; country: string };
   createdAt: Date;
   updatedAt: Date;
-}) {
+}): OrganizationView {
   return {
     id: o.id,
     name: o.name,
-    taxId: o.taxId,
+    taxId: o.taxId ?? null,
     status: o.status,
     vatStatus: o.vatStatus,
     registeredAddress: o.registeredAddress,
@@ -315,14 +437,79 @@ function serializeOrganization(o: {
   };
 }
 
-function serializeCustomerAccount(c: CustomerAccountRecord) {
+/** The merge outcomes after which the guest basket still exists, so its cookie is kept. */
+/**
+ * What a completed customer sign-in does beyond issuing the session (issue
+ * #368): hand the anonymous basket and comparison the request carried to the
+ * post-sign-in hook — the composition's `organizationsLoginHook`, where
+ * `carts` merges the basket (feature 027 R-09 / feature 037) and `comparisons`
+ * adopts the comparison — and say what the response does with the basket's
+ * cookie. The password sign-in calls it directly; a route that establishes the
+ * session itself calls it through `customerSignInCompletionPort`.
+ *
+ * The hook is best-effort: a thrown error MUST NOT break the sign-in (037
+ * FR-007/FR-008), so it is logged and answered as "nothing merged".
+ *
+ * The cookie is cleared when the source token has been consumed (adopted /
+ * merged) or pointed at an empty basket (noop_empty). A failure and
+ * noop_no_anon both leave it alone — failure so the buyer can retry on the next
+ * sign-in, noop_no_anon because there was nothing to clear in the first place
+ * (spec R-06). So does skipped_permission (`specs/170-organization-roles/`
+ * owner ruling PR-12, FR-030a): the member's role lacks `carts.create`, the
+ * guest basket was left unmerged and unchanged, and its cookie still points at
+ * it.
+ */
+export async function completeCustomerSignIn(
+  onLogin: OrganizationsPublicDeps['onLogin'],
+  input: {
+    customerAccountId: string;
+    organizationId: string | null;
+    cookies: Readonly<Record<string, string | undefined>>;
+    log: CustomerSignInCompletionInput['log'];
+    /** Issue #1188 — see {@link CustomerSignInCompletionInput.salesChannelId}. */
+    salesChannelId?: string | null;
+  },
+): Promise<CustomerSignInCompletion> {
+  if (!onLogin) return { cartMerge: null, clearAnonymousCartCookie: false };
+  const anon = input.cookies['b2b_cart_anon'];
+  const compareAnon = input.cookies['compare_token'];
+  let cartMerge: CartMergeOutcome | undefined;
+  try {
+    const hookResult = await onLogin({
+      customerAccountId: input.customerAccountId,
+      organizationId: input.organizationId,
+      ...(anon ? { anonymousCartToken: anon } : {}),
+      ...(compareAnon ? { anonymousCompareToken: compareAnon } : {}),
+      ...(input.salesChannelId ? { salesChannelId: input.salesChannelId } : {}),
+    });
+    cartMerge = hookResult.cartMerge;
+  } catch (err) {
+    input.log.error(
+      {
+        err,
+        customerAccountId: input.customerAccountId,
+        hadAnonToken: Boolean(anon),
+      },
+      'cart_merge_on_login_failed',
+    );
+  }
+  if (!cartMerge) return { cartMerge: null, clearAnonymousCartCookie: false };
+  return {
+    cartMerge: narrowCartMergeForHttp(cartMerge),
+    clearAnonymousCartCookie: !ANON_CART_COOKIE_KEPT.has(cartMerge.outcome),
+  };
+}
+
+const ANON_CART_COOKIE_KEPT: ReadonlySet<CartMergeOutcome['outcome']> = new Set(['noop_no_anon', 'skipped_permission']);
+
+/** `customerAccountSchema` without the session's role fields, which `accountView` adds (issue #599). */
+function serializeCustomerAccount(c: CustomerAccountRecord): Omit<CustomerAccount, 'organizationRole' | 'permissions'> {
   return {
     id: c.id,
     organizationId: c.organizationId ?? null,
     email: c.email,
     firstName: c.firstName,
     lastName: c.lastName,
-    role: c.role,
     emailVerifiedAt: c.emailVerifiedAt?.toISOString() ?? null,
     // The record already answers this; the entity carried the secret's
     // confirmation timestamp and every caller derived the same boolean from it.
@@ -339,8 +526,12 @@ function serializeCustomerAccount(c: CustomerAccountRecord) {
  * cart id. See specs/037-cart-merge-on-login/contracts/cart-merge.md § 1.
  */
 function narrowCartMergeForHttp(internal: CartMergeOutcome): CartMergeOutcomePublic {
+  // `skipped_permission` (owner ruling PR-12, `specs/170-organization-roles/`)
+  // changed nothing the buyer sees in their own basket, so it is a `noop` here.
   const outcome =
-    internal.outcome === 'noop_empty' || internal.outcome === 'noop_no_anon'
+    internal.outcome === 'noop_empty' ||
+    internal.outcome === 'noop_no_anon' ||
+    internal.outcome === 'skipped_permission'
       ? 'noop'
       : internal.outcome;
   return { outcome, destinationCartId: internal.destinationCartId };

@@ -39,7 +39,7 @@ export const ACCEPTANCE_OVERLAY_SETTING_CODES = {
  */
 const settings = defineModuleSettingsManifest({
   moduleCode: 'acceptance_overlay',
-  groups: [{ code: 'acceptance_overlay', name: 'Acceptance Overlay' }],
+  groups: [{ code: 'acceptance_overlay', name: 'Acceptance overlay' }],
   settings: [
     {
       code: ACCEPTANCE_OVERLAY_SETTING_CODES.ACTIVATION,
@@ -55,7 +55,7 @@ const settings = defineModuleSettingsManifest({
 
 export const manifest = defineModuleManifest({
   id: 'acceptance_overlay',
-  name: 'Acceptance Overlay',
+  name: 'Acceptance overlay',
   description:
     "Decorates a registration owned by the acceptance criterion's fixture package, so that a deployment reaching a packaged owner is measured rather than assumed.",
   version: '1.0.0',

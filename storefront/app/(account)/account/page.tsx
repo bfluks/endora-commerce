@@ -1,20 +1,30 @@
 import type { ReactNode } from 'react';
-import { redirect } from 'next/navigation';
 import { getSessionCookie } from '../../../lib/session';
 import { getServerContext } from '../../../lib/server-context';
-import { getMe } from '../../../lib/api/account';
+import { getMe, updatePreferredLanguage, type MeResult } from '../../../lib/api/account';
+import { fetchDictionary, type DictionaryRegistry } from '../../../lib/dictionary/client';
+import { EmailLanguageRow, emailLanguageFromForm } from '../../../components/account/EmailLanguageRow';
 import { getMyCreditLimit } from '../../../lib/api/credit-limit';
+import { getMyRole, type OwnRole } from '../../../lib/api/organization';
 import {
   fetchPwaConfig,
   getPushPreferences,
   updatePushPreferences,
 } from '../../../lib/api/pwa-server';
+import { getUnreadNotificationCount } from '../../../lib/api/customer-notifications';
 import { CreditLimitWidget } from '../../../components/CreditLimitWidget';
+import { ModalDialog } from '../../../components/ModalDialog';
 import {
   PushNotificationsSection,
   pushPreferencesPatch,
 } from '../../../components/pwa/PushPreferencesForm';
 import type { Metadata } from 'next';
+import { localeRedirect } from '../../../lib/i18n/navigation';
+import { tForLocale } from '../../../lib/i18n/messages';
+import { format } from '../../../lib/i18n/format';
+import { LocalizedLink } from '../../../lib/i18n/localized-link';
+import { richText } from '../../../lib/account/labels';
+import { isCompanyOrganization, isPersonalOrganization } from '../../../lib/account/organization-area';
 
 /**
  * Not indexed (`specs/098-storefront-ssr-seo-a11y-suite/`, FR-010): an
@@ -27,65 +37,133 @@ export const metadata: Metadata = { robots: { index: false, follow: false } };
  * Account profile (T154). Read-only summary of the current customer +
  * their organization role. Profile-edit is intentionally out of scope for
  * MVP — buyers update their name via support to keep audit trails simple.
+ *
+ * Feature 170 (FR-058): the role is the member's organization role, and the
+ * page says what it allows in plain language — `GET …/mine/role`, translated
+ * by the API. That list is rendered here, on the server, but sits in a dialog
+ * opened from the role row rather than in the page body: it is reference, not
+ * day-to-day content (issue #801). When the read fails the role still shows
+ * from the session and only the dialog is left out. A personal Organization's
+ * member sees neither, and the list is not read (owner ruling on PR #715).
  */
 export default async function AccountProfilePage({
   searchParams,
 }: {
-  searchParams: Promise<{ pushSaved?: string; pushError?: string }>;
+  searchParams: Promise<{ pushSaved?: string; pushError?: string; languageSaved?: string; languageError?: string }>;
 }): Promise<ReactNode> {
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const sp = await searchParams;
-  const { locale, ctx } = await getServerContext();
+  const { locale, ctx, modules, urlState } = await getServerContext();
+  const t = tForLocale(locale);
   // The push section (`specs/149-pwa-order-status-push/`) is read beside the
   // profile: the public config says what the channel offers, the preferences
   // what this customer chose. Either failing hides the section.
-  const [me, creditLimit, pwaConfig, pushPreferences] = await Promise.all([
-    getMe(session),
+  const mePromise = getMe(session);
+  // The own-role read waits only for `/me`, and is skipped where no role is shown.
+  const ownRolePromise = mePromise.then((me) =>
+    showsRole(me) ? getMyRole(session, ctx).catch((): OwnRole | null => null) : null,
+  );
+  const [me, creditLimit, pwaConfig, pushPreferences, ownRole, unread, dictionary] = await Promise.all([
+    mePromise,
     getMyCreditLimit(session),
     fetchPwaConfig(ctx.salesChannelCode),
     getPushPreferences(session, ctx),
+    ownRolePromise,
+    // `specs/179-rfq-and-customer-notifications/` FR-051c — the summary line's count,
+    // read only while the centre is present.
+    modules.isPresent('customer_notifications')
+      ? getUnreadNotificationCount(session, ctx.salesChannelCode, ctx.locale)
+      : Promise.resolve(0),
+    // Issue #652 — the languages' own names for the e-mail-language row. A
+    // failed read leaves the codes as their labels.
+    fetchDictionary({ ctx }).catch((): DictionaryRegistry | null => null),
   ]);
+  const channelLanguages = urlState.languages.map((language) => language.languageCode);
+  const channelDefault =
+    urlState.languages.find((language) => language.isDefault)?.languageCode ?? channelLanguages[0] ?? locale;
+  const languageLabel = (code: string): string =>
+    dictionary?.languages.find((language) => language.code.toLowerCase() === code.toLowerCase())?.nativeLabel || code;
+  const role = showsRole(me) ? (ownRole?.role ?? me.customerAccount.organizationRole) : null;
 
   return (
     <>
-      <h2>Your profile</h2>
+      <h2>{t('account.profile.heading')}</h2>
+      {unread > 0 ? (
+        <p className="mb-[16px]">
+          <LocalizedLink href="/account/notifications" className="b2b-account__link b2b-account__link--standalone">
+            {format(t('account.notifications.summary'), { count: unread.toLocaleString(locale) })}
+          </LocalizedLink>
+        </p>
+      ) : null}
       {creditLimit ? (
         <div className="mb-[16px]">
-          <CreditLimitWidget limit={creditLimit} showReservations />
+          <CreditLimitWidget limit={creditLimit} locale={locale} showReservations />
         </div>
       ) : null}
       <table className="b2b-account__table">
         <tbody>
           <tr>
-            <th scope="row">Name</th>
+            <th scope="row">{t('account.common.name')}</th>
             <td>
               {me.customerAccount.firstName} {me.customerAccount.lastName}
             </td>
           </tr>
           <tr>
-            <th scope="row">Email</th>
+            <th scope="row">{t('account.common.email')}</th>
             <td>
               {me.customerAccount.email}{' '}
               {me.customerAccount.emailVerifiedAt ? (
-                <span className="muted">(verified)</span>
+                <span className="muted">{t('account.profile.verified')}</span>
               ) : (
-                <span className="muted">(unverified)</span>
+                <span className="muted">{t('account.profile.unverified')}</span>
               )}
             </td>
           </tr>
+          {role ? (
+            <tr>
+              <th scope="row">{t('account.common.role')}</th>
+              <td>
+                <span className="flex flex-wrap items-center gap-x-3">
+                  {role.name}
+                  {ownRole ? (
+                    <ModalDialog
+                      triggerLabel={t('account.profile.allows.heading')}
+                      title={t('account.profile.allows.heading')}
+                      closeLabel={t('account.common.close')}
+                    >
+                      <RoleAllowsList permissions={ownRole.permissions} t={t} />
+                    </ModalDialog>
+                  ) : null}
+                </span>
+              </td>
+            </tr>
+          ) : null}
           <tr>
-            <th scope="row">Role</th>
-            <td>{me.customerAccount.role}</td>
+            <th scope="row">{t('account.profile.twoFactor')}</th>
+            <td>{me.customerAccount.twoFactorEnabled
+                ? t('account.profile.twoFactorEnabled')
+                : t('account.profile.twoFactorDisabled')}</td>
           </tr>
-          <tr>
-            <th scope="row">Two-factor</th>
-            <td>{me.customerAccount.twoFactorEnabled ? 'Enabled' : 'Disabled'}</td>
-          </tr>
-          <tr>
-            <th scope="row">Organization</th>
-            <td>{me.organization?.name ?? '—'}</td>
-          </tr>
+          {/* Issue #652 (D-292) — the language the buyer's e-mails are written in. */}
+          <EmailLanguageRow
+            locale={locale}
+            languages={channelLanguages.length > 0 ? channelLanguages : [channelDefault]}
+            defaultLanguage={channelDefault}
+            preferredLanguage={me.customerAccount.preferredLanguage ?? null}
+            labelOf={languageLabel}
+            editable={modules.isPresent('customers')}
+            saveAction={saveEmailLanguageAction}
+            saved={sp.languageSaved === '1'}
+            failed={sp.languageError === '1'}
+          />
+          {/* A personal Organization is not a company: no row names it (issue #757). */}
+          {isPersonalOrganization(me.organization) ? null : (
+            <tr>
+              <th scope="row">{t('account.profile.organization')}</th>
+              <td>{me.organization?.name ?? '—'}</td>
+            </tr>
+          )}
         </tbody>
       </table>
       <PushNotificationsSection
@@ -100,12 +178,65 @@ export default async function AccountProfilePage({
   );
 }
 
+/** What the member's role allows, one plain-language line per permission (FR-058). */
+function RoleAllowsList({
+  permissions,
+  t,
+}: {
+  permissions: OwnRole['permissions'];
+  t: ReturnType<typeof tForLocale>;
+}): ReactNode {
+  if (permissions.length === 0) {
+    return <p className="m-0 text-[13px] text-muted">{t('account.profile.allows.none')}</p>;
+  }
+  return (
+    <ul className="m-0 grid list-disc gap-1 pl-5 text-[13px]">
+      {permissions.map((p) => (
+        <li key={p.code}>
+          {richText(t('account.profile.allows.item'), {
+            label: <strong className="font-medium">{p.label}</strong>,
+            description: p.description,
+          })}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * Whether the profile shows the member's role and what it allows: only in a
+ * company Organization. A personal Organization's member holds *Administrator*
+ * (PR-3), which says nothing useful to a B2C buyer, so neither is shown nor read
+ * there (owner ruling on PR #715) — the same `isPersonal` gate as the
+ * organization screens.
+ */
+function showsRole(me: MeResult): boolean {
+  return isCompanyOrganization(me.organization);
+}
+
+async function saveEmailLanguageAction(formData: FormData): Promise<void> {
+  'use server';
+  const session = await getSessionCookie();
+  if (!session) return await localeRedirect('/login');
+  const language = emailLanguageFromForm(formData);
+  if (!language) return await localeRedirect('/account');
+  const { ctx } = await getServerContext();
+  let saved = true;
+  try {
+    await updatePreferredLanguage(session, ctx, language);
+  } catch {
+    saved = false;
+  }
+  // Outside the `try`: `redirect` throws by design.
+  return await localeRedirect(saved ? '/account?languageSaved=1' : '/account?languageError=1');
+}
+
 async function savePushPreferencesAction(formData: FormData): Promise<void> {
   'use server';
   const session = await getSessionCookie();
-  if (!session) redirect('/login');
+  if (!session) return await localeRedirect('/login');
   const patch = pushPreferencesPatch(formData);
-  if (!patch) redirect('/account');
+  if (!patch) return await localeRedirect('/account');
   const { ctx } = await getServerContext();
   let saved = true;
   try {
@@ -114,5 +245,5 @@ async function savePushPreferencesAction(formData: FormData): Promise<void> {
     saved = false;
   }
   // Outside the `try`: `redirect` throws by design.
-  redirect(saved ? '/account?pushSaved=1' : '/account?pushError=1');
+  return await localeRedirect(saved ? '/account?pushSaved=1' : '/account?pushError=1');
 }

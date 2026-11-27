@@ -1,9 +1,9 @@
 ---
-title: delivery_methods
+title: Metody dostawy
 description: Skonfigurowane metody dostawy
 ---
 
-# `delivery_methods`
+# Metody dostawy (`delivery_methods`)
 
 **Mechanizm metod dostawy** w platformie (_Metoda dostawy_). Moduł zawiera rejestr podłączanych
 adapterów, zbudowany na katalogu metod dostawy — odpowiednik modułu `payment_methods` po stronie
@@ -42,7 +42,7 @@ usunąć jej kanały sprzedaży, a `delivery_methods:read` — aby zobaczyć kan
 | `GET /api/v1/admin/delivery-methods/adapters` | administrator | `delivery_methods:read` | Adaptery, do których można przypisać metodę: `{ key, ownerModule }` dla każdego zarejestrowanego adaptera, którego moduł jest włączony |
 | `GET /api/v1/admin/delivery-methods/sales-channels` | administrator | `delivery_methods:read` | Kanały sprzedaży, do których można przypisać metodę — `{ id, code, name, active }` dla każdego kanału, także nieaktywnych |
 | `PUT /api/v1/admin/delivery-methods/:code` | administrator | `delivery_methods:write` | Utworzenie lub aktualizacja według kodu (nazwa, koszt/`price`, `adapter`, status, `statusOnSuccess`/`statusOnFailure`, kanały sprzedaży) |
-| `DELETE /api/v1/admin/delivery-methods/:id` | administrator | `delivery_methods:write` | Trwałe usunięcie (chronione: odrzucane z 409, gdy metoda jest używana przez przesyłkę `Shipment` — zamiast tego ustaw status `inactive`) |
+| `DELETE /api/v1/admin/delivery-methods/:id` | administrator | `delivery_methods:write` | Trwałe usunięcie (chronione: odrzucane z `409 DELIVERY_METHOD_IN_USE`, gdy metoda jest używana przez przesyłkę `Shipment` — zamiast tego ustaw status `inactive` — oraz z `409 DELIVERY_METHOD_USAGE_UNKNOWN`, gdy moduł `shipments` jest wyłączony) |
 
 Listy wyboru statusów w panelu pobierają opcje z `GET /api/v1/admin/order-statuses` (trasa
 administracyjna modułu metod płatności; wspólny `OrderStatusRegistry`). Ta trasa wymaga
@@ -81,7 +81,7 @@ Przypisanie jest egzekwowane tam, gdzie spotyka je kupujący:
   `X-Sales-Channel`, a sklep utworzony z wcześniejszego wydania wymaga tej samej zmiany w
   `lib/api/methods.ts` — w przeciwnym razie otrzyma metody kanału domyślnego.
 - Złożenie zamówienia i podgląd jego sumy odrzucają metodę, która nie jest dostępna w kanale
-  sprzedaży zamówienia, odpowiedzią `400 VALIDATION_FAILED` z
+  sprzedaży zamówienia, odpowiedzią `400 ORDER_DELIVERY_METHOD_UNAVAILABLE` z
   `details.code = "delivery_method_not_in_sales_channel"`. Dotyczy to zakupu w sklepie, zakupu
   jednym kliknięciem, zamówienia tworzonego przez administratora w imieniu klienta (kanał wybrany
   dla zamówienia) oraz zamówienia złożonego kluczem API (kanał klucza). Formularz tworzenia
@@ -171,9 +171,15 @@ Trzy reguły obowiązują zarówno w API, jak i na ekranie:
   moduł, kończy się odpowiedzią 400.
 - **Metoda, która ma już przesyłki, zachowuje swój adapter.** Przesyłka `Shipment` zapisuje metodę
   dostawy, a nie adapter, który ją utworzył, więc `adapter` metody jest jedynym zapisem tego, który
-  przewoźnik ma te paczki. Jego zmiana kończy się odpowiedzią 409; ustaw metodę jako `inactive` i
-  utwórz nową dla drugiego adaptera. Gdy moduł `shipments` jest wyłączony, platforma nie może
-  policzyć przesyłek, więc zmiana jest odrzucana do czasu jego ponownego włączenia.
+  przewoźnik ma te paczki. Jego zmiana kończy się odpowiedzią `409 DELIVERY_METHOD_IN_USE`; ustaw
+  metodę jako `inactive` i utwórz nową dla drugiego adaptera. Gdy moduł `shipments` jest wyłączony,
+  platforma nie może policzyć przesyłek, więc zmiana jest odrzucana odpowiedzią
+  `409 DELIVERY_METHOD_USAGE_UNKNOWN` do czasu jego ponownego włączenia.
+
+  Oba kody niosą token `details.code` wskazujący odrzucony zapis (`delete` lub `change_adapter`)
+  oraz `deliveryMethodId` metody. `DELIVERY_METHOD_IN_USE` dodaje `deliveryMethodCode` i
+  `shipmentCount`, a dla `change_adapter` także bieżący `adapter`. `DELIVERY_METHOD_USAGE_UNKNOWN`
+  dodaje `module: "shipments"`. Do zgłoszenia #632 oba były odpowiedzią `409 VALIDATION_FAILED`.
 - **Pole `adapter` nadal można pominąć w treści żądania.** Tworzenie bez tego pola przyjmuje jako
   adapter `code` metody — tak jak przed wprowadzeniem adapterów — co daje działającą metodę tylko
   wtedy, gdy kod jest akurat kluczem zarejestrowanego adaptera. Podawaj `adapter` jawnie;
@@ -273,7 +279,7 @@ dodawane **raz, podczas kompozycji**. Każdy odczyt następuje **później, w tr
 | Wybór adaptera w panelu | `GET /api/v1/admin/delivery-methods/adapters` → `list` | adapter nie jest dostępny do wyboru |
 | Zabezpieczenie zapisu w panelu | `PUT /api/v1/admin/delivery-methods/:code` → `isRegistered` | jawnie podany klucz, którego nikt nie dodał, jest odrzucany (400), chyba że wiersz już go ma; klucz dodany przez wyłączony moduł jest akceptowany, bo ten odczyt celowo nie sprawdza obecności |
 | Składanie zamówienia | `orders` ponownie sprawdza wybraną metodę, a potem wywołuje `onOrderCreated` | metoda, której właściciel jest wyłączony, odpowiada 503 `MODULE_DISABLED`; dla niezarejestrowanej hook jest pomijany |
-| Generowanie przesyłki | `ShipmentService.create` → `onShipmentCreated` | hook adaptera jest pomijany, a `Shipment` powstaje w stanie **`pending_manual`** z nazwą nieobecnego modułu — nigdy w zwykłym `pending`, które wyglądałoby na przyjęte przez przewoźnika |
+| Generowanie przesyłki | `ShipmentService.createShipment` → `onShipmentCreated` | hook adaptera jest pomijany, a `Shipment` powstaje w stanie **`pending_manual`** z nazwą nieobecnego modułu — nigdy w zwykłym `pending`, które wyglądałoby na przyjęte przez przewoźnika |
 | E-mail z potwierdzeniem zamówienia | klucz `renderers.email` metody | używany jest szablon domyślny platformy |
 
 Wynikają z tego dwie rzeczy i dlatego ta sekcja istnieje, a nie jest pozostawiona domysłom. Po

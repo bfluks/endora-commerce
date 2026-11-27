@@ -5,6 +5,10 @@ import { ProductCard } from '../../components/ProductCard';
 import { ProductGallery } from '../../components/ProductGallery';
 import { StockBadge } from '../../components/StockBadge';
 import type { ProductSummary, ProductAsset } from '@endora-commerce/contracts';
+import { moduleActionPresence } from '../../lib/module-action-presence';
+
+/** Every action module present: what these cases render is not about presence (issue #672). */
+const ALL_PRESENT = moduleActionPresence({ isPresent: () => true });
 
 /**
  * T243 — assert that the reference-theme primitives expose the markup
@@ -19,7 +23,7 @@ import type { ProductSummary, ProductAsset } from '@endora-commerce/contracts';
 describe('Breadcrumbs — JSON-LD + crawlable anchors', () => {
   it('emits BreadcrumbList JSON-LD and links every non-current crumb', () => {
     const html = renderToString(
-      <Breadcrumbs
+      <Breadcrumbs locale="en-US"
         crumbs={[
           { href: '/', label: 'Home' },
           { href: '/catalog', label: 'Catalog' },
@@ -38,7 +42,7 @@ describe('Breadcrumbs — JSON-LD + crawlable anchors', () => {
   });
 
   it('renders nothing for an empty crumb list', () => {
-    expect(renderToString(<Breadcrumbs crumbs={[]} />)).toBe('');
+    expect(renderToString(<Breadcrumbs locale="en-US" crumbs={[]} />)).toBe('');
   });
 });
 
@@ -56,7 +60,7 @@ describe('ProductCard — semantic markup with name + price + SKU', () => {
       stockIndicator: 'available',
       stockLevel: 12,
     };
-    const html = renderToString(<ProductCard product={product} locale="en-US" />);
+    const html = renderToString(<ProductCard presence={ALL_PRESENT} product={product} locale="en-US" salesChannelCode="retail" />);
     expect(html).toContain('<h3');
     expect(html).toContain('Widget 1000');
     expect(html).toContain('href="/p/widget-1000"');
@@ -83,7 +87,7 @@ describe('ProductGallery — server-rendered images + document links', () => {
         altText: 'Datasheet',
       },
     ];
-    const html = renderToString(<ProductGallery assets={assets} alt="Widget gallery" />);
+    const html = renderToString(<ProductGallery locale="en-US" assets={assets} alt="Widget gallery" />);
     expect(html).toContain('src="https://example.com/a.jpg"');
     expect(html).toContain('alt="Widget gallery"');
     expect(html).toContain('href="https://example.com/datasheet.pdf"');
@@ -91,7 +95,7 @@ describe('ProductGallery — server-rendered images + document links', () => {
   });
 
   it('renders a placeholder when there are no images', () => {
-    const html = renderToString(<ProductGallery assets={[]} alt="empty" />);
+    const html = renderToString(<ProductGallery locale="en-US" assets={[]} alt="empty" />);
     expect(html).toContain('aspect-square');
   });
 });
@@ -104,7 +108,7 @@ describe('StockBadge — surfaces stock state in plain text', () => {
     [{ stockLevel: null, stockIndicator: 'out_of_stock' as const }, 'Out of stock'],
     [{ stockLevel: null, stockIndicator: 'to_order' as const }, 'Request a quote'],
   ])('renders %j as text containing "%s"', (input, expected) => {
-    const html = renderToString(<StockBadge product={input} locale="en-US" />);
+    const html = renderToString(<StockBadge quoteRequests product={input} locale="en-US" />);
     expect(html).toContain(expected);
   });
 });

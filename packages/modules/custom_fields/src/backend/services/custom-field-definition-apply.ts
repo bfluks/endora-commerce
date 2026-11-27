@@ -1,14 +1,27 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
 import {
+  assessCustomFieldCarry,
   customFieldDefinitionSchema,
-  type CreateCustomFieldDefinitionRequest,
+  type CustomFieldAdminAccess,
+  type CustomFieldAudience,
+  type CustomFieldInputSurface,
   type CustomFieldOptionDto,
+  type CustomFieldValueType,
   type SupportedEntityType,
   type UpdateCustomFieldDefinitionRequest,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { CustomFieldDefinition } from '../entities/custom-field-definition.entity.js';
 import { CustomFieldOption } from '../entities/custom-field-option.entity.js';
-import { isSupportedEntityType } from './custom-field-registry.js';
+import type { CustomFieldDefinitionApplyCreateInput } from '../../ports/index.js';
+import {
+  carryTargetsOf,
+  customerInputSurfacesOf,
+  isEntityTypeServed,
+  isSupportedEntityType,
+  offersListFilter,
+  offersPageBuilderValues,
+} from './custom-field-registry.js';
 
 /**
  * Transactional apply functions for custom-field definition/option writes
@@ -36,8 +49,22 @@ export class CustomFieldDefinitionError extends Error {
       | 'stored_values_exist'
       | 'option_in_use'
       | 'key_changed'
-      | 'invalid_key',
+      | 'invalid_key'
+      | 'list_filter_unsupported'
+      | 'carry_incompatible'
+      | 'value_type_unsupported'
+      // Feature 175 (research R-4) — the buyer-input and admin-access invariants.
+      | 'customer_input_unsupported'
+      | 'customer_input_audience'
+      | 'customer_input_value_type'
+      | 'admin_access_required',
     message: string,
+    /**
+     * What a refusal's sentence names (feature 157): the field `key`, an
+     * option's `value` and `label`. A carry refusal (feature 162) adds its
+     * reason token as `code` and the missing option values as a list.
+     */
+    readonly details?: Readonly<Record<string, string | readonly string[]>>,
   ) {
     super(message);
     this.name = 'CustomFieldDefinitionError';
@@ -73,10 +100,243 @@ export function assertOptionsRule(valueType: string, options: CustomFieldOptionD
   }
 }
 
+/**
+ * `listFilter: true` only where the entity type's registry entry offers the
+ * option (feature 157); `false` and absence are always accepted.
+ */
+export function assertListFilterSupported(entityType: string, listFilter: boolean | undefined): void {
+  if (listFilter === true && !offersListFilter(entityType)) {
+    throw new CustomFieldDefinitionError(
+      'list_filter_unsupported',
+      `Fields of entity type "${entityType}" cannot be used as list filters.`,
+    );
+  }
+}
+
+/**
+ * `page_builder` only where the entity type's registry entry offers it
+ * (feature 172, research R-5): a Page Builder document is stored by its host,
+ * so a type whose host stores none must not accept a definition of it.
+ */
+export function assertValueTypeOffered(entityType: string, valueType: string): void {
+  if (valueType === 'page_builder' && !offersPageBuilderValues(entityType)) {
+    throw new CustomFieldDefinitionError(
+      'value_type_unsupported',
+      `Fields of entity type "${entityType}" cannot hold Page Builder content.`,
+      { valueType },
+    );
+  }
+}
+
+/**
+ * A definition's value type never moves to or from `page_builder` (feature
+ * 172, FR-005), whatever the stored values: a document and a field value are
+ * not convertible into each other.
+ */
+export function assertValueTypeChangeAllowed(key: string, from: string, to: string | undefined): void {
+  if (to === undefined || to === from) return;
+  if (from === 'page_builder' || to === 'page_builder') {
+    throw new CustomFieldDefinitionError(
+      'value_type_locked',
+      `The value type of "${key}" cannot be changed to or from Page Builder content.`,
+      { key },
+    );
+  }
+}
+
+/** A definition's surfaces as stored: deduplicated and sorted (feature 175). */
+export function normaliseCustomerInput(
+  surfaces: readonly CustomFieldInputSurface[] | undefined,
+): CustomFieldInputSurface[] {
+  return [...new Set(surfaces ?? [])].sort();
+}
+
+/** The members of a definition the buyer-input and admin-access invariants read (feature 175). */
+export interface CustomerInputSubject {
+  readonly entityType: string;
+  readonly key: string;
+  readonly valueType: string;
+  readonly audience: CustomFieldAudience;
+  readonly required: boolean;
+  readonly customerInput: readonly CustomFieldInputSurface[];
+  readonly adminAccess: CustomFieldAdminAccess;
+}
+
+/**
+ * The four invariants of `specs/175-buyer-input-custom-fields/` research R-4,
+ * judged on the RESULTING definition — so turning the input on under an
+ * internal audience and turning the audience internal under an open field are
+ * one predicate, whichever side of the change raised it.
+ *
+ * Judged before the entity type's value-type offer, so an open Page Builder
+ * field is refused for being open rather than for its type.
+ */
+export function assertCustomerInputAndAdminAccess(definition: CustomerInputSubject): void {
+  const { key } = definition;
+  if (definition.customerInput.length > 0) {
+    if (definition.valueType === 'page_builder') {
+      throw new CustomFieldDefinitionError(
+        'customer_input_value_type',
+        `Field "${key}" holds Page Builder content and cannot be collected from buyers.`,
+        { key },
+      );
+    }
+    const offered = customerInputSurfacesOf(definition.entityType);
+    if (definition.customerInput.some((surface) => !offered.includes(surface))) {
+      throw new CustomFieldDefinitionError(
+        'customer_input_unsupported',
+        `Field "${key}" cannot be collected from buyers on that form.`,
+        { key },
+      );
+    }
+    if (definition.audience !== 'customer') {
+      throw new CustomFieldDefinitionError(
+        'customer_input_audience',
+        `Field "${key}" is collected from buyers, so it must be visible to customers.`,
+        { key },
+      );
+    }
+  }
+  if (definition.required && definition.adminAccess !== 'edit') {
+    throw new CustomFieldDefinitionError(
+      'admin_access_required',
+      `Field "${key}" is required, so it must stay editable in the admin.`,
+      { key },
+    );
+  }
+}
+
+/** One definition as a carry judgement reads it (feature 162). */
+export interface CarrySourceDefinition {
+  readonly entityType: SupportedEntityType;
+  readonly key: string;
+  readonly valueType: CustomFieldValueType;
+  readonly audience: CustomFieldAudience;
+  readonly options: ReadonlyArray<{ value: string }>;
+}
+
+function carryRefusal(
+  source: CarrySourceDefinition,
+  target: SupportedEntityType,
+  token: string,
+  message: string,
+  extra: Record<string, string | readonly string[]> = {},
+): CustomFieldDefinitionError {
+  return new CustomFieldDefinitionError('carry_incompatible', message, {
+    code: token,
+    targetEntityType: target,
+    key: source.key,
+    ...extra,
+  });
+}
+
+/**
+ * Judge the carry targets a definition write **adds** (feature 162, research
+ * R-4), on the Command's own transaction. Each must be offered by the source
+ * type's registry entry (`pair_unsupported`), have its owner module present
+ * (`target_unavailable`), and pass {@link assessCustomFieldCarry} against the
+ * same-key definition of the target type; the first reason refuses the write
+ * with `carry_incompatible`. A target already on is never passed here: a
+ * drifted carry stays as configured (FR-019).
+ */
+export async function assertCarryTargetsAccepted(
+  em: EntityManager,
+  source: CarrySourceDefinition,
+  added: readonly SupportedEntityType[],
+): Promise<void> {
+  const offered = carryTargetsOf(source.entityType);
+  for (const target of added) {
+    if (!offered.includes(target)) {
+      throw carryRefusal(
+        source,
+        target,
+        'pair_unsupported',
+        `Values of "${source.key}" cannot be carried to ${target}.`,
+      );
+    }
+    if (!isEntityTypeServed(target)) {
+      throw carryRefusal(
+        source,
+        target,
+        'target_unavailable',
+        `${target} is switched off, so values cannot be carried to it.`,
+      );
+    }
+    const targetDefinition = await em.findOne(CustomFieldDefinition, { entityType: target, key: source.key });
+    const targetOptions = targetDefinition
+      ? await em.find(CustomFieldOption, { definitionId: targetDefinition.id })
+      : [];
+    const [first] = assessCustomFieldCarry(
+      { valueType: source.valueType, audience: source.audience, options: source.options },
+      targetDefinition
+        ? { valueType: targetDefinition.valueType, audience: targetDefinition.audience, options: targetOptions }
+        : null,
+    );
+    if (first === undefined) continue;
+    switch (first.reason) {
+      case 'target_missing':
+        throw carryRefusal(
+          source,
+          target,
+          first.reason,
+          `No field with the key "${source.key}" exists on ${target}.`,
+        );
+      case 'value_type_mismatch':
+        throw carryRefusal(
+          source,
+          target,
+          first.reason,
+          `The field "${source.key}" on ${target} is ${first.targetValueType}, but this field is ${first.sourceValueType}.`,
+          { sourceValueType: first.sourceValueType, targetValueType: first.targetValueType },
+        );
+      case 'options_missing':
+        throw carryRefusal(
+          source,
+          target,
+          first.reason,
+          `The field "${source.key}" on ${target} lacks these options: ${first.missingOptionValues.join(', ')}.`,
+          {
+            missingOptionValues: first.missingOptionValues.join(', '),
+            missingOptionValueList: [...first.missingOptionValues],
+          },
+        );
+      case 'audience_mismatch':
+        throw carryRefusal(
+          source,
+          target,
+          first.reason,
+          `The field "${source.key}" on ${target} is visible to customers, but this field is internal.`,
+        );
+    }
+  }
+}
+
+/**
+ * The apply seam's own floor for `carryTo` (feature 162): a host writing
+ * through it may name only the pairs its type's registry entry offers. The
+ * compatibility judgement is the definition Commands' (above); a host-managed
+ * type offers no pair, so this refuses any carry a host names.
+ */
+function assertCarryPairsOffered(
+  entityType: string,
+  key: string,
+  carryTo: readonly SupportedEntityType[] | undefined,
+): void {
+  const offered = carryTargetsOf(entityType);
+  const unsupported = (carryTo ?? []).find((target) => !offered.includes(target));
+  if (unsupported !== undefined) {
+    throw new CustomFieldDefinitionError(
+      'carry_incompatible',
+      `Values of "${key}" cannot be carried to ${unsupported}.`,
+      { code: 'pair_unsupported', targetEntityType: unsupported, key },
+    );
+  }
+}
+
 /** Create a definition (+ its options for select types) on the caller's EM. */
 export async function applyCreateDefinition(
   em: EntityManager,
-  input: CreateCustomFieldDefinitionRequest,
+  input: CustomFieldDefinitionApplyCreateInput,
 ): Promise<CustomFieldDefinition> {
   // command-coverage-ignore: apply-seam primitive — mutates on the invoking Command's
   // transactional EM; the caller (custom_fields definition command or a host command,
@@ -85,7 +345,13 @@ export async function applyCreateDefinition(
   if (!isSupportedEntityType(input.entityType)) {
     throw new CustomFieldDefinitionError('entity_type_unknown', `Unknown entity type "${input.entityType}".`);
   }
+  const customerInput = normaliseCustomerInput(input.customerInput);
+  const adminAccess = input.adminAccess ?? 'edit';
+  assertCustomerInputAndAdminAccess({ ...input, customerInput, adminAccess });
+  assertValueTypeOffered(input.entityType, input.valueType);
   assertOptionsRule(input.valueType, input.options);
+  assertListFilterSupported(input.entityType, input.listFilter);
+  assertCarryPairsOffered(input.entityType, input.key, input.carryTo);
   const existing = await em.findOne(CustomFieldDefinition, {
     entityType: input.entityType,
     key: input.key,
@@ -106,6 +372,10 @@ export async function applyCreateDefinition(
     audience: input.audience,
     sortOrder: input.sortOrder,
     config: input.config,
+    listFilter: input.listFilter ?? false,
+    carryTo: [...(input.carryTo ?? [])],
+    customerInput,
+    adminAccess,
   });
   if (SELECT_TYPES.has(input.valueType)) {
     // Flush the definition first: options reference it by id (no ORM relation),
@@ -123,8 +393,30 @@ export async function applyUpdateDefinition(
   patch: UpdateCustomFieldDefinitionRequest,
   probes?: DefinitionChangeProbes,
 ): Promise<CustomFieldDefinition> {
+  if (!isUuidShape(id)) throw new CustomFieldDefinitionError('not_found', `Custom field ${id} not found.`);
   const def = await em.findOne(CustomFieldDefinition, { id });
   if (!def) throw new CustomFieldDefinitionError('not_found', `Custom field ${id} not found.`);
+  assertValueTypeChangeAllowed(def.key, def.valueType, patch.valueType);
+  const customerInput =
+    patch.customerInput !== undefined
+      ? normaliseCustomerInput(patch.customerInput)
+      : [...(def.customerInput ?? [])];
+  const adminAccess = patch.adminAccess ?? def.adminAccess ?? 'edit';
+  assertCustomerInputAndAdminAccess({
+    entityType: def.entityType,
+    key: def.key,
+    valueType: patch.valueType ?? def.valueType,
+    audience: patch.audience ?? def.audience,
+    required: patch.required ?? def.required,
+    customerInput,
+    adminAccess,
+  });
+  assertListFilterSupported(def.entityType, patch.listFilter);
+  assertCarryPairsOffered(
+    def.entityType,
+    def.key,
+    patch.carryTo?.filter((target) => !def.carryTo.includes(target)),
+  );
   // FR-010: changing valueType while values exist is rejected (probe binding).
   if (patch.valueType !== undefined && patch.valueType !== def.valueType && probes) {
     const inUse = await probes.hasStoredValues(em, def.entityType, def.key);
@@ -132,6 +424,7 @@ export async function applyUpdateDefinition(
       throw new CustomFieldDefinitionError(
         'value_type_locked',
         `Cannot change the value type of "${def.key}" while records hold values. Clear them first.`,
+        { key: def.key },
       );
     }
   }
@@ -142,6 +435,10 @@ export async function applyUpdateDefinition(
   if (patch.audience !== undefined) def.audience = patch.audience;
   if (patch.sortOrder !== undefined) def.sortOrder = patch.sortOrder;
   if (patch.config !== undefined) def.config = patch.config;
+  if (patch.listFilter !== undefined) def.listFilter = patch.listFilter;
+  if (patch.carryTo !== undefined) def.carryTo = [...patch.carryTo];
+  if (patch.customerInput !== undefined) def.customerInput = customerInput;
+  if (patch.adminAccess !== undefined) def.adminAccess = adminAccess;
   return def;
 }
 
@@ -173,6 +470,7 @@ export async function applyRenameDefinitionKey(
   // committed atomically with the host's value rename and the connector's own
   // repair checkpoint); an audit entry for it would have nobody to attribute.
   // Contract: specs/134-paid-module-extraction/research.md D12.
+  if (!isUuidShape(id)) throw new CustomFieldDefinitionError('not_found', `Custom field ${id} not found.`);
   const def = await em.findOne(CustomFieldDefinition, { id });
   if (!def) throw new CustomFieldDefinitionError('not_found', `Custom field ${id} not found.`);
   if (def.key !== expectedKey) {
@@ -203,6 +501,7 @@ export async function applyDeleteDefinition(em: EntityManager, id: string): Prom
   // transactional EM; the caller (custom_fields definition command or a host command,
   // e.g. catalog.attribute.*) records the single audit row co-transactionally.
   // Contract: specs/061-attributes-on-custom-fields/contracts/custom-fields-product-host.md.
+  if (!isUuidShape(id)) throw new CustomFieldDefinitionError('not_found', `Custom field ${id} not found.`);
   const def = await em.findOne(CustomFieldDefinition, { id });
   if (!def) throw new CustomFieldDefinitionError('not_found', `Custom field ${id} not found.`);
   const options = await em.find(CustomFieldOption, { definitionId: id });
@@ -217,6 +516,7 @@ export async function applyCreateOption(
   definitionId: string,
   input: CustomFieldOptionDto,
 ): Promise<CustomFieldOption> {
+  if (!isUuidShape(definitionId)) throw new CustomFieldDefinitionError('not_found', `Custom field ${definitionId} not found.`);
   const def = await em.findOne(CustomFieldDefinition, { id: definitionId });
   if (!def) throw new CustomFieldDefinitionError('not_found', `Custom field ${definitionId} not found.`);
   if (!SELECT_TYPES.has(def.valueType)) {
@@ -232,6 +532,9 @@ export async function applyUpdateOption(
   optionId: string,
   patch: Partial<Pick<CustomFieldOptionDto, 'label' | 'labelDefault' | 'isDefault' | 'sortOrder'>>,
 ): Promise<CustomFieldOption> {
+  if (!isUuidShape(optionId)) {
+    throw new CustomFieldDefinitionError('not_found', `Option ${optionId} not found.`);
+  }
   const option = await em.findOne(CustomFieldOption, { id: optionId });
   if (!option || option.definitionId !== definitionId) {
     throw new CustomFieldDefinitionError('not_found', `Option ${optionId} not found.`);
@@ -254,8 +557,12 @@ export async function applyDeleteOption(
   // transactional EM; the caller (custom_fields definition command or a host command,
   // e.g. catalog.attribute.*) records the single audit row co-transactionally.
   // Contract: specs/061-attributes-on-custom-fields/contracts/custom-fields-product-host.md.
+  if (!isUuidShape(definitionId)) throw new CustomFieldDefinitionError('not_found', `Custom field ${definitionId} not found.`);
   const def = await em.findOne(CustomFieldDefinition, { id: definitionId });
   if (!def) throw new CustomFieldDefinitionError('not_found', `Custom field ${definitionId} not found.`);
+  if (!isUuidShape(optionId)) {
+    throw new CustomFieldDefinitionError('not_found', `Option ${optionId} not found.`);
+  }
   const option = await em.findOne(CustomFieldOption, { id: optionId });
   if (!option || option.definitionId !== definitionId) {
     throw new CustomFieldDefinitionError('not_found', `Option ${optionId} not found.`);
@@ -267,6 +574,7 @@ export async function applyDeleteOption(
       throw new CustomFieldDefinitionError(
         'option_in_use',
         `Option "${option.value}" is in use and cannot be removed.`,
+        { value: option.value, label: option.labelDefault },
       );
     }
   }

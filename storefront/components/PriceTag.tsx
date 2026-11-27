@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
+import { formatMoney } from '../lib/i18n/money';
 import type { Money } from '@endora-commerce/contracts';
 import { tForLocale } from '../lib/i18n/messages';
 import { BaseSalePriceBlock } from './pricing/BaseSalePriceBlock';
-import type { ResolvedPrice } from '../lib/api/pricing';
+import type { PriceDisplay } from '../lib/api/pricing';
 
 /**
  * Price rendering for the storefront.
@@ -21,12 +22,23 @@ import type { ResolvedPrice } from '../lib/api/pricing';
  */
 export function PriceTag(props: {
   price?: Money | null;
-  resolved?: ResolvedPrice | null;
+  resolved?: PriceDisplay | null;
   locale: string;
   variant?: 'card' | 'pdp';
+  /**
+   * `quote_requests` is present (issue #672): a missing price invites a quote only then;
+   * otherwise it is stated as "price on request".
+   */
+  quoteRequests: boolean;
+  /**
+   * The product's VAT rate for this buyer (`ProductDetail.vatRate`, issue #852).
+   * Absent or `null`: no gross is derived and the net is shown, labelled net.
+   */
+  vatRate?: number | null;
 }): ReactNode {
   const { price, resolved, locale, variant = 'pdp' } = props;
   const t = tForLocale(locale);
+  const noPrice = t(props.quoteRequests ? 'product.requestQuote' : 'commerce.common.priceOnRequest');
 
   if (resolved !== undefined && resolved !== null) {
     if (resolved.displayMode === 'none') return null;
@@ -34,23 +46,25 @@ export function PriceTag(props: {
       <BaseSalePriceBlock
         basePrice={resolved.basePrice}
         salePrice={resolved.salePrice}
+        listPrice={resolved.listPrice ?? null}
         displayMode={resolved.displayMode}
         locale={locale}
+        vatRate={props.vatRate ?? null}
         variant={variant}
+        listLabel={t('product.listPrice')}
+        yourPriceLabel={t('product.yourPrice')}
       />
     );
   }
 
   if (resolved === null) {
-    return <span className="font-mono font-normal text-muted">{t('product.requestQuote')}</span>;
+    return <span className="font-mono font-normal text-muted">{noPrice}</span>;
   }
 
   if (!price) {
-    return <span className="font-mono font-normal text-muted">{t('product.requestQuote')}</span>;
+    return <span className="font-mono font-normal text-muted">{noPrice}</span>;
   }
-  const formatted = new Intl.NumberFormat(locale, {
-    style: 'currency',
-    currency: price.currency,
-  }).format(price.amount);
+  // A unit price: its significant places, up to four (owner ruling of 2026-10-25).
+  const formatted = formatMoney(price.amount, price.currency, locale, { unitPrice: true });
   return <span className="font-mono font-semibold">{formatted}</span>;
 }

@@ -6,6 +6,7 @@ import {
   type DictionaryValidator,
   type ResolvedTax,
   type TaxResolutionInput,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
@@ -52,6 +53,7 @@ export class TaxService {
   }
 
   async getById(id: string): Promise<Tax> {
+    if (!isUuidShape(id)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, `Tax ${id} not found.`);
     const row = await this.emFactory().findOne(Tax, { id });
     if (!row) throw new HttpError(404, ERROR_CODES.NOT_FOUND, `Tax ${id} not found.`);
     return row;
@@ -120,10 +122,11 @@ export class TaxService {
 
   async remove(id: string): Promise<void> {
     const em = this.emFactory();
+    if (!isUuidShape(id)) return;
     const row = await em.findOne(Tax, { id });
     if (!row) return;
     this.#audit(em, 'tax.delete', row.id, { code: row.code }, null);
-    await em.removeAndFlush(row);
+    await em.remove(row).flush();
   }
 
   async taxRateFor(input: TaxResolutionInput): Promise<ResolvedTax> {

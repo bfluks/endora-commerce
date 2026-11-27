@@ -36,6 +36,7 @@ import { SalesChannel } from '@endora-commerce/platform/kernel';
 
 
 import { DeliveryMethod } from '../../helpers/package-entities.js';
+import { addOrganizationChannels } from '../../helpers/sales-channel-access.js';
 
 
 /**
@@ -143,11 +144,14 @@ describe('external order intake — org capability envelope (062 / T022)', () =>
       currencies: ['PLN'],
       defaultCurrency: 'PLN',
       active: true,
-      isPublic: true,
     });
-    await em.persistAndFlush(channel);
+    await em.persist(channel).flush();
     channelId = channel.id;
     await h.salesChannels.cache.invalidate('ext-envelope');
+    // Issue #699 — the intake places only on one of the bound Organization's
+    // active assigned channels.
+    await addOrganizationChannels(h, TEST_ORGANIZATION_ID, ['ext-envelope']);
+    await addOrganizationChannels(h, TEST_SUSPENDED_ORGANIZATION_ID, ['ext-envelope']);
     await em.getConnection().execute(
       `insert into sales_channel_products (sales_channel_id, product_id) values (?,?)`,
       [channelId, SEED_PRODUCT_101_ID],
@@ -162,7 +166,7 @@ describe('external order intake — org capability envelope (062 / T022)', () =>
       currency: 'PLN',
       adapter: 'personal_pickup',
     });
-    await em.persistAndFlush(altDelivery);
+    await em.persist(altDelivery).flush();
     altDeliveryMethodId = altDelivery.id;
 
     orgAToken = await mint({
@@ -284,7 +288,7 @@ describe('external order intake — org capability envelope (062 / T022)', () =>
     expect(cart).not.toBeNull();
     const item = await em.findOne(CartItem, { cartId: cart!.id });
     item!.quantity = 80;
-    await em.persistAndFlush(item!);
+    await em.persist(item!).flush();
 
     const customerRes = await h.app.inject({
       method: 'POST',
@@ -332,7 +336,7 @@ describe('external order intake — org capability envelope (062 / T022)', () =>
     const keyRes = await postKey(orgAToken, keyPayload());
     expect(keyRes.statusCode).toBe(400);
     const err = (keyRes.json() as { error: MethodRefusal }).error;
-    expect(err.code).toBe(ERROR_CODES.VALIDATION_FAILED);
+    expect(err.code).toBe(ERROR_CODES.ORDER_PAYMENT_METHOD_UNAVAILABLE);
     expect(err.details?.code).toBe('payment_method_not_allowed_for_organization');
 
     const buyerRes = await placeAsBuyer();
@@ -353,7 +357,7 @@ describe('external order intake — org capability envelope (062 / T022)', () =>
     const keyRes = await postKey(orgAToken, keyPayload());
     expect(keyRes.statusCode).toBe(400);
     const err = (keyRes.json() as { error: MethodRefusal }).error;
-    expect(err.code).toBe(ERROR_CODES.VALIDATION_FAILED);
+    expect(err.code).toBe(ERROR_CODES.ORDER_DELIVERY_METHOD_UNAVAILABLE);
     expect(err.details?.code).toBe('delivery_method_not_allowed_for_organization');
 
     const buyerRes = await placeAsBuyer();

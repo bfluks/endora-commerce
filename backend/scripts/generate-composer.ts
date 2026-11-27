@@ -84,16 +84,30 @@ import {
 } from './lib/platform-root.js';
 import { barrelKeyOf, parseBarrel, type BarrelParse } from './lib/platform-surface.js';
 import { entityDeclarations, entityDecoratorMentionLine } from './lib/entity-declarations.js';
+import {
+  analyzeSource as entityDecoratorFindings,
+  findingMessage as entityDecoratorFindingMessage,
+} from '@endora-commerce/cli/rules/entity-decorators.js';
+import {
+  analyzeSource as tenantClassificationFindings,
+  classifyFindings,
+  remedyFor as tenantClassificationRemedy,
+} from '@endora-commerce/cli/rules/entity-tenant-classification.js';
+import { schemaExtensionDeclarationSites } from './lib/schema-extension-declarations.js';
+import { firstPartyBridges, firstPartyDerivedDowns } from './lib/first-party-bridges.js';
 import { declaresRegisterModule } from './lib/module-roots.js';
 import { BASELINE_THROUGH } from '@endora-commerce/platform/db';
 import { BASELINE_MIGRATION_INVENTORY } from '@endora-commerce/platform/migrations';
 import {
   adminRegistryOutputPathIn,
+  adminSourceRootIn,
   collectAdminContributions,
   collectBlockStylesheets,
+  collectOverlayAdminSources,
   collectTailwindSources,
   emitAdminRegistry,
   emitTailwindRegistry,
+  renderDeploymentAdminRegistriesInto,
   tailwindRegistryOutputPathIn,
 } from './lib/admin-artefacts.js';
 // The entity index's renderer, shared with `endora generate` for the same reason
@@ -104,6 +118,10 @@ import {
   entityIndexOutputPathIn,
 } from './lib/entity-index-artefact.js';
 import { nodeWorkspaceFs, workspaceMembers } from './lib/workspace-packages.js';
+// `specs/189-command-middleware/contracts/module-origin.md` §2 — the release's
+// first-party module packages are the release index's rule, imported rather
+// than restated.
+import { publishablePackages } from '@endora-commerce/cli/lib/release-index.js';
 import {
   DOCS_SIDEBAR_ARTEFACT,
   docsDeclarationIn,
@@ -200,8 +218,15 @@ export function generatedArtifactPaths(): readonly string[] {
     entitiesRegistryOutputPath,
     migrationsRegistryOutputPath,
     baselineListOutputPath(),
+    foreignWriteExemptionsOutputPath(),
+    firstPartyModulesOutputPath(),
     adminRegistryOutputPathIn(repoRoot),
     tailwindRegistryOutputPathIn(repoRoot),
+    // One per deployment on disk, plus bare core's (`specs/190-overlay-full-modules/`
+    // FR-080). A function of the tree, not of `DEPLOYMENT`, like every path here.
+    ...renderDeploymentAdminRegistriesInto(adminSourceRootIn(repoRoot), join(srcRoot, 'apps')).map(
+      (rendered) => rendered.outputPath,
+    ),
     // The entity index (`specs/109-backend-test-kit/` T065). It belongs here for
     // the same reason the two registries above do and for **no** reason peculiar
     // to itself: `endora generate` writes all three into a client's tree as
@@ -440,6 +465,13 @@ export interface ArtefactPopulation {
   readonly packages: readonly ModulePackage[];
   /** `null` in an instance — see {@link ApplicationModules}. */
   readonly application: ApplicationModules | null;
+  /**
+   * The directory holding every deployment — `backend/src/apps` here, `apps` in an
+   * instance. The deployment admin registries and the overlay `@source` lines are
+   * rendered over **every** deployment under it (`specs/190-overlay-full-modules/`
+   * FR-080, FR-082), so they are `DEPLOYMENT`-independent (#120).
+   */
+  readonly appsRoot: string;
 }
 
 /** This repository: workspace members, plus the modules the host itself owns. */
@@ -450,6 +482,7 @@ export function workspacePopulation(
     root: repoRoot,
     packages,
     application: { modulesRoot, resident: residentModules() },
+    appsRoot: join(srcRoot, 'apps'),
   };
 }
 
@@ -465,6 +498,7 @@ export function instancePopulation(instanceRoot: string): ArtefactPopulation {
     root: instanceRoot,
     packages: installedModulePackages(instanceRoot),
     application: null,
+    appsRoot: join(instanceRoot, 'apps'),
   };
 }
 
@@ -1565,20 +1599,12 @@ export function collectEntities(sources: SourceTree): DiscoveredEntity[] {
       }
       continue;
     }
-    if (owner === null && file.startsWith('apps/')) {
-      throw new Error(
-        `[composer] ${file} declares an @Entity() class under a deployment overlay. ` +
-          `A per-deployment overlay contributes registrations, routes, decorations, ` +
-          `interceptors, permissions, i18n and a manifest — and no schema (D-106, narrowing ` +
-          `D-105). The reason is not migration ordering: that argument was measured false ` +
-          `and is retired. It is that an overlay lives in the same repository and the same ` +
-          `build as core, so the remedy is always available and costs nothing but a ` +
-          `directory. Delete this file's directory and ship the table from a core module; ` +
-          `the overlay module keeps its services, routes and decorations and reads the core ` +
-          `module's port. An extension package is the opposite case and may ship schema — a ` +
-          `third-party author has no core module to ship it from.`,
-      );
-    }
+    // `specs/190-overlay-full-modules/` FR-038 (research R-4): an overlay module's
+    // entity is read at runtime from the deployment root and never emitted here, so
+    // the committed registry stays bare core under every `DEPLOYMENT` (D-104). What
+    // the generator owes it is validation, before a boot is the first to say.
+    const overlay = owner === null && file.startsWith('apps/');
+    if (overlay) assertOverlayEntityFile(source, file);
     for (const declaration of declarations) {
       if (declaration.kind === 'unreadable') {
         throw new Error(
@@ -1596,10 +1622,82 @@ export function collectEntities(sources: SourceTree): DiscoveredEntity[] {
         );
       }
       byClassName.set(className, file);
-      found.push({ className, file, owner });
+      if (!overlay) found.push({ className, file, owner });
     }
   }
   return found;
+}
+
+/**
+ * An overlay module's entity file, held to the two rules a core module's is held
+ * to by its own checks and an instance's boot would otherwise be first to meet:
+ * exactly one tenancy classification per entity (Principle XI;
+ * `check:entity-tenant-classification`'s predicate) and every MikroORM decorator
+ * from `@mikro-orm/decorators/legacy` (OR-7; `check:entity-decorators`').
+ */
+function assertOverlayEntityFile(source: string, file: string): void {
+  const { unclassified, multiple } = classifyFindings(tenantClassificationFindings(source, file));
+  const misclassified = [...unclassified, ...multiple];
+  if (misclassified.length > 0) {
+    throw new Error(
+      `[composer] ${file} is an overlay module's entity file, and ` +
+        `${misclassified.map(tenantClassificationRemedy).join(' ')} The platform refuses the ` +
+        `same entity at boot (\`UnclassifiedEntityError\`); this says it first.`,
+    );
+  }
+  const imports = entityDecoratorFindings(source, file);
+  if (imports.length > 0) {
+    throw new Error(
+      `[composer] ${file} is an overlay module's entity file. ` +
+        `${imports.map(entityDecoratorFindingMessage).join(' ')}`,
+    );
+  }
+}
+
+/**
+ * Refuses a declared extension column anywhere the composer walks
+ * (`specs/178-extensible-columns/` FR-008, FR-064; tasks.md T011).
+ *
+ * Declared columns on another module's table are an **installed** package's
+ * mechanism (research R-7): the platform reads them at runtime from the
+ * package's `./backend` export, exactly as it reads that package's entities.
+ * A **workspace module package** may not declare one: it owns its own tables, so
+ * it adds a column to a table it owns with a migration, or keeps its data on a
+ * side table of its own. The application tree is refused on the same terms. An
+ * **overlay module** is the exception since D-297 (OR-3): it declares them as an
+ * installed package does, read and validated at runtime from the deployment root.
+ */
+/** A file under one overlay module's directory: `apps/<deployment>/modules/<id>/…`. */
+const OVERLAY_MODULE_FILE = /^apps\/[^/]+\/modules\/[^/]+\//;
+
+export function assertNoSchemaExtensionDeclarations(sources: SourceTree): void {
+  for (const [file, { text, owner }] of [...sources].sort(([a], [b]) => a.localeCompare(b))) {
+    // An overlay module declares extension columns as an installed package does
+    // (`specs/190-overlay-full-modules/` OR-3, contract §5): the platform reads and
+    // validates them at runtime, and nothing here emits them. Only under a module's
+    // own directory: the platform reads a module's `backend` export, so a declaration
+    // elsewhere under a deployment would pass here and declare nothing (FR-065).
+    if (owner === null && OVERLAY_MODULE_FILE.test(file)) continue;
+    const sites = schemaExtensionDeclarationSites(text, file);
+    if (sites.length === 0) continue;
+    const site = sites[0]!;
+    const what =
+      site.kind === 'call' ? 'calls defineColumnExtension' : "exports 'schemaExtensions'";
+    const where =
+      owner !== null
+        ? `the workspace module package ${owner.name} (module "${owner.moduleId}")`
+        : "the application's own tree";
+    const remedy =
+      owner !== null
+        ? 'A first-party module owns its tables: add the column to a table it owns with a ' +
+          'migration, or keep the data on a side table of its own.'
+        : 'Ship the extension from an installed module package or a deployment overlay module.';
+    throw new Error(
+      `[composer] ${file}:${String(site.line)} ${what} in ${where}. Declared extension columns ` +
+        `are an installed package's mechanism, read at runtime from its ./backend export ` +
+        `(specs/178-extensible-columns/ FR-008, FR-064). ${remedy}`,
+    );
+  }
 }
 
 function emitEntitiesHeader(): string {
@@ -1617,9 +1715,10 @@ function emitEntitiesHeader(): string {
 // here, in path order. Detection is by that decorator, not by the
 // \`.entity.ts\` suffix, because nothing enforces the suffix — and the decorator
 // is deliberately not spelled out in this comment, so that a walk looking for
-// it does not find its own output. A per-deployment overlay contributes no
-// schema (D-106), so an entity under \`src/apps/\` is refused by the generator
-// rather than registered for a table nothing creates. A **module package** is
+// it does not find its own output. A per-deployment overlay module's entities
+// are not here either: they are read at runtime from the deployment root, so this
+// list is bare core under every value of \`DEPLOYMENT\` (D-104,
+// \`specs/190-overlay-full-modules/\` FR-038). A **module package** is
 // the opposite case and is here: its entities are named by a bare specifier
 // derived from that package's own \`exports\` map (D-149), and they arrive as
 // **one \`entities\` array** rather than as a class per name (D-168) — the same
@@ -1680,6 +1779,9 @@ export function emitEntitiesRegistry(entities: readonly DiscoveredEntity[]): str
     { readonly specifier: string; readonly className: string; readonly file: string }
   >();
   const emitted = new Set<string>();
+  // `specs/187-side-table-extensions/` R-4 — which module contributes each
+  // package's entities, for the side-table rules' ownership question (M2, U1).
+  const owners: string[] = [];
   let needsEntityClassLike = false;
 
   for (const entity of entities) {
@@ -1724,6 +1826,7 @@ export function emitEntitiesRegistry(entities: readonly DiscoveredEntity[]): str
     // `package-runtime.ts` then agree on one type for a package's entities, and
     // the application's own classes keep their precise ones.
     listed.push(`  ...(${binding} as readonly EntityClassLike[]),`);
+    owners.push(`  ['${entity.owner.moduleId}', ${binding} as readonly EntityClassLike[]],`);
   }
 
   const typeImport = needsEntityClassLike
@@ -1736,6 +1839,15 @@ ${typeImport}${importLines.join('\n')}
 export const ALL_ENTITIES = [
 ${listed.join('\n')}
 ] as const;
+
+/**
+ * Which module contributes each module package's entities — the owner of the
+ * tables they map (\`specs/187-side-table-extensions/\` M2, U1). The classes the
+ * application tree names one by one are the platform's and belong to no module.
+ */
+export const ENTITY_OWNERS: ReadonlyArray<readonly [moduleId: string, entities: readonly (new (...args: never[]) => object)[]]> = [
+${owners.join('\n')}
+];
 `;
 }
 
@@ -1744,6 +1856,7 @@ export function renderEntitiesRegistry(sources: SourceTree = readSourceTree()): 
   outputPath: string;
   content: string;
 } {
+  assertNoSchemaExtensionDeclarations(sources);
   return {
     outputPath: entitiesRegistryOutputPath,
     content: emitEntitiesRegistry(collectEntities(sources)),
@@ -1827,7 +1940,7 @@ export interface DiscoveredMigration {
 const PLATFORM_MIGRATION_SUBPATH = 'migrations';
 const CORE_MIGRATION_RE = new RegExp(`^${PLATFORM_MIGRATION_SUBPATH}/([^/]+\\.ts)$`);
 const MODULE_MIGRATION_RE = /^modules\/([^/]+)\/migrations\/([^/]+\.ts)$/;
-const OVERLAY_MIGRATION_RE = /^apps\/[^/]+\/modules\/[^/]+\/migrations\//;
+const OVERLAY_MIGRATION_RE = /^apps\/[^/]+\/modules\/([^/]+)\/migrations\/([^/]+\.ts)$/;
 
 /**
  * A migration inside a module package — `<anything>/migrations/<file>`.
@@ -1863,19 +1976,22 @@ export function collectMigrations(
   for (const [file, { text: source, owner }] of [...sources].sort(([a], [b]) =>
     a.localeCompare(b),
   )) {
-    if (owner === null && OVERLAY_MIGRATION_RE.test(file)) {
-      throw new Error(
-        `[composer] ${file} is a migration under a deployment overlay. A per-deployment ` +
-          `overlay contributes registrations, routes, decorations, interceptors, ` +
-          `permissions, i18n and a manifest — and no schema (D-106, narrowing D-105). The ` +
-          `reason is not migration ordering: that argument was measured false and is ` +
-          `retired. It is that an overlay lives in the same repository and the same build ` +
-          `as core, so the remedy is always available and costs nothing but a directory — ` +
-          `move the schema into a core module. Registering this file here would be a new ` +
-          `capability, not a side effect of generating the list. An extension package is ` +
-          `the opposite case and may ship migrations — a third-party author has no core ` +
-          `module to ship them from.`,
-      );
+    // `specs/190-overlay-full-modules/` FR-038 (research R-4): an overlay module's
+    // migrations run from the deployment root at runtime and are never emitted here.
+    // They are validated as a core module's are, and their class names join the
+    // collision check, since a database records both sets under one name space.
+    const overlayMigration = owner === null ? OVERLAY_MIGRATION_RE.exec(file) : null;
+    if (overlayMigration) {
+      const className = overlayMigrationClassName(overlayMigration[1]!, overlayMigration[2]!, file, source);
+      const previous = byClassName.get(className);
+      if (previous !== undefined) {
+        throw new Error(
+          `[composer] two migrations resolve to '${className}' (${previous} and ${file}). ` +
+            `The persisted name would collide, so one of the two would never run.`,
+        );
+      }
+      byClassName.set(className, file);
+      continue;
     }
     const packaged = owner !== null ? PACKAGE_MIGRATION_RE.exec(file) : null;
     const core = owner === null ? CORE_MIGRATION_RE.exec(file) : null;
@@ -1924,6 +2040,48 @@ export function collectMigrations(
     found.push({ moduleId, className, file, owner });
   }
   return found;
+}
+
+/**
+ * The class an overlay module's migration file must export, or a refusal: the
+ * filename is a migration's (§1), the file exports the class its filename
+ * derives (§2), and that name is scoped by the module id — the rule
+ * `orderMigrations` applies at runtime (`unscoped-name`), said here first.
+ */
+function overlayMigrationClassName(
+  moduleId: string,
+  filename: string,
+  file: string,
+  source: string,
+): string {
+  if (!MIGRATION_FILE_RE.test(filename)) {
+    throw new Error(
+      `[composer] ${file} is in an overlay module's migrations directory but is not named like a ` +
+        `migration (<YYYYMMDDTHHmmss>_<module-segment>_<slug>.ts). The platform reads that ` +
+        `directory file by file and refuses it at boot (\`migration-file-shape\`).`,
+    );
+  }
+  const className = classNameFromMigrationFile(filename);
+  if (!new RegExp(`export\\s+class\\s+${className}\\b`).test(source)) {
+    throw new Error(
+      `[composer] ${file} must export 'class ${className}' — the class name is derived ` +
+        `from the filename and is what \`mikro_orm_migrations\` persists.`,
+    );
+  }
+  const stamp = MIGRATION_FILE_RE.exec(filename)![1]!;
+  const prefix = moduleId
+    .split('_')
+    .filter((segment) => segment.length > 0)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join('');
+  if (!className.startsWith(`Migration${stamp}${prefix}`)) {
+    throw new Error(
+      `[composer] ${file} is owned by the overlay module "${moduleId}", so its class must be ` +
+        `named Migration${stamp}${prefix}…, not ${className}. A class name is scoped by its ` +
+        `module, which is what keeps it unique beside every module the platform composes.`,
+    );
+  }
+  return className;
 }
 
 function emitMigrationsHeader(): string {
@@ -2088,6 +2246,182 @@ export function renderBaselineList(_sources: SourceTree = readSourceTree()): {
 }
 
 
+// ── the first-party foreign-write exemptions ────────────────────────────────
+//
+// `specs/178-extensible-columns/` FR-071, `contracts/foreign-schema-guard.md` §3.
+// An installed package's migration that writes another module's table is
+// refused at `migrate` (FR-070). This repository's modules are installed as
+// packages in an instance, and some of their migrations write a table another
+// module owns — each one recorded, with its reason and its retirement, in R2's
+// ledger (`scripts/ledgers/migration-foreign-writes/`). The guard lets exactly
+// those through, by (module, migration class, table), and this artefact is how
+// it knows them: rendered from the ledger, published on the platform's
+// `./migrations` subpath, and held fresh by `overlay:check` like the baseline
+// list beside it. An entry retired from the ledger leaves this list in the same
+// merge request.
+
+/** R2's ledger directory — `check:module-boundary`'s own. */
+const FOREIGN_WRITE_LEDGER_ROOT = join(here, 'ledgers', 'migration-foreign-writes');
+
+function foreignWriteExemptionsOutputPath(): string {
+  return join(dirname(baselineListOutputPath()), 'foreign-write-exemptions.generated.ts');
+}
+
+export interface ForeignWriteExemptionRow {
+  readonly moduleId: string;
+  readonly migration: string;
+  readonly table: string;
+  /**
+   * Absent for an R2 write; `bridge` for a derived D-226 bridge (D-291 R-A6);
+   * `derived-down` for a `down()` destruction R-A7's predicate exempts.
+   */
+  readonly kind?: 'bridge' | 'derived-down';
+  readonly direction?: 'up' | 'down';
+  readonly clause?: string;
+}
+
+/**
+ * The ledger's entries as (module, class, table). The class name is read off
+ * the migration file the key names rather than derived from its file name: the
+ * file is in this tree, and a derivation would be a second author of the
+ * naming convention.
+ */
+export async function foreignWriteExemptionRows(
+  ledgerRoot: string = FOREIGN_WRITE_LEDGER_ROOT,
+): Promise<ForeignWriteExemptionRow[]> {
+  if (!existsSync(ledgerRoot)) {
+    throw new Error(`[composer] R2's ledger directory is missing (${ledgerRoot}); refusing to render no exemptions`);
+  }
+  const rows: ForeignWriteExemptionRow[] = [];
+  for (const name of readdirSync(ledgerRoot).sort()) {
+    if (!name.endsWith('.ts')) continue;
+    const moduleId = name.replace(/\.ts$/, '');
+    const shard = (await import(pathToFileURL(join(ledgerRoot, name)).href)) as {
+      entries?: Readonly<Record<string, unknown>>;
+    };
+    for (const key of Object.keys(shard.entries ?? {})) {
+      const split = key.lastIndexOf(':');
+      const file = key.slice(0, split);
+      const table = key.slice(split + 1);
+      const path = join(repoRoot, file);
+      const declared = existsSync(path) ? /export class (Migration\w+)/.exec(readFileSync(path, 'utf8')) : null;
+      if (declared === null) {
+        throw new Error(
+          `[composer] R2 ledger entry "${key}" (${moduleId}) names no migration class — the file is gone ` +
+            'or declares none. Retire the entry in the same merge request that moved the migration.',
+        );
+      }
+      rows.push({ moduleId, migration: declared[1]!, table });
+    }
+  }
+  return rows.sort(
+    (a, b) =>
+      a.moduleId.localeCompare(b.moduleId) || a.migration.localeCompare(b.migration) || a.table.localeCompare(b.table),
+  );
+}
+
+/** Pure emit — the published exemption list. */
+export function emitForeignWriteExemptions(rows: readonly ForeignWriteExemptionRow[]): string {
+  const line = (row: ForeignWriteExemptionRow): string =>
+    `  { moduleId: '${row.moduleId}', migration: '${row.migration}', table: '${row.table}'` +
+    (row.kind === undefined ? '' : `, kind: '${row.kind}', direction: '${row.direction}'`) +
+    (row.clause === undefined ? '' : `, clause: '${row.clause}'`) +
+    ' },';
+  return `${HEADER('generate-composer.ts')}//
+// The first-party migrations the runtime foreign-schema guard lets write a table
+// another module owns (specs/178-extensible-columns/ FR-071), by module,
+// migration class and table — rendered from R2's ledger,
+// backend/scripts/ledgers/migration-foreign-writes/, where each entry carries its
+// reason and its retirement. It shrinks as that ledger drains.
+//
+// Entries of kind \`bridge\` (D-291 R-A6) are derived, not ledgered: the D-226
+// bridges — a table a module's migration creates while another module's entity
+// maps it, bridging a table of each — whose migration may destroy that table in
+// \`direction\` (backend/scripts/lib/first-party-bridges.ts). Entries of kind
+// \`derived-down\` (D-291 R-A7) are the first-party \`down()\` destructions of a
+// table another module owns that the shared predicate exempts — the owner
+// depends on the writer, the writer is core, or both are non-deactivatable —
+// with the clause recorded.
+
+export const FIRST_PARTY_FOREIGN_WRITE_EXEMPTIONS: readonly {
+  readonly moduleId: string;
+  readonly migration: string;
+  readonly table: string;
+  readonly kind?: 'write' | 'bridge' | 'derived-down';
+  readonly direction?: 'up' | 'down';
+  readonly clause?: 'owner-depends-on-writer' | 'writer-is-core' | 'both-required';
+}[] = [
+${rows.map(line).join('\n')}
+];
+`;
+}
+
+/** Pure render — the target path + expected content of the exemption list. */
+export async function renderForeignWriteExemptions(): Promise<{ outputPath: string; content: string }> {
+  return {
+    outputPath: foreignWriteExemptionsOutputPath(),
+    content: emitForeignWriteExemptions([
+      ...(await foreignWriteExemptionRows()),
+      // D-291 R-A6 — derived from `check:module-boundary`'s owner map and the
+      // manifests, never hand-listed.
+      ...(await firstPartyBridges()),
+      // D-291 R-A7 — the shared predicate's verdicts, with their clause.
+      ...(await firstPartyDerivedDowns()),
+    ]),
+  };
+}
+
+// ── the first-party module packages ─────────────────────────────────────────
+//
+// `specs/189-command-middleware/contracts/module-origin.md` §2. In an instance
+// core arrives as installed packages, and the package loader gives an installed
+// module the trust tier `core` only when its own `package.json` name **and** its
+// `endora.id` are one pair of this list — so an npm alias cannot borrow a
+// first-party name, and a package outside the release (a paid module, D-296.8)
+// is `package` whatever its scope. The population is the CLI release index's
+// rule (`publishablePackages`: every non-private, named workspace package),
+// narrowed to packages declaring `endora.type: "module"`. Lockstep releases make
+// "this release's first-party set" one fact (`release-intent.md`).
+
+function firstPartyModulesOutputPath(): string {
+  const platformRoot = platformSourceRootAt(repoRoot);
+  if (platformRoot === null) {
+    throw new PlatformRootUnresolvableError(
+      '[composer] no workspace member declares `endora.type: "platform"`, so the first-party ' +
+        'module list has no home. It is the host package\'s: the package loader reads it.',
+    );
+  }
+  return join(platformRoot, 'packages', 'first-party-modules.generated.ts');
+}
+
+export interface FirstPartyModulePackage {
+  readonly moduleId: string;
+  readonly packageName: string;
+}
+
+/** Pure emit, sorted by module id so the artefact is byte-stable. */
+export function emitFirstPartyModules(rows: readonly FirstPartyModulePackage[]): string {
+  const sorted = [...rows].sort((a, b) => a.moduleId.localeCompare(b.moduleId) || a.packageName.localeCompare(b.packageName));
+  return `${HEADER('generate-composer.ts')}//
+// This release's first-party module packages
+// (specs/189-command-middleware/contracts/module-origin.md §2): every non-private,
+// named workspace package declaring \`endora.type: "module"\`, by the CLI release
+// index's own rule. The package loader stamps an installed module \`origin: 'core'\`
+// only when both its package.json \`name\` and its \`endora.id\` are one pair here.
+
+export const FIRST_PARTY_MODULE_PACKAGES: readonly { readonly moduleId: string; readonly packageName: string }[] = [
+${sorted.map((row) => `  { moduleId: '${row.moduleId}', packageName: '${row.packageName}' },`).join('\n')}
+];
+`;
+}
+
+export function renderFirstPartyModules(): { outputPath: string; content: string } {
+  const rows = publishablePackages(join(repoRoot, 'packages')).flatMap((pkg) =>
+    pkg.moduleId === undefined ? [] : [{ moduleId: pkg.moduleId, packageName: pkg.name }],
+  );
+  return { outputPath: firstPartyModulesOutputPath(), content: emitFirstPartyModules(rows) };
+}
+
 // ── the admin contribution registry ─────────────────────────────────────────
 //
 // The fifth artefact (feature 091, Phase 2). Its three siblings under
@@ -2139,8 +2473,33 @@ export function renderTailwindRegistry(
       collectTailwindSources(population.root, population.packages),
       undefined,
       collectBlockStylesheets(population.root),
+      collectOverlayAdminSources(adminSourceRootIn(population.root), population.appsRoot),
     ),
   };
+}
+
+// ── the deployment admin registries ─────────────────────────────────────────
+//
+// `specs/190-overlay-full-modules/` FR-080, `contracts/overlay-admin-layer.md` §2.
+// One registry per deployment on disk, and bare core's empty `none`, beside the
+// admin contribution registry. The renderer is `@endora-commerce/cli`'s, as the
+// two above are, because an instance renders the same files with
+// `endora generate`. Every deployment is rendered whatever `DEPLOYMENT` says, so
+// each is committed and `overlay:check` compares each (#120); the admin build
+// selects one.
+
+/** Pure render — bare core's registry, then one per deployment on disk. */
+export function renderDeploymentAdminRegistries(
+  population: ArtefactPopulation = workspacePopulation(),
+): ReadonlyArray<RenderedArtefact & { label: string }> {
+  return renderDeploymentAdminRegistriesInto(
+    adminSourceRootIn(population.root),
+    population.appsRoot,
+  ).map((rendered) => ({
+    label: `deployment-admin-registry (${rendered.deployment ?? 'none'})`,
+    outputPath: rendered.outputPath,
+    content: rendered.content,
+  }));
 }
 
 // ── the test entity index ───────────────────────────────────────────────────
@@ -2304,8 +2663,21 @@ export async function renderAll(): Promise<
     // registry agree is R1.7, and it is asserted where it can be: over both
     // committed artefacts, in test/unit/db/instance-migration-order.test.ts.
     { label: 'baseline-migrations', ...renderBaselineList(sources), entryKind: 'none' as const },
+    // `specs/178-extensible-columns/` FR-071 — the first-party R2 writes the
+    // runtime foreign-schema guard lets through. It names migration classes and
+    // tables, not files, so it has no containment population either.
+    {
+      label: 'foreign-write-exemptions',
+      ...(await renderForeignWriteExemptions()),
+      entryKind: 'none' as const,
+    },
+    // `specs/189-command-middleware/` — the release's first-party module
+    // packages, which the package loader stamps `core`. Package and module
+    // names, not files, so no containment population either.
+    { label: 'first-party-modules', ...renderFirstPartyModules(), entryKind: 'none' as const },
     { label: 'admin-registry', ...renderAdminRegistry(population) },
     { label: 'admin-tailwind', ...renderTailwindRegistry(population), entryKind: 'css-specifier' as const },
+    ...renderDeploymentAdminRegistries(population),
     { label: 'entity-index', ...renderEntityIndex(population) },
     { label: 'docs-sidebar', ...renderDocsSidebar(population) },
     { label: 'module-map', ...renderModuleMap(population) },

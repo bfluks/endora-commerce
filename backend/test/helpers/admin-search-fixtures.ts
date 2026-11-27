@@ -12,6 +12,8 @@ import {
 } from './package-entities.js';
 import { SEED_DELIVERY_METHOD_ID, SEED_PAYMENT_METHOD_ID } from './seed-commerce.js';
 import { withSystemScope } from '../../src/tenancy/escape-hatch.js';
+import { bindOrganizationsToFixtureChannelsSql } from './sales-channel-access.js';
+import { predefinedRoleIdOf } from './seed-organization-roles.js';
 
 /**
  * Fixtures for `specs/150-admin-global-search/`'s server-bound tests.
@@ -81,14 +83,20 @@ export async function seedOrganization(
 ): Promise<Organization> {
   const org = em.create(Organization, {
     name: over.name,
-    taxId: over.taxId ?? `PL${randomUUID().replace(/\D/g, '').slice(0, 10).padEnd(10, '7')}`,
+    // A personal organization has no tax ID (specs/177-tax-id-scope/).
+    taxId: over.isPersonal
+      ? null
+      : (over.taxId ?? `PL${randomUUID().replace(/\D/g, '').slice(0, 10).padEnd(10, '7')}`),
     status: (over.status ?? 'active') as never,
     vatStatus: 'vat_payer',
     ...(over.legalName !== undefined ? { legalName: over.legalName } : {}),
     ...(over.isPersonal !== undefined ? { isPersonal: over.isPersonal } : {}),
     registeredAddress: { street: 'ul. Szukana 1', city: 'Kraków', postalCode: '30-001', country: 'PL' },
   } as never);
-  await em.persistAndFlush(org);
+  await em.persist(org).flush();
+  // Feature 154 — an Organization with no sales channel may not shop anywhere;
+  // bind the stores the harness seeds.
+  await bindOrganizationsToFixtureChannelsSql(em, [org.id]);
   return org;
 }
 
@@ -103,10 +111,10 @@ export async function seedCustomer(
     passwordHash: 'x'.repeat(60),
     firstName: over.firstName ?? 'Gs',
     lastName: over.lastName ?? 'Customer',
-    role: 'organization_admin',
+    organizationRoleId: await predefinedRoleIdOf(em, organizationId, 'administrator'),
     emailVerifiedAt: new Date(),
   } as never);
-  await em.persistAndFlush(customer);
+  await em.persist(customer).flush();
   return customer;
 }
 
@@ -149,7 +157,7 @@ export async function seedOrder(
     currency: 'PLN',
     placedAt: new Date(),
   } as never);
-  await em.persistAndFlush(order);
+  await em.persist(order).flush();
   return order;
 }
 
@@ -174,7 +182,7 @@ export async function ensureSalesRep(
       previous = [...role.permissions];
       role.permissions = Array.from(new Set([...role.permissions, ...permissions]));
     }
-    await em.persistAndFlush(role);
+    await em.persist(role).flush();
     await upsertAdmin(em, GS_SALES_REP_ID, 'global-search-sales-rep@example.com', role.id);
     for (const organizationId of organizationIds) {
       const existing = await em.findOne(OrganizationSalesRepAssignment, { adminUserId: GS_SALES_REP_ID, organizationId });
@@ -186,7 +194,7 @@ export async function ensureSalesRep(
     await withSystemScope('test cleanup: global search sales representative', async () => {
       const em = h.em();
       const rows = await em.find(OrganizationSalesRepAssignment, { adminUserId: GS_SALES_REP_ID });
-      if (rows.length > 0) await em.removeAndFlush(rows);
+      if (rows.length > 0) await em.remove(rows).flush();
       if (previous !== null) {
         const role = await em.findOne(AdminRole, { code: 'sales_representative' });
         if (role) {
@@ -194,6 +202,38 @@ export async function ensureSalesRep(
           await em.flush();
         }
       }
+    });
+  };
+}
+
+/**
+ * Issue #305 — make `organizationIds` another representative's.
+ *
+ * A sales representative reaches every Organization nobody else governs, so an
+ * Organization with no assignment at all is in the global-search
+ * representative's reach. A fixture that means "an Organization outside their
+ * scope" assigns it here, to a representative no admin account is behind.
+ * Returns the cleanup.
+ */
+export const GS_OTHER_REP_ID = '00000000-0000-4000-8000-0000000150a9';
+
+export async function assignToAnotherRepresentative(
+  h: BackendServerHandle,
+  organizationIds: readonly string[],
+): Promise<() => Promise<void>> {
+  await withSystemScope('test seed: global search, another representative', async () => {
+    const em = h.em();
+    for (const organizationId of organizationIds) {
+      const existing = await em.findOne(OrganizationSalesRepAssignment, { adminUserId: GS_OTHER_REP_ID, organizationId });
+      if (!existing) em.create(OrganizationSalesRepAssignment, { adminUserId: GS_OTHER_REP_ID, organizationId });
+    }
+    await em.flush();
+  });
+  return async () => {
+    await withSystemScope('test cleanup: global search, another representative', async () => {
+      const em = h.em();
+      const rows = await em.find(OrganizationSalesRepAssignment, { adminUserId: GS_OTHER_REP_ID });
+      if (rows.length > 0) await em.remove(rows).flush();
     });
   };
 }
@@ -210,7 +250,7 @@ export async function ensureAdminWithRole(
     let role = await em.findOne(AdminRole, { code: roleCode });
     if (!role) role = em.create(AdminRole, { code: roleCode, name: roleCode, permissions: [...permissions] });
     else role.permissions = [...permissions];
-    await em.persistAndFlush(role);
+    await em.persist(role).flush();
     await upsertAdmin(em, adminUserId, `${roleCode.replace(/_/g, '-')}@example.com`, role.id);
   });
 }

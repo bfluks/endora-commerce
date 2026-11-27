@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import { zoneComponent, type AdminContributions } from '@endora-commerce/admin-kit/contributions';
 import { renderWithI18n } from '../../helpers/render-with-i18n';
 import { adminSession, modulePresence, withSession } from '../../helpers/render-with-session';
+import { markup } from '../../helpers/react-ids';
 
 /**
  * `quote_request.detail.after` — the stack of panels a quote request's screen
@@ -131,11 +132,6 @@ async function renderDetail(options: {
   return container;
 }
 
-/** The screen's markup with React's per-render ids taken out, so two renders compare. */
-function markup(container: HTMLElement): string {
-  return container.innerHTML.replace(/(id|for|aria-[a-z]+)="(:r[0-9a-z]+:|«r[0-9a-z]+»)"/g, '$1="_"');
-}
-
 beforeEach(() => {
   getSpy.mockReset();
 });
@@ -199,7 +195,7 @@ describe('RfqDetail — the quote_request.detail.after zone', () => {
       resolve(process.cwd(), '../packages/modules/quote_requests/src/admin/pages/RfqDetail.tsx'),
       'utf8',
     );
-    expect(source).toContain('<AdminZone name="quote_request.detail.after" props={{ quoteRequestId: id }} />');
+    expect(source).toContain('<AdminZone name="quote_request.detail.after" props={{ quoteRequestId: id }} chrome="card" />');
     expect(source).not.toMatch(/mod-crm|crm:|opportunit/i);
     const manifest = readFileSync(
       resolve(process.cwd(), '../packages/modules/quote_requests/package.json'),

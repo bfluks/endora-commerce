@@ -13,19 +13,33 @@ import {
   type RfqComparisonAgainstLastSeen,
   type AdminUserReadPort,
   type CartWritePort,
+  type CatalogProductAvailabilityPort,
   type CatalogProductReadPort,
+  type CatalogPackagingUnitRecord,
   type CatalogProductRecord,
+  type CreateQuoteRequestLine,
   type CustomerAccountReadPort,
   type CustomerAccountRecord,
   type SalesRepAssignmentPort,
   type BuyerLinePricePort,
   type CreateForCustomerOptions,
+  type OrderMinimumLine,
+  withChannelOrderRules,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 import type { EventBase, EventBus } from '@endora-commerce/platform/events';
 import { HttpError } from '@endora-commerce/platform/http';
 import { recordAuditFromContext } from '@endora-commerce/platform/commands';
-import type { AuditPort } from '@endora-commerce/platform/kernel';
-import { QuoteRequest, type QuoteRequestStatus } from '../entities/quote-request.entity.js';
+import type { CommandBus } from '@endora-commerce/platform/commands';
+import type { AuditPort, PlatformLogger } from '@endora-commerce/platform/kernel';
+import {
+  makeBuyerCreateQuoteRequestCommand,
+  makeBuyerResubmitQuoteRequestCommand,
+  type QuoteRequestBuyerCommandDeps,
+  type QuoteRequestBuyerLine,
+} from '../commands/quote-request-buyer-commands.js';
+import type { AssigneeEligibility } from './assignee-eligibility.js';
+import { QuoteRequest } from '../entities/quote-request.entity.js';
 import { QuoteRequestItem } from '../entities/quote-request-item.entity.js';
 import {
   QuoteRequestEvent,
@@ -34,15 +48,16 @@ import {
 import type { QuoteRequestRevisionLine } from '../entities/quote-request-revision.entity.js';
 import type { RfqEventService } from './rfq-event-service.js';
 import type { RfqRevisionService } from './rfq-revision-service.js';
-import type { RfqNotificationService} from './rfq-notification-service.js';
-import { type NotificationRecipient } from './rfq-notification-service.js';
+import type { RfqNotificationService } from './rfq-notification-service.js';
+import type { OrgWideViewerRoleIds } from './notifications/recipients.js';
 import type { QuoteRequestBusinessIdGenerator } from './quote-request-business-id-generator.js';
 import type { SalesChannelMembershipPort } from '@endora-commerce/platform/kernel';
-import { productIdsInRequestChannel } from '@endora-commerce/platform/kernel';
-import { raisedOnChannelId } from './raised-on-channel.js';
-import { hasUnpricedLine, quoteIncompleteError } from './agreed-price.js';
+import { raisedInScopeLanguage, raisedOnChannelId } from './raised-on-channel.js';
+import { hasUnpricedLine, quoteIncompleteError, unitPriceText } from './agreed-price.js';
 import { underRowLock } from './transition-lock.js';
+import type { NotificationKick } from './notifications/kick.js';
 import { summarize } from './summarize.js';
+import { channelCurrencies, channelCurrency, requestLineCurrency } from './line-currency.js';
 import {
   assertValidSuppliedReferences,
   referenceColumns,
@@ -50,7 +65,9 @@ import {
   storedReferenceColumns,
   type ReferenceColumns,
 } from './reference-price.js';
-import { carriedProposal, pairLines, referenceInputsUnchanged } from './line-carry-over.js';
+import { carriedProposal, pairLines } from './line-carry-over.js';
+import { LINE_STORAGE_ORDER, loadArrangedQuoteLines, nonEmptyGroups, toLineGroup } from './line-order.js';
+import { planLineGrouping, type PlannedLineGroup } from './line-grouping.js';
 import type { NegotiationPolicyService } from './negotiation-policy-service.js';
 import {
   CUSTOMER_EVENT_KEYS,
@@ -60,6 +77,20 @@ import {
   pickKeys,
 } from './customer-projection.js';
 import { assertDraftOpenForCustomer, submissionRecordProposals } from './draft-guard.js';
+import {
+  carriesPackagingReference,
+  packagingMismatchError,
+  resolveLinePackaging,
+  type ResolvedPackaging,
+} from './packaging-resolution.js';
+import {
+  assertQuoteMeetsMinimums,
+  draftEditExemptions,
+  quoteMinimumLines,
+  quoteMinimumWarnings,
+  resubmitMinimumLines,
+  type QuoteLineMinimumWarning,
+} from './quote-minimums.js';
 
 /**
  * Customer-facing Quote Requests service — feature 008 workflow.
@@ -85,12 +116,19 @@ export interface RfqEvents extends Record<string, EventBase> {
 }
 export type RfqEventBus = EventBus<RfqEvents>;
 
+/**
+ * Who is asking, on this module's customer routes.
+ *
+ * `organizationRoleId` is the role the actor carries (`specs/170-organization-roles/`,
+ * research R-15), handed to `organizationPermissionPort` so it need not read
+ * the account again; absent, the port reads it. Whether the caller sees every
+ * quote request of the Organization is **not** carried here: it is asked of
+ * the port where it is needed (research R-30), so no caller can state it.
+ */
 export interface CustomerContext {
   customerAccountId: string;
   organizationId: string;
-  /** True when the customer account holds the org-admin role on the
-   * current organization (FR-011 — broader visibility). */
-  isOrgAdmin: boolean;
+  organizationRoleId?: string | null;
 }
 
 export interface RfqServiceDeps {
@@ -99,6 +137,13 @@ export interface RfqServiceDeps {
   eventService: RfqEventService;
   revisionService: RfqRevisionService;
   notificationService: RfqNotificationService;
+  /**
+   * Wakes the notification delivery worker once a transition that recorded
+   * deliveries has committed (`specs/179-rfq-and-customer-notifications/`
+   * research R-8). Never throws. Absent: nothing is kicked, and the worker's
+   * schedule reaches the records.
+   */
+  notificationKick?: NotificationKick;
   salesRepAssignment: SalesRepAssignmentPort;
   /**
    * Narrows a quote's custom-field values to the ones a customer may read
@@ -132,6 +177,15 @@ export interface RfqServiceDeps {
    * module's, so it is not one of the four edges the block above declares.
    */
   channelMembership: SalesChannelMembershipPort;
+  /**
+   * Feature 163 — `catalog`'s one answer to "may this buyer acquire this
+   * product here, now" (FR-004, FR-018): membership, effective status at
+   * (channel, L), window and effective audience.
+   */
+  catalogAvailability: Pick<
+    CatalogProductAvailabilityPort,
+    'filterAvailable' | 'effectiveTexts' | 'effectivePackagingUnitNames' | 'effectiveOrderRules'
+  >;
   customerAccounts: CustomerAccountReadPort;
   adminUsers: AdminUserReadPort;
   carts: CartWritePort;
@@ -164,6 +218,31 @@ export interface RfqServiceDeps {
   resolveTaxRate: (organizationId: string) => Promise<number>;
   /** Feature 054 — audits RFQ writes co-transactionally when provided. */
   auditLog?: AuditPort;
+  /**
+   * Issue #1906 — the buyer's create-and-submit and submit-again run as the
+   * Commands `quote_request.create` and `.resubmit` (Principle XIII), declared
+   * hookable; the buyer's other writes keep their hand audit through {@link auditLog}.
+   */
+  commandBus: Pick<CommandBus, 'run'>;
+  /**
+   * Issue #1906 — who a command hook on `quote_request.create` may make the
+   * request's assignee (`assignee-eligibility.ts`).
+   */
+  assigneeEligibility: AssigneeEligibility;
+  /**
+   * Feature 155 (threat F6) — where the server-side cause of an `unknown_unit`
+   * refusal goes; the buyer's answer never carries it. Absent: not logged.
+   */
+  log?: PlatformLogger;
+  /**
+   * The Organization roles whose holders see every quote request of that
+   * Organization — until P3 its *Administrator* role
+   * (`specs/170-organization-roles/`, FR-041 in its P2 form, research R-30).
+   * The **same** function decides the customer-side notification recipients
+   * (`specs/179-rfq-and-customer-notifications/` research R-3), so nobody is
+   * told about a request this service answers them `404` for.
+   */
+  orgWideViewerRoleIds: OrgWideViewerRoleIds;
 }
 
 export class RfqService {
@@ -193,16 +272,149 @@ export class RfqService {
   async #acquirableProductsById(
     productIds: readonly string[],
     ctx: CustomerContext,
+    /** The request's language (feature 163): L is it resolved against the channel. */
+    languageTag: string | undefined,
+    /**
+     * Feature 163 — the channel the buyer's route resolved, named explicitly
+     * so a buyer's lines are always asked about at a channel.
+     */
+    salesChannelId: string | undefined,
   ): Promise<Map<string, CatalogProductRecord>> {
-    const visible = (await this.deps.catalogProducts.findByIds(productIds)).filter((p) =>
-      isProductVisibleTo(p, rfqAudience(ctx)),
+    // Feature 163, owner decision P-3 = A — an archived product is never a quote
+    // line, at any channel or none. With a channel `filterAvailable` already says
+    // so; without one the audience rule below would not.
+    const records = (await this.deps.catalogProducts.findByIds(productIds)).filter(isNotArchived);
+    const channelId = salesChannelId ?? raisedOnChannelId();
+    // Outside a request, with no channel named, there is no channel to ask
+    // about (FR-007): the audience filter alone, as before. A buyer route
+    // never reaches this branch — it names the channel it resolved.
+    if (channelId === null) {
+      return new Map(records.filter((p) => isProductVisibleTo(p, rfqAudience(ctx))).map((p) => [p.id, p]));
+    }
+    // Feature 163 (FR-018) — the request's channel and language; one answer for
+    // every reason a line is not acquirable.
+    const available = await this.deps.catalogAvailability.filterAvailable(
+      records.map((p) => p.id),
+      { channelId, languageCode: raisedInScopeLanguage(languageTag, channelId), audience: rfqAudience(ctx) },
     );
-    const publishedHere = await productIdsInRequestChannel(
-      this.deps.channelMembership,
-      visible.map((p) => p.id),
+    return new Map(records.filter((p) => available.has(p.id)).map((p) => [p.id, p]));
+  }
+
+  /**
+   * Feature 163 (FR-017 d, N2) — the names a quote line snapshots: the effective
+   * name `catalog` answers at `channelId` in the request's scope language
+   * (`languageTag` resolved against the channel), or at the channel's default
+   * language for an operator (`languageTag` `null`). Empty without a channel; the
+   * caller keeps its baseline pick then.
+   */
+  async lineNames(
+    products: readonly CatalogProductRecord[],
+    channelId: string | null,
+    languageTag: string | null | undefined,
+  ): Promise<Map<string, string>> {
+    if (channelId === null || products.length === 0) return new Map();
+    const texts = await this.deps.catalogAvailability.effectiveTexts(
+      products.map((p) => p.id),
+      { channelId, languageCode: languageTag === null ? null : raisedInScopeLanguage(languageTag, channelId) },
     );
-    const acquirable = publishedHere ? visible.filter((p) => publishedHere.has(p.id)) : visible;
-    return new Map(acquirable.map((p) => [p.id, p]));
+    return new Map([...texts].map(([id, text]) => [id, text.name]));
+  }
+
+  /**
+   * Feature 155 (FR-026, R13.1) — resolves each line's packaging against the
+   * catalogue, or refuses the whole write with `422 PACKAGING_UNIT_MISMATCH`.
+   *
+   * Runs after the product 404, so every product here passed
+   * `#acquirableProductsById`, and the units are read only for those vetted ids
+   * — and only for the lines that name a unit at all (threat F12). Which of an
+   * unknown, a deleted or another product's unit an `unknown_unit` was goes to
+   * the log, never to the buyer (threat F6).
+   */
+  async #resolvePackaging(
+    lines: readonly CreateQuoteRequestLine[],
+    productById: ReadonlyMap<string, CatalogProductRecord>,
+    /** Feature 163 — the request's language tag, the unit and product names' scope language is resolved from. */
+    languageTag: string | undefined,
+    /**
+     * Feature 163 (FR-079, T138) — the channel the line names are asked at
+     * (`lineNames`'s), so the unit name is snapshotted in the same scope
+     * language as the product name it is appended to.
+     */
+    channelId: string | null,
+  ): Promise<{ packaging: ResolvedPackaging[]; units: CatalogPackagingUnitRecord[] }> {
+    const vettedIds = Array.from(
+      new Set(lines.filter(carriesPackagingReference).map((line) => line.productId)),
+    ).filter((id) => productById.has(id));
+    const units =
+      vettedIds.length > 0 ? await this.deps.catalogProducts.listPackagingUnitsByProductIds(vettedIds) : [];
+    // Feature 174 (FR-030, FR-032) — the unit names snapshotted at the line names' scope. No
+    // channel: none asked, the Global names (as `lineNames` asks nothing then).
+    const unitNamesAtScope =
+      channelId === null || units.length === 0
+        ? new Map<string, string | null>()
+        : await this.deps.catalogAvailability.effectivePackagingUnitNames(
+            units.map((unit) => unit.id),
+            { channelId, languageCode: raisedInScopeLanguage(languageTag, channelId) },
+          );
+    const { lines: packaging, mismatches } = resolveLinePackaging(lines, units, unitNamesAtScope);
+    if (mismatches.length > 0) {
+      const causes = mismatches.filter((m) => m.cause !== undefined);
+      if (causes.length > 0) {
+        this.deps.log?.info(
+          { lines: causes.map((m) => ({ index: m.index, productId: m.productId, cause: m.cause })) },
+          'quote_requests: a packaging unit id did not resolve on a buyer write',
+        );
+      }
+      throw packagingMismatchError(
+        mismatches,
+        productNames(productById.values(), await this.lineNames([...productById.values()], channelId, languageTag)),
+      );
+    }
+    return { packaging, units };
+  }
+
+  /**
+   * Feature 155 (FR-012, FR-029) — the minimum check of a buyer's write, after
+   * the packaging resolution and before any reference price is resolved or
+   * anything is written. `'warn'` is set only by an in-process caller acting
+   * for a representative (`CreateForCustomerOptions.minimums`).
+   */
+  async #assertMinimums(
+    lines: readonly OrderMinimumLine[],
+    products: Iterable<CatalogProductRecord>,
+    packagingUnits: readonly CatalogPackagingUnitRecord[],
+    mode: 'enforce' | 'warn',
+    /** Feature 163 (FR-100) — the request's channel, whose minimums apply; none = the global ones. */
+    channelId: string | null | undefined,
+    /** Feature 174 (FR-030) — the request's language tag: a refusal names products at (channel, L). */
+    languageTag: string | null | undefined,
+  ): Promise<void> {
+    const records = await this.#withChannelOrderRules(Array.from(products), channelId);
+    const names = productNames(records, await this.lineNames(records, channelId ?? null, languageTag));
+    assertQuoteMeetsMinimums(lines, { products: records, packagingUnits }, names, mode);
+  }
+
+  /** Feature 163 (FR-100, research R26) — the records with the request channel's minimum and returnable flag. */
+  async #withChannelOrderRules(
+    records: CatalogProductRecord[],
+    channelId: string | null | undefined,
+  ): Promise<CatalogProductRecord[]> {
+    if (records.length === 0 || !channelId) return records;
+    return withChannelOrderRules(
+      records,
+      await this.deps.catalogAvailability.effectiveOrderRules(
+        records.map((record) => record.id),
+        channelId,
+      ),
+    );
+  }
+
+  /**
+   * After a commit that recorded deliveries, and never before it: a kick for a
+   * transaction that then rolled back would wake the worker for nothing.
+   */
+  private kickNotificationDelivery(): void {
+    this.deps.notificationKick?.();
   }
 
   /** Feature 054 — co-transactional RFQ audit on `em` (actor from context). */
@@ -248,13 +460,50 @@ export class RfqService {
   // Read paths
   // -------------------------------------------------------------------------
 
+  /**
+   * The quote requests **the account itself** raised — `RfqCustomerPort`'s
+   * answer, which `customers` reads for a buyer's own list and for one
+   * customer's list in the Admin UI. Never widened to the Organization, whoever
+   * the account is: that is {@link listVisibleForCustomer}, this module's own
+   * storefront list.
+   */
   async listForCustomer(ctx: CustomerContext): Promise<QuoteRequestSummary[]> {
+    return this.#listSummaries(ctx, false);
+  }
+
+  /**
+   * `GET /api/v1/quote-requests` — the caller's own quote requests, or every
+   * quote request of its Organization when it holds the *Administrator* role
+   * (`specs/170-organization-roles/`, FR-041 P2 form, research R-30).
+   */
+  async listVisibleForCustomer(ctx: CustomerContext): Promise<QuoteRequestSummary[]> {
+    return this.#listSummaries(ctx, await this.#seesOrganization(ctx));
+  }
+
+  /**
+   * Whether the caller sees every quote request of its Organization: its role
+   * is one of {@link orgWideViewerRoleIds} — until P3 the *Administrator* role
+   * (research R-30), never the legacy `role` column. The role is the one the
+   * actor carries; absent, the account's own role **in that Organization**,
+   * and an account that is not a member there sees nothing of it.
+   */
+  async #seesOrganization(ctx: CustomerContext): Promise<boolean> {
+    const roleId =
+      ctx.organizationRoleId ??
+      (await this.deps.customerAccounts.findInOrganization(ctx.customerAccountId, ctx.organizationId))
+        ?.organizationRoleId ??
+      null;
+    if (roleId === null) return false;
+    return (await this.deps.orgWideViewerRoleIds(ctx.organizationId)).includes(roleId);
+  }
+
+  async #listSummaries(ctx: CustomerContext, seesOrganization: boolean): Promise<QuoteRequestSummary[]> {
     const em = this.deps.emFactory();
-    // Feature 056 (T032) — an Organization Admin sees "their org(s)"; the org
-    // predicate is enforced by the always-on tenant filter (single-org, or the
-    // SUBTREE for a roll-up-enabled head-office login), so we do not pin
-    // `ctx.organizationId` here. A regular user still sees only their own RFQs.
-    const where = ctx.isOrgAdmin ? {} : { customerAccountId: ctx.customerAccountId };
+    // Feature 056 (T032) — an Organization's administrator sees "their org(s)";
+    // the org predicate is enforced by the always-on tenant filter (single-org,
+    // or the SUBTREE for a roll-up-enabled head-office login), so we do not pin
+    // `ctx.organizationId` here. Anyone else sees only their own RFQs.
+    const where = seesOrganization ? {} : { customerAccountId: ctx.customerAccountId };
     const rfqs = await em.find(QuoteRequest, where, { orderBy: { createdAt: 'desc' } });
     if (rfqs.length === 0) return [];
 
@@ -270,6 +519,11 @@ export class RfqService {
     // Every RFQ in a customer listing belongs to the same Organization
     // (the caller's), so the VAT rate is resolved once for the page.
     const taxRate = await this.taxRateForOrganization(ctx.organizationId);
+    // Issue #303 — a request with no lines speaks its channel's currency.
+    const currencyByChannel = await channelCurrencies(
+      em,
+      rfqs.filter((rfq) => !itemsByRfq.has(rfq.id)).map((rfq) => rfq.salesChannelId),
+    );
 
     return rfqs.map((rfq) => {
       const rfqItems = itemsByRfq.get(rfq.id) ?? [];
@@ -277,6 +531,7 @@ export class RfqService {
       return summarize(rfq, rfqItems, {
         requesterDisplayName: requester ? customerDisplayName(requester) : null,
         taxRate,
+        currencyByChannel,
       });
     });
   }
@@ -328,6 +583,8 @@ export class RfqService {
     const productById = await this.#acquirableProductsById(
       input.items.map((it) => it.productId),
       ctx,
+      options.languageTag,
+      options.salesChannelId,
     );
     if (productById.size !== new Set(input.items.map((it) => it.productId)).size) {
       // Issues #227 and #259 — a line the buyer may not see, and a line the
@@ -337,11 +594,31 @@ export class RfqService {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'One or more products do not exist.');
     }
 
+    // Feature 155 (FR-026, FR-012, FR-029) — packaging, then minimums, after
+    // the 404 above and before anything is priced, numbered or written.
+    // The channel this request is raised on: the reference prices, the stored
+    // row and the snapshot names (product and unit) all speak about it.
+    const salesChannelId = raisedOnChannelId();
+    const { packaging, units } = await this.#resolvePackaging(
+      input.items,
+      productById,
+      options.languageTag,
+      salesChannelId,
+    );
+    const resolvedLines = input.items.map((line, index) => withResolvedPackaging(line, packaging[index]!));
+    await this.#assertMinimums(
+      quoteMinimumLines(resolvedLines),
+      productById.values(),
+      units,
+      options.minimums ?? 'enforce',
+      options.salesChannelId,
+      options.languageTag,
+    );
+
     // FR-001 / FR-008 — each line's reference, for the request's owner on the
     // channel it is raised on; a cart conversion supplies its own snapshot.
     // Resolved before any write: a pricing failure leaves no reference and
     // never blocks the request (research R2).
-    const salesChannelId = raisedOnChannelId();
     const references = await resolveReferencePrices(this.deps.buyerLinePrices, {
       owner: { customerAccountId: ctx.customerAccountId, organizationId: ctx.organizationId },
       salesChannelId,
@@ -350,92 +627,59 @@ export class RfqService {
     });
     const capturedAt = new Date();
 
-    const businessId = await this.generateBusinessId(em);
-    const rfq = em.create(QuoteRequest, {
-      ...(businessId ? { businessId } : {}),
-      organizationId: ctx.organizationId,
-      customerAccountId: ctx.customerAccountId,
-      salesChannelId,
-      status: 'Pending' satisfies QuoteRequestStatus,
-      headerNote: input.headerNote ?? null,
-      submittedAt: new Date(),
-      currentRevisionNumber: 1,
-      lastCustomerSeenRevisionNumber: 1,
-    });
-    await em.persistAndFlush(rfq);
+    const lineNames = await this.lineNames([...productById.values()], salesChannelId, options.languageTag);
+    // Issue #303 — decided here, once: the raised-on channel's currency.
+    const lineCurrency = await channelCurrency(em, salesChannelId);
 
-    const items: QuoteRequestItem[] = [];
-    for (const [index, lineInput] of input.items.entries()) {
+    const lines = input.items.map((lineInput, index): QuoteRequestBuyerLine => {
       const product = productById.get(lineInput.productId)!;
+      const unit = packaging[index]!;
       // Feature 043 — append the packaging-unit name to the snapshot name so
       // RFQ views show "<name> (Paleta)", and persist the structured snapshot.
-      const baseName = anyLocaleValue(product.name);
-      const productName = lineInput.packagingUnitName
-        ? `${baseName} (${lineInput.packagingUnitName})`
-        : baseName;
-      const item = em.create(QuoteRequestItem, {
-        quoteRequestId: rfq.id,
+      // Feature 155 (FR-026) — the name and base quantity are the catalogue
+      // unit's, beside its id; a line naming no unit stores plain pieces.
+      // Feature 163 (FR-017 d, N2) — the name is the one the buyer saw: the
+      // effective name at the request's (channel, language).
+      const baseName = lineNames.get(product.id) || product.name;
+      return {
         productId: product.id,
-        productName,
+        productName: unit.packagingUnitName ? `${baseName} (${unit.packagingUnitName})` : baseName,
         productSlug: product.slug,
         variantId: lineInput.variantId ?? null,
         quantity: lineInput.quantity,
-        ...(lineInput.packagingUnitName
-          ? { packagingUnitName: lineInput.packagingUnitName }
-          : {}),
-        ...(lineInput.packagingUnitBaseQuantity != null
-          ? { packagingUnitBaseQuantity: lineInput.packagingUnitBaseQuantity }
-          : {}),
-        desiredUnitPrice:
-          lineInput.desiredUnitPrice !== undefined ? lineInput.desiredUnitPrice.toFixed(2) : null,
+        packagingUnitId: unit.packagingUnitId,
+        packagingUnitName: unit.packagingUnitName,
+        packagingUnitBaseQuantity: unit.packagingUnitBaseQuantity,
+        desiredUnitPrice: lineInput.desiredUnitPrice !== undefined ? unitPriceText(lineInput.desiredUnitPrice) : null,
         lineNote: lineInput.lineNote ?? null,
-        lineCurrency: 'PLN',
+        lineCurrency,
         ...referenceColumns(references[index] ?? null, capturedAt),
-      });
-      items.push(item);
-    }
-    this.#audit(em, 'quote_request.create', rfq.id, null, {
-      status: rfq.status,
-      itemCount: items.length,
-      salesChannelId: rfq.salesChannelId ?? null,
-    });
-    await em.persistAndFlush(items);
-
-    const revision = await this.deps.revisionService.record({
-      rfq,
-      items,
-      actor: { customerAccountId: ctx.customerAccountId },
+        // Feature 159 — the request's order, stored (ungrouped: one section).
+        position: index,
+      };
     });
 
-    const created = await this.deps.eventService.append({
-      quoteRequestId: rfq.id,
-      eventType: 'created',
-      actor: { customerAccountId: ctx.customerAccountId, roleLabel: 'Customer' },
-      payload: { type: 'created' },
-      revisionId: revision.id,
-    });
-    const submitted = await this.deps.eventService.append({
-      quoteRequestId: rfq.id,
-      eventType: 'submitted',
-      actor: { customerAccountId: ctx.customerAccountId, roleLabel: 'Customer' },
-      payload: {
-        type: 'submitted',
-        itemCount: items.length,
-      },
-      revisionId: revision.id,
-    });
+    // Issue #1906 — the write is a Command, `quote_request.create`, hookable
+    // for both phases: a `beforeCommit` hook may veto it or set its assignee
+    // before the operators' notifications are fixed. The request, its lines,
+    // revision 1, its two history entries and the records naming `submitted`
+    // commit together, or none of them does
+    // (`specs/179-rfq-and-customer-notifications/` FR-001); `rfq.created.v1`
+    // is announced on the commit.
+    const rfq = await this.deps.commandBus.run(
+      makeBuyerCreateQuoteRequestCommand(
+        this.#buyerCommandDeps(),
+        {
+          customer: { customerAccountId: ctx.customerAccountId, organizationId: ctx.organizationId },
+          salesChannelId,
+          headerNote: input.headerNote ?? null,
+          lines,
+        },
+      ),
+    );
+    this.kickNotificationDelivery();
 
-    await this.notifyInternalSide(rfq.organizationId, submitted.id, rfq.id);
-
-    this.deps.events.emit('rfq.created.v1', {
-      eventId: randomUUID(),
-      occurredAt: new Date().toISOString(),
-      rfqId: rfq.id,
-      organizationId: rfq.organizationId,
-    });
-
-    void created; // referenced for ordering side-effect
-    return this.serializeFull(em, rfq, false);
+    return this.serializeFull(this.deps.emFactory(), rfq, false);
   }
 
   // -------------------------------------------------------------------------
@@ -447,6 +691,13 @@ export class RfqService {
     ctx: CustomerContext,
     body: PatchQuoteRequest,
     expectedVersion: number | null,
+    /**
+     * The language a refusal names a product in (feature 155, D3/D4); the
+     * channel the buyer's route resolved and the request's language tag, which
+     * the lines' scope language is resolved from (feature 163,
+     * `CreateForCustomerOptions.languageTag`).
+     */
+    options: { language?: string | undefined; languageTag?: string | undefined; salesChannelId?: string | undefined } = {},
   ): Promise<RfqDto> {
     const em = this.deps.emFactory();
     const rfq = await this.findVisibleForCustomer(em, rfqId, ctx);
@@ -478,6 +729,8 @@ export class RfqService {
       const productById = await this.#acquirableProductsById(
         body.items.map((it) => it.productId),
         ctx,
+        options.languageTag,
+        options.salesChannelId,
       );
       if (productById.size !== new Set(body.items.map((it) => it.productId)).size) {
         // Issues #227 and #259 — see `createForCustomer`. A revision may not
@@ -485,32 +738,42 @@ export class RfqService {
         // axis.
         throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'One or more products do not exist.');
       }
-      const existing = await em.find(
-        QuoteRequestItem,
-        { quoteRequestId: rfq.id },
-        { orderBy: { createdAt: 'asc', id: 'asc' } },
+      // Feature 159 — in display order (the order the buyer saw), with the
+      // stored groups a paired line keeps (R-13).
+      const { lines: existing, groups: storedGroups } = await loadArrangedQuoteLines(em, rfq.id);
+      // Feature 155 (FR-026) — packaging resolved against the catalogue
+      // before the pairing, which reads the **resolved** name: a line naming
+      // its unit by id alone pairs with the stored row of that unit.
+      const { packaging, units } = await this.#resolvePackaging(
+        body.items,
+        productById,
+        options.languageTag,
+        rfq.salesChannelId ?? null,
       );
+      const resolvedLines = body.items.map((line, index) => withResolvedPackaging(line, packaging[index]!));
+
       // Research R5.3 — pair by product, variant, packaging name, position.
-      const { paired } = pairLines(
-        existing,
-        body.items.map((line) => ({
-          productId: line.productId,
-          variantId: line.variantId ?? null,
-          packagingUnitName: line.packagingUnitName ?? null,
-        })),
-        'customer',
-      );
+      const { paired } = pairLines(existing, resolvedLines, 'customer');
 
       // A paired line whose product, variant, quantity and packaging unit are
       // unchanged keeps its stored reference; every other line is priced
       // afresh — for the request's **owner**, on the channel it was raised on,
       // never for the acting user (an organization administrator editing a
       // colleague's draft prices it as the colleague would pay).
-      const keeps = body.items.map((line, index) => {
-        const row = paired[index] ?? null;
-        return row !== null && referenceInputsUnchanged(row, line);
-      });
-      const toResolve = body.items.filter((_, index) => !keeps[index]);
+      //
+      // Feature 155 (FR-031 (b)) — the same predicate exempts the line from the
+      // minimums: an unchanged line is not refused, and still counts toward its
+      // product's total. Judged before pricing (FR-029).
+      const keeps = draftEditExemptions(paired, resolvedLines);
+      await this.#assertMinimums(
+        quoteMinimumLines(resolvedLines, keeps),
+        productById.values(),
+        units,
+        'enforce',
+        rfq.salesChannelId,
+        options.languageTag,
+      );
+      const toResolve = resolvedLines.filter((_, index) => !keeps[index]);
       const resolved = await resolveReferencePrices(this.deps.buyerLinePrices, {
         owner: { customerAccountId: rfq.customerAccountId, organizationId: rfq.organizationId },
         salesChannelId: rfq.salesChannelId ?? null,
@@ -524,18 +787,30 @@ export class RfqService {
           : referenceColumns(resolved[next++] ?? null, capturedAt),
       );
 
+      // Issue #303 — every line keeps the currency the request already has.
+      const lineCurrency = await requestLineCurrency(em, rfq, existing);
+      // Feature 163 — the names the edited lines snapshot (FR-017 d).
+      const lineNames = await this.lineNames(
+        [...productById.values()],
+        rfq.salesChannelId ?? null,
+        options.languageTag,
+      );
+      // Feature 159 (R-13, FR-025) — a customer body carries no grouping: a
+      // paired line keeps its group, a new line is ungrouped, no group changes;
+      // positions follow the body order within each section.
+      const grouping = planLineGrouping({ storedGroups, body: { items: body.items.map(() => ({})) }, pairedRows: paired });
       const lines = body.items.map((lineInput, index): QuoteRequestItemDraft => {
         const product = productById.get(lineInput.productId)!;
         const row = paired[index] ?? null;
-        // FR-035 — packaging stored as sent, with the name suffix
-        // `createForCustomer` writes.
-        const baseName = anyLocaleValue(product.name);
+        const unit = packaging[index]!;
+        // FR-035 — packaging stored with the name suffix `createForCustomer`
+        // writes; feature 155 (FR-026) — the catalogue unit's, beside its id;
+        // feature 163 — the effective name at the request's (channel, language).
+        const baseName = lineNames.get(product.id) || product.name;
         return {
           quoteRequestId: rfq.id,
           productId: product.id,
-          productName: lineInput.packagingUnitName
-            ? `${baseName} (${lineInput.packagingUnitName})`
-            : baseName,
+          productName: unit.packagingUnitName ? `${baseName} (${unit.packagingUnitName})` : baseName,
           productSlug: product.slug,
           variantId: lineInput.variantId ?? null,
           variantLabel:
@@ -543,13 +818,16 @@ export class RfqService {
               ? (row.variantLabel ?? null)
               : null,
           quantity: lineInput.quantity,
-          packagingUnitName: lineInput.packagingUnitName ?? null,
-          packagingUnitBaseQuantity: lineInput.packagingUnitBaseQuantity ?? null,
+          packagingUnitId: unit.packagingUnitId,
+          packagingUnitName: unit.packagingUnitName,
+          packagingUnitBaseQuantity: unit.packagingUnitBaseQuantity,
           // Threat model T5 — an omitted proposal on a paired line is kept.
           desiredUnitPrice: carriedProposal(lineInput.desiredUnitPrice, row),
           lineNote: lineInput.lineNote ?? null,
-          lineCurrency: 'PLN',
+          lineCurrency,
           ...references[index]!,
+          groupId: plannedGroupId(grouping.lines[index]!.group),
+          position: grouping.lines[index]!.position,
         };
       });
       rewrite = { existing, lines };
@@ -577,9 +855,9 @@ export class RfqService {
       if (body.headerNote !== undefined) rfq.headerNote = body.headerNote ?? null;
 
       if (rewrite) {
-        await em.removeAndFlush(rewrite.existing);
+        await em.remove(rewrite.existing).flush();
         const items = rewrite.lines.map((line) => em.create(QuoteRequestItem, line));
-        await em.persistAndFlush(items);
+        await em.persist(items).flush();
       }
 
       rfq.currentRevisionNumber += 1;
@@ -591,7 +869,8 @@ export class RfqService {
       await em.flush();
     });
 
-    const items = await em.find(QuoteRequestItem, { quoteRequestId: rfq.id });
+    // Feature 159 — the revision records the lines in display order.
+    const items = (await loadArrangedQuoteLines(em, rfq.id)).lines;
     const previousRevision = await this.deps.revisionService.byNumber(
       rfq.id,
       rfq.currentRevisionNumber - 1,
@@ -632,11 +911,19 @@ export class RfqService {
     rfqId: string,
     ctx: CustomerContext,
     body: ResubmitQuoteRequest,
+    /**
+     * The language a refusal names a product in (feature 155, D3/D4); the
+     * channel the buyer's route resolved and the request's language tag, which
+     * the lines' scope language is resolved from (feature 163,
+     * `CreateForCustomerOptions.languageTag`).
+     */
+    options: { language?: string | undefined; languageTag?: string | undefined; salesChannelId?: string | undefined } = {},
   ): Promise<RfqDto> {
     const em = this.deps.emFactory();
     const sourceRfq = await this.findVisibleForCustomer(em, rfqId, ctx);
 
-    const sourceItems = await em.find(QuoteRequestItem, { quoteRequestId: sourceRfq.id });
+    // Feature 159 — copied in the order the buyer saw them; no group is copied (FR-026).
+    const sourceItems = (await loadArrangedQuoteLines(em, sourceRfq.id)).lines;
     if (sourceItems.length === 0) {
       throw new HttpError(400, ERROR_CODES.RFQ_EMPTY, 'Source RFQ has no items.');
     }
@@ -651,13 +938,32 @@ export class RfqService {
     //
     // Whole-request 404, the same answer `createForCustomer` gives, because a
     // resubmit *is* a create over lines the buyer already chose.
-    const publishedHere = await productIdsInRequestChannel(
-      this.deps.channelMembership,
-      sourceItems.map((it) => it.productId),
+    // Feature 163 — and every other reason a line is not acquirable here, now.
+    const acquirable = await this.#acquirableProductsById(
+      Array.from(new Set(sourceItems.map((it) => it.productId))),
+      ctx,
+      options.languageTag,
+      options.salesChannelId,
     );
-    if (publishedHere && sourceItems.some((it) => !publishedHere.has(it.productId))) {
+    if (sourceItems.some((it) => !acquirable.has(it.productId))) {
       throw new HttpError(404, ERROR_CODES.PRODUCT_NOT_FOUND, 'One or more products do not exist.');
     }
+
+    // Feature 155 (FR-031 (c), FR-029) — judged as a new submission, before
+    // pricing: pieces only (no packaging is copied below), no exemption. The
+    // records are those of the buyer's own request's products; a product with
+    // no record is the unknown-product 404 (FR-037).
+    const sourceProducts = await this.deps.catalogProducts.findByIds(
+      Array.from(new Set(sourceItems.map((it) => it.productId))),
+    );
+    await this.#assertMinimums(
+      resubmitMinimumLines(sourceItems),
+      sourceProducts,
+      [],
+      'enforce',
+      options.salesChannelId,
+      options.languageTag,
+    );
 
     // The resubmit is its own request, so it is raised on the channel *this*
     // request resolved to — not the one the source RFQ carries. A buyer who
@@ -672,63 +978,47 @@ export class RfqService {
     });
     const capturedAt = new Date();
 
-    const newRfq = em.create(QuoteRequest, {
-      organizationId: ctx.organizationId,
-      customerAccountId: ctx.customerAccountId,
-      salesChannelId,
-      status: 'Pending' satisfies QuoteRequestStatus,
-      headerNote: body.headerNote ?? null,
-      submittedAt: new Date(),
-      currentRevisionNumber: 1,
-      lastCustomerSeenRevisionNumber: 1,
-    });
-    await em.persistAndFlush(newRfq);
-
-    const newItems: QuoteRequestItem[] = sourceItems.map((src, index) =>
-      em.create(QuoteRequestItem, {
-        quoteRequestId: newRfq.id,
-        productId: src.productId,
-        productName: src.productName,
-        productSlug: src.productSlug ?? null,
-        variantId: src.variantId ?? null,
-        quantity: src.quantity,
-        desiredUnitPrice: null,
-        lineNote: src.lineNote ?? null,
-        lineCurrency: src.lineCurrency,
-        ...referenceColumns(references[index] ?? null, capturedAt),
+    // Issue #1906 — the write is a Command, `quote_request.resubmit`, hookable
+    // for both phases like the create: a `beforeCommit` hook may veto it or set
+    // the new request's assignee before the operators' notifications are fixed.
+    // A re-submitted request is numbered like any other, never with the
+    // entity's `QR-<uuid>` placeholder; it and everything naming it commit
+    // together (FR-001). The source request is not written.
+    const newRfq = await this.deps.commandBus.run(
+      makeBuyerResubmitQuoteRequestCommand(this.#buyerCommandDeps(), {
+        customer: { customerAccountId: ctx.customerAccountId, organizationId: ctx.organizationId },
+        salesChannelId,
+        headerNote: body.headerNote ?? null,
+        sourceQuoteRequestId: sourceRfq.id,
+        lines: sourceItems.map((src, index) => ({
+          productId: src.productId,
+          productName: src.productName,
+          productSlug: src.productSlug ?? null,
+          variantId: src.variantId ?? null,
+          quantity: src.quantity,
+          desiredUnitPrice: null,
+          lineNote: src.lineNote ?? null,
+          lineCurrency: src.lineCurrency,
+          ...referenceColumns(references[index] ?? null, capturedAt),
+          // Feature 159 — the order the buyer was shown, ungrouped (FR-026).
+          position: index,
+        })),
       }),
     );
-    this.#audit(em, 'quote_request.resubmit', newRfq.id, null, {
-      status: newRfq.status,
-      itemCount: newItems.length,
-      salesChannelId: newRfq.salesChannelId ?? null,
-    });
-    await em.persistAndFlush(newItems);
+    this.kickNotificationDelivery();
 
-    const revision = await this.deps.revisionService.record({
-      rfq: newRfq,
-      items: newItems,
-      actor: { customerAccountId: ctx.customerAccountId },
-    });
+    return this.serializeFull(this.deps.emFactory(), newRfq, false);
+  }
 
-    await this.deps.eventService.append({
-      quoteRequestId: newRfq.id,
-      eventType: 'created',
-      actor: { customerAccountId: ctx.customerAccountId, roleLabel: 'Customer' },
-      payload: { type: 'created', sourceRfqId: sourceRfq.id },
-      revisionId: revision.id,
-    });
-    const submittedEvt = await this.deps.eventService.append({
-      quoteRequestId: newRfq.id,
-      eventType: 're-submitted',
-      actor: { customerAccountId: ctx.customerAccountId, roleLabel: 'Customer' },
-      payload: { type: 're-submitted', sourceRfqId: sourceRfq.id, newRfqId: newRfq.id },
-      revisionId: revision.id,
-    });
-
-    await this.notifyInternalSide(newRfq.organizationId, submittedEvt.id, newRfq.id);
-
-    return this.serializeFull(em, newRfq, false);
+  /** What the buyer's two submission Commands write through (issue #1906). */
+  #buyerCommandDeps(): QuoteRequestBuyerCommandDeps {
+    return {
+      generateBusinessId: (within) => this.generateBusinessId(within),
+      revisionService: this.deps.revisionService,
+      eventService: this.deps.eventService,
+      notificationService: this.deps.notificationService,
+      assigneeEligibility: this.deps.assigneeEligibility,
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -808,11 +1098,25 @@ export class RfqService {
     // request nobody can order from. After the revision pin, so the buyer is
     // judged on the revision they are looking at.
     if (decision === 'accept') {
-      const lines = await em.find(QuoteRequestItem, { quoteRequestId: rfq.id });
+      const lines = await em.find(QuoteRequestItem, { quoteRequestId: rfq.id }, { orderBy: LINE_STORAGE_ORDER });
       if (hasUnpricedLine(lines)) throw quoteIncompleteError();
     }
 
     const now = new Date();
+    const eventType: QuoteRequestEventType =
+      decision === 'accept' ? 'customer-accepted-revision' : 'customer-rejected-revision';
+    const eventPayload: Record<string, unknown> = {
+      type: eventType,
+      revisionNumber: rfq.currentRevisionNumber,
+    };
+    if (decision === 'reject' && reason) eventPayload['reason'] = reason;
+    const terminalEventType: QuoteRequestEventType = decision === 'accept' ? 'approved' : 'canceled';
+    const terminalPayload: Record<string, unknown> =
+      decision === 'accept'
+        ? { type: 'approved', approvedBy: 'customer' }
+        : { type: 'canceled', canceledBy: 'customer', reason: reason ?? null };
+    // FR-001 — the answer, its two history entries and the records naming the
+    // terminal one commit together.
     await underRowLock(em, rfq, async () => {
       if (decision === 'accept') {
         rfq.status = 'Approved';
@@ -831,36 +1135,34 @@ export class RfqService {
         revisionNumber: rfq.currentRevisionNumber,
       });
       await em.flush();
-    });
 
-    const eventType: QuoteRequestEventType =
-      decision === 'accept' ? 'customer-accepted-revision' : 'customer-rejected-revision';
-    const eventPayload: Record<string, unknown> = {
-      type: eventType,
-      revisionNumber: rfq.currentRevisionNumber,
-    };
-    if (decision === 'reject' && reason) eventPayload['reason'] = reason;
-    const revisionEvt = await this.deps.eventService.append({
-      quoteRequestId: rfq.id,
-      eventType,
-      actor: { customerAccountId: ctx.customerAccountId, roleLabel: 'Customer' },
-      payload: eventPayload,
-    });
+      await this.deps.eventService.append(
+        {
+          quoteRequestId: rfq.id,
+          eventType,
+          actor: { customerAccountId: ctx.customerAccountId, roleLabel: 'Customer' },
+          payload: eventPayload,
+        },
+        em,
+      );
+      const terminalEvt = await this.deps.eventService.append(
+        {
+          quoteRequestId: rfq.id,
+          eventType: terminalEventType,
+          actor: { customerAccountId: ctx.customerAccountId, roleLabel: 'Customer' },
+          payload: terminalPayload,
+        },
+        em,
+      );
 
-    const terminalEventType: QuoteRequestEventType = decision === 'accept' ? 'approved' : 'canceled';
-    const terminalPayload: Record<string, unknown> =
-      decision === 'accept'
-        ? { type: 'approved', approvedBy: 'customer' }
-        : { type: 'canceled', canceledBy: 'customer', reason: reason ?? null };
-    const terminalEvt = await this.deps.eventService.append({
-      quoteRequestId: rfq.id,
-      eventType: terminalEventType,
-      actor: { customerAccountId: ctx.customerAccountId, roleLabel: 'Customer' },
-      payload: terminalPayload,
+      await this.deps.notificationService.record(em, {
+        change: decision === 'accept' ? 'offer_accepted' : 'offer_rejected',
+        sourceEvent: terminalEvt,
+        rfq,
+        actor: { customerAccountId: ctx.customerAccountId },
+      });
     });
-    void revisionEvt;
-
-    await this.notifyInternalSide(rfq.organizationId, terminalEvt.id, rfq.id);
+    this.kickNotificationDelivery();
 
     if (decision === 'accept') {
       this.deps.events.emit('rfq.approved.v1', {
@@ -884,13 +1186,51 @@ export class RfqService {
   // Convert to order (US5)
   // -------------------------------------------------------------------------
 
+  /**
+   * Seed the customer's basket on `salesChannelId` — the channel of the
+   * caller's request — with the approved quote's agreed lines. A customer holds
+   * one basket per channel (`specs/154-sales-channel-access/`), so the basket
+   * seeded is the one of the store the buyer converts on and goes to checkout
+   * from.
+   */
   async convertToOrder(
     rfqId: string,
     ctx: CustomerContext,
+    salesChannelId: string,
   ): Promise<{ cartId: string; checkoutUrl: string }> {
     const em = this.deps.emFactory();
     const rfq = await this.findVisibleForCustomer(em, rfqId, ctx);
+    const seeded = await this.seedBasketFromApproved(em, rfq, {
+      customerAccountId: ctx.customerAccountId,
+      organizationId: ctx.organizationId,
+      salesChannelId,
+    });
+    const cartId = seeded.cartId;
+    this.#audit(em, 'quote_request.convert_to_order', rfq.id, null, {
+      cartId,
+      itemCount: seeded.itemCount,
+    });
+    await em.flush();
 
+    return {
+      cartId,
+      checkoutUrl: `/checkout?cartId=${cartId}&fromRfq=${rfq.id}`,
+    };
+  }
+
+  /**
+   * Seed `owner`'s basket on `owner.salesChannelId` with an approved request's
+   * lines at the agreed unit prices — the rules a conversion is held to, in one
+   * place. The customer's own conversion calls it for the caller on the
+   * channel they convert on; the admin's `prepareCustomerBasket` (issue #170)
+   * for the customer who owns the request, on the channel it was raised on.
+   * Records nothing itself: each caller audits its own action.
+   */
+  async seedBasketFromApproved(
+    em: EntityManager,
+    rfq: QuoteRequest,
+    owner: { customerAccountId: string; organizationId: string; salesChannelId: string },
+  ): Promise<{ cartId: string; itemCount: number }> {
     if (rfq.status !== 'Approved') {
       throw new HttpError(409, ERROR_CODES.RFQ_NOT_QUOTED, 'Quote Request is not approved.');
     }
@@ -901,6 +1241,13 @@ export class RfqService {
     // sentence with no consequence — an accepted quote is `Approved`, and the
     // expiry worker sweeps only `Pending` / `Created from admin`, so nothing
     // in the platform ever reached this row again.
+    //
+    // Issue #167 (owner ruling of 2026-11-02) — and not only here. The
+    // commitment is consumed when the order is *placed*, so `orders` reads this
+    // request again at placement, through `quoteRequestReadPort`, for every
+    // basket line still priced at its agreement, and refuses with the same
+    // code once the date has passed: a basket seeded inside the window cannot
+    // be ordered at the agreed prices after it; a new quote must be issued.
     //
     // `QUOTE_VALIDITY_ENDED` rather than `RFQ_EXPIRED`: the buyer here already
     // made their decision inside the window and it is the *quote* that has run
@@ -917,7 +1264,8 @@ export class RfqService {
       );
     }
 
-    const items = await em.find(QuoteRequestItem, { quoteRequestId: rfq.id });
+    // Feature 159 — the basket is seeded in the quote's display order.
+    const items = (await loadArrangedQuoteLines(em, rfq.id)).lines;
     if (items.length === 0) {
       throw new HttpError(409, ERROR_CODES.RFQ_EMPTY, 'Quote Request has no items.');
     }
@@ -967,8 +1315,14 @@ export class RfqService {
     // The sibling ruling covers `orders`' reorder, which re-acquires a placed
     // order's lines through the same port; its comment carries the second-order
     // consequence that makes the obvious fix wrong there.
+    //
+    // Feature 163, P-3 = A (2026-10-26) — "archived" is now `archivedAt`, which
+    // `findByIds` does not filter, so the edge case above is asked of it here.
+    // Archived is global and not the channel question the ruling exempts; the
+    // seeded basket's placement would refuse the line anyway (consumers.md row
+    // 14), and this answers before the basket is cleared.
     const productIds = items.map((it) => it.productId);
-    const products = await this.deps.catalogProducts.findByIds(productIds);
+    const products = (await this.deps.catalogProducts.findByIds(productIds)).filter(isNotArchived);
     if (products.length !== new Set(productIds).size) {
       throw new HttpError(
         409,
@@ -988,10 +1342,7 @@ export class RfqService {
     // inside the module that owns them; `carts` published
     // `replaceItemsForCustomer` naming this call site.
     const seeded = await this.deps.carts.replaceItemsForCustomer(
-      {
-        customerAccountId: ctx.customerAccountId,
-        organizationId: ctx.organizationId,
-      },
+      owner,
       lines,
       // The basket remembers which request these prices were agreed on, and
       // `orders` copies that onto the order it places from it — after reading
@@ -1001,17 +1352,7 @@ export class RfqService {
       // (`specs/143-crm-sales-opportunities/`, FR-100).
       { sourceQuoteRequestId: rfq.id },
     );
-    const cartId = seeded.cart.id;
-    this.#audit(em, 'quote_request.convert_to_order', rfq.id, null, {
-      cartId,
-      itemCount: seeded.items.length,
-    });
-    await em.flush();
-
-    return {
-      cartId,
-      checkoutUrl: `/checkout?cartId=${cartId}&fromRfq=${rfq.id}`,
-    };
+    return { cartId: seeded.cart.id, itemCount: seeded.items.length };
   }
 
   // -------------------------------------------------------------------------
@@ -1023,54 +1364,19 @@ export class RfqService {
     rfqId: string,
     ctx: CustomerContext,
   ): Promise<QuoteRequest> {
+    // A malformed id names no request; PostgreSQL would answer it with a 500 (issue #753).
+    if (!isUuidShape(rfqId)) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Quote Request not found.');
     const rfq = await em.findOne(QuoteRequest, { id: rfqId });
     if (!rfq) throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Quote Request not found.');
     if (rfq.organizationId !== ctx.organizationId) {
       throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Quote Request not found.');
     }
-    if (!ctx.isOrgAdmin && rfq.customerAccountId !== ctx.customerAccountId) {
+    // A colleague's request exists for the caller only if it sees the whole
+    // Organization (R-30); otherwise it is 404, never 403 (Principle XI).
+    if (rfq.customerAccountId !== ctx.customerAccountId && !(await this.#seesOrganization(ctx))) {
       throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Quote Request not found.');
     }
     return rfq;
-  }
-
-  // -------------------------------------------------------------------------
-  // Notification helpers
-  // -------------------------------------------------------------------------
-
-  private async notifyInternalSide(
-    organizationId: string,
-    sourceEventId: string,
-    quoteRequestId: string,
-  ): Promise<void> {
-    // Find every admin user assigned to the org. If the org is unassigned,
-    // fan out to every active admin user holding the sales_representative
-    // role plus every platform_admin (research §R4).
-    //
-    // Feature 075, Phase C — this asked the question twice: an `em.count` on
-    // `organizations`' assignment entity, reached through a dynamic `import()`
-    // with a comment apologising for it, and then the port. The count was a
-    // duplicate of `listForOrganization(…).length`, and its `.catch(() => 0)`
-    // silently answered "unassigned" — a fan-out to every admin — for any
-    // failure at all, `MODULE_DISABLED` included. One port call, no catch, and
-    // an absent `organizations` now stops the notification instead of
-    // broadcasting it.
-    const assignments = await this.deps.salesRepAssignment.listForOrganization(organizationId);
-
-    const recipients: NotificationRecipient[] = [];
-    if (assignments.length > 0) {
-      for (const a of assignments) recipients.push({ adminUserId: a.adminUserId });
-    } else {
-      const everyAdmin = await this.deps.adminUsers.listAll();
-      for (const a of everyAdmin) recipients.push({ adminUserId: a.id });
-    }
-
-    await this.deps.notificationService.enqueue({
-      quoteRequestId,
-      sourceEventId,
-      recipients,
-      channels: ['email', 'in_app'],
-    });
   }
 
   // -------------------------------------------------------------------------
@@ -1093,12 +1399,50 @@ export class RfqService {
     return quoteCustomFieldValuesFor(this.deps.customFieldValues, rfq.customFieldValues ?? {}, forAdmin);
   }
 
+  /**
+   * Feature 155 (FR-030, research R13.5) — each stored line's warning against
+   * today's minimums: no exemption, product totals across the request. One
+   * batched catalogue read of the products (no audience or channel filter —
+   * this is the operator's view), and of the units only when a line names one.
+   */
+  async #minimumWarnings(
+    items: readonly QuoteRequestItem[],
+    /** Feature 163 (FR-100) — the request's channel, whose minimums apply. */
+    channelId: string | null | undefined,
+  ): Promise<Array<QuoteLineMinimumWarning | null>> {
+    if (items.length === 0) return [];
+    const productIds = Array.from(new Set(items.map((it) => it.productId)));
+    const unitProductIds = Array.from(
+      new Set(items.filter((it) => it.packagingUnitId != null).map((it) => it.productId)),
+    );
+    const [products, packagingUnits] = await Promise.all([
+      this.deps.catalogProducts.findByIds(productIds),
+      unitProductIds.length > 0
+        ? this.deps.catalogProducts.listPackagingUnitsByProductIds(unitProductIds)
+        : Promise.resolve([]),
+    ]);
+    return quoteMinimumWarnings(
+      quoteMinimumLines(
+        items.map((it) => ({
+          productId: it.productId,
+          quantity: it.quantity,
+          packagingUnitId: it.packagingUnitId ?? null,
+          packagingUnitBaseQuantity: it.packagingUnitBaseQuantity ?? null,
+        })),
+      ),
+      { products: await this.#withChannelOrderRules(products, channelId), packagingUnits },
+    );
+  }
+
   async serializeFull(
     em: EntityManager,
     rfq: QuoteRequest,
     includeFullActorIdentity: boolean,
   ): Promise<RfqDto> {
-    const items = await em.find(QuoteRequestItem, { quoteRequestId: rfq.id });
+    // Feature 159 (FR-011) — the lines in display order; this read had no
+    // order at all before (research R-1).
+    const arranged = await loadArrangedQuoteLines(em, rfq.id);
+    const items = arranged.lines;
     const taxRate = await this.taxRateForOrganization(rfq.organizationId);
     const events = await em.find(
       QuoteRequestEvent,
@@ -1109,6 +1453,9 @@ export class RfqService {
     const submittedProposals = forAdmin
       ? await submissionRecordProposals(em, items, events)
       : new Map<string, number | null>();
+    // Feature 155 (FR-030) — computed for the admin reply only; the customer
+    // path never reads the catalogue for it (threat S7).
+    const minimumWarnings = forAdmin ? await this.#minimumWarnings(items, rfq.salesChannelId) : [];
 
     let comparison: RfqComparisonAgainstLastSeen | null = null;
     if (rfq.awaitingCustomerRevisionAcceptance) {
@@ -1159,11 +1506,14 @@ export class RfqService {
       headerNote: rfq.headerNote ?? null,
       cancellationReason: rfq.cancellationReason ?? null,
       customFieldValues: await this.customFieldValuesFor(rfq, includeFullActorIdentity),
+      // Feature 159 — the admin editor needs every group, empty ones included;
+      // a customer is shown only the groups holding a line (D2, FR-034).
+      itemGroups: forAdmin ? arranged.groups.map(toLineGroup) : nonEmptyGroups(arranged),
       // Feature 146 (threat model T7): the customer reply is built from an
       // explicit allow-list of item, event and payload keys — a key added to
       // the admin projection, or one that reaches a stored payload, never
       // reaches the customer by default.
-      items: items.map((it) => {
+      items: items.map((it, index) => {
         const item = {
           id: it.id,
           productId: it.productId,
@@ -1180,6 +1530,11 @@ export class RfqService {
           taxRate,
           packagingUnitName: it.packagingUnitName ?? null,
           packagingUnitBaseQuantity: it.packagingUnitBaseQuantity ?? null,
+          // Feature 155 — the resolved catalogue unit; both replies (analyze F14).
+          packagingUnitId: it.packagingUnitId ?? null,
+          // Feature 159 — the line's group and its order within its section.
+          groupId: it.groupId ?? null,
+          position: it.position,
         };
         if (!forAdmin) return pickKeys(item, CUSTOMER_ITEM_KEYS);
         return {
@@ -1194,6 +1549,7 @@ export class RfqService {
               : null,
           customerProposedUnitPrice:
             item.desiredUnitPrice ?? submittedProposals.get(it.id) ?? null,
+          minimumWarning: minimumWarnings[index] ?? null,
         };
       }),
       events: (forAdmin ? events : customerEventsOf(events)).map((e) => {
@@ -1235,9 +1591,38 @@ export class RfqService {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function anyLocaleValue(blob: Record<string, string>): string {
-  const k = Object.keys(blob)[0];
-  return k ? (blob[k] ?? '') : '';
+/**
+ * Feature 155 (D3/D4), on feature 174's model — the names a refusal gives its products: the
+ * effective name at the request's (channel, language), `namesAtScope` (`lineNames`), else the
+ * Global name.
+ */
+function productNames(
+  products: Iterable<CatalogProductRecord>,
+  namesAtScope: ReadonlyMap<string, string>,
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const product of products) out.set(product.id, namesAtScope.get(product.id) || product.name);
+  return out;
+}
+
+/** A body line with its packaging replaced by the catalogue's resolution. */
+function withResolvedPackaging(
+  line: CreateQuoteRequestLine,
+  packaging: ResolvedPackaging,
+): {
+  productId: string;
+  variantId: string | null;
+  quantity: number;
+  packagingUnitId: string | null;
+  packagingUnitName: string | null;
+  packagingUnitBaseQuantity: number | null;
+} {
+  return {
+    productId: line.productId,
+    variantId: line.variantId ?? null,
+    quantity: line.quantity,
+    ...packaging,
+  };
 }
 
 /**
@@ -1301,11 +1686,14 @@ type QuoteRequestItemDraft = Pick<
   | 'variantId'
   | 'variantLabel'
   | 'quantity'
+  | 'packagingUnitId'
   | 'packagingUnitName'
   | 'packagingUnitBaseQuantity'
   | 'desiredUnitPrice'
   | 'lineNote'
   | 'lineCurrency'
+  | 'groupId'
+  | 'position'
 > &
   ReferenceColumns;
 
@@ -1327,8 +1715,19 @@ function groupBy<T, K>(arr: T[], key: (t: T) => K): Map<K, T[]> {
  * the one the RFQ is filed under — so it is also the one the product's
  * allow-list has to name.
  */
-function rfqAudience(ctx: CustomerContext): ProductAudience {
+export function rfqAudience(ctx: Pick<CustomerContext, 'organizationId'>): ProductAudience {
   return { organizationId: ctx.organizationId, authenticated: true };
+}
+
+/**
+ * Feature 163, owner decision P-3 = A (2026-10-26) — may this product be a quote
+ * line at all? Archived (`archivedAt` set by catalog's Archive action) is global,
+ * not a scope axis, so it is asked of the record on every path that names
+ * products — the buyer's and the operator's alike — and a line that fails it
+ * gets the same answer as a product that does not exist.
+ */
+export function isNotArchived(product: Pick<CatalogProductRecord, 'archivedAt'>): boolean {
+  return (product.archivedAt ?? null) === null;
 }
 
 /**
@@ -1344,4 +1743,9 @@ export async function quoteCustomFieldValuesFor(
 ): Promise<Record<string, unknown>> {
   if (forAdmin) return bag;
   return port ? port.projectForCustomer('quote_request', bag) : {};
+}
+
+/** A customer rewrite only ever keeps stored groups (it creates none). */
+function plannedGroupId(group: PlannedLineGroup): string | null {
+  return group?.kind === 'existing' ? group.id : null;
 }

@@ -9,7 +9,7 @@ import {
   erpSaleDocumentUpsertInputSchema,
 } from '@endora-commerce/contracts';
 import { HttpError } from '@endora-commerce/platform/http';
-import { isOrgInScope } from '@endora-commerce/platform/tenancy';
+import { orgInScope } from '@endora-commerce/platform/tenancy';
 import { InvoiceExternalAttachment } from '../entities/invoice-external-attachment.entity.js';
 import { Invoice } from '../entities/invoice.entity.js';
 
@@ -44,7 +44,7 @@ export class ErpSaleDocumentWritePortService implements ErpSaleDocumentWritePort
       );
     }
     const input = parsed.data;
-    if (!isOrgInScope(input.organizationId)) {
+    if (!(await orgInScope(input.organizationId))) {
       throw new HttpError(404, ERROR_CODES.NOT_FOUND, 'Organization not found.');
     }
 
@@ -80,7 +80,7 @@ export class ErpSaleDocumentWritePortService implements ErpSaleDocumentWritePort
       buyerSnapshot: input.buyerSnapshot ?? null,
       status: 'ready',
     });
-    await em.persistAndFlush(invoice);
+    await em.persist(invoice).flush();
     await this.syncAttachments(em, invoice, input.attachments ?? []);
     await em.flush();
     return { invoiceId: invoice.id, created: true };

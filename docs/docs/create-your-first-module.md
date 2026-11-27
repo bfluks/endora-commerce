@@ -1,10 +1,10 @@
 ---
-title: Create your first Module
+title: Create your first module
 description: A 20-minute tutorial — add your own module to a new Endora Commerce instance, with a setting you edit in the admin, an API route, a permission and a translation, then switch it off and on.
 sidebar_position: 3
 ---
 
-# Create your first Module
+# Create your first module
 
 This tutorial takes a new instance and adds one small module of your own to it: a **store notice**.
 The shop owner types a short message in the admin ("We are closed 24-26 December"), and the
@@ -193,7 +193,8 @@ export function registerModule(ctx: ModuleContext): void {
 
 Nothing in an instance compiles this file: Node runs it directly and removes the types as it goes.
 So write plain TypeScript — an `enum`, a `namespace` or a constructor parameter property stops the
-start with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`.
+start with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`. `pnpm run typecheck` reports all three before
+that, together with any type error in `apps/`, and `pnpm run setup` runs it before `migrate`.
 
 ## Step 5 — Add the translations
 
@@ -296,14 +297,14 @@ curl http://localhost:3001/api/v1/store-notice
 ```
 
 **The setting, in the admin.** Open the admin at `http://localhost:3002`, sign in, and go to
-**System → Settings**. Find the **Store notice** group, type a message into **Notice text** and
+**Platform → Settings**. Find the **Store notice** group, type a message into **Notice text** and
 press **Save 1 change(s)**. Ask the route again:
 
 ```json
 {"data":{"message":"We are closed 24-26 December. Orders ship from 27 December.","visible":true}}
 ```
 
-**The permission and its translation.** Go to **System → Roles** and pick a role. The permission
+**The permission and its translation.** Go to **Access → Roles** and pick a role. The permission
 list has a `STORE_NOTICE` group with `store_notice:read — View the store notice`. Switch the admin
 to Polish with the language picker in the top bar and the same line reads
 `Odczyt komunikatu sklepu`.
@@ -317,7 +318,7 @@ terminal.
 Every module can be switched off by the people running the shop, and a module that is off behaves
 as if it were not installed. Nothing is deleted, and switching it on again brings everything back.
 
-**In the admin.** Open **System → Modules** (`/platform/modules`). Every module of the instance is
+**In the admin.** Open **Platform → Modules** (`/platform/modules`). Every module of the instance is
 listed there, yours included, with what the deployment installed and what your business has
 switched on. Switch **Store notice** off with the control in its row.
 

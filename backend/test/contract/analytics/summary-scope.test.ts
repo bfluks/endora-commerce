@@ -62,7 +62,7 @@ describe('GET /api/v1/admin/analytics/summary — tenant scope', () => {
     } else {
       role.permissions = Array.from(new Set([...role.permissions, 'analytics:read']));
     }
-    await em.persistAndFlush(role);
+    await em.persist(role).flush();
 
     const organization = (name: string, suffix: string) =>
       em.create(Organization, {
@@ -79,7 +79,7 @@ describe('GET /api/v1/admin/analytics/summary — tenant scope', () => {
       });
     const assigned = organization('Analytics assigned org', 'A');
     const other = organization('Analytics other org', 'B');
-    await em.persistAndFlush([assigned, other]);
+    await em.persist([assigned, other]).flush();
 
     const rep = (label: string) =>
       em.create(AdminUser, {
@@ -91,13 +91,13 @@ describe('GET /api/v1/admin/analytics/summary — tenant scope', () => {
       });
     const assignedRep = rep('rep');
     const unassignedRep = rep('rep-none');
-    await em.persistAndFlush([assignedRep, unassignedRep]);
-    await em.persistAndFlush(
+    await em.persist([assignedRep, unassignedRep]).flush();
+    await em.persist(
       em.create(OrganizationSalesRepAssignment, {
         organizationId: assigned.id,
         adminUserId: assignedRep.id,
       }),
-    );
+    ).flush();
     ADMIN_COOKIES[ASSIGNED_REP] = { adminUserId: assignedRep.id };
     ADMIN_COOKIES[UNASSIGNED_REP] = { adminUserId: unassignedRep.id };
 
@@ -130,12 +130,15 @@ describe('GET /api/v1/admin/analytics/summary — tenant scope', () => {
     await teardownBackendServer(h);
   });
 
-  it('shows a sales representative the events of their organizations only, in both series', async () => {
-    expect(await totalFor(ASSIGNED_REP)).toEqual({ status: 200, total: 2, days: 2 });
+  // Issue #305 — one reach rule: a sales representative reaches their own
+  // organizations and every organization nobody is assigned to (`other`), and
+  // never an event that belongs to no organization at all.
+  it('shows a sales representative the events of the organizations they reach, in both series', async () => {
+    expect(await totalFor(ASSIGNED_REP)).toEqual({ status: 200, total: 5, days: 5 });
   });
 
-  it('shows a sales representative with no assignment nothing', async () => {
-    expect(await totalFor(UNASSIGNED_REP)).toEqual({ status: 200, total: 0, days: 0 });
+  it('shows a sales representative with no assignment the unassigned organizations’ events, not another representative’s', async () => {
+    expect(await totalFor(UNASSIGNED_REP)).toEqual({ status: 200, total: 3, days: 3 });
   });
 
   it('shows a platform administrator every event, the unattributed ones included', async () => {

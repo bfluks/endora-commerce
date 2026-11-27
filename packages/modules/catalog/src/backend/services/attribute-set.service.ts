@@ -1,3 +1,4 @@
+import type { ProductVisibilityClause } from './admin-product-visibility.js';
 /**
  * AttributeSetService — admin-only CRUD for Attribute Sets and their
  * relationship with Product Attributes (feature 002,
@@ -22,6 +23,7 @@ import {
   type CreateAttributeSetRequest,
   type UpdateAttributeSetRequest,
   type AssignAttributesRequest,
+  isUuidShape,
 } from '@endora-commerce/contracts';
 
 import { HttpError } from '@endora-commerce/platform/http';
@@ -102,7 +104,8 @@ export class AttributeSetService {
 
   // -- READ ------------------------------------------------------------------
 
-  async listSets(): Promise<AttributeSetDto[]> {
+  /** Spec 193 (FR-031) — `visible` (over `"p"."id"`) narrows each set's `productCount`. */
+  async listSets(visible: ProductVisibilityClause): Promise<AttributeSetDto[]> {
     const em = this.emFactory();
     const rows = (await em.execute(
       `select
@@ -114,9 +117,10 @@ export class AttributeSetService {
          s.created_at,
          s.updated_at,
          (select count(*)::int from attribute_set_attributes a where a.attribute_set_id = s.id) as attribute_count,
-         (select count(*)::int from products p where p.attribute_set_id = s.id) as product_count
+         ${visible === false ? '0' : `(select count(*)::int from products p where p.attribute_set_id = s.id${visible ? ` and ${visible.sql}` : ''})`} as product_count
        from attribute_sets s
        order by s.is_system desc, s.code asc`,
+      visible ? [...visible.params] : [],
     )) as Array<{
       id: string;
       code: string;
@@ -142,8 +146,26 @@ export class AttributeSetService {
     }));
   }
 
-  async getSetDetail(id: string): Promise<AttributeSetDetailDto> {
+  /**
+   * One set with its members. `includeContent: false` (feature 172, FR-042)
+   * leaves out the Page Builder content attributes: the integration-facing
+   * read offers a connector what it can map, and a document is not a value a
+   * connector maps. The admin read keeps them — the product form lays its
+   * content cards out from it (OR-2).
+   */
+  async getSetDetail(
+    id: string,
+    visible: ProductVisibilityClause,
+    options: { includeContent?: boolean } = {},
+  ): Promise<AttributeSetDetailDto> {
     const em = this.emFactory();
+    if (!isUuidShape(id)) {
+      throw new HttpError(
+        404,
+        ERROR_CODES.ATTRIBUTE_SET_NOT_FOUND,
+        `Attribute Set ${id} not found.`,
+      );
+    }
     const set = await em.findOne(AttributeSet, { id });
     if (!set) {
       throw new HttpError(
@@ -153,8 +175,12 @@ export class AttributeSetService {
       );
     }
 
-    const attrs = await this.#listAssignedAttributes(em, id);
-    const counts = await this.#computeCounts(em, id);
+    const assigned = await this.#listAssignedAttributes(em, id);
+    const attrs =
+      options.includeContent === false
+        ? assigned.filter((attribute) => attribute.valueType !== 'page_builder')
+        : assigned;
+    const counts = await this.#computeCounts(em, id, visible);
 
     return this.#toDetailDto(set, attrs, counts);
   }
@@ -229,15 +255,23 @@ export class AttributeSetService {
       );
     }
     const attrs = await this.#listAssignedAttributes(em, set.id);
-    const counts = await this.#computeCounts(em, set.id);
+    const counts = await this.#computeCounts(em, set.id, null);
     return this.#toDetailDto(set, attrs, counts);
   }
 
   async updateSet(
     id: string,
     input: UpdateAttributeSetRequest,
+    visible: ProductVisibilityClause,
   ): Promise<AttributeSetDto> {
     const set = await this.#audited('attribute_set.update', id, async (em) => {
+      if (!isUuidShape(id)) {
+        throw new HttpError(
+          404,
+          ERROR_CODES.ATTRIBUTE_SET_NOT_FOUND,
+          `Attribute Set ${id} not found.`,
+        );
+      }
       const s = await em.findOne(AttributeSet, { id });
       if (!s) {
         throw new HttpError(
@@ -279,7 +313,7 @@ export class AttributeSetService {
       };
     });
 
-    const counts = await this.#computeCounts(this.emFactory(), set.id);
+    const counts = await this.#computeCounts(this.emFactory(), set.id, visible);
     return {
       id: set.id,
       code: set.code,
@@ -293,8 +327,19 @@ export class AttributeSetService {
     };
   }
 
-  async deleteSet(id: string): Promise<void> {
+  /**
+   * Spec 193 (FR-031) — refused while any product uses the set; the refusal's `productCount` is
+   * the caller's visible products (`visible`).
+   */
+  async deleteSet(id: string, visible: ProductVisibilityClause): Promise<void> {
     await this.#audited('attribute_set.delete', id, async (em) => {
+      if (!isUuidShape(id)) {
+        throw new HttpError(
+          404,
+          ERROR_CODES.ATTRIBUTE_SET_NOT_FOUND,
+          `Attribute Set ${id} not found.`,
+        );
+      }
       const set = await em.findOne(AttributeSet, { id });
       if (!set) {
         throw new HttpError(
@@ -313,9 +358,10 @@ export class AttributeSetService {
           `Attribute Set "${set.code}" is systemic and cannot be deleted.`,
         );
       }
-      const { productCount } = await this.#computeCounts(em, id);
+      const { productCount: inUse } = await this.#computeCounts(em, id, null);
+      const productCount = visible === null ? inUse : (await this.#computeCounts(em, id, visible)).productCount;
       try {
-        assertNotInUse(productCount);
+        assertNotInUse(inUse);
       } catch (err) {
         if (err instanceof AttributeSetValidationError) {
           throw new HttpError(409, ERROR_CODES.ATTRIBUTE_SET_IN_USE, err.message, [
@@ -333,8 +379,16 @@ export class AttributeSetService {
   async assignAttributes(
     id: string,
     input: AssignAttributesRequest,
+    visible: ProductVisibilityClause,
   ): Promise<AttributeSetDetailDto> {
     const readEm = this.emFactory();
+    if (!isUuidShape(id)) {
+      throw new HttpError(
+        404,
+        ERROR_CODES.ATTRIBUTE_SET_NOT_FOUND,
+        `Attribute Set ${id} not found.`,
+      );
+    }
     const set = await readEm.findOne(AttributeSet, { id });
     if (!set) {
       throw new HttpError(
@@ -398,12 +452,19 @@ export class AttributeSetService {
 
     const em = this.emFactory();
     const attrs = await this.#listAssignedAttributes(em, id);
-    const counts = await this.#computeCounts(em, id);
+    const counts = await this.#computeCounts(em, id, visible);
     return this.#toDetailDto(set, attrs, counts);
   }
 
   async unassignAttribute(id: string, attributeId: string): Promise<void> {
     const readEm = this.emFactory();
+    if (!isUuidShape(id)) {
+      throw new HttpError(
+        404,
+        ERROR_CODES.ATTRIBUTE_SET_NOT_FOUND,
+        `Attribute Set ${id} not found.`,
+      );
+    }
     const set = await readEm.findOne(AttributeSet, { id });
     if (!set) {
       throw new HttpError(
@@ -465,7 +526,8 @@ export class AttributeSetService {
           label: view.label,
           valueType: view.valueType as AttributeSetAssignedAttributeDto['valueType'],
           position: r.position,
-          languageScoped: view.languageScoped,
+          scopable: view.scopable,
+          scopeLevels: [...view.scopeLevels],
         };
       })
       .filter((a): a is AttributeSetAssignedAttributeDto => a !== undefined);
@@ -482,12 +544,13 @@ export class AttributeSetService {
   async #computeCounts(
     em: EntityManager,
     setId: string,
+    visible: ProductVisibilityClause,
   ): Promise<{ attributeCount: number; productCount: number }> {
     const [row] = (await em.execute(
       `select
          (select count(*)::int from attribute_set_attributes where attribute_set_id = ?) as attribute_count,
-         (select count(*)::int from products where attribute_set_id = ?) as product_count`,
-      [setId, setId],
+         ${visible === false ? '0' : `(select count(*)::int from products p where p.attribute_set_id = ?${visible ? ` and ${visible.sql}` : ''})`} as product_count`,
+      visible === false ? [setId] : [setId, setId, ...(visible ? visible.params : [])],
     )) as Array<{ attribute_count: number; product_count: number }>;
     return {
       attributeCount: row?.attribute_count ?? 0,

@@ -7,10 +7,12 @@ import type {
   CustomFieldDefinitionReadPort,
   CustomFieldDefinitionWithOptions,
 } from '@endora-commerce/contracts';
+import { attributeScopeSet } from '@endora-commerce/contracts';
 
 import { rethrowIfModuleDisabled } from '@endora-commerce/platform/kernel';
 import { ProductAttribute } from '../entities/product-attribute.entity.js';
 import { cfToLegacyValueType } from './attribute-type-mapping.js';
+import { isUuidShape } from '@endora-commerce/contracts';
 
 /**
  * CatalogAttributeReadService — the composed attribute read model (feature 061,
@@ -26,8 +28,6 @@ import { cfToLegacyValueType } from './attribute-type-mapping.js';
  * committed catalog attribute command + 5 s TTL fallback); the extension half
  * is a live query, so flag reads are always fresh.
  */
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * The three shapes moved to `@endora-commerce/contracts` in feature 075's Phase P — four
@@ -117,7 +117,7 @@ export class CatalogAttributeReadService {
   /** By extension id, definition id, or key (the admin routes' `:idOrKey` affordance). */
   async getByIdOrKey(idOrKey: string): Promise<CatalogAttributeView | null> {
     const all = await this.listAll();
-    if (UUID_REGEX.test(idOrKey)) {
+    if (isUuidShape(idOrKey)) {
       const lowered = idOrKey.toLowerCase();
       return (
         all.find(
@@ -235,18 +235,21 @@ export class CatalogAttributeReadService {
     cached: CustomFieldDefinitionWithOptions,
   ): CatalogAttributeView {
     const { definition, options } = cached;
+    const valueType = cfToLegacyValueType(
+      definition.valueType,
+      ext.selectDisplay,
+      ext.numericKind,
+    ) as AttributeValueType;
     return {
       id: ext.id,
       customFieldDefinitionId: definition.id,
       key: definition.key,
       label: definition.label,
       labelDefault: definition.labelDefault,
-      valueType: cfToLegacyValueType(
-        definition.valueType,
-        ext.selectDisplay,
-        ext.numericKind,
-      ) as AttributeValueType,
+      valueType,
       isRequired: definition.required,
+      // Feature 175 — `?? 'edit'`: a definition published before the attribute existed.
+      adminAccess: definition.adminAccess ?? 'edit',
       options: options.map((o) => ({
         id: o.id,
         value: o.value,
@@ -267,8 +270,8 @@ export class CatalogAttributeReadService {
       isPriceRule: ext.isPriceRule,
       filterPosition: ext.filterPosition,
       isVisibleOnProductPage: ext.isVisibleOnProductPage,
-      channelScoped: ext.channelScoped,
-      languageScoped: ext.languageScoped,
+      scopable: ext.scopable,
+      scopeLevels: attributeScopeSet({ scopable: ext.scopable, valueType }),
       massEditable: ext.massEditable,
       createdAt: ext.createdAt,
       updatedAt: ext.updatedAt,
