@@ -735,7 +735,11 @@ export class CatalogAdminService {
     if (!this.commandBus) {
       throw new Error('CatalogAdminService: setAttributeValues needs the Command Bus.');
     }
-    const command = this.#updateProductCommand(id, version === undefined ? {} : { version }, undefined, merge);
+    // Spec 193 T049 — the same hookable `product.update` as the `PATCH`, so it carries the same data.
+    const command = withProductStatusHookData(
+      this.#updateProductCommand(id, version === undefined ? {} : { version }, undefined, merge),
+      [id],
+    );
     return this.commandBus.run(caller ? withCallerOptions(command, caller) : command);
   }
 
