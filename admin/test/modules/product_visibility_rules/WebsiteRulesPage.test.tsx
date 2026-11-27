@@ -25,9 +25,11 @@ const CHANNEL_Y = '00000000-0000-4000-8000-0000000000e2';
 const PREVIEW = '00000000-0000-4000-8000-0000000000d1';
 const EVIL = '<img src=x onerror="window.__pwned=1">';
 
+let building = false;
+
 function overview(): ProductVisibilityOverviewResponse {
   return {
-    currencies: [{ code: 'PLN', active: true, designation: null, designationStatus: null, servedGeneration: 1, building: false }],
+    currencies: [{ code: 'PLN', active: true, designation: null, designationStatus: null, servedGeneration: 1, building }],
     categories: [],
     roles: [{ roleId: SELF_ROLE, code: 'test_role', name: 'Admin', effect: 'unmappable_unrestricted', warnings: [] }],
     productRules: [
@@ -294,6 +296,13 @@ describe('WebsiteRulesPage (T073)', () => {
     fireEvent.click(within(confirm).getByRole('button', { name: k('rules.delete') }));
     expect(await screen.findByText('This product rule governs a sales channel.')).toBeInTheDocument();
     expect(state.calls).toContainEqual(expect.objectContaining({ method: 'DELETE', headers: { 'If-Match': '"2"' } }));
+  });
+
+  it('says governed channels keep their products while catalogue prices are being rebuilt (T079, US4-11)', async () => {
+    building = true;
+    render();
+    expect(await screen.findByText(k('rules.building'))).toBeInTheDocument();
+    building = false;
   });
 
   it('is read-only for an operator holding only the read permission', async () => {
