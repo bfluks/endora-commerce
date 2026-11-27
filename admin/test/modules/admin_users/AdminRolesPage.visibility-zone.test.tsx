@@ -44,6 +44,8 @@ const OVERVIEW: ProductVisibilityOverviewResponse = {
 };
 
 let overviewReads = 0;
+/** While set, the overview read waits for it. */
+let overviewGate: Promise<void> | null = null;
 
 function mockApi(): void {
   vi.mocked(apiClient.get).mockImplementation(async (url: string) => {
@@ -51,20 +53,21 @@ function mockApi(): void {
     if (url === '/api/v1/admin/permissions') return { data: [] } as never;
     if (url === '/api/v1/admin/product-visibility/overview') {
       overviewReads += 1;
+      if (overviewGate) await overviewGate;
       return { data: OVERVIEW } as never;
     }
     throw new Error(`unexpected GET ${url}`);
   });
 }
 
-function render(options: { present: boolean; permissions?: readonly string[] }) {
+function render(options: { present: boolean; permissions?: readonly string[]; id?: string }) {
   return renderWithI18n(
     withSession(
       <MemoryRouter>
         <AdminRolesPage />
       </MemoryRouter>,
       {
-        session: adminSession({ permissions: options.permissions ?? ['*'] }),
+        session: adminSession({ permissions: options.permissions ?? ['*'], ...(options.id ? { id: options.id } : {}) }),
         presence: modulePresence(options.present ? { present: ['admin_users', 'product_visibility_rules'] } : { present: ['admin_users'], absent: ['product_visibility_rules'] }),
         contributions: MODULE_ADMIN_CONTRIBUTIONS,
       },
@@ -77,6 +80,7 @@ const listItem = async (code: string): Promise<HTMLElement> => (await screen.fin
 describe('AdminRolesPage — product visibility zones (T075)', () => {
   beforeEach(() => {
     overviewReads = 0;
+    overviewGate = null;
     mockApi();
   });
   afterEach(() => {
@@ -105,7 +109,42 @@ describe('AdminRolesPage — product visibility zones (T075)', () => {
     fireEvent.click(await screen.findByText('rep_domestic'));
     const aside = await screen.findByRole('region', { name: k('roleZone.title') });
     expect(await within(aside).findByText('domestic')).toBeInTheDocument();
-    expect(within(aside).getByRole('link', { name: k('roleZone.manage') })).toHaveAttribute('href', '/product-visibility');
+    expect(within(aside).getByRole('link', { name: k('roleZone.manage') })).toHaveAttribute('href', `/product-visibility#role-${DOMESTIC.id}`);
+  });
+
+  it('without manage, the link opens the screen in its own words, at the role\'s row', async () => {
+    render({ present: true, permissions: ['admin_roles:read', 'admin_roles:manage', 'product_visibility:read'] });
+    fireEvent.click(await screen.findByText('rep_domestic'));
+    const aside = await screen.findByRole('region', { name: k('roleZone.title') });
+    expect(within(aside).getByRole('link', { name: k('roleZone.open') })).toHaveAttribute('href', `/product-visibility#role-${DOMESTIC.id}`);
+    expect(within(aside).queryByRole('link', { name: k('roleZone.manage') })).toBeNull();
+  });
+
+  it('reserves the line in the role list while the visibility loads', async () => {
+    let release = (): void => undefined;
+    overviewGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    render({ present: true });
+    const item = await listItem('rep');
+    expect(await within(item).findByTestId('role-visibility-placeholder')).toBeInTheDocument();
+    release();
+    expect(await within(item).findByText(k('roleEffect.sees_no_products'))).toBeInTheDocument();
+  });
+
+  it('never hands one admin\'s in-flight overview to the next admin signed in', async () => {
+    let release = (): void => undefined;
+    overviewGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = render({ present: true, id: '00000000-0000-4000-8000-00000000ad0a' });
+    await listItem('rep');
+    await vi.waitFor(() => expect(overviewReads).toBe(1));
+    first.unmount();
+    render({ present: true, id: '00000000-0000-4000-8000-00000000ad0b' });
+    await listItem('rep');
+    await vi.waitFor(() => expect(overviewReads).toBe(2));
+    release();
   });
 
   it('contributes nothing while the module is off', async () => {

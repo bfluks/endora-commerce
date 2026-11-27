@@ -56,7 +56,7 @@ function listAnswer(rows: unknown[], visibility?: unknown): Record<string, unkno
   };
 }
 
-function renderList(): void {
+function renderList(bundle: Record<string, string> = {}): void {
   renderWithI18n(
     withSession(
       <MemoryRouter initialEntries={['/catalog/products']}>
@@ -64,6 +64,7 @@ function renderList(): void {
       </MemoryRouter>,
       { presence: modulePresence({ present: ['catalog'] }), session: adminSession({ permissions: ['*'] }) },
     ),
+    { catalog: bundle },
   );
 }
 
@@ -83,11 +84,17 @@ describe('ProductsList — the product visibility banner (T076)', () => {
   it('names the category a restricted role sees, as text', async () => {
     const name = '<b>export</b>';
     answer = listAnswer([product(1)], { restricted: true, categoryName: name });
+    renderList({ 'productsList.visibility.restrictedNamed': 'Your role sees only the products in the visibility category: {name}' });
+    const banner = await screen.findByTestId('product-visibility-banner');
+    expect(banner).toHaveTextContent(`Your role sees only the products in the visibility category: ${name}`);
+    expect(banner.querySelector('b')).toBeNull();
+  });
+
+  it('says a whole sentence when the category has no name', async () => {
+    answer = listAnswer([product(1)], { restricted: true, categoryName: null });
     renderList();
     const banner = await screen.findByTestId('product-visibility-banner');
-    expect(banner).toHaveTextContent(k('productsList.visibility.restricted'));
-    expect(banner).toHaveTextContent(name);
-    expect(banner.querySelector('b')).toBeNull();
+    expect(banner).toHaveTextContent(k('productsList.visibility.restrictedUnnamed'));
   });
 
   it('says a role with no category sees no products, instead of inviting a first product (FR-023)', async () => {

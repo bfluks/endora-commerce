@@ -118,6 +118,7 @@ describe('product_visibility_rules admin surface, on and off (T078)', () => {
     present = true;
     const shell = renderAt('/');
     expect(sidebarHrefs()).toContain('/product-visibility');
+    expect(sidebarHrefs()).toContain('/product-visibility/website-rules');
     shell.unmount();
     for (const route of routes) {
       const rendered = renderAt(route.path);
@@ -130,6 +131,7 @@ describe('product_visibility_rules admin surface, on and off (T078)', () => {
     present = false;
     const shell = renderAt('/');
     expect(sidebarHrefs()).not.toContain('/product-visibility');
+    expect(sidebarHrefs()).not.toContain('/product-visibility/website-rules');
     shell.unmount();
     for (const route of routes) {
       const deepLink = renderAt(route.path);
