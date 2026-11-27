@@ -76,11 +76,13 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
         }
         if (url.includes('/api/v1/admin/sales-channels')) {
           return {
-            data: [
+            items: [
               { id: CHANNEL_X, code: 'x', name: { 'en-US': 'Channel X' }, active: true },
               { id: CHANNEL_Y, code: 'y', name: { 'en-US': 'Channel Y' }, active: true },
             ],
-            meta: { page: 1, pageSize: 200, total: 2 },
+            page: 1,
+            pageSize: 200,
+            total: 2,
           };
         }
         return { data: null };
@@ -127,8 +129,8 @@ async function openAttach(): Promise<HTMLElement> {
   const governed = await screen.findByRole('region', { name: k('rules.channels.title') });
   fireEvent.click(within(governed).getByRole('button', { name: k('rules.attach.open') }));
   const dialog = await screen.findByRole('dialog');
-  fireEvent.change(within(dialog).getByLabelText(k('rules.attach.field.rule')), { target: { value: RULE_A } });
-  fireEvent.change(within(dialog).getByLabelText(k('rules.attach.field.channel')), { target: { value: CHANNEL_Y } });
+  fireEvent.change(within(dialog).getByLabelText(k('rules.attach.field.rule'), { exact: false }), { target: { value: RULE_A } });
+  fireEvent.change(within(dialog).getByLabelText(k('rules.attach.field.channel'), { exact: false }), { target: { value: CHANNEL_Y } });
   return dialog;
 }
 
@@ -165,7 +167,7 @@ describe('WebsiteRulesPage (T073)', () => {
     const rules = await screen.findByRole('region', { name: k('rules.list.title') });
     fireEvent.click(within(rules).getByRole('button', { name: k('rules.editor.new') }));
     const dialog = await screen.findByRole('dialog');
-    fireEvent.change(within(dialog).getByLabelText(k('rules.editor.field.name')), { target: { value: 'Retail flag' } });
+    fireEvent.change(within(dialog).getByLabelText(k('rules.editor.field.name'), { exact: false }), { target: { value: 'Retail flag' } });
     fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.addAttribute') }));
     const attribute = await within(dialog).findByLabelText(k('rules.editor.field.attribute'));
     await waitFor(() =>
@@ -205,7 +207,7 @@ describe('WebsiteRulesPage (T073)', () => {
     const rules = await screen.findByRole('region', { name: k('rules.list.title') });
     fireEvent.click(within(rules).getByRole('button', { name: k('rules.editor.new') }));
     const dialog = await screen.findByRole('dialog');
-    fireEvent.change(within(dialog).getByLabelText(k('rules.editor.field.name')), { target: { value: 'Empty' } });
+    fireEvent.change(within(dialog).getByLabelText(k('rules.editor.field.name'), { exact: false }), { target: { value: 'Empty' } });
     fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.save') }));
     expect(await within(dialog).findByText(k('rules.editor.error.noConditions'))).toBeInTheDocument();
     expect(state.calls.some((c) => c.method === 'POST')).toBe(false);
@@ -223,7 +225,7 @@ describe('WebsiteRulesPage (T073)', () => {
     const live = within(dialog).getByTestId('preview-status');
     expect(live).toHaveAttribute('aria-live', 'polite');
     const confirm = await within(dialog).findByRole('button', { name: k('rules.attach.confirm') });
-    const counts = within(dialog).getByText('Channel Y').closest('[data-preview-row]') as HTMLElement;
+    const counts = within(dialog).getAllByText('Channel Y').map((el) => el.closest('[data-preview-row]')).find(Boolean) as HTMLElement;
     expect(counts).toHaveTextContent('12');
     expect(counts).toHaveTextContent('3');
     expect(state.calls.some((c) => c.url.endsWith('/confirm'))).toBe(false);
@@ -265,7 +267,7 @@ describe('WebsiteRulesPage (T073)', () => {
     const governed = await screen.findByRole('region', { name: k('rules.channels.title') });
     fireEvent.click(within(governed).getByRole('button', { name: k('rules.attach.open') }));
     const dialog = await screen.findByRole('dialog');
-    const channel = within(dialog).getByLabelText(k('rules.attach.field.channel'));
+    const channel = within(dialog).getByLabelText(k('rules.attach.field.channel'), { exact: false });
     await waitFor(() => expect(within(channel).getAllByRole('option').map((o) => (o as HTMLOptionElement).value)).toContain(CHANNEL_Y));
     expect(within(channel).getAllByRole('option').map((o) => (o as HTMLOptionElement).value)).not.toContain(CHANNEL_X);
   });

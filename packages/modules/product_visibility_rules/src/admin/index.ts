@@ -19,6 +19,13 @@ export const contributions: AdminContributions = {
       requiredPermission: READ,
       index: true,
     },
+    {
+      // US4 — the product rules and the channels they govern; opened from the configuration
+      // screen and by the palette action `open-website-rules`.
+      path: '/product-visibility/website-rules',
+      component: () => import('./pages/WebsiteRulesPage.js'),
+      requiredPermission: READ,
+    },
   ],
   nav: [
     {
