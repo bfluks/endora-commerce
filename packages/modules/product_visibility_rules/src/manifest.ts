@@ -43,8 +43,11 @@ export const productVisibilityRulesSettingsManifest = defineModuleSettingsManife
 export const manifest = defineModuleManifest({
   id: 'product_visibility_rules',
   name: 'Product visibility rules',
+  // FR-076 (M10) and TM-13: `/platform/modules` shows this beside the activation switch, so it
+  // says what switching it on and off does (pinned by
+  // `backend/test/unit/product_visibility_rules/activation-texts.test.ts`).
   description:
-    'Limits which products an administrator role sees by the products’ catalogue prices, and lets a sales channel’s products follow a configurable rule.',
+    'Limits which products an administrator role sees by the products’ catalogue prices, and lets a sales channel’s products follow a configurable rule. Switching it on applies at once: a role that handles quote requests and is not mapped sees no products until it is mapped. Switching it off lifts every product restriction: every restricted role sees all products while it is off. The configuration is kept.',
   version: '1.0.0',
   // Research R-1 — the owners of what this module reads: products and variants
   // (`catalog`), catalogue prices (`price_lists`), roles and their permissions
@@ -77,6 +80,19 @@ export const manifest = defineModuleManifest({
       keywords: ['visibility', 'catalogue', 'price', 'roles', 'categories'],
       keywordsKey: 'actions.openProductVisibility.keywords',
       weight: 420,
+    },
+    {
+      // US4 — the website rules screen, a static route of its own (palette coverage).
+      id: 'open-website-rules',
+      labelKey: 'actions.openWebsiteRules.label',
+      descriptionKey: 'actions.openWebsiteRules.description',
+      icon: 'Store',
+      targetRoute: '/product-visibility/website-rules',
+      entryApiRoute: '/api/v1/admin/product-visibility/overview',
+      requiredPermission: P.READ,
+      keywords: ['website', 'storefront', 'channel', 'rule', 'membership'],
+      keywordsKey: 'actions.openWebsiteRules.keywords',
+      weight: 410,
     },
   ],
   // Routes the codes' sentences to this package's own bundle; each joins the platform's

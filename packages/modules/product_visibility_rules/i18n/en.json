@@ -1,9 +1,9 @@
 {
   "module.name": "Product visibility rules",
-  "module.description": "Limits which products an administrator role sees by the products’ catalogue prices, and lets a sales channel’s products follow a configurable rule.",
+  "module.description": "Limits which products an administrator role sees by the products’ catalogue prices, and lets a sales channel’s products follow a configurable rule. Switching it on applies at once: a role that handles quote requests and is not mapped sees no products until it is mapped. Switching it off lifts every product restriction: every restricted role sees all products while it is off. The configuration is kept.",
   "settingGroups.product_visibility_rules.name": "Product visibility rules",
   "settingLabels.product_visibility_rules.module_enabled.name": "Product visibility rules module enabled",
-  "settingLabels.product_visibility_rules.module_enabled.description": "On: mapped roles see only their category’s products; unmapped quote handlers see none. Off: no restriction.",
+  "settingLabels.product_visibility_rules.module_enabled.description": "On: mapped roles see their category; unmapped quote handlers see none until mapped. Off: every restriction is lifted.",
   "adminRoles.permission.product_visibility:read": "View product visibility rules",
   "adminRoles.permission.product_visibility:manage": "Manage product visibility rules",
   "actions.openProductVisibility.label": "Product visibility rules",
@@ -189,5 +189,8 @@
   "roleZone.title": "Product visibility",
   "roleZone.manage": "Change mapping",
   "roleZone.failed": "Product visibility could not be loaded.",
-  "roleZone.unknown": "This role is not listed in product visibility yet. Reload the page."
+  "roleZone.unknown": "This role is not listed in product visibility yet. Reload the page.",
+  "actions.openWebsiteRules.label": "Website rules",
+  "actions.openWebsiteRules.description": "Attach product rules to sales channels after previewing what changes",
+  "actions.openWebsiteRules.keywords": "website rule, storefront, sales channel, product rule"
 }

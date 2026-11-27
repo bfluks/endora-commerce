@@ -1,9 +1,9 @@
 {
   "module.name": "Reguły widoczności produktów",
-  "module.description": "Ogranicza, które produkty widzi rola administratora, według cen katalogowych produktów, i pozwala, by produkty kanału sprzedaży podążały za konfigurowalną regułą.",
+  "module.description": "Ogranicza, które produkty widzi rola administratora, według cen katalogowych produktów, i pozwala, by produkty kanału sprzedaży podążały za konfigurowalną regułą. Włączenie działa od razu: rola obsługująca zapytania ofertowe, która nie ma przypisania, nie widzi żadnych produktów, dopóki nie zostanie przypisana. Wyłączenie znosi wszystkie ograniczenia produktów: każda ograniczona rola widzi wszystkie produkty, dopóki moduł jest wyłączony. Konfiguracja zostaje zachowana.",
   "settingGroups.product_visibility_rules.name": "Reguły widoczności produktów",
   "settingLabels.product_visibility_rules.module_enabled.name": "Moduł reguł widoczności produktów włączony",
-  "settingLabels.product_visibility_rules.module_enabled.description": "Włączony: zmapowane role widzą produkty swojej kategorii, niezmapowani obsługujący zapytania żadnych. Wyłączony: bez ograniczeń.",
+  "settingLabels.product_visibility_rules.module_enabled.description": "Włączony: przypisane role widzą tylko swoją kategorię, nieprzypisani obsługujący zapytania nic do czasu przypisania. Wyłączony: bez ograniczeń.",
   "adminRoles.permission.product_visibility:read": "Podgląd reguł widoczności produktów",
   "adminRoles.permission.product_visibility:manage": "Zarządzanie regułami widoczności produktów",
   "actions.openProductVisibility.label": "Reguły widoczności produktów",
@@ -189,5 +189,8 @@
   "roleZone.title": "Widoczność produktów",
   "roleZone.manage": "Zmień przypisanie",
   "roleZone.failed": "Nie udało się wczytać widoczności produktów.",
-  "roleZone.unknown": "Tej roli nie ma jeszcze w widoczności produktów. Odśwież stronę."
+  "roleZone.unknown": "Tej roli nie ma jeszcze w widoczności produktów. Odśwież stronę.",
+  "actions.openWebsiteRules.label": "Reguły witryn",
+  "actions.openWebsiteRules.description": "Dołącz reguły produktów do kanałów sprzedaży po podglądzie zmian",
+  "actions.openWebsiteRules.keywords": "reguła witryny, sklep, kanał sprzedaży, reguła produktów"
 }

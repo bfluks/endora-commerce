@@ -48,6 +48,7 @@ An operator switches this module on and off on **/platform/modules**. The choice
 | Action | Opens | Permission |
 | --- | --- | --- |
 | `open-product-visibility` | `/product-visibility` | `product_visibility:read` |
+| `open-website-rules` | `/product-visibility/website-rules` | `product_visibility:read` |
 
 ## Settings
 
