@@ -763,6 +763,25 @@ export const AdminZoneNameSchema = z.enum([
    * only that form. Props: {@link ProfileSecurityZoneProps}.
    */
   'profile.security',
+  /**
+   * A role's row in the role list (`admin_users`' `AdminRolesPage`): extra facts about the role
+   * shown under its name and code — `specs/193-product-visibility-rules/` FR-024, research R-14.
+   *
+   * Mounted **once per role row**, inside the row's button, so a contribution renders **text
+   * only**: no link, button or other control (a control inside a button is nested interactive
+   * content). Read-only; it writes nothing, so it carries no save session. Props:
+   * {@link AdminRoleZoneProps}.
+   */
+  'admin_users.roles.list.columns',
+  /**
+   * Beside the role editor's form (`admin_users`' `AdminRolesPage`): panels about the open role
+   * that other modules own — `specs/193-product-visibility-rules/` FR-024, research R-14.
+   *
+   * Mounted **once** per open, saved role (never for a role not yet created). Read-only: a
+   * contribution links to its own screen to change anything, so the editor's one Save is
+   * unaffected and the zone carries no save session. Props: {@link AdminRoleZoneProps}.
+   */
+  'admin_users.roles.editor.aside',
 ])
 
 export type AdminZoneName = z.infer<typeof AdminZoneNameSchema>;
@@ -965,6 +984,11 @@ export interface SalesChannelEditorZoneProps {
  * host used to pass (§10.5). A prop only one contributor wants is a prop the
  * other three would have to be given a reason for (Z3).
  */
+/** A role-screen zone: the role it is about (`admin_users.roles.*`, spec 193 R-14). */
+export interface AdminRoleZoneProps {
+  readonly roleId: string;
+}
+
 export interface OrganizationDetailZoneProps {
   readonly organizationId: string;
   /** Feature 180 — the organization screen's one Save (FR-002, FR-060). */
@@ -1209,6 +1233,8 @@ export interface AdminZonePropsMap extends Record<AdminZoneName, object> {
   'product.editor.seo': ProductEditorSeoZoneProps;
   'sales_channel.editor.after': SalesChannelEditorZoneProps;
   'organization.detail.after': OrganizationDetailZoneProps;
+  'admin_users.roles.list.columns': AdminRoleZoneProps;
+  'admin_users.roles.editor.aside': AdminRoleZoneProps;
   'organization.detail.sales': OrganizationDetailSalesZoneProps;
   'customer.detail.after': CustomerDetailZoneProps;
   'order.detail.payment': OrderDetailZoneProps;

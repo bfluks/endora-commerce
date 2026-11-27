@@ -30,6 +30,7 @@ import {
   useInlineStatus,
 } from '@endora-commerce/admin-kit/ui';
 import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
+import { AdminZone } from '@endora-commerce/admin-kit/zones';
 import { resolvePermissionLabel } from '../permission-label.js';
 import {
   groupPermissions,
@@ -279,6 +280,9 @@ export default function AdminRolesPage(): ReactNode {
                       >
                         <span className="font-medium">{translateRoleName(t, r)}</span>
                         <span className="font-mono text-xs text-muted-foreground">{r.code}</span>
+                        {/* Spec 193 R-14 — read-only facts other modules add to the row (text only:
+                            this is inside the row's button). */}
+                        <AdminZone name="admin_users.roles.list.columns" props={{ roleId: r.id }} />
                       </button>
                     </li>
                   );
@@ -291,6 +295,7 @@ export default function AdminRolesPage(): ReactNode {
           </Card>
 
           {editing ? (
+            <div className="space-y-4">
             <RoleEditor
               key={editingCode}
               role={editing}
@@ -316,6 +321,11 @@ export default function AdminRolesPage(): ReactNode {
                   : null
               }
             />
+            {/* Spec 193 R-14 — read-only panels about the open, saved role that other modules own. */}
+            {editingCode !== NEW_ROLE_KEY && editing.id ? (
+              <AdminZone name="admin_users.roles.editor.aside" props={{ roleId: editing.id }} chrome="card" />
+            ) : null}
+            </div>
           ) : (
             <Card>
               <CardContent className="text-sm text-muted-foreground">

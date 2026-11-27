@@ -104,7 +104,7 @@ describe('AdminRolesPage — product visibility zones (T075)', () => {
     render({ present: true });
     fireEvent.click(await screen.findByText('rep_domestic'));
     const aside = await screen.findByRole('region', { name: k('roleZone.title') });
-    expect(within(aside).getByText('domestic')).toBeInTheDocument();
+    expect(await within(aside).findByText('domestic')).toBeInTheDocument();
     expect(within(aside).getByRole('link', { name: k('roleZone.manage') })).toHaveAttribute('href', '/product-visibility');
   });
 

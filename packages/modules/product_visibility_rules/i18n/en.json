@@ -185,5 +185,9 @@
   "rules.attach.applied": "Rule attached. The channel's products follow it within a few minutes.",
   "rules.attach.previewFailed": "The preview could not be prepared. Try again.",
   "rules.attach.error.ruleRequired": "Choose a product rule.",
-  "rules.attach.error.channelRequired": "Choose a sales channel."
+  "rules.attach.error.channelRequired": "Choose a sales channel.",
+  "roleZone.title": "Product visibility",
+  "roleZone.manage": "Change mapping",
+  "roleZone.failed": "Product visibility could not be loaded.",
+  "roleZone.unknown": "This role is not listed in product visibility yet. Reload the page."
 }

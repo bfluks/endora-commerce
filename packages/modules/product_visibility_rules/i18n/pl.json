@@ -185,5 +185,9 @@
   "rules.attach.applied": "Reguła dołączona. Produkty kanału dostosują się do niej w ciągu kilku minut.",
   "rules.attach.previewFailed": "Nie udało się przygotować podglądu. Spróbuj ponownie.",
   "rules.attach.error.ruleRequired": "Wybierz regułę produktów.",
-  "rules.attach.error.channelRequired": "Wybierz kanał sprzedaży."
+  "rules.attach.error.channelRequired": "Wybierz kanał sprzedaży.",
+  "roleZone.title": "Widoczność produktów",
+  "roleZone.manage": "Zmień przypisanie",
+  "roleZone.failed": "Nie udało się wczytać widoczności produktów.",
+  "roleZone.unknown": "Tej roli nie ma jeszcze w widoczności produktów. Odśwież stronę."
 }

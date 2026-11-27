@@ -1,4 +1,4 @@
-import { type AdminContributions } from '@endora-commerce/admin-kit/contributions';
+import { zoneComponent, type AdminContributions } from '@endora-commerce/admin-kit/contributions';
 
 /**
  * `product_visibility_rules`' admin layer (`specs/193-product-visibility-rules/`).
@@ -6,7 +6,9 @@ import { type AdminContributions } from '@endora-commerce/admin-kit/contribution
  * The configuration screen — categories, catalogue price books, role mappings (US2) — is the
  * module's landing route and its sidebar entry under *Access*, behind `product_visibility:read`,
  * the code its API reads enforce; the manifest's palette action `open-product-visibility` opens
- * it (FR-071, Principle XVI). Off ⇒ the registry drops every contribution (FR-073).
+ * it (FR-071, Principle XVI). The role list and the role editor show each role's visibility
+ * through two read-only zones `admin_users` hosts (FR-024, research R-14). Off ⇒ the registry
+ * drops every contribution (FR-073).
  */
 const ROUTE = '/product-visibility';
 const READ = 'product_visibility:read';
@@ -38,5 +40,13 @@ export const contributions: AdminContributions = {
       weight: 250,
       requiredPermission: READ,
     },
+  ],
+  zones: [
+    zoneComponent('admin_users.roles.list.columns', () => import('./zones/RoleListVisibility.js'), {
+      requiredPermission: READ,
+    }),
+    zoneComponent('admin_users.roles.editor.aside', () => import('./zones/RoleVisibilityPanel.js'), {
+      requiredPermission: READ,
+    }),
   ],
 };
