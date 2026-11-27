@@ -42,8 +42,19 @@ const coreBundle = passthroughBundle('core', [
 
 const { AppShell } = await import('../../../packages/admin-shell/src/components/AppShell');
 
-/** Who may sign in and what they may do — identities, their rights, machine secrets, the record. */
-const ACCESS = ['/admin-users', '/admin-roles', '/api-keys', '/credentials', '/audit-log'];
+/**
+ * Who may sign in and what they may do — identities, their rights, what a role may see (the
+ * product-visibility contributions, weight 250/251, spec 193), machine secrets, the record.
+ */
+const ACCESS = [
+  '/admin-users',
+  '/admin-roles',
+  '/product-visibility',
+  '/product-visibility/website-rules',
+  '/api-keys',
+  '/credentials',
+  '/audit-log',
+];
 
 /**
  * How the instance is configured and extended, frequent configuration first and
@@ -88,7 +99,7 @@ function groupHrefs(labelKey: string): (string | null)[] {
 }
 
 describe('AppShell — Access and Platform replace System (issue #1519)', () => {
-  it('renders an Access section of five rows, in order', () => {
+  it('renders an Access section of seven rows, in order', () => {
     renderShell();
     expect(groupHrefs('appShell.section.access')).toEqual(ACCESS);
   });
