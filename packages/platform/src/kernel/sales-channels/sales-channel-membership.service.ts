@@ -124,6 +124,16 @@ export interface MembershipMutationResult {
   fallbackAppliedToDefault?: boolean;
   /** Governed channels whose pair this mutation skipped (absent when none). */
   skippedGovernedChannelIds?: string[];
+  /**
+   * The entity's channel ids before the mutation, sorted — the set
+   * {@link SalesChannelMembershipService.replaceChannelsForEntity} replaced
+   * (or found already in place), from its own read on the manager it writes
+   * on, so inside the caller's transaction when it enlists. Lets a caller
+   * record the previous set without a second read on another connection
+   * (`specs/186-aggregate-ports/`, `organization.sales_channels.set`). Only
+   * `replaceChannelsForEntity` sets it.
+   */
+  previousChannelIds?: string[];
 }
 
 /** How one (channel, entity) pair is to be written. */
@@ -516,6 +526,8 @@ export class SalesChannelMembershipService {
         em.getTransactionContext(),
       );
     const existingIds = existingRows.map((row) => row.sales_channel_id);
+    // Sorted by the statement; copied so the caller cannot alter the diff below.
+    const previousChannelIds = [...existingIds];
     const existingSet = new Set(existingIds);
     const desiredSet = new Set(desiredIds);
 
@@ -538,7 +550,7 @@ export class SalesChannelMembershipService {
     }
     const removed = existingIds.filter((id) => !final.has(id));
     const added = desiredIds.filter((id) => final.has(id) && !existingSet.has(id));
-    if (removed.length === 0 && added.length === 0) return withSkipped({ changed: false }, skipped);
+    if (removed.length === 0 && added.length === 0) return withSkipped({ changed: false, previousChannelIds }, skipped);
 
     await em.transactional(async (tx) => {
       for (const channelId of removed) {
@@ -576,7 +588,7 @@ export class SalesChannelMembershipService {
       this.emitMembershipChanged(channelId, entityType, entityId, 'add');
     }
 
-    return withSkipped({ changed: true }, skipped);
+    return withSkipped({ changed: true, previousChannelIds }, skipped);
   }
 
   /**

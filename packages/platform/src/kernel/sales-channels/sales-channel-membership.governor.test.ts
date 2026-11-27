@@ -298,32 +298,32 @@ describe('membership governor — copyMemberships', () => {
 describe('membership governor — replaceChannelsForEntity', () => {
   it('ungoverned: replaced as today', async () => {
     const h = harness({ [P]: [DEFAULT] });
-    expect(await h.service.replaceChannelsForEntity('product', P, [A])).toEqual({ changed: true });
+    expect(await h.service.replaceChannelsForEntity('product', P, [A])).toEqual({ changed: true, previousChannelIds: [DEFAULT] });
     expect(channelsOf(h)).toEqual([A]);
   });
 
   it('keeps governed rows as they are and replaces the rest', async () => {
     const h = harness({ [P]: [DEFAULT, G] });
-    expect(await h.service.replaceChannelsForEntity('product', P, [A])).toEqual({ changed: true, skippedGovernedChannelIds: [G] });
+    expect(await h.service.replaceChannelsForEntity('product', P, [A])).toEqual({ changed: true, previousChannelIds: [DEFAULT, G], skippedGovernedChannelIds: [G] });
     expect(channelsOf(h)).toEqual([A, G]);
     expect(h.events.sort()).toEqual([`add:${A}:${P}`, `remove:${DEFAULT}:${P}`]);
   });
 
   it('a desired governed channel is not added', async () => {
     const h = harness({ [P]: [DEFAULT] });
-    expect(await h.service.replaceChannelsForEntity('product', P, [A, G])).toEqual({ changed: true, skippedGovernedChannelIds: [G] });
+    expect(await h.service.replaceChannelsForEntity('product', P, [A, G])).toEqual({ changed: true, previousChannelIds: [DEFAULT], skippedGovernedChannelIds: [G] });
     expect(channelsOf(h)).toEqual([A]);
   });
 
   it('a connector create naming only its governed channel ends on no channel (floor waived)', async () => {
     const h = harness({ [P]: [DEFAULT] });
-    expect(await h.service.replaceChannelsForEntity('product', P, [G])).toEqual({ changed: true, skippedGovernedChannelIds: [G] });
+    expect(await h.service.replaceChannelsForEntity('product', P, [G])).toEqual({ changed: true, previousChannelIds: [DEFAULT], skippedGovernedChannelIds: [G] });
     expect(channelsOf(h)).toEqual([]);
   });
 
   it('nothing to change except governed pairs: unchanged, the skip reported', async () => {
     const h = harness({ [P]: [A] });
-    expect(await h.service.replaceChannelsForEntity('product', P, [A, G])).toEqual({ changed: false, skippedGovernedChannelIds: [G] });
+    expect(await h.service.replaceChannelsForEntity('product', P, [A, G])).toEqual({ changed: false, previousChannelIds: [A], skippedGovernedChannelIds: [G] });
     expect(channelsOf(h)).toEqual([A]);
   });
 
@@ -336,13 +336,13 @@ describe('membership governor — replaceChannelsForEntity', () => {
 
   it('refuse: a governed pair kept as it is is no refusal', async () => {
     const h = harness({ [P]: [DEFAULT, G] });
-    expect(await h.service.replaceChannelsForEntity('product', P, [A, G], { onGoverned: 'refuse' })).toEqual({ changed: true });
+    expect(await h.service.replaceChannelsForEntity('product', P, [A, G], { onGoverned: 'refuse' })).toEqual({ changed: true, previousChannelIds: [DEFAULT, G] });
     expect(channelsOf(h)).toEqual([A, G]);
   });
 
   it('token: governed pairs follow the desired set', async () => {
     const h = harness({ [P]: [DEFAULT, G] });
-    expect(await h.service.replaceChannelsForEntity('product', P, [A], { governorToken: h.token })).toEqual({ changed: true });
+    expect(await h.service.replaceChannelsForEntity('product', P, [A], { governorToken: h.token })).toEqual({ changed: true, previousChannelIds: [DEFAULT, G] });
     expect(channelsOf(h)).toEqual([A]);
   });
 });
