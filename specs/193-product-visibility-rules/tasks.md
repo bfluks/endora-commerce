@@ -898,9 +898,11 @@ From the admin browser walk-through (configuration screen, role editor, `/platfo
 - [x] WT-2 Price books per currency: designated, not-in-force, building and the shop's base currency
   (public `GET /api/v1/i18n/config`, a failed read pins nothing) are listed first, alphabetically;
   the rest wait behind a "Show other currencies (n)" disclosure (`aria-expanded`) with a code
-  filter (`ListToolbarSearch`). A currency keeps the group it was first drawn in until the screen
-  is reopened, so the dialog's focus return finds its button (`DesignationsSection.tsx`; four tests
-  under "currencies without a designation wait behind a disclosure").
+  filter (`ListToolbarSearch`). A row does not move while its button may hold focus: one listed
+  first stays first until the screen is reopened, one in the open disclosure stays there until it
+  closes, then moves up if it was designated (`DesignationsSection.tsx`; four tests under
+  "currencies without a designation wait behind a disclosure"). Inactive currencies without a
+  designation are hidden like any other.
 - [x] WT-3 Role editor: the `admin_users.roles.editor.aside` zone renders above the role editor
   instead of below the permission tree and Save; the page has no side column
   (`AdminRolesPage.tsx`; placement assertion in `AdminRolesPage.visibility-zone.test.tsx`).

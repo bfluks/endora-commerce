@@ -285,9 +285,9 @@ describe('ConfigurationPage (T071)', () => {
     it('leaves a currency where it is when its designation changes, so focus goes back to its button', async () => {
       state.overview = many();
       state.after = { ...many(), currencies: many().currencies.map((c) => (c.code === 'USD' ? { ...c, designation: { priceListId: BOOK_B, salesChannelId: CHANNEL_X } } : c)) };
-      render();
+      render(MANAGE, { bundle: { 'config.designations.showOthers': 'Other currencies ({count})' } });
       const section = await screen.findByRole('region', { name: k('config.designations.title') });
-      const toggle = await within(section).findByRole('button', { name: k('config.designations.showOthers') });
+      const toggle = await within(section).findByRole('button', { name: 'Other currencies (3)' });
       fireEvent.click(toggle);
       const usd = within(section).getByText('USD').closest('[data-currency-row]') as HTMLElement;
       const change = within(usd).getByRole('button', { name: k('config.designations.changeFor') });
@@ -305,6 +305,12 @@ describe('ConfigurationPage (T071)', () => {
       expect(toggle).toHaveAttribute('aria-expanded', 'true');
       expect(codesIn(section).slice(-3)).toEqual(['AUD', 'CHF', 'USD']);
       await waitFor(() => expect(document.activeElement).toBe(change));
+
+      // Closed again, the now designated USD is listed first: a designated currency is never hidden.
+      fireEvent.click(toggle);
+      expect(codesIn(section)).toEqual(['EUR', 'GBP', 'PLN', 'USD', 'ZAR']);
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      expect(toggle).toHaveAccessibleName('Other currencies (2)');
     });
 
     it('opens the list straight away when no currency needs to come first', async () => {

@@ -51,15 +51,17 @@ export function DesignationsSection({ overview, channels, writable, onChanged, o
     }
   };
 
-  // Which group each currency was first drawn in. A currency keeps its group until the screen is
-  // opened again: designating or clearing it must not unmount the row whose button the dialog
-  // hands focus back to (WCAG 2.4.3).
+  // Which group each currency is drawn in. A row never moves while its button may hold focus or
+  // get it back from a dialog (WCAG 2.4.3): a currency listed first stays first until the screen
+  // is opened again (clearing its book does not hide it), and one in the open disclosure stays
+  // there while it is open. A currency designated from the disclosure moves up once it closes —
+  // so a designated currency is never left hidden.
   const placed = useRef(new Map<string, boolean>());
   const first: Currency[] = [];
   const rest: Currency[] = [];
   for (const currency of [...overview.currencies].sort((a, b) => a.code.localeCompare(b.code))) {
     let pinned = placed.current.get(currency.code);
-    if (pinned === undefined) {
+    if (pinned === undefined || (!pinned && !showRest)) {
       pinned = needsAttention(currency);
       placed.current.set(currency.code, pinned);
     }
