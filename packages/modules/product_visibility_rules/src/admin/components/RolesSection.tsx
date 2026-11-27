@@ -15,16 +15,13 @@ import {
   TableRow,
 } from '@endora-commerce/admin-kit/ui';
 import { productVisibilityClient } from '../api.js';
-import { INERT_CLASS, isMappable, refusalMessage, roleWarningLabels } from '../lib/labels.js';
+import { INERT_CLASS, isMappable, refusalMessage, roleRowId, roleWarningLabels } from '../lib/labels.js';
 import { RoleEffect } from './RoleEffect.js';
 
 const UNRESTRICTED = 'unrestricted';
 
 /** The section's id: the unmapped-roles notice and the role screens link to it. */
 export const ROLES_SECTION_ID = 'visibility-roles';
-
-/** A role row's id: `#role-<id>` from the role editor focuses it. */
-export const roleRowId = (roleId: string): string => `role-${roleId}`;
 
 type Overview = ProductVisibilityOverviewResponse;
 type Role = Overview['roles'][number];

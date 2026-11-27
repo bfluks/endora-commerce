@@ -16,14 +16,12 @@ export function ProductVisibilityBanner({ visibility }: { readonly visibility: A
   return (
     <Alert data-testid="product-visibility-banner" variant={visibility.reason === 'no_category' ? 'warning' : 'default'}>
       <AlertDescription>
-        {visibility.reason === 'no_category' ? (
-          t('productsList.visibility.noCategory')
-        ) : (
-          <>
-            <span>{t('productsList.visibility.restricted')}</span>{' '}
-            <span className="font-medium break-words">{visibility.categoryName ?? ''}</span>
-          </>
-        )}
+        {visibility.reason === 'no_category'
+          ? t('productsList.visibility.noCategory')
+          : visibility.categoryName
+            ? // One sentence with the name in it; the name is text, never markup.
+              t('productsList.visibility.restrictedNamed', { name: visibility.categoryName })
+            : t('productsList.visibility.restrictedUnnamed')}
       </AlertDescription>
     </Alert>
   );

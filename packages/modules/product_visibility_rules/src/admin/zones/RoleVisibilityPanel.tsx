@@ -1,9 +1,11 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import type { AdminRoleZoneProps } from '@endora-commerce/contracts';
+import { PRODUCT_VISIBILITY_PERMISSIONS, type AdminRoleZoneProps } from '@endora-commerce/contracts';
+import { useAuth } from '@endora-commerce/admin-kit/lib';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import { Button, EditorSection, Skeleton } from '@endora-commerce/admin-kit/ui';
 import { RoleEffect } from '../components/RoleEffect.js';
+import { roleRowId } from '../lib/labels.js';
 import { useRoleVisibility } from '../lib/use-role-visibility.js';
 
 const CONFIG_ROUTE = '/product-visibility';
@@ -16,13 +18,17 @@ const CONFIG_ROUTE = '/product-visibility';
 export default function RoleVisibilityPanel({ roleId }: AdminRoleZoneProps): ReactNode {
   const t = useTranslation('product_visibility_rules');
   const visibility = useRoleVisibility(roleId);
+  // Without manage the screen is read-only: the link says it opens, not that it changes (Jakob).
+  const canManage = useAuth().hasPermission(PRODUCT_VISIBILITY_PERMISSIONS.MANAGE);
   return (
     <EditorSection
       as="h3"
       title={t('roleZone.title')}
       action={
         <Button asChild size="sm" variant="outline">
-          <Link to={CONFIG_ROUTE}>{t('roleZone.manage')}</Link>
+          {/* The role editor's unsaved-changes prompt (AdminRolesPage) intercepts this link like any
+              in-app link, so an edited role is not dropped without asking. */}
+          <Link to={`${CONFIG_ROUTE}#${roleRowId(roleId)}`}>{canManage ? t('roleZone.manage') : t('roleZone.open')}</Link>
         </Button>
       }
     >

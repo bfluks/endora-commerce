@@ -58,6 +58,9 @@ type Role = ProductVisibilityOverviewResponse['roles'][number];
  */
 export const INERT_CLASS = 'aria-disabled:cursor-not-allowed aria-disabled:opacity-50';
 
+/** A role row's id on the configuration screen: the role editor links to `#role-<id>`, which focuses it. */
+export const roleRowId = (roleId: string): string => `role-${roleId}`;
+
 /** FR-022, FR-026 — the roles no mapping can be set for. */
 export function isMappable(role: Role): boolean {
   return role.effect !== 'unmappable_unrestricted';

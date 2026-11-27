@@ -40,6 +40,15 @@ export const contributions: AdminContributions = {
       weight: 250,
       requiredPermission: READ,
     },
+    {
+      // US4 — the website rules screen, right after the configuration screen it belongs to.
+      to: '/product-visibility/website-rules',
+      labelKey: 'nav.websiteRules.label',
+      icon: 'ListChecks',
+      section: 'access',
+      weight: 251,
+      requiredPermission: READ,
+    },
   ],
   zones: [
     zoneComponent('admin_users.roles.list.columns', () => import('./zones/RoleListVisibility.js'), {
