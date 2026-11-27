@@ -9,7 +9,8 @@ export interface OverviewState {
   /** A later read is in flight: the content stays on screen, marked busy (DS-14). */
   readonly refreshing: boolean;
   readonly failed: boolean;
-  readonly reload: () => Promise<void>;
+  /** Reads again; resolves with the answer, or `null` when the read failed or a newer one won. */
+  readonly reload: () => Promise<ProductVisibilityOverviewResponse | null>;
 }
 
 /**
@@ -25,17 +26,19 @@ export function useOverview(): OverviewState {
   const latest = useRef(0);
   const mounted = useRef(true);
 
-  const reload = useCallback(async (): Promise<void> => {
+  const reload = useCallback(async (): Promise<ProductVisibilityOverviewResponse | null> => {
     const ticket = ++latest.current;
     setRefreshing(true);
     try {
       const next = await productVisibilityClient.overview();
-      if (!mounted.current || ticket !== latest.current) return;
+      if (!mounted.current || ticket !== latest.current) return null;
       setOverview(next);
       setFailed(false);
+      return next;
     } catch {
-      if (!mounted.current || ticket !== latest.current) return;
+      if (!mounted.current || ticket !== latest.current) return null;
       setFailed(true);
+      return null;
     } finally {
       if (mounted.current && ticket === latest.current) {
         setLoading(false);

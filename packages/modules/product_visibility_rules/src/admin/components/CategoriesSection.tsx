@@ -23,7 +23,7 @@ interface CategoryDraft {
 export interface CategoriesSectionProps {
   readonly overview: ProductVisibilityOverviewResponse;
   readonly writable: boolean;
-  readonly onChanged: () => Promise<void>;
+  readonly onChanged: () => Promise<unknown>;
   readonly onStatus: (message: string, tone: 'success' | 'error') => void;
 }
 

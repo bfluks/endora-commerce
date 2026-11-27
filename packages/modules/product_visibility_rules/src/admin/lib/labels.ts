@@ -52,6 +52,12 @@ export const previewStatusLabels = defineEnumLabels<WebsiteRulePreviewResponse['
 
 type Role = ProductVisibilityOverviewResponse['roles'][number];
 
+/**
+ * A control that is `aria-disabled` while busy, not `disabled`: it keeps focus (WCAG 2.4.3) and
+ * looks unavailable, and its handler ignores the press. The kit's controls style only `disabled:`.
+ */
+export const INERT_CLASS = 'aria-disabled:cursor-not-allowed aria-disabled:opacity-50';
+
 /** FR-022, FR-026 — the roles no mapping can be set for. */
 export function isMappable(role: Role): boolean {
   return role.effect !== 'unmappable_unrestricted';

@@ -23,11 +23,18 @@ export function RoleEffect({
 }): ReactNode {
   const t = useTranslation('product_visibility_rules');
   const category = showCategory && role.effect === 'mapped' ? categories.find((c) => c.id === role.categoryId) : undefined;
+  // Beside a mapping column the category is named there, and "cannot be mapped" is said there
+  // with its reason: here the sentence ends in words, once per row.
+  const label = showCategory
+    ? roleEffectLabels.label(t, role.effect)
+    : role.effect === 'mapped'
+      ? t('roleEffect.mappedLimited')
+      : role.effect === 'unmappable_unrestricted'
+        ? roleEffectLabels.label(t, 'unrestricted')
+        : roleEffectLabels.label(t, role.effect);
   return (
     <span className="text-sm">
-      <span className={role.effect === 'sees_no_products' ? 'font-medium text-destructive' : undefined}>
-        {roleEffectLabels.label(t, role.effect)}
-      </span>
+      <span className={role.effect === 'sees_no_products' ? 'font-medium text-destructive' : undefined}>{label}</span>
       {category ? <span className="ml-1 break-words font-medium">{category.name}</span> : null}
     </span>
   );

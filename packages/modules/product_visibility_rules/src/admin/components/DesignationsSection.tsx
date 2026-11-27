@@ -16,7 +16,7 @@ export interface DesignationsSectionProps {
   readonly overview: ProductVisibilityOverviewResponse;
   readonly channels: readonly SalesChannelRow[];
   readonly writable: boolean;
-  readonly onChanged: () => Promise<void>;
+  readonly onChanged: () => Promise<unknown>;
   readonly onStatus: (message: string, tone: 'success' | 'error') => void;
 }
 
