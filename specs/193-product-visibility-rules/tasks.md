@@ -688,7 +688,7 @@ import_export, contracts, spec).
   *(Done: activation texts pinned in en/pl; `open-website-rules`; module reference re-pinned.)*
 - [x] T078 Off-state UI test: no nav, palette, zone contribution, banner while off; **TM-14** test that
   a second admin signing in on the same tab sees no list rows cached from the first.
-  *(Done: `admin/test/modules/product_visibility_rules/off-state.test.tsx`, `…/second-admin-same-tab.test.tsx`; both green on first run — behaviour predates the change.)*
+  *(Done: `admin/test/modules/product_visibility_rules/off-state.test.tsx`, `…/second-admin-same-tab.test.tsx`; both green on first run — behaviour predates the change; palette: a case in `BT/integration/product_visibility_rules/off-state.config.test.ts`, both axes, green on PG.)*
 - [x] T079 UX pass against `.claude/skills/ux-laws/SKILL.md` (states: loading, empty, error, refused,
   building generation).
   *(Done: loading skeleton, empty states, load/refresh errors with retry, refusals as the server's sentence, read-only notices, building notices on both screens.)*
