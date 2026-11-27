@@ -29,5 +29,5 @@
   // unresolvable specifier in every consumer's install. The exclusion lives here
   // rather than in `tsconfig.json` because that file is the type-check half, and
   // a test excluded there is a test no `tsc` invocation reads (issue #81).
-  "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts"]
+  "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts", "src/admin/**/*"]
 }

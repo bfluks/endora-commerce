@@ -28,6 +28,8 @@
   // invocation reads — `vitest` strips types, so nothing else would report a
   // type error in one (issue #81). Keeping them out of `dist`, where a compiled
   // test would import `vitest`, an unresolvable specifier in every consumer's
-  // install, is an *emit* concern and lives in `tsconfig.build.json`.
-  "exclude": []
+  // install, is an *emit* concern and lives in `tsconfig.build.json`. The admin
+  // layer is its own program (`tsconfig.ui.json`): React and the DOM lib must not
+  // reach a file that runs in Node.
+  "exclude": ["src/admin/**/*"]
 }

@@ -106,11 +106,13 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
         }
         if (url.includes('/api/v1/admin/sales-channels')) {
           return {
-            data: [
+            items: [
               { id: CHANNEL_X, code: 'x', name: { 'en-US': 'Channel X' }, active: true },
               { id: CHANNEL_Y, code: 'y', name: { 'en-US': 'Channel Y' }, active: true },
             ],
-            meta: { page: 1, pageSize: 200, total: 2 },
+            page: 1,
+            pageSize: 200,
+            total: 2,
           };
         }
         return { data: null };
@@ -118,7 +120,7 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
       post: write('POST'),
       put: write('PUT'),
       patch: write('PATCH'),
-      delete: write('DELETE'),
+      delete: async (url: string, options?: { headers?: unknown }) => write('DELETE')(url, undefined, options),
     },
   };
 });
@@ -185,13 +187,13 @@ describe('ConfigurationPage (T071)', () => {
     const eur = within(section).getByText('EUR').closest('[data-currency-row]') as HTMLElement;
     fireEvent.click(within(eur).getByRole('button', { name: k('config.designations.change') }));
     const dialog = await screen.findByRole('dialog');
-    const book = await within(dialog).findByLabelText(k('config.designations.field.book'));
+    const book = await within(dialog).findByLabelText(k('config.designations.field.book'), { exact: false });
     await waitFor(() => expect(within(book).getAllByRole('option').map((o) => o.textContent)).toEqual(
       expect.arrayContaining(['Export EUR', 'Export EUR 2027']),
     ));
     expect(within(book).getAllByRole('option').filter((o) => (o as HTMLOptionElement).value !== '')).toHaveLength(2);
     fireEvent.change(book, { target: { value: BOOK_B } });
-    const channel = within(dialog).getByLabelText(k('config.designations.field.channel'));
+    const channel = within(dialog).getByLabelText(k('config.designations.field.channel'), { exact: false });
     await waitFor(() => expect(within(channel).getAllByRole('option').filter((o) => (o as HTMLOptionElement).value !== '')).toHaveLength(1));
     fireEvent.change(channel, { target: { value: CHANNEL_X } });
     fireEvent.click(within(dialog).getByRole('button', { name: k('config.designations.save') }));
@@ -255,7 +257,7 @@ describe('ConfigurationPage (T071)', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: k('config.categories.save') }));
     expect(await within(dialog).findByText(k('config.categories.error.nameRequired'))).toBeInTheDocument();
     expect(state.calls.some((c) => c.method === 'POST')).toBe(false);
-    fireEvent.change(within(dialog).getByLabelText(k('config.categories.field.name')), { target: { value: 'management' } });
+    fireEvent.change(within(dialog).getByLabelText(k('config.categories.field.name'), { exact: false }), { target: { value: 'management' } });
     fireEvent.change(within(dialog).getByLabelText(k('config.categories.field.currency')), { target: { value: 'PLN' } });
     fireEvent.change(within(dialog).getByLabelText(k('config.categories.field.threshold')), { target: { value: 'gte_zero' } });
     fireEvent.click(within(dialog).getByRole('button', { name: k('config.categories.save') }));
