@@ -92,3 +92,26 @@ export function useSalesChannels(): SalesChannelsState {
   }, []);
   return state;
 }
+
+/**
+ * The shop's base currency, for listing it first among the catalogue price books. A failed read is
+ * not an error the screen reports: the currency is then simply not pinned (it stays in the list).
+ */
+export function useBaseCurrency(): string | null {
+  const [code, setCode] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    productVisibilityClient
+      .baseCurrency()
+      .then((answer) => {
+        if (live) setCode(answer);
+      })
+      .catch(() => {
+        if (live) setCode(null);
+      });
+    return (): void => {
+      live = false;
+    };
+  }, []);
+  return code;
+}

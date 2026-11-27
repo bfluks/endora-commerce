@@ -887,6 +887,31 @@ the targeted backend files of Phases 2 – 9b; full backend suite runs on `maste
 
 ---
 
+## Walk-through follow-ups
+
+From the admin browser walk-through (configuration screen, role editor, `/platform/modules`).
+
+- [x] WT-1 Roles at 390 px: below the kit's desktop tier (`useViewportTier`) each role is a stacked
+  row — name, what it sees, then the mapping select at full width — instead of the three-column
+  table in an `overflow-x-auto` wrapper; the `#role-<id>` target stays on the row
+  (`RolesSection.tsx`; `ConfigurationPage.test.tsx` "stacks each role …").
+- [x] WT-2 Price books per currency: designated, not-in-force, building and the shop's base currency
+  (public `GET /api/v1/i18n/config`, a failed read pins nothing) are listed first, alphabetically;
+  the rest wait behind a "Show other currencies (n)" disclosure (`aria-expanded`) with a code
+  filter (`ListToolbarSearch`). A currency keeps the group it was first drawn in until the screen
+  is reopened, so the dialog's focus return finds its button (`DesignationsSection.tsx`; four tests
+  under "currencies without a designation wait behind a disclosure").
+- [x] WT-3 Role editor: the `admin_users.roles.editor.aside` zone renders above the role editor
+  instead of below the permission tree and Save; the page has no side column
+  (`AdminRolesPage.tsx`; placement assertion in `AdminRolesPage.visibility-zone.test.tsx`).
+- [ ] WT-4 Activation confirm on `/platform/modules`: **not changed.** The platform offers no
+  per-module confirm-on-enable hook (`ModuleActivationSchema` is `{ settingCode, default }` or
+  `{ nonDeactivatable, reason }`; `ModuleActivationControl` confirms only a switch-off). The
+  activation consequence (FR-076, TM-13) stays in the manifest description beside the switch.
+  Needs a platform change to do more.
+
+---
+
 ## FR → test map
 
 | FR / SC | Tests |

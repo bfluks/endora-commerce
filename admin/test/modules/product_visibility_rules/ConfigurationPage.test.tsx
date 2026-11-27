@@ -72,6 +72,8 @@ const state = vi.hoisted(() => ({
   /** Swapped in for the overview once a write has gone through. */
   after: null as unknown,
   failChannels: false,
+  /** The shop's base currency, as `GET /api/v1/i18n/config` answers it; `null` ⇒ the read fails. */
+  baseCurrency: 'PLN' as string | null,
 }));
 
 vi.mock('@endora-commerce/admin-kit/lib', async () => {
@@ -101,7 +103,7 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
           }
           return { data: state.overview };
         }
-        if (url.includes('/designations/EUR/options')) {
+        if (url.includes('/designations/') && url.endsWith('/options')) {
           return {
             data: {
               items: [
@@ -110,6 +112,10 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
               ],
             },
           };
+        }
+        if (url === '/api/v1/i18n/config') {
+          if (state.baseCurrency === null) throw new actual.ApiError(500, { error: { code: 'INTERNAL', message: 'Down.' } } as never);
+          return { data: { languages: [], currencies: [], defaultLanguageCode: null, defaultCurrencyCode: state.baseCurrency } };
         }
         if (url.includes('/api/v1/admin/sales-channels')) {
           if (state.failChannels) throw new actual.ApiError(500, { error: { code: 'INTERNAL', message: 'Down.' } } as never);
@@ -169,8 +175,12 @@ describe('ConfigurationPage (T071)', () => {
     state.gate = null;
     state.after = null;
     state.failChannels = false;
+    state.baseCurrency = 'PLN';
   });
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    setMobileViewport(false);
+  });
 
   it('warns that switching the module off lifts every product restriction (FR-073, TM-13)', async () => {
     render();
@@ -192,7 +202,8 @@ describe('ConfigurationPage (T071)', () => {
     const eur = within(section).getByText('EUR').closest('[data-currency-row]') as HTMLElement;
     expect(within(eur).getByText(k('designationReason.outside_schedule'))).toBeInTheDocument();
     expect(within(eur).getByText(k('config.designations.building'))).toBeInTheDocument();
-    const pln = within(section).getByText('PLN').closest('[data-currency-row]') as HTMLElement;
+    // PLN has no designation: it is listed first because it is the shop's base currency.
+    const pln = (await within(section).findByText('PLN')).closest('[data-currency-row]') as HTMLElement;
     expect(within(pln).getByText(k('config.designations.baseBook'))).toBeInTheDocument();
   });
 
@@ -217,6 +228,111 @@ describe('ConfigurationPage (T071)', () => {
         expect.objectContaining({ method: 'PUT', url: '/api/v1/admin/product-visibility/designations/EUR', body: { priceListId: BOOK_B, salesChannelId: CHANNEL_X } }),
       ),
     );
+  });
+
+  describe('currencies without a designation wait behind a disclosure (walk-through follow-up)', () => {
+    const plain = (code: string): ProductVisibilityOverviewResponse['currencies'][number] => ({
+      code, active: true, designation: null, designationStatus: null, servedGeneration: 1, building: false,
+    });
+    const many = (): ProductVisibilityOverviewResponse => ({
+      ...overview(),
+      currencies: [
+        plain('AUD'),
+        plain('CHF'),
+        { ...plain('GBP'), building: true },
+        ...overview().currencies,
+        plain('USD'),
+        { ...plain('ZAR'), designation: { priceListId: BOOK_B2, salesChannelId: CHANNEL_Y }, designationStatus: { inForce: true, reason: null, window: null } as never },
+      ],
+    });
+    const codesIn = (section: HTMLElement): string[] =>
+      Array.from(section.querySelectorAll('[data-currency-row]')).map((row) => row.querySelector('.font-mono')?.textContent ?? '');
+
+    it('shows designated, building and base currencies first, alphabetically, and hides the rest behind a closed disclosure', async () => {
+      state.overview = many();
+      render();
+      const section = await screen.findByRole('region', { name: k('config.designations.title') });
+      await waitFor(() => expect(codesIn(section)).toEqual(['EUR', 'GBP', 'PLN', 'ZAR']));
+      const toggle = within(section).getByRole('button', { name: k('config.designations.showOthers') });
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      expect(within(section).queryByText('AUD')).toBeNull();
+      expect(within(section).queryByText('USD')).toBeNull();
+
+      fireEvent.click(toggle);
+      expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      expect(codesIn(section)).toEqual(['EUR', 'GBP', 'PLN', 'ZAR', 'AUD', 'CHF', 'USD']);
+
+      const filter = within(section).getByRole('searchbox', { name: k('config.designations.filterLabel') });
+      fireEvent.change(filter, { target: { value: 'ch' } });
+      expect(codesIn(section)).toEqual(['EUR', 'GBP', 'PLN', 'ZAR', 'CHF']);
+      fireEvent.change(filter, { target: { value: 'xyz' } });
+      expect(within(section).getByText(k('config.designations.filterEmpty'))).toBeInTheDocument();
+
+      fireEvent.click(toggle);
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      expect(within(section).queryByText('CHF')).toBeNull();
+    });
+
+    it('keeps a designated currency visible even when the base currency cannot be read', async () => {
+      state.overview = many();
+      state.baseCurrency = null;
+      render();
+      const section = await screen.findByRole('region', { name: k('config.designations.title') });
+      await waitFor(() => expect(codesIn(section)).toEqual(['EUR', 'GBP', 'ZAR']));
+      expect(within(section).queryByText('PLN')).toBeNull();
+    });
+
+    it('leaves a currency where it is when its designation changes, so focus goes back to its button', async () => {
+      state.overview = many();
+      state.after = { ...many(), currencies: many().currencies.map((c) => (c.code === 'USD' ? { ...c, designation: { priceListId: BOOK_B, salesChannelId: CHANNEL_X } } : c)) };
+      render();
+      const section = await screen.findByRole('region', { name: k('config.designations.title') });
+      const toggle = await within(section).findByRole('button', { name: k('config.designations.showOthers') });
+      fireEvent.click(toggle);
+      const usd = within(section).getByText('USD').closest('[data-currency-row]') as HTMLElement;
+      const change = within(usd).getByRole('button', { name: k('config.designations.changeFor') });
+      change.focus();
+      fireEvent.click(change);
+      const dialog = await screen.findByRole('dialog');
+      const book = await within(dialog).findByLabelText(k('config.designations.field.book'), { exact: false });
+      await waitFor(() => expect(within(book).getAllByRole('option').length).toBeGreaterThan(1));
+      fireEvent.change(book, { target: { value: BOOK_B } });
+      fireEvent.change(within(dialog).getByLabelText(k('config.designations.field.channel'), { exact: false }), { target: { value: CHANNEL_X } });
+      fireEvent.click(within(dialog).getByRole('button', { name: k('config.designations.save') }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      await waitFor(() => expect(state.calls.filter((c) => c.url.endsWith('/overview')).length).toBeGreaterThan(1));
+      expect(change.isConnected).toBe(true);
+      expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      expect(codesIn(section).slice(-3)).toEqual(['AUD', 'CHF', 'USD']);
+      await waitFor(() => expect(document.activeElement).toBe(change));
+    });
+
+    it('opens the list straight away when no currency needs to come first', async () => {
+      state.overview = { ...overview(), currencies: [plain('AUD'), plain('CHF')] };
+      state.baseCurrency = null;
+      render();
+      const section = await screen.findByRole('region', { name: k('config.designations.title') });
+      const toggle = await within(section).findByRole('button', { name: k('config.designations.showAll') });
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      fireEvent.click(toggle);
+      expect(codesIn(section)).toEqual(['AUD', 'CHF']);
+    });
+  });
+
+  it('stacks each role as a card on a phone: name, effect, then the mapping at full width — no table to scroll', async () => {
+    setMobileViewport(true);
+    render();
+    const section = await screen.findByRole('region', { name: k('config.roles.title') });
+    expect(within(section).queryByRole('table')).toBeNull();
+    const rep = roleRow('Sales rep');
+    expect(rep).toHaveAttribute('id', `role-${ROLE_REP}`);
+    expect(rep).toHaveAttribute('tabindex', '-1');
+    expect(within(rep).getByText(k('roleEffect.sees_no_products'))).toBeInTheDocument();
+    expect(within(rep).getByText(k('config.roles.column.mapping'))).toBeInTheDocument();
+    const select = within(rep).getByRole('combobox', { name: k('config.roles.mappingFor') });
+    expect(select.className).toContain('w-full');
+    expect(select.className).not.toContain('min-w-48');
+    expect(section.querySelector('.overflow-x-auto')).toBeNull();
   });
 
   it('shows every role\'s effect: cannot be mapped, sees no products, mapped, mapping without effect (FR-024, FR-026)', async () => {

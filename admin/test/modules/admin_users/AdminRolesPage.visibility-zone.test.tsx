@@ -112,6 +112,17 @@ describe('AdminRolesPage — product visibility zones (T075)', () => {
     expect(within(aside).getByRole('link', { name: k('roleZone.manage') })).toHaveAttribute('href', `/product-visibility#role-${DOMESTIC.id}`);
   });
 
+  it('puts the open role\'s visibility above the editor\'s permission tree and its Save, not below them', async () => {
+    render({ present: true });
+    fireEvent.click(await screen.findByText('rep_domestic'));
+    const aside = await screen.findByRole('region', { name: k('roleZone.title') });
+    const permissions = screen.getByRole('heading', { name: /adminRoles\.permissionsHeading$/ });
+    const save = screen.getByRole('button', { name: /adminRoles\.save$/ });
+    for (const below of [permissions, save]) {
+      expect(aside.compareDocumentPosition(below) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+
   it('without manage, the link opens the screen in its own words, at the role\'s row', async () => {
     render({ present: true, permissions: ['admin_roles:read', 'admin_roles:manage', 'product_visibility:read'] });
     fireEvent.click(await screen.findByText('rep_domestic'));

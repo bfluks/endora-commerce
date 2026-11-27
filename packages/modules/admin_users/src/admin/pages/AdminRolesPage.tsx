@@ -296,6 +296,12 @@ export default function AdminRolesPage(): ReactNode {
 
           {editing ? (
             <div className="space-y-4">
+            {/* Spec 193 R-14 — read-only panels about the open, saved role that other modules own.
+                Above the editor, not under it: below a long permission tree and its Save nobody
+                scrolls to them (walk-through follow-up); the page has no side column to hold them. */}
+            {editingCode !== NEW_ROLE_KEY && editing.id ? (
+              <AdminZone name="admin_users.roles.editor.aside" props={{ roleId: editing.id }} chrome="card" />
+            ) : null}
             <RoleEditor
               key={editingCode}
               role={editing}
@@ -321,10 +327,6 @@ export default function AdminRolesPage(): ReactNode {
                   : null
               }
             />
-            {/* Spec 193 R-14 — read-only panels about the open, saved role that other modules own. */}
-            {editingCode !== NEW_ROLE_KEY && editing.id ? (
-              <AdminZone name="admin_users.roles.editor.aside" props={{ roleId: editing.id }} chrome="card" />
-            ) : null}
             </div>
           ) : (
             <Card>

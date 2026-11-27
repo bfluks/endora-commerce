@@ -1,4 +1,5 @@
 import type {
+  I18nConfigResponse,
   ProductRuleAttributesResponse,
   ProductRuleCreateBody,
   ProductRuleDetail,
@@ -97,6 +98,14 @@ export const productVisibilityClient = {
   },
 
   /** Every sales channel, active or not, for naming the ones this module's rows point at. */
+  /**
+   * The shop's base currency, from the public `GET /api/v1/i18n/config` (no permission needed), so
+   * the configuration screen can list it first. `null` when none is set.
+   */
+  async baseCurrency(): Promise<string | null> {
+    return (await apiClient.get<{ data: I18nConfigResponse | null }>('/api/v1/i18n/config')).data?.defaultCurrencyCode ?? null;
+  },
+
   async salesChannels(): Promise<SalesChannelListResponse['items']> {
     const qs = new URLSearchParams({ pageSize: '200', activeOnly: 'false' });
     return (await apiClient.get<SalesChannelListResponse>(`/api/v1/admin/sales-channels?${qs.toString()}`)).items;

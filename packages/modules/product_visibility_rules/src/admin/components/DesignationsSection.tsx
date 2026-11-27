@@ -1,12 +1,12 @@
-import { useEffect, useId, useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import { Loader2 } from 'lucide-react';
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import type { ProductVisibilityDesignationOptionsResponse, ProductVisibilityOverviewResponse } from '@endora-commerce/contracts';
-import { ModalDialog, useConfirmDialog } from '@endora-commerce/admin-kit/components';
+import { ListToolbarSearch, ModalDialog, useConfirmDialog } from '@endora-commerce/admin-kit/components';
 import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import { Alert, AlertDescription, Badge, Button, EditorSection, FormField, Select } from '@endora-commerce/admin-kit/ui';
 import { productVisibilityClient } from '../api.js';
 import { channelName, designationReasonLabels, refusalMessage } from '../lib/labels.js';
-import type { SalesChannelRow } from '../lib/use-overview.js';
+import { useBaseCurrency, type SalesChannelRow } from '../lib/use-overview.js';
 
 
 type Currency = ProductVisibilityOverviewResponse['currencies'][number];
@@ -27,10 +27,13 @@ export interface DesignationsSectionProps {
  */
 export function DesignationsSection({ overview, channels, writable, onChanged, onStatus }: DesignationsSectionProps): ReactNode {
   const t = useTranslation('product_visibility_rules');
-  const { language } = useTranslationContext();
   const { confirm, confirmDialog } = useConfirmDialog();
   const [editing, setEditing] = useState<Currency | null>(null);
   const bookNames = useBookNames(overview.currencies);
+  const baseCurrency = useBaseCurrency();
+  const [showRest, setShowRest] = useState(false);
+  const [filter, setFilter] = useState('');
+  const restId = useId();
 
   const clear = async (currency: Currency): Promise<void> => {
     const ok = await confirm({
@@ -48,79 +51,71 @@ export function DesignationsSection({ overview, channels, writable, onChanged, o
     }
   };
 
+  // Which group each currency was first drawn in. A currency keeps its group until the screen is
+  // opened again: designating or clearing it must not unmount the row whose button the dialog
+  // hands focus back to (WCAG 2.4.3).
+  const placed = useRef(new Map<string, boolean>());
+  const first: Currency[] = [];
+  const rest: Currency[] = [];
+  for (const currency of [...overview.currencies].sort((a, b) => a.code.localeCompare(b.code))) {
+    let pinned = placed.current.get(currency.code);
+    if (pinned === undefined) {
+      pinned = needsAttention(currency);
+      placed.current.set(currency.code, pinned);
+    }
+    (pinned || currency.code === baseCurrency ? first : rest).push(currency);
+  }
+  const query = filter.trim().toUpperCase();
+  const shown = query === '' ? rest : rest.filter((currency) => currency.code.includes(query));
+
+  const row = (currency: Currency): ReactNode => (
+    <CurrencyRow
+      key={currency.code}
+      currency={currency}
+      bookName={currency.designation ? bookNames.get(currency.designation.priceListId) : undefined}
+      channels={channels}
+      writable={writable}
+      onEdit={(): void => setEditing(currency)}
+      onClear={(): void => void clear(currency)}
+    />
+  );
+
   return (
     <EditorSection as="h2" chrome="card" title={t('config.designations.title')} description={t('config.designations.description')}>
-      <ul className="divide-y divide-border">
-        {overview.currencies.map((currency) => {
-          const designation = currency.designation;
-          const status = currency.designationStatus;
-          return (
-            <li key={currency.code} data-currency-row className="flex flex-wrap items-center justify-between gap-3 py-3">
-              <div className="min-w-0 space-y-1">
-                <p className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono font-medium">{currency.code}</span>
-                  {currency.active ? null : <Badge variant="secondary">{t('config.designations.inactiveCurrency')}</Badge>}
-                </p>
-                {designation ? (
-                  <p className="text-sm">
-                    <span className="break-words">{bookNames.get(designation.priceListId) ?? t('config.designations.bookUnavailable')}</span>
-                    <span className="text-muted-foreground"> · </span>
-                    <span className="text-muted-foreground">
-                      {channelName(
-                        channels.find((c) => c.id === designation.salesChannelId),
-                        language,
-                        t('config.unknownChannel'),
-                      )}
-                    </span>
-                  </p>
-                ) : (
-                  <p className="text-sm text-muted-foreground">{t('config.designations.baseBook')}</p>
-                )}
-                <div className="flex flex-wrap items-center gap-2">
-                  {status === null ? null : status.inForce ? (
-                    <Badge variant="success">{t('config.designations.inForce')}</Badge>
-                  ) : (
-                    <Badge variant="warning">
-                      <span>{t('config.designations.notInForce')}</span>
-                      <span className="ml-1">{designationReasonLabels.label(t, status.reason)}</span>
-                    </Badge>
-                  )}
-                  {currency.building ? (
-                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                      <Loader2 className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />
-                      {t('config.designations.building')}
-                    </span>
-                  ) : null}
-                </div>
-              </div>
-              {writable ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    aria-label={t('config.designations.changeFor', { currency: currency.code })}
-                    onClick={(): void => setEditing(currency)}
-                  >
-                    {t('config.designations.change')}
-                  </Button>
-                  {designation ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      aria-label={t('config.designations.clearFor', { currency: currency.code })}
-                      onClick={(): void => void clear(currency)}
-                    >
-                      {t('config.designations.clear')}
-                    </Button>
-                  ) : null}
-                </div>
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
+      {first.length > 0 ? <ul className="divide-y divide-border">{first.map(row)}</ul> : null}
+      {rest.length > 0 ? (
+        <div className={first.length > 0 ? 'mt-2 border-t border-border pt-2' : undefined}>
+          {/* Hick: the currencies nobody has configured wait behind one disclosure, so the ones that
+              need a decision are not buried under fifty that do not (walk-through follow-up). */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-expanded={showRest}
+            aria-controls={showRest ? restId : undefined}
+            onClick={(): void => setShowRest((open) => !open)}
+          >
+            {showRest ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
+            {first.length > 0
+              ? t('config.designations.showOthers', { count: rest.length })
+              : t('config.designations.showAll', { count: rest.length })}
+          </Button>
+          {showRest ? (
+            <div id={restId} className="mt-2 space-y-2">
+              <ListToolbarSearch
+                label={t('config.designations.filterLabel')}
+                value={filter}
+                onValueChange={setFilter}
+              />
+              {shown.length > 0 ? (
+                <ul className="divide-y divide-border">{shown.map(row)}</ul>
+              ) : (
+                <p className="py-3 text-sm text-muted-foreground">{t('config.designations.filterEmpty')}</p>
+              )}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {editing ? (
         <DesignationDialog
           currency={editing}
@@ -135,6 +130,96 @@ export function DesignationsSection({ overview, channels, writable, onChanged, o
       ) : null}
       {confirmDialog}
     </EditorSection>
+  );
+}
+
+/**
+ * What earns a currency a place above the disclosure: a designated book, a book not in force, or
+ * catalogue prices being rebuilt. The shop's base currency is listed there too.
+ */
+function needsAttention(currency: Currency): boolean {
+  return currency.designation !== null || currency.building || (currency.designationStatus !== null && !currency.designationStatus.inForce);
+}
+
+interface CurrencyRowProps {
+  readonly currency: Currency;
+  readonly bookName: string | undefined;
+  readonly channels: readonly SalesChannelRow[];
+  readonly writable: boolean;
+  readonly onEdit: () => void;
+  readonly onClear: () => void;
+}
+
+/** One currency: its book and channel (or the base book), its status, and the two actions. */
+function CurrencyRow({ currency, bookName, channels, writable, onEdit, onClear }: CurrencyRowProps): ReactNode {
+  const t = useTranslation('product_visibility_rules');
+  const { language } = useTranslationContext();
+  const designation = currency.designation;
+  const status = currency.designationStatus;
+  return (
+    <li data-currency-row className="flex flex-wrap items-center justify-between gap-3 py-3">
+      <div className="min-w-0 space-y-1">
+        <p className="flex flex-wrap items-center gap-2">
+          <span className="font-mono font-medium">{currency.code}</span>
+          {currency.active ? null : <Badge variant="secondary">{t('config.designations.inactiveCurrency')}</Badge>}
+        </p>
+        {designation ? (
+          <p className="text-sm">
+            <span className="break-words">{bookName ?? t('config.designations.bookUnavailable')}</span>
+            <span className="text-muted-foreground"> · </span>
+            <span className="text-muted-foreground">
+              {channelName(
+                channels.find((c) => c.id === designation.salesChannelId),
+                language,
+                t('config.unknownChannel'),
+              )}
+            </span>
+          </p>
+        ) : (
+          <p className="text-sm text-muted-foreground">{t('config.designations.baseBook')}</p>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {status === null ? null : status.inForce ? (
+            <Badge variant="success">{t('config.designations.inForce')}</Badge>
+          ) : (
+            <Badge variant="warning">
+              <span>{t('config.designations.notInForce')}</span>
+              <span className="ml-1">{designationReasonLabels.label(t, status.reason)}</span>
+            </Badge>
+          )}
+          {currency.building ? (
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+              <Loader2 className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />
+              {t('config.designations.building')}
+            </span>
+          ) : null}
+        </div>
+      </div>
+      {writable ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            aria-label={t('config.designations.changeFor', { currency: currency.code })}
+            onClick={onEdit}
+          >
+            {t('config.designations.change')}
+          </Button>
+          {designation ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              aria-label={t('config.designations.clearFor', { currency: currency.code })}
+              onClick={onClear}
+            >
+              {t('config.designations.clear')}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </li>
   );
 }
 

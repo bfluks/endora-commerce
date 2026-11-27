@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import type { ProductVisibilityMappingTarget, ProductVisibilityOverviewResponse } from '@endora-commerce/contracts';
-import { useConfirmDialog } from '@endora-commerce/admin-kit/components';
+import { useConfirmDialog, useViewportTier } from '@endora-commerce/admin-kit/components';
 import { useTranslation } from '@endora-commerce/admin-kit/i18n';
 import {
   Button,
@@ -19,6 +19,7 @@ import { INERT_CLASS, isMappable, refusalMessage, roleRowId, roleWarningLabels }
 import { RoleEffect } from './RoleEffect.js';
 
 const UNRESTRICTED = 'unrestricted';
+const FOCUS_RING = 'focus-visible:outline-2 focus-visible:outline-ring';
 
 /** The section's id: the unmapped-roles notice and the role screens link to it. */
 export const ROLES_SECTION_ID = 'visibility-roles';
@@ -54,6 +55,7 @@ function targetOf(value: string): ProductVisibilityMappingTarget | null {
 export function RolesSection({ overview, writable, onChanged, onStatus }: RolesSectionProps): ReactNode {
   const t = useTranslation('product_visibility_rules');
   const { confirm, confirmDialog } = useConfirmDialog();
+  const tier = useViewportTier();
   // Per role: the choice being written, shown at once (optimistic) and dropped once the
   // overview has been read again — so a refused choice snaps back, and two rows never share
   // one busy flag that the first to finish would clear for both.
@@ -106,9 +108,27 @@ export function RolesSection({ overview, writable, onChanged, onStatus }: RolesS
     });
   };
 
+  // The `#role-<id>` target the role editor links to, on whichever element draws the role.
+  const rowTarget = (role: Role): { id: string; tabIndex: number; 'data-role-row': true; className: string } => ({
+    id: roleRowId(role.roleId),
+    tabIndex: -1,
+    'data-role-row': true,
+    className: tier === 'desktop' ? FOCUS_RING : `py-3 ${FOCUS_RING}`,
+  });
+  const mappingCell = (role: Role, fullWidth: boolean): ReactNode => (
+    <MappingCell
+      role={role}
+      overview={overview}
+      writable={writable}
+      fullWidth={fullWidth}
+      pending={pending[role.roleId]}
+      onChange={(value): void => void save(role, value)}
+    />
+  );
+
   return (
     <EditorSection id={ROLES_SECTION_ID} as="h2" chrome="card" title={t('config.roles.title')} description={t('config.roles.description')}>
-      <div className="overflow-x-auto">
+      {tier === 'desktop' ? (
         <Table aria-labelledby={`${ROLES_SECTION_ID}-title`}>
           <TableHeader>
             <TableRow>
@@ -119,31 +139,55 @@ export function RolesSection({ overview, writable, onChanged, onStatus }: RolesS
           </TableHeader>
           <TableBody>
             {overview.roles.map((role) => (
-              <TableRow key={role.roleId} id={roleRowId(role.roleId)} tabIndex={-1} data-role-row className="focus-visible:outline-2 focus-visible:outline-ring">
+              <TableRow key={role.roleId} {...rowTarget(role)}>
                 <TableCell className="align-top">
-                  <p className="font-medium break-words">{role.name}</p>
-                  <p className="font-mono text-xs text-muted-foreground">{role.code}</p>
+                  <RoleName role={role} />
                 </TableCell>
                 <TableCell className="align-top">
                   <RoleEffect role={role} categories={overview.categories} showCategory={false} />
                   <RoleWarnings role={role} />
                 </TableCell>
-                <TableCell className="align-top">
-                  <MappingCell
-                    role={role}
-                    overview={overview}
-                    writable={writable}
-                    pending={pending[role.roleId]}
-                    onChange={(value): void => void save(role, value)}
-                  />
-                </TableCell>
+                <TableCell className="align-top">{mappingCell(role, false)}</TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
-      </div>
+      ) : (
+        // Below the kit's desktop tier a three-column table either clips the mapping select or
+        // scrolls sideways: each role is a stacked row instead (no frame: the section is the card) — name, what it sees, then the
+        // mapping at full width (Fitts: the one control a phone user came for is the widest target).
+        <ul aria-labelledby={`${ROLES_SECTION_ID}-title`} className="divide-y divide-border">
+          {overview.roles.map((role) => (
+            <li key={role.roleId} {...rowTarget(role)}>
+              <RoleName role={role} />
+              <dl className="mt-2 space-y-2 text-sm">
+                <div>
+                  <dt className="text-xs font-medium text-muted-foreground">{t('config.roles.column.effect')}</dt>
+                  <dd>
+                    <RoleEffect role={role} categories={overview.categories} showCategory={false} />
+                    <RoleWarnings role={role} />
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-medium text-muted-foreground">{t('config.roles.column.mapping')}</dt>
+                  <dd>{mappingCell(role, true)}</dd>
+                </div>
+              </dl>
+            </li>
+          ))}
+        </ul>
+      )}
       {confirmDialog}
     </EditorSection>
+  );
+}
+
+function RoleName({ role }: { readonly role: Role }): ReactNode {
+  return (
+    <div>
+      <p className="font-medium break-words">{role.name}</p>
+      <p className="font-mono text-xs text-muted-foreground">{role.code}</p>
+    </div>
   );
 }
 
@@ -170,12 +214,14 @@ interface MappingCellProps {
   readonly role: Role;
   readonly overview: Overview;
   readonly writable: boolean;
+  /** Stacked (a phone): the select takes the card's whole width. */
+  readonly fullWidth: boolean;
   /** The choice being written; `undefined` when the row is idle. */
   readonly pending: string | undefined;
   readonly onChange: (value: string) => void;
 }
 
-function MappingCell({ role, overview, writable, pending, onChange }: MappingCellProps): ReactNode {
+function MappingCell({ role, overview, writable, fullWidth, pending, onChange }: MappingCellProps): ReactNode {
   const t = useTranslation('product_visibility_rules');
   const busy = pending !== undefined;
   if (role.effect === 'unmappable_unrestricted') {
@@ -217,7 +263,7 @@ function MappingCell({ role, overview, writable, pending, onChange }: MappingCel
       // (WCAG 2.4.3); a change made meanwhile is ignored.
       aria-disabled={busy || undefined}
       aria-busy={busy}
-      className={`min-w-48 ${INERT_CLASS}`}
+      className={`${fullWidth ? 'w-full' : 'min-w-48'} ${INERT_CLASS}`}
       onChange={(e): void => {
         if (!busy) onChange(e.target.value);
       }}
