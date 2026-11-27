@@ -56,7 +56,10 @@ const savedRules: Record<string, unknown> = {
 
 function overview(): ProductVisibilityOverviewResponse {
   return {
-    currencies: [{ code: 'PLN', active: true, designation: null, designationStatus: null, servedGeneration: 1, building }],
+    currencies: [
+      { code: 'PLN', active: true, designation: null, designationStatus: null, servedGeneration: 1, building },
+      { code: 'CZK', active: false, designation: null, designationStatus: null, servedGeneration: 1, building: false },
+    ],
     categories: [],
     roles: [{ roleId: SELF_ROLE, code: 'test_role', name: 'Admin', effect: selfEffect, warnings: [] }],
     productRules: [
@@ -79,6 +82,9 @@ const state = vi.hoisted(() => ({
   /** How many preview reads fail in transport (no answer) before one answers. */
   transportFailures: 0,
   failChannels: false,
+  /** `/attributes`: the list, an empty list, or no answer until the gate opens. */
+  attributes: 'listed' as 'listed' | 'empty',
+  attributesGate: null as null | Promise<void>,
 }));
 
 vi.mock('@endora-commerce/admin-kit/lib', async () => {
@@ -98,6 +104,8 @@ vi.mock('@endora-commerce/admin-kit/lib', async () => {
         refuseIf('GET', url);
         if (url.endsWith('/overview')) return { data: overview() };
         if (url.endsWith('/attributes')) {
+          if (state.attributesGate) await state.attributesGate;
+          if (state.attributes === 'empty') return { data: { items: [] } };
           return {
             data: {
               items: [
@@ -211,6 +219,8 @@ describe('WebsiteRulesPage (T073)', () => {
     state.confirmGate = null;
     state.transportFailures = 0;
     state.failChannels = false;
+    state.attributes = 'listed';
+    state.attributesGate = null;
     allGoverned = false;
     selfEffect = 'unmappable_unrestricted';
     delete (window as unknown as { __pwned?: number }).__pwned;
@@ -238,7 +248,7 @@ describe('WebsiteRulesPage (T073)', () => {
     fireEvent.click(within(rules).getByRole('button', { name: k('rules.editor.new') }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.change(within(dialog).getByLabelText(k('rules.editor.field.name'), { exact: false }), { target: { value: 'Retail flag' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.addAttribute') }));
+    // A new rule starts with one attribute condition (checkpoint 2).
     const attribute = await within(dialog).findByLabelText(k('rules.editor.field.attribute'));
     await waitFor(() =>
       expect(within(attribute).getAllByRole('option').filter((o) => (o as HTMLOptionElement).value !== '').map((o) => (o as HTMLOptionElement).value)).toEqual([
@@ -278,6 +288,8 @@ describe('WebsiteRulesPage (T073)', () => {
     fireEvent.click(within(rules).getByRole('button', { name: k('rules.editor.new') }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.change(within(dialog).getByLabelText(k('rules.editor.field.name'), { exact: false }), { target: { value: 'Empty' } });
+    await within(dialog).findByRole('option', { name: 'Flag A' });
+    fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.removeConditionN') }));
     fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.save') }));
     expect(await within(dialog).findByText(k('rules.editor.error.noConditions'))).toBeInTheDocument();
     expect(state.calls.some((c) => c.method === 'POST')).toBe(false);
@@ -568,7 +580,6 @@ describe('WebsiteRulesPage (T073)', () => {
       fireEvent.click(within(rules).getByRole('button', { name: k('rules.editor.new') }));
       const dialog = await screen.findByRole('dialog');
       fireEvent.change(within(dialog).getByLabelText(k('rules.editor.field.name'), { exact: false }), { target: { value: 'Retail' } });
-      fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.addAttribute') }));
       const attribute = await within(dialog).findByLabelText(k('rules.editor.field.attribute'));
       await waitFor(() => expect(within(attribute).getAllByRole('option').length).toBeGreaterThan(1));
       fireEvent.change(attribute, { target: { value: 'segment' } });
@@ -730,6 +741,103 @@ describe('WebsiteRulesPage (T073)', () => {
       } finally {
         savedRules[RULE_EVIL] = kept;
       }
+    });
+
+    describe('the rule editor, checkpoint 2 fix round', () => {
+      const openNew = async (): Promise<HTMLElement> => {
+        render();
+        const rules = await screen.findByRole('region', { name: k('rules.list.title') });
+        fireEvent.click(within(rules).getByRole('button', { name: k('rules.editor.new') }));
+        return screen.findByRole('dialog');
+      };
+
+      it('starts a new rule with one condition row', async () => {
+        const dialog = await openNew();
+        expect(within(dialog).getAllByLabelText(k('rules.editor.field.attribute'))).toHaveLength(1);
+      });
+
+      it('says when no attribute can be used in a rule', async () => {
+        state.attributes = 'empty';
+        const dialog = await openNew();
+        expect(await within(dialog).findByText(k('rules.editor.noAttributes'))).toBeInTheDocument();
+      });
+
+      it('moves focus to the first invalid field on a refused save', async () => {
+        const dialog = await openNew();
+        await within(dialog).findByRole('option', { name: 'Flag A' });
+        fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.save') }));
+        await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByLabelText(k('rules.editor.field.name'), { exact: false })));
+        fireEvent.change(within(dialog).getByLabelText(k('rules.editor.field.name'), { exact: false }), { target: { value: 'Named' } });
+        fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.save') }));
+        await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByLabelText(k('rules.editor.field.attribute'))));
+      });
+
+      it('names each remove button by its condition and moves focus on after a removal', async () => {
+        const dialog = await openNew();
+        fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.addPrice') }));
+        const removes = within(dialog).getAllByRole('button', { name: k('rules.editor.removeConditionN') });
+        expect(removes).toHaveLength(2);
+        fireEvent.click(removes[0]!);
+        const [next] = within(dialog).getAllByRole('button', { name: k('rules.editor.removeConditionN') });
+        await waitFor(() => expect(document.activeElement).toBe(next));
+        fireEvent.click(next!);
+        await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: k('rules.editor.addAttribute') })));
+      });
+
+      it('offers only active currencies for a price condition', async () => {
+        const dialog = await openNew();
+        fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.addPrice') }));
+        const currency = within(dialog).getByLabelText(k('rules.editor.field.currency'));
+        const codes = within(currency).getAllByRole('option').map((o) => (o as HTMLOptionElement).value);
+        expect(codes).toContain('PLN');
+        expect(codes).not.toContain('CZK');
+      });
+
+      it('holds Save, with its reason, until the attribute list has loaded', async () => {
+        let release = (): void => undefined;
+        state.attributesGate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const dialog = await openEditor(EVIL);
+        const save = await within(dialog).findByRole('button', { name: k('rules.editor.save') });
+        expect(save).toHaveAttribute('aria-disabled', 'true');
+        expect(save).toHaveAccessibleDescription(k('rules.editor.waitingAttributes'));
+        fireEvent.click(save);
+        expect(state.calls.some((c) => c.method === 'PATCH')).toBe(false);
+        release();
+        await waitFor(() => expect(save).not.toHaveAttribute('aria-disabled', 'true'));
+      });
+
+      it('says a refused save in the dialog\'s polite region, and offers to load the current version after a conflict', async () => {
+        state.refuse = { method: 'PATCH', url: `/product-rules/${RULE_EVIL}`, status: 409, code: 'VERSION_CONFLICT', message: 'The product rule changed since it was read.' };
+        const dialog = await openEditor(EVIL);
+        await within(dialog).findByLabelText('Retail');
+        fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.save') }));
+        const message = await within(dialog).findByText('The product rule changed since it was read.');
+        expect(message.closest('[role="status"]')).not.toBeNull();
+        expect(within(dialog).queryByRole('alert')).toBeNull();
+        const kept = savedRules[RULE_EVIL] as { version: number };
+        savedRules[RULE_EVIL] = { ...kept, version: 5 };
+        try {
+          fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.reload') }));
+          await waitFor(() => expect(state.calls.filter((c) => c.method === 'GET' && c.url.endsWith(`/product-rules/${RULE_EVIL}`))).toHaveLength(2));
+          expect(screen.getByRole('dialog')).toBe(dialog);
+          await waitFor(() => expect(within(dialog).queryByRole('button', { name: k('rules.editor.reload') })).toBeNull());
+          fireEvent.click(within(dialog).getByRole('button', { name: k('rules.editor.save') }));
+          await waitFor(() => expect(state.calls).toContainEqual(expect.objectContaining({ method: 'PATCH', headers: { 'If-Match': '"5"' } })));
+        } finally {
+          savedRules[RULE_EVIL] = kept;
+        }
+      });
+
+      it('offers to load the current version after a stale change confirm', async () => {
+        state.refuse = { method: 'POST', url: '/confirm', status: 409, code: 'WEBSITE_RULE_PREVIEW_STALE', message: 'This preview is no longer current.' };
+        const dialog = await openEditor('Flag A');
+        await within(dialog).findByLabelText(k('rules.editor.field.booleanValue'));
+        fireEvent.click(within(dialog).getByRole('button', { name: k('rules.attach.preview') }));
+        fireEvent.click(await within(dialog).findByRole('button', { name: k('rules.attach.confirm') }));
+        expect(await within(dialog).findByRole('button', { name: k('rules.editor.reload') })).toBeInTheDocument();
+      });
     });
 
     it('offers no edit to an operator holding only the read permission', async () => {
