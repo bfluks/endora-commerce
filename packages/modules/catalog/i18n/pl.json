@@ -1658,5 +1658,6 @@
   "module.nonDeactivatableReason": "Produkty, warianty i kategorie. Platforma handlowa bez katalogu to inny produkt, a nie okrojona wersja tego samego.",
   "productsList.visibility.restricted": "Twoja rola widzi tylko produkty z kategorii widoczności",
   "productsList.visibility.noCategory": "Twoja rola nie ma kategorii widoczności produktów, więc nie widzi żadnych produktów. Poproś administratora o przypisanie roli.",
-  "productsList.visibility.noCategoryEmpty": "Twoja rola nie widzi żadnych produktów"
+  "productsList.visibility.noCategoryEmpty": "Twoja rola nie widzi żadnych produktów",
+  "productsList.visibility.noneVisibleEmpty": "Brak produktów w kategorii widoczności Twojej roli"
 }

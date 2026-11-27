@@ -11,7 +11,7 @@ import { ModalDialog } from '@endora-commerce/admin-kit/components';
 import { useTranslation, useTranslationContext } from '@endora-commerce/admin-kit/i18n';
 import { Alert, AlertDescription, Button, Checkbox, FormField, Input, Label, Select } from '@endora-commerce/admin-kit/ui';
 import { productVisibilityClient } from '../api.js';
-import { refusalMessage, thresholdLabels } from '../lib/labels.js';
+import { localized, refusalMessage, thresholdLabels } from '../lib/labels.js';
 
 
 type Attribute = ProductRuleAttributesResponse['items'][number];
@@ -65,7 +65,7 @@ export function RuleEditorDialog({ currencies, onClose, onSaved }: RuleEditorDia
   }, []);
 
   const attributeLabel = (attribute: Attribute): string =>
-    attribute.label[language] ?? attribute.labelDefault ?? attribute.key;
+    localized(attribute.label, language) ?? attribute.labelDefault ?? attribute.key;
 
   const update = (index: number, next: ConditionDraft): void =>
     setConditions((prev) => prev.map((c, i) => (i === index ? next : c)));

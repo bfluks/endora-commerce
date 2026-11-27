@@ -679,6 +679,9 @@ export function ProductsList(): ReactNode {
       icon={<Package size={20} />}
       title={statusFilter === 'active' ? t('productsList.empty.activeTitle') : t('productsList.empty.inactiveTitle')}
     />
+  ) : listVisibility ? (
+    // Spec 193 — the role's category shows nothing: the catalogue is not empty, so no first-product invite.
+    <EmptyState icon={<Package size={20} />} title={t('productsList.visibility.noneVisibleEmpty')} />
   ) : (
     <EmptyState
       icon={<Package size={20} />}

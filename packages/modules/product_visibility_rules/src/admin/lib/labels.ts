@@ -87,13 +87,28 @@ export function refusalMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
-/** A sales channel's name in the operator's language, its code when it has none. */
+/**
+ * A per-language text in the operator's language: an exact tag, else the same language under any
+ * region (`pl` matches `pl-PL` and the other way round), else `undefined`. Stores key these by
+ * `pl`, `pl-PL` or `en-US` depending on the owner, so both shapes are read.
+ */
+export function localized(texts: Record<string, string> | null | undefined, language: string): string | undefined {
+  if (!texts) return undefined;
+  const entries = Object.entries(texts).filter(([, value]) => typeof value === 'string' && value !== '');
+  const wanted = language.toLowerCase();
+  const base = wanted.split('-')[0];
+  return (
+    entries.find(([tag]) => tag.toLowerCase() === wanted)?.[1] ??
+    entries.find(([tag]) => tag.toLowerCase().split('-')[0] === base)?.[1]
+  );
+}
+
+/** A sales channel's name in the operator's language, else English, else its code. */
 export function channelName(
   channel: { code: string; name: Record<string, string> } | undefined,
   language: string,
   unknownLabel: string,
 ): string {
   if (!channel) return unknownLabel;
-  const exact = Object.entries(channel.name).find(([lang]) => lang === language || lang.startsWith(`${language}-`));
-  return exact?.[1] ?? channel.name['en-US'] ?? Object.values(channel.name)[0] ?? channel.code;
+  return localized(channel.name, language) ?? localized(channel.name, 'en') ?? Object.values(channel.name)[0] ?? channel.code;
 }

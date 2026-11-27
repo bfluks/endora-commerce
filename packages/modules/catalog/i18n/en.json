@@ -1658,5 +1658,6 @@
   "module.nonDeactivatableReason": "Products, variants and categories. A commerce platform without a catalogue is a different product, not a reduced one.",
   "productsList.visibility.restricted": "Your role sees only the products of the visibility category",
   "productsList.visibility.noCategory": "Your role has no product visibility category, so it sees no products. Ask an administrator to map the role.",
-  "productsList.visibility.noCategoryEmpty": "No products are visible to your role"
+  "productsList.visibility.noCategoryEmpty": "No products are visible to your role",
+  "productsList.visibility.noneVisibleEmpty": "No products in your role’s visibility category"
 }

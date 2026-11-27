@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { setupBackendServer, teardownBackendServer, type BackendServerHandle } from '../../helpers/test-server.js';
-import { expectModuleAbsent, withModuleOff } from '../../helpers/off-state.js';
+import { expectModuleAbsent, withModuleOff, type OffStateAxis } from '../../helpers/off-state.js';
 import { TEST_ADMIN_ID } from '../../helpers/test-actors.js';
 import { ADMIN, BASE, call, clearConfiguration, forgetTestRoles, overview, roleWith } from './fixtures.js';
 
@@ -69,6 +69,23 @@ describe('product_visibility_rules off-state — configuration (spec 193, T024)'
     });
     // Nothing the off state refused was written, and what was there is unchanged.
     expect(await overview(h)).toEqual(before);
+  });
+
+  it('offers no palette action while off, on both axes, and both again after (T078, FR-071, FR-073)', async () => {
+    const advertised = async (): Promise<string[]> => {
+      const res = await h.app.inject({ method: 'GET', url: '/api/v1/admin/admin-actions?language=en', cookies: ADMIN });
+      expect(res.statusCode, 'the palette registry must answer').toBe(200);
+      const body = res.json() as { data: { data: { actionId: string; moduleId: string }[] } };
+      return body.data.data.filter((a) => a.moduleId === 'product_visibility_rules').map((a) => a.actionId).sort();
+    };
+    const both = ['open-product-visibility', 'open-website-rules'];
+    expect(await advertised()).toEqual(both);
+    for (const axis of ['deactivated', 'platform-unavailable'] as OffStateAxis[]) {
+      await withModuleOff('product_visibility_rules', axis, async () => {
+        expect(await advertised(), axis).toEqual([]);
+      });
+      expect(await advertised(), `${axis}, restored`).toEqual(both);
+    }
   });
 
   it('keeps the configuration while off and serves it again after (FR-076: off changes nothing it holds)', async () => {
