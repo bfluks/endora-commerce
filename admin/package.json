@@ -60,6 +60,7 @@
     "@endora-commerce/mod-payments": "workspace:*",
     "@endora-commerce/mod-price-lists": "workspace:*",
     "@endora-commerce/mod-product-feeds": "workspace:*",
+    "@endora-commerce/mod-product-visibility-rules": "workspace:*",
     "@endora-commerce/mod-projects": "workspace:*",
     "@endora-commerce/mod-promotions": "workspace:*",
     "@endora-commerce/mod-pwa": "workspace:*",

@@ -61,6 +61,7 @@
 @import "@endora-commerce/mod-payments/tailwind.css";
 @import "@endora-commerce/mod-price-lists/tailwind.css";
 @import "@endora-commerce/mod-product-feeds/tailwind.css";
+@import "@endora-commerce/mod-product-visibility-rules/tailwind.css";
 @import "@endora-commerce/mod-projects/tailwind.css";
 @import "@endora-commerce/mod-promotions/tailwind.css";
 @import "@endora-commerce/mod-pwa/tailwind.css";
